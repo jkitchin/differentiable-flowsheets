@@ -8,6 +8,12 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Multicomponent FUG functions (unit-ops book Ch. 13).** `fenske_stages_multicomponent` (key-ratio Fenske),
+  `fenske_distribution` (non-key split at total reflux), `underwood_theta` / `underwood_minimum_reflux` (bracketed
+  root between the keys, implicit gradient), `kirkbride_feed_stage` (continuous `N_R`, `N_S`), and
+  `gilliland_stages(..., method="eduljee"|"molokanov")`. `ShortcutColumn` reports `info['N_rect']` and
+  `info['N_strip']`. Checked against Geankoplis 5e Examples 11.7-2 and 11.7-3 in `tests/test_distillation.py`.
+
 - **`OperatingPointWarning`.** `operating_point` warns on a concrete negative `Q*` (no forward-flow operating
   point, e.g. a valveless parallel pair with a weak pump running backwards) or an unconverged Newton solve; silent
   under `jit`/`grad`. `PipeCavitationWarning` is exported from `difflow`. Test `tests/test_pump.py`.
@@ -830,6 +836,12 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Fixed
+
+- **`ShortcutColumn` used the pseudo-binary Fenske equation.** `N_min` took `1 - x_LK` for `x_HK`, so a light
+  non-key in the distillate understated it (8.7 instead of 10.4 on a C2-nC5 depropanizer). It is now the
+  key-ratio form. The Underwood root was a Newton step from `sqrt(alpha_LK)` clipped to `(1.001, alpha_LK-0.001)`;
+  it left the interval and returned 1.001 in about a quarter of random feeds. It is now bracketed bisection.
+  `R_min` is floored at 0 rather than 0.1.
 
 - **`plan_sensitivity` reported half the elastic penalty as a shadow price.**
   The stationarity gradient that the multipliers are solved from included

@@ -2,6 +2,7 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from difflow.eos import eos_bubble_T
 
@@ -2025,3 +2026,135 @@ class TestDepropanizerPartialCondenser:
         # the vapour distillate leaves at the dew point of y_D, which is
         # warmer than the bubble point a total condenser would reach
         assert 300.0 < float(info["T_condenser"]) < float(info["T_profile"][-1]) + 1e-6
+
+
+class TestMulticomponentFUG:
+    """Multicomponent Fenske / Underwood / Kirkbride against Geankoplis 5e.
+
+    Geankoplis (5e) Examples 11.7-2 and 11.7-3: components A-D,
+    z = (0.40, 0.25, 0.20, 0.15), light key B, heavy key C, 90 % key
+    recoveries, saturated-liquid feed. Published: N_m = 5.39 (alpha_LK =
+    2.258), R_m = 0.395 (alpha from K at 99.3 C), feed about tray 6 from the
+    top of N = 11.
+    """
+
+    K = jnp.array([3.12, 1.38, 0.60, 0.28])  # K at 99.3 C
+    z = jnp.array([0.40, 0.25, 0.20, 0.15])
+    x_D = jnp.array([0.6197, 0.3489, 0.0310, 0.0004])
+    x_B = jnp.array([0.0011, 0.0704, 0.5068, 0.4217])
+
+    def test_fenske_geankoplis_11_7_2(self):
+        from difflow import fenske_stages_multicomponent
+
+        N = fenske_stages_multicomponent(
+            self.x_D[1], self.x_D[2], self.x_B[1], self.x_B[2], 2.258
+        )
+        assert float(N) == pytest.approx(5.39, abs=0.01)
+
+    def test_underwood_geankoplis_11_7_3(self):
+        from difflow import underwood_minimum_reflux
+
+        alpha = self.K / self.K[2]
+        R_min, theta = underwood_minimum_reflux(alpha, self.z, self.x_D, 1.0)
+        assert float(R_min) == pytest.approx(0.395, abs=0.002)
+        assert 1.0 < float(theta) < float(alpha[1])
+
+    def test_kirkbride_geankoplis_11_7_3(self):
+        from difflow import kirkbride_feed_stage
+
+        N_R, N_S = kirkbride_feed_stage(
+            11.0, self.z[1], self.z[2], self.x_B[1], self.x_D[2], 35.52, 64.48
+        )
+        assert round(float(N_R)) == 6
+        assert float(N_R + N_S) == pytest.approx(11.0)
+
+    def test_fenske_distribution_places_keys(self):
+        from difflow import fenske_distribution
+
+        F = 100 * self.z
+        d, b, N_min = fenske_distribution(F, self.K, 1, 2, 0.9, 0.9)
+        assert float(d[1]) == pytest.approx(22.5)
+        assert float(b[2]) == pytest.approx(18.0)
+        assert jnp.allclose(d + b, F)
+        # non-keys follow d/b = (d/b)_HK alpha^N_min
+        alpha = self.K / self.K[2]
+        ratio = (d[0] / b[0]) / ((d[2] / b[2]) * alpha[0] ** N_min)
+        assert float(ratio) == pytest.approx(1.0, rel=1e-8)
+
+    def test_underwood_theta_stays_bracketed(self):
+        """The old Newton step left (1, alpha_LK) and was clipped to 1.001."""
+        from scipy.optimize import brentq
+        from difflow import underwood_theta
+
+        rng = np.random.default_rng(0)
+        for _ in range(100):
+            aLK = 1.1 + 3 * rng.random()
+            al = np.array([aLK * (1 + 8 * rng.random()), aLK, 1.0,
+                           0.05 + 0.9 * rng.random()])
+            zz = rng.dirichlet(np.ones(4))
+            q = rng.choice([1.0, 0.0, 0.5, 1.2, -0.2])
+            th = float(underwood_theta(jnp.asarray(al), jnp.asarray(zz), q))
+            f = lambda t: np.sum(al * zz / (al - t)) - (1 - q)
+            assert th == pytest.approx(brentq(f, 1 + 1e-12, aLK - 1e-12), abs=1e-8)
+
+    def test_underwood_gradients(self):
+        from jax.test_util import check_grads
+        from difflow import underwood_minimum_reflux
+
+        alpha = self.K / self.K[2]
+
+        def R_of(a_LK, q):
+            return underwood_minimum_reflux(
+                alpha.at[1].set(a_LK), self.z, self.x_D, q
+            )[0]
+
+        check_grads(R_of, (alpha[1], 1.0), order=1, modes=["rev", "fwd"])
+
+    def test_fenske_kirkbride_gradients(self):
+        from jax.test_util import check_grads
+        from difflow import fenske_stages_multicomponent, kirkbride_feed_stage
+
+        check_grads(
+            lambda a: fenske_stages_multicomponent(0.35, 0.03, 0.07, 0.5, a),
+            (2.258,), order=1, modes=["rev", "fwd"],
+        )
+        check_grads(
+            lambda N: kirkbride_feed_stage(N, 0.25, 0.2, 0.07, 0.03, 35.0, 65.0)[0],
+            (11.0,), order=1, modes=["rev", "fwd"],
+        )
+
+    def test_gilliland_methods(self):
+        Ne = gilliland_stages(0.5925, 0.395, 5.39)
+        Nm = gilliland_stages(0.5925, 0.395, 5.39, method="molokanov")
+        assert 10.0 < float(Ne) < 14.0 and 10.0 < float(Nm) < 14.0
+        with pytest.raises(ValueError):
+            gilliland_stages(1.0, 0.5, 5.0, method="nope")
+
+
+class TestShortcutColumnMulticomponentFenske:
+    """G13-1: N_min used the pseudo-binary Fenske form."""
+
+    def test_depropanizer_nmin_is_key_ratio_fenske(self):
+        from difflow.database import get_species_data
+
+        sp = ["ethane", "propane", "isobutane", "n_butane", "n_pentane"]
+        th = IdealThermo({s: get_species_data(s) for s in sp})
+        P = 16e5
+        feed = make_stream(dict(zip(sp, [3.0, 20.0, 37.0, 35.0, 5.0])),
+                           T=330.0, P=P)
+        col = ShortcutColumn(
+            ShortcutColumnParams(sp, "propane", "isobutane",
+                                 x_D_LK=0.99, x_B_HK=0.99), th)
+        D, B, info = col(feed, R=3.0, P=P, q=1.0)
+        d, b = get_flows(D), get_flows(B)
+        a = info["alpha"]["propane"] / info["alpha"]["isobutane"]
+        expected = np.log((d["propane"] / b["propane"])
+                          * (b["isobutane"] / d["isobutane"])) / np.log(a)
+        assert float(info["N_min"]) == pytest.approx(float(expected), rel=1e-6)
+        # the pseudo-binary form gave 8.7 here
+        assert float(info["N_min"]) > 10.0
+        # continuous Kirkbride split sums to N
+        assert float(info["N_rect"] + info["N_strip"]) == pytest.approx(
+            float(info["N"]))
+        # theta lies between the keys
+        assert 1.0 < float(info["theta"]) < float(a)

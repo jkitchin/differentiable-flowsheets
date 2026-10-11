@@ -295,6 +295,11 @@ from difflow.units.distillation import (
     fenske_stages,
     minimum_reflux_ratio,
     gilliland_stages,
+    fenske_stages_multicomponent,
+    fenske_distribution,
+    underwood_theta,
+    underwood_minimum_reflux,
+    kirkbride_feed_stage,
     column_diameter,
 )
 from difflow.units.evaporator import (
@@ -763,6 +768,11 @@ __all__ = [
     "fenske_stages",
     "minimum_reflux_ratio",
     "gilliland_stages",
+    "fenske_stages_multicomponent",
+    "fenske_distribution",
+    "underwood_theta",
+    "underwood_minimum_reflux",
+    "kirkbride_feed_stage",
     "column_diameter",
     # Unit operations - Evaporators
     "Evaporator",

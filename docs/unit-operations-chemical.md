@@ -1007,6 +1007,16 @@ Where:
 - $\theta$: Root between $\alpha_{HK}$ and $\alpha_{LK}$
 - $q$: Feed quality (1 for saturated liquid, 0 for saturated vapor)
 
+The Fenske equation is the key-ratio (multicomponent) form above. Before the
+unit-ops book's Chapter 13 the column used the pseudo-binary form, with
+$1 - x_{LK}$ in place of $x_{HK}$; a light non-key in the distillate (ethane
+over a propane/isobutane split) then made $N_{min}$ 16 % too small. The
+Underwood root is found by bisection on the open interval between the heavy
+key and the next volatility above it, where the function is monotone; a Newton
+iteration used to leave that interval and be clipped to 1.001, which happened
+in about a quarter of random feeds. $R_{min}$ is floored at 0 (it used to be
+floored at 0.1, which overstated an easy split).
+
 **Gilliland Correlation** (actual stages):
 
 $$\frac{N - N_{min}}{N + 1} = 1 - \exp\left[\frac{(1 + 54.4X)(X - 1)}{(11 + 117.2X)(X^{0.5})}\right]$$
@@ -1027,7 +1037,8 @@ $$\frac{N_R}{N_S} = \left[\frac{B}{D} \cdot \frac{x_{F,HK}}{x_{F,LK}} \cdot \lef
 | `info['N_min']` | float | - | Minimum stages (Fenske) |
 | `info['R_min']` | float | - | Minimum reflux ratio (Underwood) |
 | `info['N']` | float | - | Actual stages (Gilliland) |
-| `info['N_feed']` | float | - | Feed stage (Kirkbride) |
+| `info['N_feed']` | float | - | Feed stage (Kirkbride), counted from the bottom and rounded |
+| `info['N_rect']`, `info['N_strip']` | float | - | Continuous Kirkbride split of `N` above / below the feed (differentiable; the rounded `N_feed` has a zero derivative) |
 | `info['D']`, `info['B']` | float | mol/s | Distillate and bottoms flow |
 | `info['x_D']`, `info['x_B']` | dict | - | Product compositions by species |
 | `info['T_condenser']` / `info['T_top']` | float | K | Condenser temperature = bubble point of $x_D$ |
@@ -1102,6 +1113,31 @@ from difflow.units.column_design import tray_column_diameter
 diameter, _ = tray_column_diameter(V_molar=50.0, MW_V=80.0, rho_V=3.0,
                                    L_molar=50.0, MW_L=85.0, rho_L=800.0, sigma=0.02)
 ```
+
+The multicomponent versions take arrays over every species (`alpha` on any
+basis; give `alpha_HK` on the same basis) and are differentiable, the
+Underwood root by its implicit derivative:
+
+```python
+import jax.numpy as jnp
+from difflow import (fenske_stages_multicomponent, fenske_distribution,
+                     underwood_theta, underwood_minimum_reflux,
+                     kirkbride_feed_stage, gilliland_stages)
+
+# Geankoplis 5e, Examples 11.7-2 and 11.7-3 (keys B and C, 90 % recoveries)
+K = jnp.array([3.12, 1.38, 0.60, 0.28]); z = jnp.array([0.40, 0.25, 0.20, 0.15])
+x_D = jnp.array([0.6197, 0.3489, 0.0310, 0.0004])
+x_B = jnp.array([0.0011, 0.0704, 0.5068, 0.4217])
+N_min = fenske_stages_multicomponent(x_D[1], x_D[2], x_B[1], x_B[2], 2.258)  # 5.40
+d, b, N_min_d = fenske_distribution(100 * z, K, 1, 2, 0.9, 0.9)  # non-keys by Fenske
+R_min, theta = underwood_minimum_reflux(K / K[2], z, x_D, q=1.0)          # 0.395
+N = gilliland_stages(1.5 * R_min, R_min, N_min, method="molokanov")
+N_R, N_S = kirkbride_feed_stage(11.0, z[1], z[2], x_B[1], x_D[2], 35.52, 64.48)  # 5.96, 5.04
+```
+
+`gilliland_stages` defaults to Eduljee's fit; `method="molokanov"` is the fit
+`ShortcutColumn` uses. `fenske_stages` (above) is the pseudo-binary form, right
+only for a binary.
 
 Relative volatility is a method on the column, not a free function
 (`column.relative_volatility(T, P, x=None)`), because it needs the key
