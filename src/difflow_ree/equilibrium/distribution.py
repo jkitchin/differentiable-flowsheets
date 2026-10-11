@@ -1576,7 +1576,7 @@ def stages_kremser(
     Args:
         D: Distribution coefficient
         S_F: Solvent-to-feed ratio
-        recovery: Desired recovery fraction
+        recovery: Desired recovery fraction, in (0, 1)
 
     Returns:
         Number of theoretical stages
