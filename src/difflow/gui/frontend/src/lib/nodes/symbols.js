@@ -433,6 +433,8 @@ export const OPERATION_SYMBOLS = {
   // distillation and contacting
   DistillationColumn: 'column',
   BatchDistillation: 'column',
+  Absorber: 'packed_column',
+  Stripper: 'packed_column',
   ShortcutColumn: 'column',
   MultistageCascade: 'column',
   DifferentialContactor: 'packed_column',

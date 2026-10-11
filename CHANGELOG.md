@@ -31,6 +31,40 @@ All notable changes to difflow are recorded here. The format follows
   transcribed from memory (flagged in the docstrings). Docs: `## Mass
   Transfer` in `docs/unit-operations-chemical.md`; example notebook
   `examples/51_mass_transfer.ipynb`.
+- **Generic `Absorber` and `Stripper` (#428).** New `difflow.units.absorption`:
+  physical-solvent gas absorber and stripper, two inlets (`gas_in`, `liquid_in`)
+  and two outlets, sharing one implementation and one `AbsorptionParams`
+  (deliberately not `AbsorberParams`/`StripperParams`, which `difflow_cc` and
+  `difflow_ree` already export and `difflow.serialize` looks up by name).
+  Henry's law per solute with a van 't Hoff temperature dependence
+  (`henry_constant`; `HENRY_WATER`, a small table **from memory, unverified**),
+  three models: `"kremser"` (closed form per solute for any `A > 0`, solute in
+  the entering solvent, Edmister-style geometric-mean `A` iterated with the
+  outlet flows, Murphree vapor efficiency by the Lewis relation, real-valued
+  `n_stages`), `"stages"` (tray-to-tray, one linear system per solute with Picard
+  sweeps on the stage flows, concrete integer `n_stages`) and `"packed"` (HTU/NTU:
+  Onda films from `difflow.mass_transfer` or a user `H_OG`; Colburn, or the
+  numerical `N_OG` integral with the `(1-y)_lm` option; rating by `height`,
+  design by `recovery`). `recovery` also makes the Kremser stage count an
+  output. `info` carries per-solute recovery, `A`, `S`, `K`, `N_eq`/`N_OG`/`H_OG`,
+  `L_min` (absorber) or `G_min` (stripper) and the ratio to it, the solute-free
+  operating line and curve, the heat of absorption and an adiabatic temperature
+  rise (reported, not applied), `converged` and `feasible` (an unreachable spec
+  gives `inf`, never NaN). Library helpers `solute_free_operating_line`,
+  `minimum_solvent_rate` (rich-end or tangent pinch on any
+  `difflow.staged.EquilibriumCurve`) and `minimum_stripping_gas_rate`.
+  Registered in the catalog (`absorption` module in the `separations` category)
+  and the GUI palette (packed-column symbol). Validated against the Kremser
+  closed form, a separate SciPy `fsolve` of the tray equations, dilute-limit
+  Kremser/stages agreement, Colburn against the NTU integral, a dense chord-slope
+  scan for the minimum rate, mass balances, `check_grads` and an absorber-stripper
+  recycle flowsheet through `fs.solve` differentiated with respect to the solvent
+  rate; **no published textbook example is reproduced** (the issue's numbers are
+  unverified recollections). Not implemented: modified-Raoult K from a `thermo`
+  object, `fraction_flood` sizing (needs the hardware model of #429), solvent
+  volatility, a rate-based Maxwell-Stefan model. Example notebook
+  `examples/52_absorption_stripping.ipynb`.
+
 - **`BatchDistillation`: Rayleigh, constant-reflux and constant-composition
   batch distillation (#426).** New `difflow.units.batch_distillation`: a binary
   batch rectifier (`n_stages` equilibrium stages above the still, total

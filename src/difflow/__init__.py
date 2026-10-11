@@ -160,6 +160,14 @@ from difflow.units.lle import (
     minimum_solvent_ratio,
     stages_for_recovery,
 )
+from difflow.units.absorption import (
+    Absorber,
+    AbsorptionParams,
+    Stripper,
+    minimum_solvent_rate,
+    minimum_stripping_gas_rate,
+    solute_free_operating_line,
+)
 from difflow.units.batch_distillation import (
     BatchDistillation,
     BatchDistillationParams,
@@ -516,6 +524,13 @@ __all__ = [
     "separation_factor",
     "minimum_solvent_ratio",
     "stages_for_recovery",
+    # Unit operations - Absorption and stripping
+    "Absorber",
+    "AbsorptionParams",
+    "Stripper",
+    "minimum_solvent_rate",
+    "minimum_stripping_gas_rate",
+    "solute_free_operating_line",
     # Unit operations - Distillation
     "ShortcutColumn",
     "ShortcutColumnParams",

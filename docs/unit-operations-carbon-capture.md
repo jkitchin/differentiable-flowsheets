@@ -310,6 +310,11 @@ K_G = overall_mass_transfer(k_G=k_G, k_L=k_L, E=10.0, H=H_CO2, P=101325.0)
 (amineabsorber)=
 ### AmineAbsorber
 
+> The generic physical-solvent `Absorber` and `Stripper` (Henry's law, Kremser,
+> stage-by-stage or packed HTU/NTU, minimum solvent rate) are documented in
+> [Absorption and Stripping](unit-operations-chemical.md); this amine unit is
+> the *reactive* (chemical-absorption) version and is not replaced by them.
+
 **Location**: `difflow_cc/units/absorber.py`
 
 **Class**: `AmineAbsorber`

@@ -1633,6 +1633,222 @@ feed.
 
 ---
 
+(absorption-and-stripping)=
+## Absorption and Stripping
+
+Physical-solvent gas absorbers and strippers: a gas of carrier plus dilute
+solutes rises through a column against a liquid solvent (`gas_in` at the
+bottom, `liquid_in` at the top). The keys of `params.henry` are the
+transferring solutes; every other species stays on the side it enters (the
+carrier in the gas, the solvent in the liquid; give them different names).
+Reactive absorption (amines, loading) is the job of the carbon-capture
+plugin: see `AmineAbsorber` and `AmineStripper` in
+[Carbon Capture Unit Operations](unit-operations-carbon-capture.md). The
+generic units here are physical (Henry's law) and are not a replacement for
+them.
+
+Equilibrium is Henry's law in mole fractions, `y_i = K_i x_i`, `K_i = H_i(T)/P`,
+with a van 't Hoff dependence
+`H(T) = H_ref exp(-C (1/T - 1/T_ref))` (`C = -dH_abs/R`, positive for an
+exothermic absorption). The column is isothermal; the heat of absorption and
+the adiabatic temperature rise it would cause are reported in `info`, not
+applied. `difflow.units.absorption.HENRY_WATER` holds a small table (acetone,
+NH3, CO2, H2S, SO2, TCE, benzene in water near 25 C) **transcribed from
+memory, unverified, +/-20-30 %**: use measured data for design.
+
+### Absorber
+
+**Location**: `difflow/units/absorption.py`
+
+**Class**: `Absorber(params)(gas_in, liquid_in) -> (gas_out, liquid_out, info)`,
+with `AbsorptionParams` (shared with `Stripper`; not named `AbsorberParams`
+so that it cannot shadow `difflow_cc.AbsorberParams` in the serializer's
+by-name lookup).
+
+Three models, chosen by `params.model`:
+
+**`"kremser"`** (closed form per solute). With the effective absorption factor
+`A_i = L/(K_i V)` (the geometric mean of its top and bottom values, so the flow
+change along the column is carried, Edmister's idea; `variable_flow=False`
+uses the inlet flows) and the equivalent equilibrium stages
+`N_eq = N ln(1+E(S-1))/ln S`, `S = 1/A`, for a Murphree vapor efficiency `E`:
+
+$$
+v_{out} = v_{in}(1-f) + \frac{l_{in}}{A}\,f, \qquad
+f = \frac{A^{N_{eq}+1}-A}{A^{N_{eq}+1}-1}.
+$$
+
+This includes solute in the entering solvent (`l_in/A = K x_in V` is the gas
+in equilibrium with it), holds for every `A > 0` (for `A < 1` the removal
+tends to `A`, not 1) and passes smoothly through `A = 1`. `n_stages` is a real
+number, so it is differentiable. The effective-stage ratio is the Lewis
+relation for a vapor efficiency (`difflow_cc` uses the `A` form, which is the
+liquid-side efficiency).
+
+**`"stages"`** (tray-to-tray). All component balances plus the Murphree stage
+relation, solved as one linear system per solute and iterated a fixed number of
+times on the total flows of every stage. It carries the flow change that the
+Kremser mean `A` only approximates, handles any number of solutes at once, and
+is the oracle the Kremser mode is checked against (they agree to about `1e-4`
+at dilute solute and diverge as the solute gets concentrated). `n_stages`
+must be a concrete integer.
+
+**`"packed"`** (rate-based HTU/NTU). `Z = H_OG N_OG` with
+`H_OG = H_G + lambda H_L`, `lambda = 1/A = K V/L`. The film heights come from
+the Onda correlations of [Packed-Column Mass Transfer](#mass-transfer-packed)
+(give `packing`, `diameter`, `D_G`/`D_L` per solute and the fluid properties;
+viscosities, density and surface tension default to air and water at
+25 C) or you give `H_OG`. For straight lines the outlet follows Colburn's
+closed form; `ntu_method="integral"` evaluates `N_OG` by quadrature for the key
+solute (`concentrated=True` adds the `(1-y)_lm` correction). **Rating**: give
+`height`; **design**: give `recovery` and read `info["height"]`. Flooding and
+pressure drop are not part of this unit: give the diameter.
+
+**Design instead of rating.** Setting `recovery` (the fraction of the
+`key_solute` removed from the gas) makes the Kremser stage count or the packed
+height an output; the other solutes are then rated at that size. A target
+below the minimum solvent rate is flagged (`info["feasible"]` is False, the
+stage count is `inf`, nothing is NaN).
+
+`info` holds, per solute, `recovery`, `transferred` (mol/s, gas to liquid), `A`,
+`S`, `K`, `N_eq` (and `N_OG`, `H_OG` for packed); `n_stages` and `height`;
+`L_min` and `L_over_Lmin` for the key solute; the solute-free operating line
+and equilibrium curve `X`, `Y`, `Y_eq` for plotting; `Q_absorption` (W),
+`delta_T_adiabatic` (K), `converged` and `feasible`.
+
+```python
+import jax.numpy as jnp
+from difflow import Absorber, AbsorptionParams, make_stream
+from difflow.units.absorption import henry_params
+
+# acetone scrubbed from air with water at 25 C (Henry's constants from memory)
+henry, henry_C = henry_params(["acetone"])
+gas = make_stream({"air": 1.0, "acetone": 0.02}, 298.15, 101325.0)    # mol/s
+water = make_stream({"H2O": 2.0}, 298.15, 101325.0)
+
+for model in ("kremser", "stages"):
+    absorber = Absorber(AbsorptionParams(henry=henry, henry_C=henry_C,
+                                         model=model, n_stages=6))
+    treated, rich, info = absorber(gas, water)
+    print(model, "recovery", float(info["recovery"]["acetone"]),
+          "L/L_min", float(info["L_over_Lmin"]))
+
+# design: how many stages for 95 % recovery at this solvent rate?
+design = Absorber(AbsorptionParams(henry=henry, henry_C=henry_C, recovery=0.95))
+_, _, info = design(gas, water)
+print("stages for 95 %:", float(info["n_stages"]))
+```
+
+Packed rating and design, with the Onda films (diffusivities from the
+correlations of the mass-transfer section):
+
+```python
+from difflow import Absorber, AbsorptionParams, make_stream
+from difflow.mass_transfer import (diffusion_volume, fuller_diffusivity,
+                                   wilke_chang_diffusivity)
+from difflow.units.absorption import henry_params
+
+henry, henry_C = henry_params(["acetone"])
+D_G = fuller_diffusivity(298.15, 101325.0, 58.08, 28.96,
+                         diffusion_volume({"C": 3, "H": 6, "O": 1}), 19.7)
+D_L = wilke_chang_diffusivity(298.15, 8.9e-4, 18.015, 74.0, 2.6)
+gas = make_stream({"air": 20.0, "acetone": 0.4}, 298.15, 101325.0)
+water = make_stream({"H2O": 50.0}, 298.15, 101325.0)
+
+column = dict(henry=henry, henry_C=henry_C, model="packed",
+              packing="pall_metal_50", diameter=0.8,
+              D_G={"acetone": float(D_G)}, D_L={"acetone": float(D_L)})
+_, _, d = Absorber(AbsorptionParams(recovery=0.95, **column))(gas, water)
+print("height for 95 %:", float(d["height"]), "m;  H_OG:", float(d["H_OG"]["acetone"]), "m")
+_, _, r = Absorber(AbsorptionParams(height=float(d["height"]), **column))(gas, water)
+print("rating at that height:", float(r["recovery"]["acetone"]))
+```
+
+Library helpers (not palette units): `solute_free_operating_line(G_s, L_s,
+X_ref, Y_ref)` gives the straight operating line `Y = slope X + intercept` in
+solute-free ratios; `minimum_solvent_rate(curve, Y_in, Y_out, X_in, G_s)`
+finds the pinch (rich end, or tangent for a curved equilibrium) with the
+mole-fraction equilibrium curve of `difflow.staged`, returning the minimum
+solute-free solvent rate (`inf` if the spec is below equilibrium with the
+entering solvent); `minimum_stripping_gas_rate` is its mirror image;
+`kremser_absorption(A, N)` and `kremser_stages(A, fraction)` are the
+`difflow.staged` functions. The design rule of thumb is `L = 1.2-2 L_min`.
+
+```python
+from difflow.staged import tabulated
+from difflow.units.absorption import minimum_solvent_rate
+
+# a curved (inflected) equilibrium table: the pinch is a tangent, not the rich end
+curve = tabulated([0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.10],
+                  [0, 0.002, 0.004, 0.009, 0.022, 0.050, 0.080, 0.105, 0.120])
+Y_in = 0.12 / 0.88
+L_min = minimum_solvent_rate(curve, Y_in=Y_in, Y_out=2e-4, X_in=0.0, G_s=1.0)
+print("L_s,min / G_s =", float(L_min))
+```
+
+Absorber and stripper with solvent recycle go through `Flowsheet.solve` like
+any two-inlet unit; the recycled liquid is the tear stream, and the whole loop
+is differentiable with respect to the solvent rate (the L/G trade-off between
+absorber size and stripper duty is a `jax.grad` away; see
+`examples/52_absorption_stripping.ipynb`).
+
+Assumptions: dilute-to-moderate solutes with constant `K_i` per solute (no
+activity-coefficient model: modified Raoult with `thermo` is not implemented),
+isothermal, no solvent volatility, no reaction.
+
+What was and was not verified: the Kremser closed form (including `A < 1`
+and `A = 1`); the stage-by-stage mode against a separate SciPy `fsolve` of the
+nonlinear tray equations; the Kremser/stages agreement for dilute linear
+equilibrium, with and without a Murphree efficiency; Colburn against the
+numerical `N_OG` integral and the rating/design inversion; the minimum
+solvent rate against a dense chord-slope scan (rich-end and tangent pinches);
+per-species mass balances in every mode; `check_grads`; an
+absorber-stripper recycle flowsheet through `fs.solve`. **No published
+textbook worked example (Seader-Henley-Roper Ch. 6, McCabe-Smith-Harriott
+Ch. 18, Geankoplis Ch. 10, Wankat Ch. 12/16, Crittenden Ch. 14) is
+reproduced**: the issue's numbers are unverified recollections, so none is
+quoted. See `tests/test_absorption.py`.
+
+### Stripper
+
+**Location**: `difflow/units/absorption.py`
+
+**Class**: `Stripper(params)(gas_in, liquid_in) -> (gas_out, liquid_out, info)`
+
+The same column run the other way: `gas_in` is the stripping gas (air or
+steam) at the bottom and `liquid_in` the rich liquid at the top. It shares the
+implementation, the three models and `AbsorptionParams` with `Absorber`; the
+differences are that `recovery` is the fraction of the key solute removed from
+the **liquid**, and `info` reports the minimum stripping-gas rate `G_min` and
+`G_over_Gmin` instead of `L_min`. The stripping factor `S = K V/L` is in
+`info["S"]`: with a clean gas the Kremser relation is
+`x_out/x_in = (S-1)/(S^(N+1)-1)`, and with `S < 1` infinitely many stages
+still remove only the fraction `S`. A volatile, sparingly soluble solute (a
+large Henry's constant, TCE in water) needs a small air/water ratio, which is
+why air stripping works.
+
+```python
+from difflow import Stripper, AbsorptionParams, make_stream
+from difflow.units.absorption import HENRY_WATER, henry_params
+
+henry, henry_C = henry_params(["TCE"])          # TCE in water (from memory)
+K = HENRY_WATER["TCE"].H298 / 101325.0
+L = 1000.0                                        # mol/s of water
+air = make_stream({"air": 4.0 * L / K}, 298.15, 101325.0)    # stripping factor S = 4
+water = make_stream({"H2O": L, "TCE": 1e-3}, 298.15, 101325.0)
+
+stripper = Stripper(AbsorptionParams(henry=henry, henry_C=henry_C,
+                                     recovery=0.99, variable_flow=False))
+offgas, treated, info = stripper(air, water)
+print("S =", float(info["S"]["TCE"]), " stages for 99 %:", float(info["n_stages"]),
+      " G/G_min:", float(info["G_over_Gmin"]))
+```
+
+The TCE case is a hand-worked example with the Henry's constant above, not
+the textbook example of the issue (which could not be retrieved).
+
+---
+
 ## Heat Exchangers
 
 ### Heater
