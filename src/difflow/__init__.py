@@ -127,6 +127,12 @@ from difflow.units.flash import (
     PHFlash,
     Mixer,
     Splitter,
+    ComponentSplitter,
+    ComponentSplitterParams,
+)
+from difflow.units.stoichiometric import (
+    StoichiometricReactor,
+    StoichiometricReactorParams,
 )
 from difflow.activity import (
     ActivityModel,
@@ -346,6 +352,7 @@ from difflow.combustion import IdealGasThermo
 from difflow.flowsheet import (
     Flowsheet,
     Unit,
+    DegreesOfFreedom,
     create_objective,
     ConvergenceWarning,
     ConvergenceError,
@@ -592,6 +599,10 @@ __all__ = [
     "PHFlash",
     "Mixer",
     "Splitter",
+    "ComponentSplitter",
+    "ComponentSplitterParams",
+    "StoichiometricReactor",
+    "StoichiometricReactorParams",
     # Unit operations - LLE
     "MultistageCascade",
     "CascadeParams",
@@ -825,6 +836,7 @@ __all__ = [
     "calculation_order",
     "analyze_tears",
     "TearAnalysis",
+    "DegreesOfFreedom",
     "CycleEnumerationWarning",
     # Plugin infrastructure
     "registry",

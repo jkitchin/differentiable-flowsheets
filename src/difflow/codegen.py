@@ -239,8 +239,8 @@ def to_python(
     body.append(
         f"fs = Flowsheet(species_order={list(flowsheet.species_order)!r}, "
         f"default_flow={flowsheet.default_flow!r}, "
-        f"default_T={flowsheet.default_T!r}, "
-        f"default_P={flowsheet.default_P!r})"
+        f"default_T={None if flowsheet.infer_tear_T else flowsheet.default_T!r}, "
+        f"default_P={None if flowsheet.infer_tear_P else flowsheet.default_P!r})"
     )
     body.append("")
 

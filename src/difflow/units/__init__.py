@@ -6,6 +6,8 @@ Core unit operations:
 - FedBatchReactor: Fed-batch/semi-batch reactor
 - Flash: Vapor-liquid equilibrium flash
 - Mixer/Splitter: Stream combining and splitting
+- ComponentSplitter: per-species split fractions (ideal separator)
+- StoichiometricReactor: fixed conversion of a key reactant
 - MultistageCascade: Liquid-liquid extraction
 - ShortcutColumn/DistillationColumn: Distillation
 - Heater/Cooler: Single-stream heat exchange with utility
@@ -47,6 +49,12 @@ from difflow.units.flash import (
     PHFlash,
     Mixer,
     Splitter,
+    ComponentSplitter,
+    ComponentSplitterParams,
+)
+from difflow.units.stoichiometric import (
+    StoichiometricReactor,
+    StoichiometricReactorParams,
 )
 from difflow.units.lle import (
     MultistageCascade,
@@ -280,6 +288,10 @@ __all__ = [
     "PHFlash",
     "Mixer",
     "Splitter",
+    "ComponentSplitter",
+    "ComponentSplitterParams",
+    "StoichiometricReactor",
+    "StoichiometricReactorParams",
     # LLE
     "MultistageCascade",
     "CascadeParams",
