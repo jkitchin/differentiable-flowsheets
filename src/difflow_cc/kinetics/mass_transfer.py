@@ -5,6 +5,14 @@ in packed columns used for amine-based CO2 absorption.
 
 All correlations are JAX-compatible for automatic differentiation.
 
+The Onda functions (:func:`gas_film_coefficient`,
+:func:`liquid_film_coefficient`, :func:`interfacial_area`) and the HTU/NTU
+helpers are **deprecated thin wrappers** on :mod:`difflow.mass_transfer`
+(``onda_gas_coefficient``, ``onda_liquid_coefficient``, ``onda_wetted_area``,
+``htu_og``, ``ntu_og_colburn``). Their values changed in #427: the old
+implementations disagreed with the published Onda (1968) form (see the core
+docstrings). ``overall_mass_transfer`` is unchanged.
+
 References:
     Onda K et al. (1968). Mass transfer coefficients between gas
         and liquid phases in packed columns. J Chem Eng Japan 1:56-62.
@@ -22,13 +30,22 @@ __all__ = [
     "interfacial_area",
 ]
 
+import warnings
+
 import jax.numpy as jnp
 from jax import Array
 
+from difflow import mass_transfer as _mt
 from difflow.numerics import safe_divide
 
-# Constants
-g = 9.81  # m/s²
+
+def _deprecated(old: str, new: str) -> None:
+    warnings.warn(
+        f"difflow_cc.kinetics.{old} is deprecated; use difflow.mass_transfer.{new}. "
+        "Values differ from earlier versions (corrected Onda 1968 form).",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 
 def gas_film_coefficient(
@@ -39,15 +56,15 @@ def gas_film_coefficient(
     D_G: Array | float,
     a_p: Array | float,
 ) -> Array:
-    """Calculate gas-side mass transfer coefficient.
+    """Deprecated: use ``difflow.mass_transfer.onda_gas_coefficient`` (corrected).
+
+    Gas-side coefficient ``k_c`` (m/s).
 
     Uses Onda correlation (1968):
         k_G * R * T / (a_p * D_G) = 5.23 * (G / (a_p * mu_G))^0.7
                                     * (mu_G / (rho_G * D_G))^(1/3)
                                     * (a_p * d_p)^-2
-
-    Simplified form for packed columns:
-        k_G = C * (u_G / a_p)^0.7 * (D_G / d_p)^0.67
+    (C = 2.00 for d_p < 15 mm); see the core docstring.
 
     Args:
         u_G: Superficial gas velocity (m/s)
@@ -63,23 +80,8 @@ def gas_film_coefficient(
     References:
         Onda K et al. (1968). J Chem Eng Japan 1:56.
     """
-    u_G = jnp.asarray(u_G)
-    d_p = jnp.asarray(d_p)
-    mu_G = jnp.asarray(mu_G)
-    rho_G = jnp.asarray(rho_G)
-    D_G = jnp.asarray(D_G)
-    a_p = jnp.asarray(a_p)
-
-    # Reynolds number
-    Re_G = rho_G * u_G / (a_p * mu_G)
-
-    # Schmidt number
-    Sc_G = mu_G / (rho_G * D_G)
-
-    # Onda correlation
-    k_G = 5.23 * (D_G / d_p) * jnp.power(Re_G, 0.7) * jnp.power(Sc_G, 1/3)
-
-    return k_G
+    _deprecated("gas_film_coefficient", "onda_gas_coefficient")
+    return _mt.onda_gas_coefficient(u_G, rho_G, mu_G, D_G, a_p=a_p, d_p=d_p)
 
 
 def liquid_film_coefficient(
@@ -92,7 +94,10 @@ def liquid_film_coefficient(
     sigma: Array | float = 0.072,
     sigma_c: Array | float = 0.075,
 ) -> Array:
-    """Calculate liquid-side mass transfer coefficient.
+    """Deprecated: use ``difflow.mass_transfer.onda_liquid_coefficient`` (corrected).
+
+    Liquid-side coefficient. ``sigma`` / ``sigma_c`` keep their old hidden
+    defaults here only for backward compatibility.
 
     Uses Onda correlation (1968):
         k_L * (rho_L / (mu_L * g))^(1/3) = 0.0051 * (L / (a_w * mu_L))^(2/3)
@@ -115,35 +120,10 @@ def liquid_film_coefficient(
     References:
         Onda K et al. (1968). J Chem Eng Japan 1:56.
     """
-    u_L = jnp.asarray(u_L)
-    d_p = jnp.asarray(d_p)
-    mu_L = jnp.asarray(mu_L)
-    rho_L = jnp.asarray(rho_L)
-    D_L = jnp.asarray(D_L)
-    a_p = jnp.asarray(a_p)
-    sigma = jnp.asarray(sigma)
-    sigma_c = jnp.asarray(sigma_c)
-
-    # Reynolds number
-    Re_L = rho_L * u_L / (a_p * mu_L)
-
-    # Schmidt number
-    Sc_L = mu_L / (rho_L * D_L)
-
-    # Froude number
-    Fr_L = u_L**2 * a_p / g
-
-    # Weber number
-    We_L = rho_L * u_L**2 / (sigma * a_p)
-
-    # Characteristic length
-    L_char = jnp.power(mu_L**2 / (rho_L**2 * g), 1/3)
-
-    # Onda correlation
-    k_L = 0.0051 * jnp.power(Re_L, 2/3) * jnp.power(Sc_L, -0.5) * \
-          jnp.power(a_p * d_p, 0.4) * jnp.power(rho_L * g / mu_L, 1/3)
-
-    return k_L
+    _deprecated("liquid_film_coefficient", "onda_liquid_coefficient")
+    return _mt.onda_liquid_coefficient(
+        u_L, rho_L, mu_L, D_L, sigma, a_p=a_p, d_p=d_p, sigma_c=sigma_c
+    )
 
 
 def interfacial_area(
@@ -155,7 +135,9 @@ def interfacial_area(
     a_p: Array | float,
     sigma_c: Array | float = 0.075,
 ) -> Array:
-    """Calculate effective gas-liquid interfacial area.
+    """Deprecated: use ``difflow.mass_transfer.onda_wetted_area``.
+
+    Effective gas-liquid interfacial area.
 
     Uses Onda correlation (1968):
         a_w / a_p = 1 - exp(-1.45 * (sigma_c/sigma)^0.75
@@ -176,26 +158,8 @@ def interfacial_area(
     References:
         Onda K et al. (1968). J Chem Eng Japan 1:56.
     """
-    u_L = jnp.asarray(u_L)
-    rho_L = jnp.asarray(rho_L)
-    mu_L = jnp.asarray(mu_L)
-    sigma = jnp.asarray(sigma)
-    a_p = jnp.asarray(a_p)
-    sigma_c = jnp.asarray(sigma_c)
-
-    # Dimensionless numbers
-    Re_L = rho_L * u_L / (a_p * mu_L)
-    Fr_L = u_L**2 * a_p / g
-    We_L = rho_L * u_L**2 / (sigma * a_p)
-
-    # Onda correlation
-    ratio = sigma_c / sigma
-    exponent = -1.45 * jnp.power(ratio, 0.75) * \
-               jnp.power(Re_L, 0.1) * jnp.power(Fr_L, -0.05) * jnp.power(We_L, 0.2)
-
-    a_w = a_p * (1 - jnp.exp(exponent))
-
-    return a_w
+    _deprecated("interfacial_area", "onda_wetted_area")
+    return _mt.onda_wetted_area(u_L, rho_L, mu_L, sigma, a_p=a_p, sigma_c=sigma_c)
 
 
 def overall_mass_transfer(
@@ -244,7 +208,9 @@ def height_of_transfer_unit(
     K_G: Array | float,
     a_w: Array | float,
 ) -> Array:
-    """Calculate height of a transfer unit (HTU).
+    """Deprecated: use ``difflow.mass_transfer.htu_og``.
+
+    Height of a transfer unit (HTU).
 
     HTU_G = u_G / (K_G * a_w)
 
@@ -260,13 +226,8 @@ def height_of_transfer_unit(
         Column height = HTU * NTU
         where NTU is number of transfer units from driving force integration.
     """
-    u_G = jnp.asarray(u_G)
-    K_G = jnp.asarray(K_G)
-    a_w = jnp.asarray(a_w)
-
-    HTU = safe_divide(u_G, K_G * a_w)
-
-    return HTU
+    _deprecated("height_of_transfer_unit", "htu_og")
+    return _mt.htu_og(u_G, K_G, a_w)
 
 
 def number_of_transfer_units(
@@ -274,7 +235,9 @@ def number_of_transfer_units(
     y_out: Array | float,
     y_eq_avg: Array | float,
 ) -> Array:
-    """Calculate number of transfer units (NTU).
+    """Deprecated: use ``difflow.mass_transfer.ntu_og_colburn``.
+
+    Number of transfer units (NTU), constant equilibrium value.
 
     For dilute systems with linear equilibrium:
         NTU = ln((y_in - y_eq)/(y_out - y_eq))
@@ -292,18 +255,14 @@ def number_of_transfer_units(
         along the column. This simplified version assumes constant
         equilibrium (valid for low conversion or high L/G).
     """
+    _deprecated("number_of_transfer_units", "ntu_og_colburn")
     y_in = jnp.asarray(y_in)
     y_out = jnp.asarray(y_out)
     y_eq_avg = jnp.asarray(y_eq_avg)
-
-    # Log-mean driving force
-    df_in = y_in - y_eq_avg
-    df_out = y_out - y_eq_avg
-
-    # Avoid log of negative numbers
-    df_in = jnp.maximum(df_in, 1e-10)
-    df_out = jnp.maximum(df_out, 1e-10)
-
-    NTU = jnp.log(df_in / df_out)
-
+    # Constant equilibrium value y* = y_eq_avg is the lam = 0 Colburn limit
+    # (m = 1, x_in = y*); the driving forces keep their historical floor.
+    y_in = y_eq_avg + jnp.maximum(y_in - y_eq_avg, 1e-10)
+    y_out = y_eq_avg + jnp.maximum(y_out - y_eq_avg, 1e-10)
+    NTU = _mt.ntu_og_colburn(y_in, y_out, y_eq_avg, 1.0, 0.0)
     return jnp.maximum(NTU, 0.0)
+

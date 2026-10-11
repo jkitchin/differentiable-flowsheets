@@ -22,8 +22,9 @@ Steam properties
 Water/steam properties are self-contained correlations (below); the module
 does not use ``IdealThermo``'s Antoine/Watson water entry because evaporators
 run at 20-200 C where a 1-2 % error in the latent heat goes straight into the
-steam economy. See :func:`water_saturation_pressure` and friends for what each
-correlation is and what was checked.
+steam economy. The correlations now live in :mod:`difflow.water` (shared with
+:mod:`difflow.psychrometrics`) and are re-exported here; see that module for
+what each correlation is and what was checked.
 
 All functions are JAX-only and differentiable; the multiple-effect solve uses
 ``optimistix`` (Newton) so it differentiates with respect to U, the feed and the
@@ -46,84 +47,24 @@ from difflow.streams import Stream, get_flows
 # =============================================================================
 # Water / steam properties (SI: K, Pa, J/kg)
 # =============================================================================
+# The correlations live in :mod:`difflow.water` (shared with
+# :mod:`difflow.psychrometrics`); they are re-exported here so that
+# ``from difflow.units.evaporator import water_saturation_pressure`` keeps
+# working. Evaporators run at 20-200 C, where the original fits are unchanged.
 
-#: 0 C in K; the liquid enthalpy reference (h = 0 for saturated liquid at 0 C)
-T_REF = 273.15
-#: Critical temperature of water (K), IAPWS
-T_CRIT_WATER = 647.096
-#: Specific gas constant of steam, J/kg/K
-R_STEAM = 461.5
-
-# IAPWS-IF97 region-4 saturation-line coefficients (Wagner & Pruss 1993;
-# IAPWS-IF97 Eq. 29-31). Checked numerically in tests (round trip, and
-# Psat(100 C) = 101.418 kPa).
-_N = (
-    0.11670521452767e4, -0.72421316703206e6, -0.17073846940092e2,
-    0.12020824702470e5, -0.32325550322333e7, 0.14915108613530e2,
-    -0.48232657361591e4, 0.40511340542057e6, -0.23855557567849,
-    0.65017534844798e3,
+from difflow.water import (  # noqa: E402,F401  (re-exports)
+    R_STEAM,
+    T_CRIT_WATER,
+    T_REF,
+    _HF_COEFFS,
+    _HFG_COEFFS,
+    _N,
+    water_latent_heat,
+    water_liquid_enthalpy,
+    water_saturation_pressure,
+    water_saturation_temperature,
+    water_vapor_enthalpy,
 )
-
-# Saturated-liquid enthalpy h_f(t) = c3 t^3 + c2 t^2 + c1 t + c0, t in C,
-# J/kg, and latent heat h_fg = a (1 - T/Tc)^(b + c T/Tc). Both are least-squares
-# fits to eight saturated-steam-table points (25, 50, 75, 100, 120, 150, 180,
-# 200 C) recalled from a standard steam table (Cengel-type, IAPWS-95 values),
-# NOT regenerated from IAPWS here. Max fit residuals over those points: h_f
-# 0.04 %, h_fg 0.09 %. Valid 20-200 C; extrapolation outside that is
-# unchecked.
-_HF_COEFFS = (4.53143312e-03, -6.69677099e-01, 4.21481377e03, -2.36660783e02)
-_HFG_COEFFS = (2.92757368e06, 2.64717681e-01, 6.57306406e-02)
-
-
-def water_saturation_pressure(T: Array | float) -> Array:
-    """Saturation pressure of water (Pa) at temperature ``T`` (K).
-
-    IAPWS-IF97 region-4 equation (Wagner & Pruss), 273.15-647 K.
-    """
-    T = jnp.asarray(T, dtype=jnp.float64)
-    th = T + _N[8] / (T - _N[9])
-    A = th**2 + _N[0] * th + _N[1]
-    B = _N[2] * th**2 + _N[3] * th + _N[4]
-    C = _N[5] * th**2 + _N[6] * th + _N[7]
-    return (2.0 * C / (-B + jnp.sqrt(B * B - 4.0 * A * C))) ** 4 * 1.0e6
-
-
-def water_saturation_temperature(P: Array | float) -> Array:
-    """Saturation temperature of water (K) at pressure ``P`` (Pa).
-
-    Closed-form inverse of :func:`water_saturation_pressure` (IAPWS-IF97
-    backward equation), 611 Pa to 22 MPa.
-    """
-    P = jnp.asarray(P, dtype=jnp.float64)
-    b = (P / 1.0e6) ** 0.25
-    E = b * b + _N[2] * b + _N[5]
-    F = _N[0] * b * b + _N[3] * b + _N[6]
-    G = _N[1] * b * b + _N[4] * b + _N[7]
-    D = 2.0 * G / (-F - jnp.sqrt(F * F - 4.0 * E * G))
-    return 0.5 * (_N[9] + D - jnp.sqrt((_N[9] + D) ** 2 - 4.0 * (_N[8] + _N[9] * D)))
-
-
-def water_latent_heat(T: Array | float) -> Array:
-    """Latent heat of vaporization of water (J/kg) at saturation temperature ``T`` (K).
-
-    Fit of the form ``a (1 - Tr)^(b + c Tr)`` to steam-table points; see the
-    module notes (valid 20-200 C, about 0.1 %).
-    """
-    Tr = jnp.asarray(T, dtype=jnp.float64) / T_CRIT_WATER
-    a, b, c = _HFG_COEFFS
-    return a * (1.0 - Tr) ** (b + c * Tr)
-
-
-def water_liquid_enthalpy(T: Array | float) -> Array:
-    """Saturated-liquid enthalpy of water (J/kg), zero at 0 C (valid 20-200 C)."""
-    t = jnp.asarray(T, dtype=jnp.float64) - T_REF
-    c3, c2, c1, c0 = _HF_COEFFS
-    return ((c3 * t + c2) * t + c1) * t + c0
-
-
-def water_vapor_enthalpy(T: Array | float) -> Array:
-    """Saturated-vapor enthalpy of water (J/kg) at saturation temperature ``T`` (K)."""
-    return water_liquid_enthalpy(T) + water_latent_heat(T)
 
 
 # =============================================================================

@@ -41,6 +41,7 @@ import numpy as np
 from jax import Array
 
 from difflow.numerics import safe_divide
+from difflow.staged import kremser_fraction, kremser_stages  # noqa: F401  (re-exported)
 from difflow_ree.database import (
     get_extractant_database,
     get_extractant,
@@ -1560,23 +1561,17 @@ def stages_kremser(
     S_F: Array | float,
     recovery: float = 0.99,
 ) -> Array:
-    """Number of counter-current stages for a recovery, from Kremser.
+    """Number of stages from the Kremser equation (counter-current extraction).
 
-    With extraction factor ``E = D * S/F`` and a solute-free solvent, the
-    fraction extracted in ``N`` ideal stages is
-
-        recovery = (E^(N+1) - E) / (E^(N+1) - 1),
-
-    so ``E^(N+1) = (E - recovery) / (1 - recovery)`` and
-
-        N = ln((E - recovery) / (1 - recovery)) / ln(E) - 1,
-
-    with the limit ``N = recovery / (1 - recovery)`` at ``E = 1``.
-    Infinitely many stages recover at most ``min(E, 1)``, so a recovery of
-    ``E`` or more with ``E < 1`` is unreachable and returns ``inf``.
-
-    The result is floored at 1 stage (see :func:`stages_fenske` for an
-    unfloored lower bound).
+    A thin wrapper on :func:`difflow.staged.kremser_stages` with the
+    extraction factor ``E = D * S/F``:
+    ``N = ln((E - R)/(1 - R))/ln E - 1``. Fixed in #424: the previous form
+    ``ln((R(E-1)+1)/E)/ln E`` was negative for every ``E > 1`` and its
+    floor returned 1.0 for every input. Valid for any ``E > 0`` (``E = 1``
+    is the limit ``R/(1-R)``; ``E < 1`` needs ``R < E``, else ``inf``). Still
+    floored at one stage, like ``difflow.units.lle.stages_for_recovery``
+    (a cascade has at least one stage); the unfloored, fractional value is
+    :func:`difflow.staged.kremser_stages`.
 
     Args:
         D: Distribution coefficient
@@ -1584,28 +1579,9 @@ def stages_kremser(
         recovery: Desired recovery fraction, in (0, 1)
 
     Returns:
-        Number of theoretical stages (continuous; ``inf`` if unreachable)
-
-    Example:
-        >>> float(stages_kremser(2.0, 1.0, 0.9))  # E = 2: 2^(N+1) = 11
-        2.4594316186372978
+        Number of theoretical stages
     """
-    D = jnp.asarray(D, dtype=float)
-    S_F = jnp.asarray(S_F, dtype=float)
-    E = D * S_F
-
-    near_one = jnp.abs(E - 1.0) < 1e-6
-    reachable = E > recovery
-    ok = reachable & ~near_one
-    # Safe placeholders keep both jnp.where branches finite (and their
-    # gradients NaN-free) where the other branch is selected.
-    E_safe = jnp.where(ok, E, 2.0)
-    arg = jnp.where(ok, (E_safe - recovery) / (1.0 - recovery), 3.0)
-    N_kremser = jnp.log(arg) / jnp.log(E_safe) - 1.0
-
-    N = jnp.where(near_one, recovery / (1.0 - recovery), N_kremser)
-    N = jnp.where(reachable | near_one, N, jnp.inf)
-    return jnp.maximum(N, 1.0)
+    return jnp.maximum(kremser_stages(jnp.asarray(D) * jnp.asarray(S_F), recovery), 1.0)
 
 
 def stages_fenske(

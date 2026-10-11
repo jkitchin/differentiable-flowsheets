@@ -112,6 +112,83 @@ export const SYMBOLS = {
     ],
   },
 
+  /** A counterflow cooling tower: louvred box, wet fill, fan stack above. */
+  cooling_tower: {
+    label: 'cooling tower',
+    shapes: [
+      ['path', { d: 'M12 36l3-22h18l3 22z' }],
+      ['rect', { x: 15, y: 19, width: 18, height: 10, ...WASH }],
+      ['path', { d: 'M17 22l14 4M31 22l-14 4', fill: 'none' }],
+      ['rect', { x: 18, y: 8, width: 12, height: 6, rx: 1 }],
+      ['line', { x1: 20, y1: 11, x2: 28, y2: 11 }],
+      ['line', { x1: 24, y1: 3, x2: 24, y2: 8 }],
+      ['line', { x1: 8, y1: 36, x2: 40, y2: 36 }],
+    ],
+  },
+
+  /** A rotary dryer: inclined drum on trunnions, feed chute and discharge. */
+  dryer: {
+    label: 'dryer',
+    shapes: [
+      ['path', { d: 'M8 16l32 2v12l-32 2z' }],
+      ['path', { d: 'M14 17v14M22 18v12M30 19v10', fill: 'none' }],
+      ['line', { x1: 4, y1: 8, x2: 12, y2: 14 }],
+      ['line', { x1: 36, y1: 34, x2: 44, y2: 40 }],
+      ['line', { x1: 14, y1: 38, x2: 14, y2: 34 }],
+      ['line', { x1: 32, y1: 38, x2: 32, y2: 34 }],
+    ],
+  },
+
+  /** A crystallizer: a vessel with a conical draft-tube bottom and a faceted crystal. */
+  crystallizer: {
+    label: 'crystallizer',
+    shapes: [
+      ['path', { d: 'M12 6h24v20l-8 10h-8l-8-10z' }],
+      ['line', { x1: 12, y1: 14, x2: 36, y2: 14 }],
+      ['path', { d: 'M24 18l5 4-2 6h-6l-2-6z', ...WASH }],
+      ['line', { x1: 24, y1: 1, x2: 24, y2: 6 }],
+      ['line', { x1: 24, y1: 36, x2: 24, y2: 40 }],
+    ],
+  },
+
+  /** A thickener / settler: a shallow tank with a conical floor, a rake and the solids drawn off below. */
+  settler: {
+    label: 'settler',
+    shapes: [
+      ['path', { d: 'M5 10h38v14l-19 8-19-8z' }],
+      ['line', { x1: 24, y1: 3, x2: 24, y2: 22 }],
+      ['line', { x1: 10, y1: 21, x2: 38, y2: 21 }],
+      ['path', { d: 'M8 26l16 6 16-6v-2l-16 6-16-6z', ...WASH }],
+      ['line', { x1: 24, y1: 32, x2: 24, y2: 38 }],
+    ],
+  },
+
+  /** A cake filter: a filter-press frame with the plates, a cake band and the filtrate drain. */
+  cake_filter: {
+    label: 'cake filter',
+    shapes: [
+      ['rect', { x: 6, y: 8, width: 36, height: 22, rx: 1 }],
+      ['line', { x1: 15, y1: 8, x2: 15, y2: 30 }],
+      ['line', { x1: 24, y1: 8, x2: 24, y2: 30 }],
+      ['line', { x1: 33, y1: 8, x2: 33, y2: 30 }],
+      ['rect', { x: 16, y: 10, width: 7, height: 18, ...WASH }],
+      ['rect', { x: 25, y: 10, width: 7, height: 18, ...WASH }],
+      ['line', { x1: 24, y1: 30, x2: 24, y2: 38 }],
+    ],
+  },
+
+  /** A gas cyclone: a cylinder over a cone, tangential inlet, a vortex-finder tube and the dust leg. */
+  cyclone: {
+    label: 'cyclone',
+    shapes: [
+      ['path', { d: 'M14 10h20v12l-7 14h-6l-7-14z' }],
+      ['line', { x1: 24, y1: 2, x2: 24, y2: 18 }],
+      ['line', { x1: 4, y1: 13, x2: 14, y2: 13 }],
+      ['polyline', { points: '19,24 24,27 29,24' }],
+      ['line', { x1: 24, y1: 36, x2: 24, y2: 40 }],
+    ],
+  },
+
   /** Heat in: the exchanger circle with the arrow pointing at it. */
   heater: {
     label: 'heater',
@@ -432,8 +509,12 @@ export const OPERATION_SYMBOLS = {
 
   // distillation and contacting
   DistillationColumn: 'column',
+  BatchDistillation: 'column',
+  Absorber: 'packed_column',
+  Stripper: 'packed_column',
   ShortcutColumn: 'column',
   MultistageCascade: 'column',
+  Leacher: 'train',
   DifferentialContactor: 'packed_column',
   LLEEquilibrium: 'stirred_tank',
 
@@ -450,6 +531,20 @@ export const OPERATION_SYMBOLS = {
   Evaporator: 'evaporator',
   MultiEffectEvaporator: 'evaporator',
   MechanicalVaporRecompression: 'evaporator',
+
+  // humidification
+  CoolingTower: 'cooling_tower',
+
+  // drying
+  Dryer: 'dryer',
+
+  // crystallization
+  Crystallizer: 'crystallizer',
+
+  // mechanical separations
+  Settler: 'settler',
+  CakeFilter: 'cake_filter',
+  Cyclone: 'cyclone',
 
   // pressure
   EOSCompressor: 'compressor',
@@ -539,6 +634,9 @@ export const CATEGORY_SYMBOLS = {
   chromatography: 'chromatography',
   heat_transfer: 'heat_exchanger',
   evaporation: 'evaporator',
+  drying: 'dryer',
+  crystallization: 'crystallizer',
+  mechanical: 'separator',
   pressure_change: 'compressor',
   power: 'turbine',
   gas_network: 'pipe',

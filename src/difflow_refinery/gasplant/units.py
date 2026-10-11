@@ -46,20 +46,9 @@ class GasColumnConvergenceWarning(UserWarning):
     """A gas-plant column did not converge."""
 
 
-def oconnell_efficiency(alpha, mu_cP):
-    """O'Connell's overall tray efficiency (fraction).
-
-    ``E_o = 0.492 (alpha mu_L)^-0.245``, with ``alpha`` the key relative
-    volatility and ``mu_L`` the liquid viscosity (cP), both at the average
-    column conditions. Clipped to ``[0.1, 1]``.
-
-    References:
-        O'Connell, H. E. (1946) Trans. AIChE 42, 741-755 (the data and the
-        curve). The power-law fit is the one quoted by Seader, Henley and
-        Roper, Separation Process Principles (verify the attribution).
-    """
-    E = 0.492 * (jnp.asarray(alpha) * jnp.asarray(mu_cP)) ** -0.245
-    return jnp.clip(E, 0.1, 1.0)
+# O'Connell's correlation now lives in core (difflow.units.column_design); re-exported
+# here because the gas-plant factories and users import it from this module.
+from difflow.units.column_design import oconnell_efficiency  # noqa: E402,F401
 
 
 # ---------------------------------------------------------------------------

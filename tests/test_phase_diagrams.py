@@ -491,3 +491,232 @@ class TestPlots:
         from difflow.visualization import plot_ternary
         with pytest.raises(ValueError):
             plot_ternary(ternary_lle(ternary_model, 300.0, n_tie=2), coords="polar")
+
+
+# --------------------------------------------------------------------------
+# Ternary geometry: mix, lever rule, tie lines, difference point, Hunter-Nash (#430)
+#
+# Verification note: no published Hunter-Nash example (Seader, Treybal, Geankoplis)
+# is reproduced; the inputs and printed answers of those examples could not be
+# retrieved, so no agreement with them is claimed. The construction is checked
+# against (i) the lever rule and component balances exactly, (ii) the analytic
+# Kremser solution for an immiscible ternary (tie lines running from edge to edge
+# with a linear ratio equilibrium), where the stage count is known in closed form,
+# and (iii) its own consistency (operating lines through the difference point,
+# tie lines on the isoactivity curve). The graphical tolerance is the issue's
+# +-0.5 stage; the observed agreement is far tighter.
+# --------------------------------------------------------------------------
+
+from difflow.phase_diagrams import (  # noqa: E402
+    difference_point, hunter_nash, lever_rule, mix, tie_line_through,
+)
+
+
+def _immiscible_ternary(K=2.0, X_max=6.0, m=601):
+    """Tie lines of an immiscible ternary: species 0 and 1 mutually insoluble,
+    the solute at ratio equilibrium Y = K X (X, Y = solute per carrier)."""
+    X = np.linspace(0.0, X_max, m)
+    tl = np.array([[[1 / (1 + x), 0.0, x / (1 + x)],
+                    [0.0, 1 / (1 + K * x), K * x / (1 + K * x)]] for x in X])
+    return {"tie_lines": jnp.asarray(tl)}
+
+
+class TestMixAndLever:
+    def test_mix_conserves_components(self):
+        rng = np.random.default_rng(1)
+        pts = rng.dirichlet(np.ones(3), size=4)
+        a = rng.uniform(0.5, 3.0, size=4)
+        M = np.asarray(mix(pts, a))
+        np.testing.assert_allclose(M.sum(), 1.0, atol=1e-14)
+        np.testing.assert_allclose(a.sum() * M, a @ pts, rtol=1e-14, atol=1e-15)
+
+    def test_lever_rule_exact_on_collinear_points(self):
+        rng = np.random.default_rng(2)
+        for _ in range(10):
+            A, B = rng.dirichlet(np.ones(3), size=2)
+            f = rng.uniform(-0.5, 1.5)            # inside and outside the segment
+            M = (1 - f) * A + f * B
+            fA, fB = lever_rule(M, A, B)
+            np.testing.assert_allclose([fA, fB], [1 - f, f], rtol=1e-12, atol=1e-13)
+            np.testing.assert_allclose(fA * A + fB * B, M, atol=1e-13)
+
+    def test_lever_rule_is_the_segment_length_ratio(self):
+        A, B = np.array([0.9, 0.0, 0.1]), np.array([0.1, 0.8, 0.1])
+        M = 0.3 * A + 0.7 * B
+        fA, fB = lever_rule(M, A, B)
+        np.testing.assert_allclose(fB, np.linalg.norm(M - A) / np.linalg.norm(B - A), rtol=1e-12)
+        np.testing.assert_allclose(fA, np.linalg.norm(B - M) / np.linalg.norm(B - A), rtol=1e-12)
+
+    def test_mix_then_lever_roundtrip(self):
+        A, B = np.array([0.7, 0.1, 0.2]), np.array([0.05, 0.8, 0.15])
+        M = mix(np.stack([A, B]), np.array([2.0, 6.0]))
+        fA, fB = lever_rule(M, A, B)
+        np.testing.assert_allclose([fA, fB], [0.25, 0.75], rtol=1e-12)
+
+    def test_gradients(self):
+        A = jnp.array([0.7, 0.1, 0.2])
+        B = jnp.array([0.05, 0.8, 0.15])
+        check_grads(lambda a: mix(jnp.stack([A, B]), a), (jnp.array([2.0, 6.0]),), order=1, modes=["rev"])
+        check_grads(lambda P: mix(P, jnp.array([2.0, 6.0])), (jnp.stack([A, B]),), order=1, modes=["rev"])
+        M = 0.3 * A + 0.7 * B + jnp.array([1e-3, -2e-3, 1e-3])    # slightly off the line: projected
+        check_grads(lambda m, a, b: lever_rule(m, a, b)[0], (M, A, B), order=1, modes=["rev"])
+        check_grads(lambda m, a, b: lever_rule(m, a, b)[1], (M, A, B), order=1, modes=["rev"])
+
+
+class TestTieLineThrough:
+    def test_passes_through_the_point_and_lever_rule_fractions(self, ternary_model):
+        d = ternary_lle(ternary_model, 300.0, n_tie=30)
+        tl = np.asarray(d["tie_lines"])
+        for i, f in ((3, 0.3), (8, 0.5), (14, 0.8)):
+            P = (1 - f) * tl[i, 0] + f * tl[i, 1]
+            r = tie_line_through(d, P)
+            np.testing.assert_allclose(r["s"], i, atol=1e-6)
+            np.testing.assert_allclose((r["frac_I"] * r["x_I"] + r["frac_II"] * r["x_II"]), P, atol=1e-10)
+            np.testing.assert_allclose(r["frac_II"], f, atol=1e-6)
+
+    def test_between_tabulated_tie_lines_is_near_isoactivity(self, ternary_model):
+        d = ternary_lle(ternary_model, 300.0, n_tie=30)
+        tl = np.asarray(d["tie_lines"])
+        P = 0.5 * (0.5 * tl[7].sum(axis=0) / 1.0 + 0.5 * tl[8].sum(axis=0) / 1.0)   # between 7 and 8
+        r = tie_line_through(d, P / 1.0)
+        for x in (r["x_I"], r["x_II"]):
+            np.testing.assert_allclose(float(jnp.sum(x)), 1.0, atol=1e-12)
+        aI = r["x_I"] * nrtl_activity_coefficients(r["x_I"], 300.0, ternary_model)
+        aII = r["x_II"] * nrtl_activity_coefficients(r["x_II"], 300.0, ternary_model)
+        # interpolated, not solved: relative activity mismatch is interpolation-sized (measured ~1e-3)
+        np.testing.assert_allclose(np.asarray(aI), np.asarray(aII), rtol=2e-2)
+
+    def test_single_phase_point_is_rejected(self, ternary_model):
+        d = ternary_lle(ternary_model, 300.0, n_tie=10)
+        with pytest.raises(ValueError):
+            tie_line_through(d, np.array([0.3, 0.3, 0.4]))      # beyond the plait point's range
+        with pytest.raises(ValueError):
+            tie_line_through(d, np.array([0.99, 0.0, 0.01]))    # pure-ish single-phase corner
+
+
+class TestDifferencePoint:
+    def test_balance_and_collinearity(self):
+        F = np.array([0.7, 0.0, 0.3]); S = np.array([0.0, 1.0, 0.0])
+        RN = np.array([0.9, 0.05, 0.05])
+        M = np.asarray(mix(np.stack([F, S]), np.array([1.0, 2.0])))
+        E1 = RN + 1.7 * (M - RN)                     # collinear R_N - M - E_1, beyond M
+        dp = difference_point(F, E1, S, RN, 1.0, None, 2.0)
+        # extensive balance F + S = E1 + R_N  (component by component)
+        np.testing.assert_allclose(np.asarray(dp["M"]), M, atol=1e-14)
+        np.testing.assert_allclose(3.0 * M, float(dp["E1_amount"]) * E1 + float(dp["R_N_amount"]) * RN, atol=1e-12)
+        np.testing.assert_allclose(float(dp["E1_amount"]), 3.0 / 1.7, rtol=1e-12)   # lever rule
+        # F - E1 = R_N - S, amount-weighted
+        np.testing.assert_allclose(np.asarray(dp["vector"]), float(dp["R_N_amount"]) * RN - 2.0 * S, atol=1e-12)
+        # Delta lies on both line F-E1 and line S-R_N
+        D = np.asarray(dp["composition"])
+        np.testing.assert_allclose(D.sum(), 1.0, atol=1e-12)
+        for p, q in ((F, E1), (S, RN)):
+            u, v = (q - p)[1:], (D - p)[1:]
+            assert abs(u[0] * v[1] - u[1] * v[0]) < 1e-12
+
+    def test_gradients(self):
+        F = jnp.array([0.7, 0.0, 0.3]); S = jnp.array([0.0, 1.0, 0.0]); RN = jnp.array([0.9, 0.05, 0.05])
+        M = mix(jnp.stack([F, S]), jnp.array([1.0, 2.0]))
+        E1 = RN + 1.7 * (M - RN)
+        check_grads(lambda e: difference_point(F, e, S, RN, 1.0, None, 2.0)["composition"], (E1,),
+                    order=1, modes=["rev"])
+
+    def test_parallel_lines_put_delta_at_infinity(self):
+        F = np.array([0.5, 0.0, 0.5]); S = np.array([0.0, 1.0, 0.0])
+        E1 = np.array([0.0, 0.5, 0.5]); RN = np.array([0.5, 0.5, 0.0])
+        # F-E1 is parallel to S-R_N: net flow F - E1 has zero total amount
+        dp = difference_point(F, E1, S, RN, 1.0, 1.0, 1.0, 1.0)
+        assert float(dp["amount"]) == 0.0 and np.all(np.isnan(np.asarray(dp["composition"])))
+
+
+class TestHunterNash:
+    def test_immiscible_limit_equals_kremser(self):
+        """Analytic oracle: edge-to-edge tie lines, Y = K X, so the stage count is Kremser's."""
+        K = 2.0
+        data = _immiscible_ternary(K)
+        F, S = np.array([0.7, 0.0, 0.3]), np.array([0.0, 1.0, 0.0])
+        X0, Fc = 0.3 / 0.7, 0.7
+        for Sv in (2.0, 1.0, 0.5):
+            A = K * Sv / Fc
+            for N in (1, 2, 3, 5):
+                XN = X0 * (A - 1) / (A ** (N + 1) - 1)
+                r = hunter_nash(data, F, S, XN / (1 + XN), S_over_F=Sv)
+                assert r["feasible"]
+                assert abs(r["n_stages"] - N) < 0.01, (Sv, N, r["n_stages"])
+
+    def test_stage_compositions_match_the_dense_linear_solve(self):
+        K = 2.0
+        data = _immiscible_ternary(K)
+        F, S = np.array([0.7, 0.0, 0.3]), np.array([0.0, 1.0, 0.0])
+        Fc, Sv, X0, N = 0.7, 2.0, 0.3 / 0.7, 3
+        A_ = np.zeros((N, N)); b = np.zeros(N)
+        for n in range(N):
+            A_[n, n] = Fc + Sv * K
+            if n > 0: A_[n, n - 1] = -Fc
+            else: b[0] += Fc * X0
+            if n < N - 1: A_[n, n + 1] = -Sv * K
+        X = np.linalg.solve(A_, b)
+        r = hunter_nash(data, F, S, X[-1] / (1 + X[-1]), S_over_F=Sv)
+        R = np.asarray(r["R"])[:N]
+        np.testing.assert_allclose(R[:, 2] / R[:, 0], X, rtol=2e-3)
+
+    def test_fractional_stage_is_between_integers(self):
+        data = _immiscible_ternary()
+        F, S = np.array([0.7, 0.0, 0.3]), np.array([0.0, 1.0, 0.0])
+        n = [hunter_nash(data, F, S, c, S_over_F=2.0)["n_stages"] for c in (0.0030, 0.0020, 0.0012)]
+        assert n[0] < n[1] < n[2]
+
+    def test_pinch_is_reported_infeasible(self):
+        data = _immiscible_ternary()
+        F, S = np.array([0.7, 0.0, 0.3]), np.array([0.0, 1.0, 0.0])
+        # solvent far below the minimum: A < 1 cannot reach a 1e-3 raffinate
+        r = hunter_nash(data, F, S, 0.001, S_over_F=0.3)
+        assert not r["feasible"] and not np.isfinite(r["n_stages"])
+
+    def test_ternary_lle_consistency(self, ternary_model):
+        d = ternary_lle(ternary_model, 300.0, n_tie=30)
+        F, S = np.array([0.8, 0.0, 0.2]), np.array([0.0, 1.0, 0.0])
+        r = hunter_nash(d, F, S, 0.02, S_over_F=1.0)
+        assert r["feasible"] and 2.5 < r["n_stages"] < 4.0
+        E, R = np.asarray(r["E"]), np.asarray(r["R"])
+        # tie lines: every (E_n, R_n) pair is at isoactivity to interpolation accuracy
+        for e, rr in zip(E, R):
+            ae = e * np.asarray(nrtl_activity_coefficients(jnp.asarray(e), 300.0, ternary_model))
+            ar = rr * np.asarray(nrtl_activity_coefficients(jnp.asarray(rr), 300.0, ternary_model))
+            np.testing.assert_allclose(ae, ar, rtol=3e-2)
+        # operating lines: E_{n+1} - R_n is parallel to w - t_w R_n, w = E_1 - F (extensive), t_w its amount
+        dp = r["delta"]
+        w = -np.asarray(dp["vector"])
+        # E_{n+1} - R_n = u/e with u = w - t_w R_n: check collinearity with Delta
+        for n in range(len(R) - 1):
+            u = (w - (-float(dp["amount"])) * R[n])[1:]
+            v = (E[n + 1] - R[n])[1:]
+            assert abs(u[0] * v[1] - u[1] * v[0]) < 1e-6
+
+    def test_bad_inputs(self, ternary_model):
+        d = ternary_lle(ternary_model, 300.0, n_tie=30)
+        F, S = np.array([0.8, 0.0, 0.2]), np.array([0.0, 1.0, 0.0])
+        with pytest.raises(ValueError):
+            hunter_nash(d, F, S, 0.02, carrier=2)
+        with pytest.raises(ValueError):
+            hunter_nash(d, F, S, 0.9)                       # solute fraction outside the branch
+        with pytest.raises(ValueError):                      # M in the single-phase region
+            hunter_nash(d, F, S, 0.02, S_over_F=1e-3)
+
+
+class TestHunterNashPlot:
+    @pytest.fixture(autouse=True)
+    def _agg(self):
+        mpl = pytest.importorskip("matplotlib")
+        mpl.use("Agg")
+
+    @pytest.mark.parametrize("coords", ["equilateral", "right"])
+    def test_plot(self, ternary_model, coords):
+        from difflow.visualization import plot_hunter_nash
+        d = ternary_lle(ternary_model, 300.0, n_tie=30)
+        r = hunter_nash(d, np.array([0.8, 0.0, 0.2]), np.array([0.0, 1.0, 0.0]), 0.02)
+        ax = plot_hunter_nash(r, coords=coords, labels=("a", "b", "s"))
+        styles = {l.get_linestyle() for l in ax.get_lines()}
+        assert {"-", "--", ":", "-."} <= styles                 # not colour alone
+        n_text = [t for t in ax.texts if t.get_text().isdigit()]
+        assert len(n_text) == len(r["E"])

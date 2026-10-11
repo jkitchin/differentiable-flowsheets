@@ -47,14 +47,21 @@ from difflow.visualization.phase_diagrams import (
     plot_pxy,
     plot_xy,
     plot_ternary,
+    plot_hunter_nash,
+    plot_mccabe_thiele,
 )
 
+from difflow.visualization.psychrometric_chart import plot_psychrometric_chart
+
 __all__ = [
+    "plot_psychrometric_chart",
     # Phase diagrams (matplotlib)
     "plot_txy",
     "plot_pxy",
     "plot_xy",
     "plot_ternary",
+    "plot_hunter_nash",
+    "plot_mccabe_thiele",
     # Main visualizer
     "FlowsheetVisualizer",
     "visualize_flowsheet",

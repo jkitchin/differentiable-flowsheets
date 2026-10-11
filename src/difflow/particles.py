@@ -10,7 +10,11 @@ Building blocks for adsorbers, catalytic beds, settlers, cyclones and filters:
   :func:`fluidization_window`, :func:`geldart_group` (not differentiable).
 
 These are plain functions, not unit operations: they are not registered in
-the GUI palette. Everything is differentiable with ``jax.grad`` /
+the GUI palette. The units that apply them are in
+:mod:`difflow.units.mechanical`: ``Settler`` (terminal and hindered settling
+velocity for overflow-rate and thickener design), ``CakeFilter`` (the
+Kozeny-Carman specific cake resistance, via
+``specific_cake_resistance``) and ``Cyclone``. Everything is differentiable with ``jax.grad`` /
 ``jax.jacobian`` (the implicit terminal-velocity solve differentiates through
 ``optimistix`` implicit differentiation, not by unrolling Newton steps).
 

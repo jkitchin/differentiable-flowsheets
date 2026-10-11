@@ -91,6 +91,8 @@ from difflow_ree.equilibrium import (
     solve_free_extractant,
     # Stage-count correlations
     stages_kremser,
+    kremser_fraction,
+    kremser_stages,
     stages_fenske,
     # Saponification and counter-ion balance (#197)
     SaponifiedParams,
@@ -520,6 +522,8 @@ __all__ = [
     "implied_loading_fraction",
     "solve_free_extractant",
     "stages_kremser",
+    "kremser_fraction",
+    "kremser_stages",
     "stages_fenske",
     # Saponification and counter-ion balance (#197)
     "SaponifiedParams",

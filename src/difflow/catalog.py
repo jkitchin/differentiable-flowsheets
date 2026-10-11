@@ -57,10 +57,17 @@ CORE_CATEGORIES = {
     "pfr": "reactors",
     "fed_batch": "reactors",
     "flash": "separations",
+    "absorption": "separations",
     "distillation": "distillation",
+    "batch_distillation": "distillation",
     "heat_exchanger": "heat_transfer",
     "evaporator": "evaporation",
+    "cooling_tower": "heat_transfer",
+    "dryer": "drying",
+    "crystallizer": "crystallization",
+    "mechanical": "mechanical",
     "lle": "extraction",
+    "leaching": "extraction",
     "eos_units": "pressure_change",
     "pipe": "pressure_change",
     "pump": "pressure_change",
@@ -68,7 +75,7 @@ CORE_CATEGORIES = {
 }
 
 #: classes in ``difflow.units`` that are not themselves operations
-NOT_OPERATIONS = frozenset({"UnitBase", "ReactorBase", "DistributionCoeffs"})
+NOT_OPERATIONS = frozenset({"UnitBase", "ReactorBase", "DistributionCoeffs", "Solubility"})
 
 #: registry name -> class name, where the two deliberately differ.
 #: ``difflow_gas`` also registers a "Compressor", so the EOS-consistent

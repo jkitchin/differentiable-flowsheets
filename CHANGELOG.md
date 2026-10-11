@@ -8,6 +8,302 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`Settler`, `CakeFilter` and `Cyclone` units and the mechanical-separation library (#434).**
+  `difflow.units.mechanical` (one module, catalog category `mechanical`, GUI symbols `settler`, `cake_filter`,
+  `cyclone`). *Settler*: methods `overflow_rate` (Hazen clarifier, capture `min(1, v_t/v_o)` per size bin with a smooth
+  minimum), `coe_clevenger` (flux data `C_data`/`v_data`, or the particle model `terminal_velocity` x Richardson-Zaki
+  `(1 - C/rho_p)^n`), `kynch` and `talmage_fitch` (a batch interface-height curve). Library: `solids_flux`,
+  `batch_flux_curve`, `thickener_area_coe_clevenger`, `kynch_construction`, `thickener_area_kynch`,
+  `thickener_area_talmage_fitch`, `lse_max` (the **smooth maximum**: log-sum-exp with temperature
+  `mean|a|/sharpness`, never under-predicts, within `ln(N)/sharpness` of the grid maximum; default sharpness 1000),
+  `overflow_rate_area`/`overflow_rate_capture`. The Richardson-Zaki exponent is piecewise in `Re_t`; pass
+  `richardson_zaki_n` to avoid the jumps when optimizing over size. *CakeFilter*: Ruth constant pressure
+  (`ruth_constants`, `ruth_constant_pressure`, cancellation-safe `filtrate_volume`, `filtrate_rate`), constant rate
+  (`ruth_constant_rate`, `time_to_pressure`), `fit_ruth` (the Ruth plot: K_p, B, alpha, R_m), `compressible_cake`,
+  `specific_cake_resistance` (Kozeny-Carman, consistent with `particles.kozeny_carman`),
+  `cake_solids_per_filtrate`, `wash_time`, `cycle_throughput` (differentiable in `t_f`), `optimal_cycle` (closed form
+  `K_p/2 (1 + 2r/phi) V^2 = t_down`, independent of B; a bracketed implicit-gradient solve for a user wash function),
+  `filter_area_for_cycle`; the unit has `batch` (design from `cycle_time`, or rating with `filtration_time` /
+  `optimize_cycle`) and `rotary` (drum, submergence fraction) modes and reports `area_for_cost`. *Cyclone*: Lapple
+  `lapple_cut_size`, `lapple_efficiency`, `overall_efficiency` over fixed size bins, `lapple_turns`,
+  `cyclone_geometry` (Lapple, Stairmand HE, custom ratios), Shepherd-Lapple `cyclone_pressure_drop`. **Solids
+  convention:** `F_<solid_species>` in kg/s (`solid_molar_mass` 1 kg/mol), as the `Dryer` fines stream. **Dryer to
+  Cyclone:** a `Dryer`'s fines are in `info["fines"]` (not in `air_out`); the documented hand-off is
+  `Cyclone(...)(dust_laden_gas(air_out, info["fines"]))` in Python (a `Flowsheet` cannot route `info`), tested.
+  Docs `## Mechanical Separations` (`### Settler`, `### CakeFilter`, `### Cyclone`, with a pointer to the `difflow_bio`
+  centrifuges), notebook 58, `particles.py` docstring updated, tests. No existing behaviour changed (`difflow.numerics`
+  already exports `smooth_max`/`smooth_min`, so the new log-sum-exp maximum is exported as `lse_max`).
+  **Not implemented / skipped:** cost entries for cyclones and thickeners (no correlation could be cited with
+  confidence, so none was added to `economics/capital.py`), a wash-water inlet (wash volume and time are reported),
+  a wash or dewatering arc for the rotary drum, thickener compression and rakes, cyclone mass-loading effects,
+  hydrocyclones, screening, precipitators and bag filters. **Unverified/not reproduced:** no Geankoplis,
+  McCabe, Coulson & Richardson or Cooper & Alley worked example was reproduced (numbers "from recollection"), so the
+  tests use independent oracles (`scipy` quadrature and scalar optimization, a NumPy grid maximum, the analytic
+  Coe-Clevenger area of `v = v0 (C0/C)^2`, a batch curve generated from a known `v(C)` as the envelope of its
+  tangents, hand calculations, `check_grads`); the Lapple constants (K = 16, the standard proportions, the Stairmand
+  set) are typed from memory and flagged unverified; all data are synthetic and labelled illustrative.
+- **`Crystallizer` unit and the crystallization library (#433).** `difflow.units.crystallizer` (catalog category
+  `crystallization`, one category for the unit as `evaporation` and `drying` are for theirs; GUI symbol `crystallizer`):
+  `Solubility` pytree (polynomial in degrees C, van 't Hoff `ln c = A + B/T`, or PCHIP table; kg solute per kg
+  solvent, `per_100g=True` for g/100 g) carrying the hydrate form (`hydrate_waters`, molar masses) and an optional
+  second solid form with `T_transition`, joined by a **smooth logistic blend** in `T` (never a Python `if`);
+  `supersaturation` (ratio, absolute, relative); `crystal_yield` / `crystal_balance` (the two-balance hydrate yield
+  `C = (S0 - c_sat W)/(f_s - c_sat f_w)`, evaporation allowed, soft-clipped at zero so undersaturated feeds give
+  zero yield and a finite gradient); the MSMPR functions `msmpr_distribution`, `msmpr_moments`,
+  `msmpr_dominant_size` (3 G tau), `msmpr_mass_median_size` (the gamma(4) half-point, computed by Newton, not
+  typed), `msmpr_mass_cv`, `msmpr_from_magma`, `fit_msmpr`; `growth_rate`, `nucleation_rate` and
+  `msmpr_steady_state`, which closes the power-law kinetics with the third moment by a bisection with
+  implicit-gradient Newton step (`difflow.staged._solve_monotone`, `j <= 1`) so `L_D`, `L_50` are differentiable in
+  tau, `k_g`, `k_b`. `Crystallizer(CrystallizerParams)(feed) -> (crystals, mother_liquor, info)`: modes `cooling`,
+  `evaporative`, `cooling_evaporative`; equilibrium or kinetic mode; crystal stream convention **solute plus bound
+  water** (`F_<solute>`, `F_<solvent> = nu F_<solute>`, mol/s, every species in every outlet); duty from sensible
+  heat, `water_latent_heat` and a user heat of crystallization; takes an `Evaporator` concentrate (tested in a
+  `Flowsheet`, with a mother-liquor recycle). Parameters are flat data (solubility model/coefficients/table), so the
+  unit is declarative and buildable in the GUI. Docs `## Crystallization` (`### Crystallizer`, `### MSMPR Functions`),
+  notebook 57, tests. **Not implemented:** an adiabatic vacuum-flash mode (evaporation is a specification),
+  size-dependent growth, fines destruction, classified removal, agglomeration/breakage, polymorphs, batch cooling
+  profiles. **Unverified/not reproduced:** no Geankoplis, McCabe or Wankat worked example was reproduced (numbers
+  "from recollection" could not be recalled with confidence) and no sucrose, Na2SO4, Na2CO3 or MgSO4 solubility data,
+  decahydrate transition temperature or kinetic constant is included; every curve in tests, docs and the notebook
+  is synthetic and labelled illustrative. Tests use independent oracles (3x3 NumPy balance solve, `scipy` quadrature
+  of the moments, argmax of `L^3 n`, a `brentq` root of the kinetic closure, `k_g -> infinity` equilibrium limit,
+  `check_grads`).
+- **`Dryer` unit and the drying library (#432).** `difflow.units.dryer` (category `drying`, GUI symbol `dryer`):
+  moisture bookkeeping (`dry_basis`, `wet_basis`, `free_moisture`, `solids_moisture`), equilibrium-moisture
+  isotherms `equilibrium_moisture` / `water_activity` (GAB, BET, PCHIP table or a callable; closed-form inverse for
+  GAB/BET; optional Arrhenius `Hc`/`Hk` temperature dependence; parameters are data, none built in),
+  `constant_drying_rate` (`h (T - T_wb)/lambda` or `k_W (W_s - W)`), `heat_transfer_coefficient_tray`,
+  `drying_rate_curve`, and `drying_time` / `drying_periods` across the constant- and falling-rate periods
+  (linear falling rate in closed form, or a tabulated rate curve integrated segment by segment). The
+  constant/falling switch at `X_c` is a **softplus** of width `(X_c - X_eq)/sharpness` (default 200), so the time is
+  differentiable in `X_c`, the endpoints, the rate and the loading with no Python `if`; `sharpness -> inf`
+  recovers the piecewise answer. `Dryer` is a batch tray dryer (drying time from `load`/`area`, or the moisture
+  reached in a given time, cycle time and tray area for a throughput) and a continuous countercurrent or
+  cocurrent dryer (water and humid-enthalpy balances closing to rounding, exhaust dew-point margin and
+  `supersaturated` flag, product-temperature margin against `max_solids_T`, energy per kg of water, thermal
+  efficiency, residence time with `solids_per_area`, entrained `fines` split). Streams: air is the
+  `difflow.psychrometrics` stream; solids carry `F_solid` (dry-solid pseudo-species, mol/s, numerically kg/s with
+  the default `solid_molar_mass=1`) and `F_H2O` (mol/s). **Not implemented:** the three-zone McCabe rotary-dryer
+  length, the Fick-diffusion falling-rate series, deep-bed humidity profiles. **Unverified:** no Geankoplis or
+  McCabe drying example was reproduced (the issue's numbers are from recollection and could not be recalled with
+  confidence), the tray correlations `h = 0.0204 G^0.8` / `1.17 G^0.37` are typed from memory, and no GAB data of a
+  real material is included; the tests use closed-form, numerical-integral, balance and independent-NumPy/SciPy
+  oracles instead. Docs: `## Drying` in `docs/unit-operations-chemical.md`; notebook `examples/56_drying.ipynb`.
+  **Behaviour change (bug fix):** `psychrometrics.wet_bulb_temperature` and `adiabatic_saturation_temperature`
+  started their Newton solve at the dry-bulb temperature, where `W_s` diverges at and is negative above the boiling
+  point at `P`, so air above about 100 C at 1 atm (a dryer's inlet) gave NaN wet bulbs (and `state(...)["T_wb"]`);
+  the seed is now capped at 350 K. Results below 350 K are unchanged; hot air now returns the correct wet bulb.
+  `W_sat` and `mu` of a state above the boiling point remain meaningless (negative); `RH`, `T_dp` and `h` are fine.
+
+- **`difflow.psychrometrics`, `difflow.water` and the `CoolingTower` unit (#431).**
+  `difflow.psychrometrics` (library): ideal-gas humid air with the ASHRAE constants,
+  `state(T=, W=, RH=, T_wb=, T_dp=, h=, P=)` from any two independent properties (closed form
+  where one exists, one implicit Newton solve for `RH`-`T_wb`, `RH`-`h`, `T_wb`-`h`),
+  `humidity_ratio`, `saturation_humidity_ratio`, `dew_point`, `humid_enthalpy`, `humid_heat`,
+  `humid_volume`, `wet_bulb_temperature(lewis=)`, `adiabatic_saturation_temperature`, processes
+  (`mix_air`, `sensible_heat`, `cool_dehumidify`, `adiabatic_humidify`), the flowsheet air stream
+  convention (`H2O` + `air` species; `air_stream_from_state`, `state_from_air_stream`,
+  `dry_air_flow`) and `psychrometric_chart_data` with
+  `difflow.visualization.plot_psychrometric_chart`. Saturation is over liquid above and over ice
+  below the triple point, with a C2 blend; no enhancement factor is applied (`W_s` is 0.3-0.5 %
+  below the real-gas ASHRAE table). `CoolingTower` (category `heat_transfer`, GUI symbol
+  `cooling_tower`): counterflow Merkel tower in rating and design modes, CTI four-point or
+  Gauss-Legendre quadrature, fill characteristic, evaporation / drift / blowdown / make-up,
+  pinch detection (`feasible=False`, `KaV_L = inf`, no NaNs; `maximum_L_over_G`), implicit
+  gradients. The wex18-1 Merkel numbers of the issue (1.24, 1.39, 1.59, 1.89) are reproduced
+  to 1 %; they are the issue's own illustration, not published values. **Unverified:** no
+  ASHRAE table or textbook example could be transcribed; saturated-air values and the ice-line
+  coefficients, the heat of fusion and the 2500.9 kJ/kg triple-point latent heat are recalled
+  (see the test docstrings). Docs: `Humidification and Cooling Towers` in
+  `docs/unit-operations-chemical.md`; example notebook
+  `examples/55_psychrometrics_cooling_tower.ipynb`.
+  **Behaviour change:** the water correlations (`water_saturation_pressure`,
+  `water_saturation_temperature`, `water_latent_heat`, `water_liquid_enthalpy`,
+  `water_vapor_enthalpy`) moved to the new `difflow.water` and are re-exported from
+  `difflow.units.evaporator` (old imports unchanged, values unchanged at 20-200 C). Below 20 C
+  `water_latent_heat` and `water_liquid_enthalpy` now include a smooth correction that restores
+  the triple-point values (2500.9 kJ/kg and 0; the raw fit was 0.3 % low and -0.19 kJ/kg
+  there); below 0 C they remain extrapolations.
+
+- **Partially miscible extraction: `ternary_lle_flash` and `CascadeParams(model="rigorous")` (#430, part 3).**
+  `difflow.units.lle.ternary_lle_flash(lle_model, z, T, guess=None, pair=(0, 1))`: a
+  differentiable two-liquid-phase flash for any number of species (Rachford-Rice in the phase
+  fraction around isoactivity K updates, three seeds, then damped Newton on the full system,
+  all fixed iteration counts; implicit-function gradients in `z`, `T` and the NRTL/UNIQUAC
+  parameters; a single-phase feed returns a masked result with `two_phase=False`).
+  `CascadeParams` gains `model: "immiscible" | "rigorous"` (default `"immiscible"`, so existing
+  code is unchanged; an unknown value now raises `ValueError` at construction). `"rigorous"`
+  solves `n_stages` countercurrent ideal stages with the full equations (mutual solubility,
+  variable phase flows) by damped Newton on the flat stage system, seeded from a Kremser
+  profile, with implicit gradients. It supersedes `mutual_solubility` (giving both is an
+  error), needs an integer `n_stages`, `flow_config="counter_current"`, an NRTL/UNIQUAC
+  `equilibrium` and a positive total flow of every species of the activity model, and
+  ignores `stage_efficiency`. Stages that mix into a single liquid (too little solvent) cannot
+  be represented and are reported as `info["converged"] = False`. Checked against `ternary_lle`
+  tie lines, the binodal on random feeds, the Kremser cascade in the immiscible dilute limit, a
+  Gauss-Seidel stage-flash sweep, the Hunter-Nash stage count (agreement ~1e-4 stage) and
+  `check_grads`. **No published acetic acid-water-MIBK data or NRTL set is used** (the
+  recalled values could not be verified): the tests and docs use a synthetic type-I
+  ternary. Docs: `Ternary Diagrams and the Lever Rule`, `Leaching and Washing` and the
+  `MultistageCascade` rigorous section of `docs/unit-operations-chemical.md`; example
+  notebook `examples/54_leaching_ternary.ipynb`.
+
+- **Ternary-diagram helpers: `mix`, `lever_rule`, `tie_line_through`,
+  `difference_point`, `hunter_nash`, `plot_hunter_nash` (#430, part 2).** In
+  `difflow.phase_diagrams` (`mix` only there; the rest also top-level) and
+  `difflow.visualization`. `mix` and `lever_rule` are pure jnp and
+  differentiable; `tie_line_through`, `hunter_nash` (stage stepping with a real,
+  fractionally interpolated stage count, pinch reported as `feasible=False`) and
+  `difference_point` work on the conjugate curves of the `ternary_lle` tie lines
+  (monotone cubic interpolation, numeric, not differentiated through the
+  equilibrium); the operating lines use the extensive balance so a difference
+  point at infinity is handled. Right-triangle coordinates for leaching
+  diagrams were already provided by `ternary_xy(coords="right")`. No published
+  Hunter-Nash example is reproduced; checked against the lever rule, component
+  balances and the analytic Kremser stage count of an immiscible ternary.
+
+- **`Leacher`: countercurrent leaching and washing (#430, part 1).** New palette
+  unit in `difflow.units.leaching` (category `extraction`, mass flows in kg/s):
+  ideal-stage solid-liquid cascade with constant-solution, constant-solvent or
+  tabulated variable underflow. Constant underflow is a closed form (first stage
+  separate when the feed solids carry a different solution amount) with a
+  continuous, differentiable stage count and a smooth `r = L/V = 1` limit;
+  variable underflow is a fixed-iteration Newton solve of the stage balances
+  (integer stages). `recovery` with `design="stages"` returns N in closed form,
+  with `design="solvent"` scales the solvent stream (implicit-gradient
+  bisection). Library helpers `washing_recovery`, `washing_stages` (the Kremser
+  form in the wash ratio) and `tabulate_underflow`. `stage_efficiency` is an
+  overall efficiency (ideal stages = E x n_stages). No textbook worked example is
+  reproduced (inputs not retrievable); the tests use an independent dense
+  linear-system assembly, the closed washing form, a SciPy solve and
+  `check_grads`. The variable-underflow table in the docs is synthetic.
+
+- **`difflow.units.column_design`: column hardware (#429).** New core library
+  module (no palette entry): `flow_parameter`, `fair_capacity_factor`,
+  `flooding_velocity`, `tray_column_diameter` (Fair flooding, `fraction_flood`,
+  downcomer fraction, optional foaming/hole-area multipliers, `(D, info)`),
+  `tray_percent_flood` (rating), `weir_crest` (Francis), `tray_pressure_drop`
+  (dry + liquid head + residual, components in `info`), `weep_point` (margin),
+  `fractional_entrainment`, `oconnell_efficiency` (promoted from the gas plant,
+  re-exported there; optional `smooth=` clip), `gpdc_flood`, `gpdc_pressure_drop`,
+  `kister_gill_flood_dp`, `packed_column_diameter` (flood, dP/m, wetting
+  margin), `hetp` (random, structured, from HTU), `size_column`,
+  `column_hardware_cost` (into `column_cost`). `PACKINGS` gained Intalox
+  ceramic 25/38/50, Pall metal 38 and Mellapak 250Y. Surface tension, viscosity
+  and densities are required arguments. **Every correlation constant is from
+  memory and unverified** (no book access): Fair's chart fit (Treybal form),
+  Francis crest, the 12.5 kg/m^2 residual head, the Eduljee weep constant
+  (`K2 = 30` fixed, the chart dependence is not reproduced), the Eckert
+  flood-line log-quadratic, Kister-Gill flood dP, the minimum wetting rate, the
+  HETP rules and the packing table; expect chart-reading accuracy (10-20 %).
+  **Two pieces are placeholders, not literature fits:** `fractional_entrainment`
+  (assumed shape, order of magnitude only) and the exponent of
+  `gpdc_pressure_drop` (anchored to the flood dP, exponent assumed). **No
+  published textbook worked example is reproduced**; tests use hand
+  calculations, independent re-implementations, scaling laws, margin sign
+  changes, `check_grads` and the DistillationColumn -> diameter -> size ->
+  cost chain differentiated in R. Docs: `## Column Hardware` in
+  `docs/unit-operations-chemical.md`; notebook `examples/53_column_hardware.ipynb`.
+
+- **`difflow.mass_transfer`: diffusivities, film theory, Sherwood, Onda, HTU/NTU
+  (#427).** New core library module (no palette entry): `fuller_diffusivity`,
+  `wilke_chang_diffusivity`, `stokes_einstein_diffusivity` (native-unit
+  implementations, SI at the boundary) with the tables `FULLER_VOLUMES`,
+  `FULLER_ATOMIC_VOLUMES`, `LE_BAS_INCREMENTS`, `ASSOCIATION_FACTORS` and the
+  helpers `diffusion_volume`, `molar_volume_nbp`; `equimolar_flux`,
+  `stagnant_film_flux` (with a smooth `log_mean`), `mass_transfer_coefficient_conversions`;
+  `ranz_marshall`, `frossling`, `linton_sherwood`, `gilliland_sherwood`,
+  `pipe_sherwood`, `flat_plate_sherwood`, `chilton_colburn_jD`;
+  `overall_gas_coefficient`, `overall_liquid_coefficient`, `overall_K_G`,
+  `resistance_fractions` (optional enhancement factor); the shared
+  `PackingData` record and `PACKINGS` table; `onda_wetted_area`,
+  `onda_gas_coefficient`, `onda_liquid_coefficient`; `htu_og`, `htu_ol`,
+  `htu_og_from_films`, `ntu_og_colburn` (analytic, smooth at lambda = 1),
+  `ntu_og_integral` (Gauss-Legendre, optional `(1-y)_lm`), `hetp_from_htu`.
+  Gas viscosity and surface tension are **required arguments** (no
+  `liquid_properties` additions, no hidden `sigma=0.072`). Validated against
+  closed forms, quadrature, independent NumPy transcriptions and two gas and
+  two liquid diffusivity data points; **no published textbook worked example
+  is reproduced**, and the diffusion-volume, Le Bas and packing tables are
+  transcribed from memory (flagged in the docstrings). Docs: `## Mass
+  Transfer` in `docs/unit-operations-chemical.md`; example notebook
+  `examples/51_mass_transfer.ipynb`.
+- **Generic `Absorber` and `Stripper` (#428).** New `difflow.units.absorption`:
+  physical-solvent gas absorber and stripper, two inlets (`gas_in`, `liquid_in`)
+  and two outlets, sharing one implementation and one `AbsorptionParams`
+  (deliberately not `AbsorberParams`/`StripperParams`, which `difflow_cc` and
+  `difflow_ree` already export and `difflow.serialize` looks up by name).
+  Henry's law per solute with a van 't Hoff temperature dependence
+  (`henry_constant`; `HENRY_WATER`, a small table **from memory, unverified**),
+  three models: `"kremser"` (closed form per solute for any `A > 0`, solute in
+  the entering solvent, Edmister-style geometric-mean `A` iterated with the
+  outlet flows, Murphree vapor efficiency by the Lewis relation, real-valued
+  `n_stages`), `"stages"` (tray-to-tray, one linear system per solute with Picard
+  sweeps on the stage flows, concrete integer `n_stages`) and `"packed"` (HTU/NTU:
+  Onda films from `difflow.mass_transfer` or a user `H_OG`; Colburn, or the
+  numerical `N_OG` integral with the `(1-y)_lm` option; rating by `height`,
+  design by `recovery`). `recovery` also makes the Kremser stage count an
+  output. `info` carries per-solute recovery, `A`, `S`, `K`, `N_eq`/`N_OG`/`H_OG`,
+  `L_min` (absorber) or `G_min` (stripper) and the ratio to it, the solute-free
+  operating line and curve, the heat of absorption and an adiabatic temperature
+  rise (reported, not applied), `converged` and `feasible` (an unreachable spec
+  gives `inf`, never NaN). Library helpers `solute_free_operating_line`,
+  `minimum_solvent_rate` (rich-end or tangent pinch on any
+  `difflow.staged.EquilibriumCurve`) and `minimum_stripping_gas_rate`.
+  Registered in the catalog (`absorption` module in the `separations` category)
+  and the GUI palette (packed-column symbol). Validated against the Kremser
+  closed form, a separate SciPy `fsolve` of the tray equations, dilute-limit
+  Kremser/stages agreement, Colburn against the NTU integral, a dense chord-slope
+  scan for the minimum rate, mass balances, `check_grads` and an absorber-stripper
+  recycle flowsheet through `fs.solve` differentiated with respect to the solvent
+  rate; **no published textbook example is reproduced** (the issue's numbers are
+  unverified recollections). Not implemented: modified-Raoult K from a `thermo`
+  object, `fraction_flood` sizing (needs the hardware model of #429), solvent
+  volatility, a rate-based Maxwell-Stefan model. Example notebook
+  `examples/52_absorption_stripping.ipynb`.
+
+- **`BatchDistillation`: Rayleigh, constant-reflux and constant-composition
+  batch distillation (#426).** New `difflow.units.batch_distillation`: a binary
+  batch rectifier (`n_stages` equilibrium stages above the still, total
+  condenser, constant boil-up, quasi-steady, no holdup) in constant-reflux and
+  constant-distillate-composition modes, built on `difflow.staged`'s
+  equilibrium curve and stage relation. The charge is a stream read as moles
+  (as `FedBatchReactor` reads its initial state). Stopping is data
+  (`stop={"x_W" | "x_D_avg" | "distillate" | "time": value}`, first reached
+  wins), solved by bisection plus an implicit-function Newton step so every
+  result is differentiable in `R`, `boilup`, the charge, the efficiency and
+  the spec. `info` carries trajectories (`t`, `W`, `x_W`, `x_D`, `R`,
+  `T_still`), accumulated distillate, batch time, `int V dt`, reboiler energy,
+  recovery and flags `feasible`, `azeotrope_limited`, `stop_reached` (no NaN
+  past an azeotrope). Library functions `rayleigh` (closed form for constant
+  alpha, quadrature otherwise, solves for `x_W` or `W/F`),
+  `rayleigh_multicomponent`, `equilibrium_curve` and `batch_cuts`
+  (heads/hearts/tails with per-cut reflux overrides). Registered in the
+  catalog (`distillation` category) and GUI palette (column symbol).
+  Validated against the Rayleigh closed form, `scipy` and an independent NumPy
+  time integration; **no published textbook example is reproduced** (the
+  issue's numbers are unverified recollections). Not implemented:
+  multicomponent tray-to-tray batch columns, holdup.
+
+- **`DistillationColumn`: partial condenser and Murphree vapour efficiency
+  (#425).** `condenser_type="partial"` makes the condenser an equilibrium stage
+  outside `n_stages` (vapour distillate `y_D = K(T_c) x_R` at its dew point,
+  liquid reflux `x_R`), as one more row of the tridiagonal system so the
+  balances still telescope; `info` gains `y_D`, `x_R`, `n_equilibrium_stages`
+  and a partial-basis `Q_condenser`. `stage_efficiency` (scalar or
+  `(n_stages,)`, same name as `CascadeParams.stage_efficiency`) is a Murphree
+  vapour efficiency solved as a block-tridiagonal system (well posed at
+  `E = 0`) with a fixed-count `E = 1 -> E` homotopy; the reboiler is always an
+  equilibrium stage. Differentiable in `E` and `R` on the CMO and MESH paths.
+  `info["overall_efficiency_equiv"]` is a Fenske-style separation proxy, not a
+  theoretical-stage ratio. `stage_efficiency=1.0` (default) with a total
+  condenser takes the original code path and reproduces previous results
+  exactly. Checked against `difflow.staged.mccabe_thiele`, an independent
+  flash and `check_grads`; no textbook example numbers are claimed.
+  **Changed:** `condenser_type="partial"` no longer raises
+  `NotImplementedError`, and an unknown `condenser_type` is now a
+  `ValueError` (`"mixed"` still raises `NotImplementedError`).
+
 - **Shell-and-tube sizing and phase-change warning for the heat-exchanger
   helpers (#422).** `design_heat_exchanger` and `size_heat_exchanger` accept
   `flow_config="shell_and_tube"` with `n_shell_passes`, size with
@@ -24,6 +320,39 @@ All notable changes to difflow are recorded here. The format follows
   `EnthalpyCounterCurrentHX`.
 
 ### Breaking
+
+- **`column_diameter` is deprecated and its signature changed (#429).** The old
+  body ignored `sigma` and `tray_spacing`, hard-coded a vapor molecular weight
+  of 30 g/mol, `F_LV = 0.1` and `C_SB = 0.1`, and 80 % flood. It now emits a
+  `DeprecationWarning` and calls `tray_column_diameter`; `MW_V`, `L` and `MW_L`
+  are required keyword arguments and `sigma` is required (no `0.02` default).
+  Results change accordingly (they now respond to the molecular weight, the
+  surface tension and the spacing).
+
+- **Onda mass-transfer values corrected; `difflow_cc` functions deprecated
+  (#427).** `difflow_cc.kinetics.liquid_film_coefficient` used
+  `(rho g/mu)^(1/3)` where Onda (1968) has `(mu g/rho)^(1/3)` (about 4600x too
+  large: 0.487 m/s instead of order 1e-4 m/s) and a Reynolds number on the dry
+  area instead of the wetted area; `gas_film_coefficient` was too large by
+  `a_p d_p` and never used the 2.00 constant for packings under 15 mm.
+  `gas_film_coefficient`, `liquid_film_coefficient`, `interfacial_area`,
+  `height_of_transfer_unit` and `number_of_transfer_units` are now
+  `DeprecationWarning` wrappers on `difflow.mass_transfer` and return the
+  corrected values (`interfacial_area` is numerically unchanged apart from
+  g = 9.80665). No unit or cc result depended on the old values (the
+  absorber uses Kremser); the cc tests only checked positivity.
+- **`minimum_reflux_ratio` honours `q`; `stages_kremser` fixed (#424).**
+  `difflow.units.distillation.minimum_reflux_ratio` accepted `q` and ignored
+  it (every feed was a saturated liquid) and floored the result at 0.1. It now
+  returns the McCabe-Thiele pinch of a constant-alpha curve at that `q`
+  (`difflow.staged.minimum_reflux`) and is not floored; a vapor feed returns
+  a larger value than before, a subcooled one a smaller. `q = 1` agrees with
+  the old closed form except where that was floored. `ShortcutColumn` was not
+  affected. `difflow_ree.stages_kremser` computed `ln((R(E-1)+1)/E)/ln E`,
+  negative for every `E > 1`, so its floor returned 1.0 for every input
+  (E = 1.5, 2, 5 at 99 % recovery now give 8.70, 5.66, 2.72); it is now a
+  wrapper on `difflow.staged.kremser_stages` (still floored at one stage;
+  the core function is not).
 
 - **Cubic EOS liquid root near 1 bar; results change (#417).**
   `PengRobinson`/`SRK` clamped every root at Z >= 0.01, which replaced the
@@ -196,6 +525,25 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Added
+
+- **`difflow.staged`: McCabe-Thiele stepper, pinches and Kremser (#424).**
+  A library (not a palette unit) of graphical equilibrium-stage design.
+  Operating lines as `(a, b, c)` (`operating_line`, `rectifying_line`,
+  `stripping_line` incl. open steam, `stripping_line_from_boilup`,
+  `q_line` for any `q` including 1, `feed_intersection`, `to_ratio`),
+  `EquilibriumCurve` (`constant_alpha`, `linear_equilibrium`, `tabulated` with
+  monotone PCHIP and an inverse, optional Murphree efficiency),
+  `mccabe_thiele` (a `lax.scan` stepper with a fractional, differentiable
+  stage count, optimal or specified feed stage, partial condenser),
+  `minimum_reflux` (feed-line and tangent pinch, not floored),
+  `total_reflux_stages` / `minimum_stages` (Fenske at constant alpha),
+  `minimum_solvent_ratio` for a curved equilibrium line, and
+  `kremser_fraction` / `kremser_stages` (any `A > 0`, smooth through
+  `A = 1`; re-exported from `difflow.units.lle` and `difflow_ree`). Plot
+  helper `difflow.visualization.plot_mccabe_thiele`. Verified against hand
+  loops, closed forms, SciPy PCHIP and the Lewis relation; no published
+  textbook example is reproduced (see the docs). Example notebook
+  `examples/48_mccabe_thiele_staged.ipynb`.
 
 - **Phase-diagram helpers and Wilson / Margules / van Laar activity models
   (#398).** `difflow.activity` defines the `ActivityModel` protocol (a

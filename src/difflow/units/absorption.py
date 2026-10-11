@@ -1,0 +1,816 @@
+"""Generic physical-solvent absorber and stripper (Kremser, stage-by-stage, packed).
+
+A gas of carrier plus dilute solutes rises through a column against a liquid
+solvent. ``gas_in`` enters at the bottom and ``liquid_in`` at the top; the
+solutes (the keys of ``params.henry``) transfer between the phases, every other
+species is carried through on the side it enters (the carrier gas stays in the
+gas, the solvent stays in the liquid; give them different names). The same
+column is an **absorber** (solute from gas to liquid, ``A = L/(K V) > 1``) or a
+**stripper** (solute from liquid to gas, stripping factor ``S = K V/L > 1``); the
+two classes share one implementation and differ in defaults and in what
+``recovery`` means.
+
+Equilibrium
+-----------
+Henry's law in mole fractions, ``y_i = K_i x_i`` with ``K_i = H_i(T)/P`` and a
+van 't Hoff temperature dependence ``H(T) = H_ref exp(-C (1/T - 1/T_ref))``
+(:func:`henry_constant`; ``C = -dH_abs/R``, positive for an exothermic
+absorption). The column is isothermal at ``params.T`` (default: the gas inlet
+temperature); the heat of absorption is reported, not used.
+
+Models
+------
+``"kremser"``
+    Closed form per solute. With ``A_i`` the effective absorption factor (the
+    geometric mean of the top and bottom values, ``A = sqrt(L_in L_out /
+    (V_in V_out))/K``, Edmister's idea, iterated to consistency with the outlet
+    flows; or the inlet value if ``variable_flow=False``) and ``N_eq`` the
+    equivalent equilibrium stages (``N_eq = N ln(1+E(S-1))/ln S``, ``S = 1/A``, for a Murphree
+    vapor efficiency ``E``)::
+
+        v_out = v_in (1 - f) + (l_in / A) f ,   f = (A^(N+1) - A) / (A^(N+1) - 1)
+
+    which includes solute in the entering solvent (``l_in/A = K x_in V`` is the
+    gas in equilibrium with it), holds for every ``A > 0`` (for ``A < 1`` the
+    removal tends to ``A``, not 1) and goes smoothly through ``A = 1``. The stage
+    count ``n_stages`` is a real number. Giving ``recovery`` makes ``n_stages`` an
+    output (design).
+``"stages"``
+    Tray-to-tray: all component balances plus the Murphree stage relation
+    solved as one linear system per solute, iterated on the total flows of every
+    stage (fixed iteration count, so it is differentiable and jit-able). It
+    carries the stage-to-stage flow change that Kremser's mean ``A`` only
+    approximates, so it is the oracle the Kremser mode is checked against.
+    ``n_stages`` must be a concrete integer.
+``"packed"``
+    Rate-based HTU/NTU. ``N_OG = Z/H_OG`` with ``H_OG = H_G + lambda H_L``
+    (``lambda = 1/A``) from the Onda film coefficients of
+    :mod:`difflow.mass_transfer` (needs the column ``diameter``, a ``packing``
+    and the fluid properties in the params), or a user ``H_OG``. For straight
+    operating and equilibrium lines (dilute) the outlet follows Colburn's
+    closed form, the same ``v_out = v_in (1-f) + (l_in/A) f`` with
+    ``1 - f = 1/(1 + (e^{eps N_OG} - 1)/eps)``, ``eps = 1 - lambda``. Rating mode
+    takes ``height``; design mode takes ``recovery`` and returns the height
+    (Colburn, or the numerical integral ``ntu_method="integral"``, which with
+    ``concentrated=True`` includes the ``(1-y)_lm`` correction for a single
+    key solute).
+
+Limits
+------
+Dilute (or moderately concentrated, via the flow-corrected ``A``) solutes,
+constant ``K`` per solute (isothermal, no solute-dependent activity), no solvent
+volatility (the carrier leaves dry, the solvent does not evaporate), no
+temperature profile, no reaction (use ``difflow_cc`` for amines). Flooding and
+pressure drop (``fraction_flood`` sizing) are not part of this unit; give the
+diameter. The Henry-constant table :data:`HENRY_WATER` is from memory.
+
+References
+----------
+- Kremser, Natl. Petroleum News 22 (21), 43 (1930); Edmister, AIChE J. 3 (1957) 165.
+- Colburn, Trans. AIChE 35 (1939) 211.
+- Onda, Takeuchi & Okumoto, J. Chem. Eng. Japan 1 (1968) 56.
+- Seader, Henley & Roper, Separation Process Principles, Ch. 6 and 7;
+  Treybal, Mass-Transfer Operations, Ch. 8 and 10 (equations only; no
+  textbook numerical example is reproduced, see ``tests/test_absorption.py``).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Literal
+
+import jax
+import jax.numpy as jnp
+from jax import Array, lax
+
+from difflow.mass_transfer import (
+    PACKINGS,
+    PackingData,
+    ntu_og_colburn,
+    ntu_og_integral,
+    onda_gas_coefficient,
+    onda_liquid_coefficient,
+    onda_wetted_area,
+)
+from difflow.params_mixin import ParamsMixin
+from difflow.staged import (
+    EquilibriumCurve,
+    _extremum_on_interval,
+    _taylor_log_fraction,
+    from_ratio,
+    kremser_fraction,
+    kremser_stages,
+    linear_equilibrium,
+    to_ratio,
+)
+from difflow.streams import Stream, get_flows, make_stream
+
+__all__ = [
+    "Absorber",
+    "AbsorptionParams",
+    "Stripper",
+    "HENRY_WATER",
+    "HenryData",
+    "absorption_factor",
+    "henry_constant",
+    "henry_params",
+    "kremser_absorption",
+    "kremser_stages",
+    "minimum_solvent_rate",
+    "minimum_stripping_gas_rate",
+    "solute_free_operating_line",
+    "stripping_factor",
+]
+
+R_GAS = 8.314462618  # J/mol/K
+_FLOOR = 1e-12
+_N_PICARD = 14
+_N_PICARD_STAGES = 40
+
+
+# ---------------------------------------------------------------------------
+# Henry's law
+# ---------------------------------------------------------------------------
+
+
+def henry_constant(H_ref: Array | float, T: Array | float, C: Array | float = 0.0,
+                   T_ref: Array | float = 298.15) -> Array:
+    """Henry's constant (Pa, mole-fraction basis) at ``T``: van 't Hoff form.
+
+    ``H(T) = H_ref exp(-C (1/T - 1/T_ref))`` with ``y P = H x`` and
+    ``C = -dH_abs/R`` (K), positive for an exothermic absorption (``H`` rises
+    with ``T``, so the solute is less soluble when hot).
+    """
+    return jnp.asarray(H_ref, float) * jnp.exp(
+        -jnp.asarray(C, float) * (1.0 / jnp.asarray(T, float) - 1.0 / jnp.asarray(T_ref, float)))
+
+
+@dataclass(frozen=True)
+class HenryData:
+    """A Henry's-constant record: ``H298`` (Pa, ``y P = H x``), ``C`` (K), source note."""
+
+    H298: float
+    C: float
+    source: str = "from memory, approximate (+/-20-30 %), unverified"
+
+
+#: Solutes in water near 25 C. **Every number is from memory** of the
+#: Sander (2015, Atmos. Chem. Phys. 15, 4399) compilation and common textbook
+#: values, converted to the mole-fraction basis (``H [Pa] = 55343 [mol/m3] /
+#: H^cp [mol/(m3 Pa)]``); they are order-of-magnitude values with an uncertainty
+#: of 20-30 % (more for the temperature coefficients), meant for examples and
+#: tests. Use measured data for design.
+HENRY_WATER: dict[str, HenryData] = {
+    "acetone": HenryData(2.0e5, 5000.0),
+    "NH3": HenryData(9.4e4, 4100.0),
+    "CO2": HenryData(1.66e8, 2400.0),
+    "H2S": HenryData(5.5e7, 2100.0),
+    "SO2": HenryData(4.6e6, 3100.0),
+    "TCE": HenryData(5.5e7, 4400.0),
+    "benzene": HenryData(3.1e7, 4000.0),
+}
+
+
+def henry_params(species: list[str], table: dict[str, HenryData] | None = None):
+    """``(henry, henry_C)`` dicts for :class:`AbsorptionParams` from a table."""
+    table = HENRY_WATER if table is None else table
+    return ({s: table[s].H298 for s in species}, {s: table[s].C for s in species})
+
+
+# ---------------------------------------------------------------------------
+# Library helpers (not palette units)
+# ---------------------------------------------------------------------------
+
+
+def absorption_factor(L: Array | float, V: Array | float, K: Array | float) -> Array:
+    """``A = L/(K V)``."""
+    return jnp.asarray(L, float) / (jnp.asarray(K, float) * jnp.asarray(V, float))
+
+
+def stripping_factor(L: Array | float, V: Array | float, K: Array | float) -> Array:
+    """``S = K V/L = 1/A``."""
+    return jnp.asarray(K, float) * jnp.asarray(V, float) / jnp.asarray(L, float)
+
+
+def kremser_absorption(A: Array | float, N: Array | float) -> Array:
+    """Fraction of solute absorbed from the gas by pure solvent in ``N`` stages.
+
+    ``(A^(N+1) - A)/(A^(N+1) - 1)`` for any ``A > 0``; the same function as
+    :func:`difflow.staged.kremser_fraction`, re-exported here by name.
+    """
+    return kremser_fraction(A, N)
+
+
+def solute_free_operating_line(G_s: Array | float, L_s: Array | float,
+                               X_ref: Array | float, Y_ref: Array | float):
+    """Absorber operating line in solute-free ratios, ``Y = slope X + intercept``.
+
+    The solute balance ``G_s (Y_in - Y) = L_s (X_out - X)`` makes a straight line
+    of slope ``L_s/G_s`` in ``X = x/(1-x)``, ``Y = y/(1-y)`` coordinates through
+    any one known point ``(X_ref, Y_ref)`` of the column (the top
+    ``(X_in, Y_out)`` of an absorber; the bottom ``(X_out, Y_in)`` of a stripper
+    is the same line). Returns ``(slope, intercept)``.
+
+    Args:
+        G_s: Solute-free gas rate (mol/s).
+        L_s: Solute-free liquid rate (mol/s).
+        X_ref, Y_ref: A point on the line (liquid and gas solute ratios).
+    """
+    slope = jnp.asarray(L_s, float) / jnp.asarray(G_s, float)
+    return slope, jnp.asarray(Y_ref, float) - slope * jnp.asarray(X_ref, float)
+
+
+def _ratio_curve(curve: EquilibriumCurve):
+    """``Y*(X)`` of a mole-fraction curve ``y*(x)``."""
+    curve = curve.ideal()
+    return lambda X: to_ratio(curve(from_ratio(X)))
+
+
+def minimum_solvent_rate(curve: EquilibriumCurve, Y_in: Array | float, Y_out: Array | float,
+                         X_in: Array | float, G_s: Array | float) -> Array:
+    """Minimum solute-free solvent rate ``L_s,min`` of an absorber (mol/s).
+
+    The operating line ``Y = Y_out + (L_s/G_s)(X - X_in)`` must stay on or above
+    the equilibrium curve ``Y*(X)`` (ratio coordinates; ``curve`` is the
+    mole-fraction ``y*(x)``). Its smallest admissible slope is the largest chord
+    slope ``(Y*(X) - Y_out)/(X - X_in)`` over ``X`` from ``X_in`` to the liquid in
+    equilibrium with the inlet gas, ``X*(Y_in)``: a pinch at the rich end for a
+    curve that bends up (Henry's law with ``K > 1``), a tangent pinch (interior
+    maximum) otherwise. ``inf`` if ``Y_out`` is below equilibrium with ``X_in``
+    (the spec cannot be met at any rate). The textbook design rule is
+    ``L = 1.2-2 L_min``.
+
+    Args:
+        curve: Equilibrium curve ``y*(x)`` in mole fractions.
+        Y_in, Y_out: Gas solute ratios at the bottom and top.
+        X_in: Liquid solute ratio at the top (entering solvent).
+        G_s: Solute-free gas rate (mol/s).
+    """
+    Ystar = _ratio_curve(curve)
+    Y_in = jnp.asarray(Y_in, float)
+    Y_out = jnp.asarray(Y_out, float)
+    X_in = jnp.asarray(X_in, float)
+    X_end = to_ratio(curve.ideal().inverse(from_ratio(Y_in)))
+    lo = X_in + 1e-9 * jnp.maximum(X_end - X_in, 1e-12)
+
+    def chord(X):
+        return (Ystar(X) - Y_out) / (X - X_in)
+
+    slope = _extremum_on_interval(chord, lo, X_end, True)
+    reachable = (Y_out >= Ystar(X_in)) & (slope > 0.0)
+    return jnp.where(reachable, slope, jnp.inf) * jnp.asarray(G_s, float)
+
+
+def minimum_stripping_gas_rate(curve: EquilibriumCurve, X_in: Array | float, X_out: Array | float,
+                               Y_in: Array | float, L_s: Array | float) -> Array:
+    """Minimum solute-free stripping-gas rate ``G_s,min`` (mol/s), the mirror image.
+
+    The stripper line ``Y = Y_in + (L_s/G_s)(X - X_out)`` through
+    ``(X_out, Y_in)`` (clean end) must stay on or below ``Y*(X)``; its largest
+    slope is the smallest chord slope ``(Y*(X) - Y_in)/(X - X_out)`` up to the
+    rich-liquid end ``X_in`` (a rich-end or tangent pinch), and
+    ``G_s,min = L_s/slope_max``. ``inf`` if ``X_out`` is below equilibrium with
+    ``Y_in`` (a lean end that no amount of gas reaches).
+
+    Args:
+        curve: Equilibrium curve ``y*(x)`` in mole fractions.
+        X_in, X_out: Liquid solute ratios, rich (top) and lean (bottom).
+        Y_in: Stripping-gas solute ratio at the bottom.
+        L_s: Solute-free liquid rate (mol/s).
+    """
+    Ystar = _ratio_curve(curve)
+    X_in = jnp.asarray(X_in, float)
+    X_out = jnp.asarray(X_out, float)
+    Y_in = jnp.asarray(Y_in, float)
+    lo = X_out + 1e-9 * jnp.maximum(X_in - X_out, 1e-12)
+
+    def chord(X):
+        return (Ystar(X) - Y_in) / (X - X_out)
+
+    slope = _extremum_on_interval(chord, lo, X_in, False)
+    reachable = (Y_in <= Ystar(X_out)) & (slope > 0.0)
+    return jnp.asarray(L_s, float) / jnp.where(reachable, slope, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Numerical kernels
+# ---------------------------------------------------------------------------
+
+
+def _stage_ratio(eta: Array | float, A: Array) -> Array:
+    """Effective equilibrium stages per stage for a Murphree *vapor* efficiency.
+
+    The Lewis relation ``E_o = ln(1 + E_MV (S - 1))/ln S`` with ``S = 1/A = K V/L``
+    (exact for straight lines and constant flows; ``difflow_cc`` applies the
+    ``A`` form, which is the liquid-side Murphree efficiency). Smooth through
+    ``S = 1`` (limit ``E_MV``); no floor on ``ln S``.
+    """
+    return _taylor_log_fraction(jnp.asarray(eta, float), 1.0 / A - 1.0)
+
+
+def _expm1_over(z: Array) -> Array:
+    """``expm1(z)/z``, smooth at 0."""
+    near = jnp.abs(z) < 1e-6
+    zs = jnp.where(near, 1.0, z)
+    return jnp.where(near, 1.0 + z / 2.0 + z * z / 6.0, jnp.expm1(zs) / zs)
+
+
+def _colburn_unabsorbed(N_OG: Array, lam: Array) -> Array:
+    """Fraction of the driving force left, ``phi = eps/(e^{eps N} - lam)``, ``eps = 1 - lam``."""
+    eps = 1.0 - lam
+    return 1.0 / (1.0 + N_OG * _expm1_over(eps * N_OG))
+
+
+def _colburn_ntu(phi: Array, lam: Array) -> Array:
+    """Inverse of :func:`_colburn_unabsorbed` via :func:`ntu_og_colburn` (``inf`` if unreachable).
+
+    ``N_OG`` depends only on ``phi = (y_out - y*)/(y_in - y*)`` and ``lam``:
+    ``ntu_og_colburn(1, phi, 0, 0, lam)`` is ``ln[(1-lam)/phi + lam]/(1-lam)``.
+    """
+    ok = phi > 0.0
+    n = ntu_og_colburn(1.0, jnp.where(ok, phi, 0.5), 0.0, 0.0, lam)
+    reach = ok & ((1.0 - lam) / jnp.where(ok, phi, 0.5) + lam > 0.0)
+    return jnp.where(reach, n, jnp.inf)
+
+
+def _stages_solve(v_in, l_in, K, Gc, Lc, E, N, n_iter=_N_PICARD_STAGES):
+    """Counter-current Murphree tray column, all solutes; returns outlets and profiles.
+
+    Stage ``n = 1`` is the top. Unknowns per solute: the component flows leaving
+    each stage in the liquid (``l_n``) and the gas (``v_n``); balances
+    ``l_{n-1} + v_{n+1} = l_n + v_n`` and the Murphree vapor relation
+    ``v_n = V_n [(1-E) v_{n+1}/V_{n+1} + E K l_n/L_n]`` are linear for given total
+    flows ``V_n``, ``L_n``, which a fixed number of Picard sweeps updates.
+    """
+    V_in = Gc + jnp.sum(v_in)
+    L_in = Lc + jnp.sum(l_in)
+    eye = jnp.eye(N)
+    Sup = jnp.eye(N, k=1)
+    Sub = jnp.eye(N, k=-1)
+
+    def one(vi, li, Ki, V, L):
+        Vnext = jnp.concatenate([V[1:], V_in[None]])
+        c = (1.0 - E) * V / Vnext
+        e = E * Ki * V / L
+        Ablk = jnp.concatenate([-jnp.diag(e), eye - c[:, None] * Sup], axis=1)
+        Bblk = jnp.concatenate([eye - Sub, eye - Sup], axis=1)
+        M = jnp.concatenate([Ablk, Bblk], axis=0)
+        rA = jnp.zeros(N).at[N - 1].set(c[N - 1] * vi)
+        rB = jnp.zeros(N).at[0].add(li).at[N - 1].add(vi)
+        z = jnp.linalg.solve(M, jnp.concatenate([rA, rB]))
+        return z[:N], z[N:]
+
+    solve_all = jax.vmap(one, in_axes=(0, 0, 0, None, None))
+
+    def sweep(carry, _):
+        V, L = carry
+        l, v = solve_all(v_in, l_in, K, V, L)
+        return (Gc + jnp.sum(v, axis=0), Lc + jnp.sum(l, axis=0)), None
+
+    (V, L), _ = lax.scan(sweep, (jnp.full(N, V_in), jnp.full(N, L_in)), None, length=n_iter)
+    l, v = solve_all(v_in, l_in, K, V, L)
+    V2 = Gc + jnp.sum(v, axis=0)
+    L2 = Lc + jnp.sum(l, axis=0)
+    resid = jnp.max(jnp.abs(V2 - V)) + jnp.max(jnp.abs(L2 - L))
+    return v[:, 0], l[:, N - 1], {"l": l, "v": v, "V": V2, "L": L2, "residual": resid}
+
+
+def _picard(step, n_iter: int = _N_PICARD):
+    """Fixed-point iteration on the net transfer ``delta`` (mol/s, gas to liquid)."""
+    def body(delta, _):
+        _, new = step(delta)
+        return new, None
+
+    delta, _ = lax.scan(body, jnp.asarray(0.0), None, length=n_iter)
+    aux, new = step(delta)
+    return aux, delta, jnp.abs(new - delta)
+
+
+# ---------------------------------------------------------------------------
+# Params
+# ---------------------------------------------------------------------------
+
+
+@dataclass(repr=False)
+class AbsorptionParams(ParamsMixin):
+    """Parameters of a gas-liquid column, shared by :class:`Absorber` and :class:`Stripper`.
+
+    (Named ``AbsorptionParams``, not ``AbsorberParams``, so it cannot shadow
+    ``difflow_cc.AbsorberParams`` or ``difflow_ree.StripperParams`` in
+    ``difflow.serialize``'s lookup of Params classes by name.) For a
+    :class:`Stripper`, ``recovery`` is the fraction of the key solute removed from
+    the liquid.
+
+    Attributes:
+        henry: Henry's constants ``H_i`` (Pa, ``y_i P = H_i x_i``) at ``T_ref`` for
+            every transferring solute; the keys are the solute species names.
+            ``difflow.units.absorption.HENRY_WATER`` has a small table (from memory).
+        henry_C: van 't Hoff coefficients ``C_i`` (K) per solute,
+            ``H(T) = H_ref exp(-C (1/T - 1/T_ref))``; missing means 0 (no
+            temperature dependence).
+        T_ref: Reference temperature of ``henry`` (K).
+        model: ``"kremser"``, ``"stages"`` (tray-to-tray, integer ``n_stages``) or
+            ``"packed"`` (HTU/NTU).
+        n_stages: Number of real stages (kremser and stages models). Continuous
+            for ``"kremser"``; ignored when ``recovery`` is given (it is then an output).
+        stage_efficiency: Murphree vapor efficiency of a stage (1 = equilibrium).
+        P: Column pressure (Pa); ``None`` takes the gas inlet pressure.
+        T: Column temperature (K, isothermal); ``None`` takes the gas inlet temperature.
+        variable_flow: Use the geometric-mean (Edmister) absorption factor from the
+            top and bottom flows (True), or the inlet flows (False).
+        key_solute: The solute that sets ``recovery`` (design), ``L_min`` and the
+            operating line; defaults to the first of ``henry``.
+        recovery: Design specification for the key solute: fraction removed from
+            the gas (absorber) or from the liquid (stripper). ``None`` = rating.
+        packing: Packing name in ``difflow.mass_transfer.PACKINGS`` or a
+            ``PackingData`` (packed model with Onda films).
+        diameter: Column diameter (m) (packed model).
+        height: Packed height (m) for rating; ignored with ``recovery`` (output).
+        H_OG: Overall transfer-unit height (m); ``None`` computes it from Onda films.
+        ntu_method: ``"colburn"`` (analytic, straight lines) or ``"integral"``
+            (numerical ``N_OG`` for the key solute; design mode only).
+        concentrated: With ``"integral"``, include the ``(1-y)_lm`` correction.
+        D_G: Gas-phase diffusivity per solute (m^2/s) for the Onda gas film.
+        D_L: Liquid-phase diffusivity per solute (m^2/s) for the Onda liquid film.
+        mu_G: Gas viscosity (Pa s); default air at 25 C.
+        mu_L: Liquid viscosity (Pa s); default water at 25 C.
+        rho_L: Liquid density (kg/m^3); default water.
+        sigma: Liquid surface tension (N/m); default water.
+        MW_gas: Mean molar mass of the gas (kg/mol); default air.
+        MW_liquid: Molar mass of the solvent (kg/mol); default water.
+        cp_liquid: Liquid molar heat capacity (J/mol/K) for the adiabatic
+            temperature-rise estimate; default water.
+    """
+
+    henry: dict[str, float]
+    henry_C: dict[str, float] = field(default_factory=dict)
+    T_ref: float = 298.15
+    model: Literal["kremser", "stages", "packed"] = "kremser"
+    n_stages: float = 5.0
+    stage_efficiency: float = 1.0
+    P: float | None = None
+    T: float | None = None
+    variable_flow: bool = True
+    key_solute: str | None = None
+    recovery: float | None = None
+    packing: str | PackingData | None = None
+    diameter: float | None = None
+    height: float | None = None
+    H_OG: float | None = None
+    ntu_method: Literal["colburn", "integral"] = "colburn"
+    concentrated: bool = False
+    D_G: dict[str, float] = field(default_factory=dict)
+    D_L: dict[str, float] = field(default_factory=dict)
+    mu_G: float = 1.85e-5
+    mu_L: float = 8.9e-4
+    rho_L: float = 997.0
+    sigma: float = 0.072
+    MW_gas: float = 0.02897
+    MW_liquid: float = 0.018015
+    cp_liquid: float = 75.3
+
+    def __post_init__(self):
+        if not self.henry:
+            raise ValueError("henry needs at least one solute")
+        if self.model not in ("kremser", "stages", "packed"):
+            raise ValueError("model must be 'kremser', 'stages' or 'packed'")
+        if self.ntu_method not in ("colburn", "integral"):
+            raise ValueError("ntu_method must be 'colburn' or 'integral'")
+        if self.key_solute is not None and self.key_solute not in self.henry:
+            raise ValueError(f"key_solute {self.key_solute!r} not in henry")
+
+
+# ---------------------------------------------------------------------------
+# The unit
+# ---------------------------------------------------------------------------
+
+
+def _is_tracer(x) -> bool:
+    return isinstance(x, jax.core.Tracer)
+
+
+class _GasLiquidColumn:
+    """Shared implementation of :class:`Absorber` and :class:`Stripper`."""
+
+    _role = "absorber"
+
+    def __init__(self, params: AbsorptionParams):
+        self.params = params
+
+    # -- helpers -----------------------------------------------------------
+    def _packing(self) -> PackingData:
+        pk = self.params.packing
+        if isinstance(pk, str):
+            if pk not in PACKINGS:
+                raise ValueError(f"unknown packing {pk!r}; one of {sorted(PACKINGS)}")
+            return PACKINGS[pk]
+        return pk
+
+    def _film_heights(self, solutes, V_in, L_in, T, P):
+        """Onda ``H_G``, ``H_L`` per solute (m) and diagnostics, at the inlet flows."""
+        p = self.params
+        pk = self._packing()
+        if pk is None or p.diameter is None:
+            raise ValueError("the packed model needs `packing` and `diameter` (or a user H_OG)")
+        missing = [s for s in solutes if s not in p.D_G or s not in p.D_L]
+        if missing:
+            raise ValueError(f"the Onda films need D_G and D_L for {missing} "
+                             "(e.g. difflow.mass_transfer.fuller_diffusivity, wilke_chang_diffusivity)")
+        area = jnp.pi * jnp.asarray(p.diameter, float) ** 2 / 4.0
+        rho_G = P * p.MW_gas / (R_GAS * T)
+        u_G = V_in * R_GAS * T / (P * area)
+        u_L = L_in * p.MW_liquid / (p.rho_L * area)
+        D_G = jnp.stack([jnp.asarray(p.D_G[s], float) for s in solutes])
+        D_L = jnp.stack([jnp.asarray(p.D_L[s], float) for s in solutes])
+        a_w = onda_wetted_area(u_L, p.rho_L, p.mu_L, p.sigma, pk)
+        k_c = onda_gas_coefficient(u_G, rho_G, p.mu_G, D_G, pk)
+        k_L = onda_liquid_coefficient(u_L, p.rho_L, p.mu_L, D_L, p.sigma, pk, a_w=a_w)
+        k_y = k_c * P / (R_GAS * T)
+        k_x = k_L * p.rho_L / p.MW_liquid
+        H_G = (V_in / area) / (k_y * a_w)
+        H_L = (L_in / area) / (k_x * a_w)
+        return H_G, H_L, {"a_w": a_w, "area": area, "k_y": k_y, "k_x": k_x, "u_G": u_G, "u_L": u_L}
+
+    # -- call --------------------------------------------------------------
+    def __call__(self, gas_in: Stream, liquid_in: Stream) -> tuple[Stream, Stream, dict]:
+        """Contact the gas (bottom) with the liquid (top).
+
+        Args:
+            gas_in: Gas entering at the bottom (carrier plus solutes), mol/s.
+            liquid_in: Liquid entering at the top (solvent plus any solute), mol/s.
+
+        Returns:
+            gas_out: Gas leaving at the top.
+            liquid_out: Liquid leaving at the bottom.
+            info: ``recovery`` and ``transferred`` per solute (mol/s gas to liquid),
+                ``A`` and ``S`` (effective absorption and stripping factors), ``K``,
+                ``n_stages`` / ``N_eq`` (kremser, stages; ``N_eq`` per solute) or ``N_OG``,
+                ``H_OG`` (per solute) and ``height`` (packed), ``L_min`` (absorber) or ``G_min`` (stripper)
+                for the key solute and the ratio to it, the solute-free operating
+                line and equilibrium curve (``X``, ``Y``, ``Y_eq``), ``Q_absorption``
+                (W) and ``delta_T_adiabatic`` (K, reported, not applied),
+                ``converged``, ``feasible``.
+        """
+        p = self.params
+        solutes = list(p.henry)
+        key = p.key_solute or solutes[0]
+        k = solutes.index(key)
+        design = p.recovery is not None
+        gf = get_flows(gas_in)
+        lf = get_flows(liquid_in)
+        T = jnp.asarray(p.T if p.T is not None else gas_in["T"], float)
+        P = jnp.asarray(p.P if p.P is not None else gas_in["P"], float)
+        H = jnp.stack([henry_constant(p.henry[s], T, p.henry_C.get(s, 0.0), p.T_ref) for s in solutes])
+        K = H / P
+        v_in = jnp.stack([jnp.asarray(gf.get(s, 0.0), float) for s in solutes])
+        l_in = jnp.stack([jnp.asarray(lf.get(s, 0.0), float) for s in solutes])
+        V_in = sum(jnp.asarray(v, float) for v in gf.values())
+        L_in = sum(jnp.asarray(v, float) for v in lf.values())
+        eta = jnp.asarray(p.stage_efficiency, float)
+        Gc = V_in - jnp.sum(v_in)
+        Lc = L_in - jnp.sum(l_in)
+        feasible = jnp.asarray(True)
+        extra: dict = {}
+
+        # design target for the key solute: v_out_key from the recovery
+        r = None if not design else jnp.asarray(p.recovery, float)
+        if design:
+            if p.model == "stages":
+                raise ValueError("recovery (design) is not available for model='stages': "
+                                 "n_stages is a concrete integer there; use rating or the kremser model")
+            v_out_target = v_in[k] * (1.0 - r) if self._role == "absorber" else v_in[k] + l_in[k] * r
+
+        if p.model == "stages":
+            if _is_tracer(p.n_stages):
+                raise ValueError("model='stages' needs a concrete integer n_stages (not a traced value)")
+            n_f = float(p.n_stages)
+            if n_f != int(n_f) or n_f < 1:
+                raise ValueError(f"model='stages' needs an integer n_stages >= 1, got {p.n_stages}")
+            N = int(n_f)
+            v_out, l_out, prof = _stages_solve(v_in, l_in, K, Gc, Lc, eta, N)
+            V_top = Gc + jnp.sum(v_out)
+            L_bot = Lc + jnp.sum(l_out)
+            A = jnp.sqrt(L_in * L_bot / (V_in * V_top)) / K if p.variable_flow else L_in / (V_in * K)
+            n_act = jnp.asarray(float(N))
+            N_eq = n_act * _stage_ratio(eta, A)
+            converged = prof["residual"] < 1e-9 * (V_in + L_in)
+            extra.update(stage_x=prof["l"] / prof["L"], stage_y=prof["v"] / prof["V"],
+                         stage_V=prof["V"], stage_L=prof["L"])
+        else:
+            packed = p.model == "packed"
+            if packed:
+                if design and (p.height is not None):
+                    raise ValueError("give height (rating) or recovery (design), not both")
+                if not design and p.height is None:
+                    raise ValueError("packed model: give height (rating) or recovery (design)")
+                if p.H_OG is None:
+                    H_G, H_L, film = self._film_heights(solutes, V_in, L_in, T, P)
+                    extra.update(film)
+                else:
+                    H_G = H_L = None
+                if design and p.ntu_method == "integral":
+                    G_s = V_in - v_in[k]
+                    L_s = L_in - l_in[k]
+                    Y_in = v_in[k] / G_s
+                    Y_out = v_out_target / G_s
+                    X_in = l_in[k] / L_s
+                    y_in, y_out = from_ratio(Y_in), from_ratio(Y_out)
+
+                    def y_star(y):
+                        Y = to_ratio(y)
+                        X = X_in + (G_s / L_s) * (Y - Y_out)
+                        return K[k] * from_ratio(X)
+
+                    N_og_int = ntu_og_integral(y_in, y_out, y_star, concentrated=p.concentrated)
+                    extra["N_OG_integral"] = N_og_int
+            else:
+                N_in = jnp.asarray(p.n_stages, float)
+
+            def step(delta):
+                V_top = jnp.maximum(V_in - delta, _FLOOR * V_in)
+                L_bot = jnp.maximum(L_in + delta, _FLOOR * L_in)
+                if p.variable_flow:
+                    A = jnp.sqrt(L_in * L_bot / (V_in * V_top)) / K
+                else:
+                    A = L_in / (V_in * K)
+                v_star = l_in / A
+                if packed:
+                    lam = 1.0 / A
+                    H_OG = (jnp.full_like(A, p.H_OG) if H_G is None else H_G + lam * H_L)
+                    if design:
+                        phi_k = (v_out_target - v_star[k]) / (v_in[k] - v_star[k])
+                        if p.ntu_method == "integral":
+                            Z = H_OG[k] * N_og_int
+                        else:
+                            Z = H_OG[k] * _colburn_ntu(phi_k, lam[k])
+                    else:
+                        Z = jnp.asarray(p.height, float)
+                    N_OG = Z / H_OG
+                    f = 1.0 - _colburn_unabsorbed(N_OG, lam)
+                    aux = {"A": A, "H_OG": H_OG, "N_OG": N_OG, "height": Z, "f": f, "v_star": v_star,
+                           "N_eq": None, "n_act": None}
+                else:
+                    if design:
+                        N_key = kremser_stages(A[k], 1.0 - (v_out_target - v_star[k]) / (v_in[k] - v_star[k]))
+                        n_act = N_key / _stage_ratio(eta, A[k])
+                    else:
+                        n_act = N_in
+                    N_eq = n_act * _stage_ratio(eta, A)
+                    f = kremser_fraction(A, N_eq)
+                    aux = {"A": A, "f": f, "v_star": v_star, "N_eq": N_eq, "n_act": n_act}
+                v_out = v_in * (1.0 - f) + v_star * f
+                aux["v_out"] = v_out
+                return aux, jnp.sum(v_in - v_out)
+
+            aux, delta, resid = _picard(step)
+            A, v_out = aux["A"], aux["v_out"]
+            l_out = l_in + v_in - v_out
+            converged = resid < 1e-9 * (V_in + L_in)
+            if packed:
+                extra.update(N_OG=dict(zip(solutes, aux["N_OG"])), H_OG=dict(zip(solutes, aux["H_OG"])),
+                             height=aux["height"])
+                n_act = jnp.asarray(jnp.nan)
+                N_eq = aux["N_OG"]
+                feasible = jnp.isfinite(aux["height"]) & (aux["height"] >= 0.0)
+            else:
+                n_act, N_eq = aux["n_act"], aux["N_eq"]
+                feasible = jnp.isfinite(n_act) & (n_act >= 0.0)
+
+        transferred = v_in - v_out
+        removed_gas = transferred / jnp.where(v_in > 0.0, v_in, 1.0)
+        removed_liq = -transferred / jnp.where(l_in > 0.0, l_in, 1.0)
+        recov = removed_gas if self._role == "absorber" else removed_liq
+
+        # outlets
+        gas_flows = {s: jnp.asarray(f, float) for s, f in gf.items() if s not in p.henry}
+        liq_flows = {s: jnp.asarray(f, float) for s, f in lf.items() if s not in p.henry}
+        for i, s in enumerate(solutes):
+            gas_flows[s] = v_out[i]
+            liq_flows[s] = l_out[i]
+        gas_out = make_stream(gas_flows, T, P)
+        liquid_out = make_stream(liq_flows, T, P)
+
+        # key-solute operating line, equilibrium curve and minimum rate (solute-free ratios)
+        G_s = V_in - v_in[k]
+        L_s = L_in - l_in[k]
+        Y_in = v_in[k] / G_s
+        Y_out = v_out[k] / G_s
+        X_in = l_in[k] / L_s
+        X_out = l_out[k] / L_s
+        curve = linear_equilibrium(K[k])
+        Xs = jnp.linspace(0.0, 1.0, 41) * (jnp.maximum(X_in, X_out) - jnp.minimum(X_in, X_out)) + \
+            jnp.minimum(X_in, X_out)
+        slope, icpt = solute_free_operating_line(G_s, L_s, X_in, Y_out)
+        if self._role == "absorber":
+            L_min = minimum_solvent_rate(curve, Y_in, Y_out, X_in, G_s)
+            ratio = L_s / L_min
+            minimum = {"L_min": L_min, "L_over_Lmin": ratio}
+        else:
+            G_min = minimum_stripping_gas_rate(curve, X_in, X_out, Y_in, L_s)
+            minimum = {"G_min": G_min, "G_over_Gmin": G_s / G_min}
+        # heat of absorption: C_i R per mol, released when solute goes into the liquid
+        C = jnp.stack([jnp.asarray(p.henry_C.get(s, 0.0), float) for s in solutes])
+        Q = jnp.sum(transferred * C) * R_GAS
+        dT = Q / (jnp.sum(jnp.stack([jnp.asarray(v, float) for v in liq_flows.values()])) * p.cp_liquid)
+
+        info = {
+            "recovery": dict(zip(solutes, recov)),
+            "transferred": dict(zip(solutes, transferred)),
+            "A": dict(zip(solutes, A)),
+            "S": dict(zip(solutes, 1.0 / A)),
+            "K": dict(zip(solutes, K)),
+            "key_solute": key,
+            "n_stages": n_act,
+            "N_eq": dict(zip(solutes, jnp.broadcast_to(N_eq, (len(solutes),)))),
+            **minimum,
+            "X": Xs,
+            "Y": icpt + slope * Xs,
+            "Y_eq": to_ratio(curve(from_ratio(Xs))),
+            "Q_absorption": Q,
+            "delta_T_adiabatic": dT,
+            "T": T,
+            "P": P,
+            "converged": converged,
+            "feasible": feasible,
+            **extra,
+        }
+        return gas_out, liquid_out, info
+
+
+_COMMON_ASSUMPTIONS = [
+    "Isothermal at T; the heat of absorption is reported, not applied.",
+    "Henry's law per solute, y = K x with K = H(T)/P; solutes do not interact.",
+    "No solvent evaporation and no carrier dissolution: non-solute species stay on the side they enter.",
+    "Constant total flows per stage, corrected through the geometric-mean (Edmister) factor A.",
+    "No reaction (use the difflow_cc amine units for reactive absorption).",
+]
+_COMMON_EQUATIONS = [
+    r"v_{out} = v_{in}(1-f) + \frac{l_{in}}{A} f,\quad f=\frac{A^{N_{eq}+1}-A}{A^{N_{eq}+1}-1},\quad A=\frac{L}{K V}",
+    r"N_{eq} = N\,\frac{\ln\!\big(1+E(S-1)\big)}{\ln S},\ S=\frac1A\qquad\text{(Murphree vapor efficiency)}",
+    r"Z = H_{OG} N_{OG},\quad H_{OG} = H_G + \lambda H_L,\quad \lambda = \frac{1}{A} = \frac{K V}{L}",
+    r"N_{OG} = \frac{\ln\!\big[(1-\lambda)\,\tfrac{y_{in}-Kx_{in}}{y_{out}-Kx_{in}} + \lambda\big]}{1-\lambda}\qquad\text{(Colburn)}",
+    r"\text{solute-free line: } G_s\,(Y_{in}-Y) = L_s\,(X_{out}-X),\ X=\tfrac{x}{1-x}",
+]
+_COMMON_REFERENCES = [
+    "Kremser, A. Natl. Petroleum News 22(21), 43 (1930); Edmister, W.C. AIChE J. 3, 165 (1957).",
+    "Colburn, A.P. Trans. AIChE 35, 211 (1939).",
+    "Onda, K., Takeuchi, H., Okumoto, Y. J. Chem. Eng. Japan 1, 56 (1968).",
+    "Seader, Henley & Roper, Separation Process Principles, Ch. 6-7.",
+]
+_COMMON_UNITS = {
+    "henry": "Pa", "henry_C": "K", "T_ref": "K", "n_stages": "-", "stage_efficiency": "-",
+    "P": "Pa", "T": "K", "recovery": "-", "diameter": "m", "height": "m", "H_OG": "m",
+    "D_G": "m^2/s", "D_L": "m^2/s", "mu_G": "Pa s", "mu_L": "Pa s", "rho_L": "kg/m^3",
+    "sigma": "N/m", "MW_gas": "kg/mol", "MW_liquid": "kg/mol", "cp_liquid": "J/(mol K)",
+}
+_COMMON_SYMBOLS = {"n_stages": "N", "stage_efficiency": r"E_{MV}", "henry": "H", "recovery": r"\phi",
+                   "height": "Z", "H_OG": "H_{OG}", "diameter": "D"}
+
+
+class Absorber(_GasLiquidColumn):
+    """Physical-solvent absorber: Kremser, stage-by-stage or packed (HTU/NTU).
+
+    Two inlets, ``gas_in`` (bottom) and ``liquid_in`` (top), and two outlets;
+    see the module docstring for the three models. ``params.recovery`` makes the
+    stage count (kremser) or the packed height an output. Library helpers for
+    the solute-free operating line and the minimum solvent rate are
+    :func:`solute_free_operating_line` and :func:`minimum_solvent_rate`.
+    """
+
+    symbol = "Absorber"
+    _role = "absorber"
+    equations = _COMMON_EQUATIONS
+    assumptions = _COMMON_ASSUMPTIONS
+    references = _COMMON_REFERENCES
+    parameter_units = _COMMON_UNITS
+    parameter_symbols = _COMMON_SYMBOLS
+    numerical_method = ("Closed-form Kremser with a fixed-iteration flow correction; tray-to-tray linear solve "
+                        "per solute with Picard sweeps on the stage flows; Colburn or Gauss-Legendre NTU.")
+    outlet_roles = ["gas_out", "liquid_out"]
+
+    def __init__(self, params: AbsorptionParams):
+        super().__init__(params)
+
+
+class Stripper(_GasLiquidColumn):
+    """Physical stripper: solute from the liquid into a stripping gas (air, steam).
+
+    The same column as :class:`Absorber` run the other way: ``gas_in`` is the
+    stripping gas (bottom), ``liquid_in`` the rich liquid (top);
+    ``params.recovery`` is the fraction of the key solute removed from the
+    liquid, and ``info`` reports the minimum stripping-gas rate ``G_min``.
+    The stripping factor ``S = K V/L`` is in ``info["S"]``.
+    """
+
+    symbol = "Stripper"
+    _role = "stripper"
+    equations = _COMMON_EQUATIONS
+    assumptions = _COMMON_ASSUMPTIONS
+    references = _COMMON_REFERENCES
+    parameter_units = _COMMON_UNITS
+    parameter_symbols = _COMMON_SYMBOLS
+    numerical_method = Absorber.numerical_method
+    outlet_roles = ["gas_out", "liquid_out"]
+
+    def __init__(self, params: AbsorptionParams):
+        super().__init__(params)
