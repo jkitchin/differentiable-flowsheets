@@ -319,7 +319,7 @@ from difflow.units.heat_exchanger import (
     design_heat_exchanger,
     size_heat_exchanger,
 )
-from difflow.units.pipe import Pipe, PipeParams
+from difflow.units.pipe import Pipe, PipeCavitationWarning, PipeParams
 from difflow.units.pump import (
     CentrifugalPump,
     CentrifugalPumpParams,
@@ -781,6 +781,7 @@ __all__ = [
     "CompressorParams",
     "JTValve",
     "Pipe",
+    "PipeCavitationWarning",
     "PipeParams",
     "CentrifugalPump",
     "CentrifugalPumpParams",

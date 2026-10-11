@@ -4171,6 +4171,9 @@ the pipe raises `PipeCavitationWarning`. Under `jit`/`grad` only the flag is
 set; the warning never fires on a tracer. Water at 20 °C pumped 40 m uphill
 through 100 m of 2-in pipe at 3 L/s from 4 bar gives P_out = -33 kPa against
 P_vap = 2339 Pa: flagged.
+Only the outlet is checked: a line that climbs over a high point and comes back
+down can fall below the vapour pressure at the crest with a healthy outlet
+pressure. Model such a line as two `Pipe` units, splitting it at the crest.
 
 **Flow from the available head.** `Pipe.flow_at_head(H, inlet=None, Q0=None)`
 returns the volumetric flow at which friction plus minor losses equal `H`
