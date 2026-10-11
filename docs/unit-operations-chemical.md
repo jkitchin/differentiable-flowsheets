@@ -4582,7 +4582,9 @@ Q_star = operating_point(pump, sys_)                  # m^3/s; differentiable
   Newton started from the pump's zero-head flow. Gradients with respect to
   pump and system parameters (`D`, `N`, pipe diameter, ...) use the implicit
   function theorem, not the iterations. It has no meaningful answer when the
-  shutoff head is below the static head.
+  shutoff head is below the static head. A concrete negative root (that case,
+  or a `check_valves=False` parallel pair whose weak pump would run backwards)
+  or an unconverged solve raises `OperatingPointWarning`.
 - `pumps_in_series(*pumps)` adds heads at equal flow. `pumps_in_parallel(*pumps,
   check_valves=True)` adds flows at equal head. Both return curves usable by
   `operating_point`.

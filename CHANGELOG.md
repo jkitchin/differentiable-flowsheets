@@ -8,6 +8,9 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`OperatingPointWarning`.** `operating_point` warns on a concrete negative `Q*` (no forward-flow operating
+  point, e.g. a valveless parallel pair with a weak pump running backwards) or an unconverged Newton solve; silent
+  under `jit`/`grad`. `PipeCavitationWarning` is exported from `difflow`. Test `tests/test_pump.py`.
 - **Compressible flow, compressors, expanders, valves (book Ch. 5 gaps).**
   (1) EOS `Turboexpander`/`Compressor`/`JTValve` solve the outlet temperature with a bracketed (P, S)/(P, H) flash,
   also public as `flash_PS_eos`/`flash_PH_eos`. Two-phase, pure-component jump handled by the lever rule. Implicit

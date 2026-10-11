@@ -28,6 +28,7 @@ this system.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
@@ -39,7 +40,7 @@ from jax import Array
 from difflow.fluids import GRAVITY
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, get_flows, get_species, make_stream
-from difflow.units.pipe import Pipe, evaluate_property, stream_mass_flow
+from difflow.units.pipe import Pipe, _is_concrete, evaluate_property, stream_mass_flow
 
 #: Floor on the efficiency curve so shaft power stays finite far off the curve.
 ETA_FLOOR = 0.01
@@ -501,6 +502,14 @@ def system_curve(
     return SystemCurve(static_head, pipes, delta_P, rho, inlet)
 
 
+class OperatingPointWarning(UserWarning):
+    """No physical operating point: the root is a negative flow, or Newton failed.
+
+    Raised by :func:`operating_point` on concrete values only; under
+    ``jit``/``grad`` the root is returned unchanged.
+    """
+
+
 def operating_point(pump, system, Q_guess: Array | float | None = None, return_info: bool = False):
     """Flow ``Q*`` (m^3/s) where the pump head equals the system head.
 
@@ -511,6 +520,9 @@ def operating_point(pump, system, Q_guess: Array | float | None = None, return_i
     function theorem (``optimistix``), not by differentiating through the
     iterations. If the shutoff head is below the static head there is no
     positive root and the result is not meaningful (check ``H(0)`` first).
+    A concrete negative ``Q*`` (that case, or a valveless parallel pair whose
+    weak pump runs backwards) or an unconverged solve raises
+    :class:`OperatingPointWarning`; the value is still returned.
 
     Args:
         pump: :class:`CentrifugalPump`, :class:`PumpCurve` or a combined curve.
@@ -533,6 +545,21 @@ def operating_point(pump, system, Q_guess: Array | float | None = None, return_i
 
     sol = optx.root_find(resid, optx.Newton(rtol=1e-12, atol=1e-10), jnp.asarray(1.0), throw=False)
     Q = sol.value * Q0
+    if _is_concrete(Q):
+        if not bool(sol.result == optx.RESULTS.successful):
+            warnings.warn(
+                f"operating_point did not converge (Q = {float(Q):.6g} m^3/s).",
+                OperatingPointWarning,
+                stacklevel=2,
+            )
+        elif float(Q) < 0.0:
+            warnings.warn(
+                f"operating_point found Q* = {float(Q):.6g} m^3/s < 0: no forward-flow "
+                "operating point. Check the shutoff head against the static head, or "
+                "use check_valves=True for pumps in parallel.",
+                OperatingPointWarning,
+                stacklevel=2,
+            )
     if not return_info:
         return Q
     info = {"Q": Q, "head": curve.head(Q)}

@@ -497,3 +497,25 @@ class TestRegistration:
         for n in ("CentrifugalPump", "CentrifugalPumpParams", "system_curve",
                   "operating_point", "pumps_in_series", "pumps_in_parallel", "fit_pump_curve", "npsh_available"):
             assert hasattr(difflow, n)
+
+
+def test_operating_point_warns_on_reverse_flow():
+    """A valveless parallel pair with a weak pump can put Q* < 0; say so."""
+    import warnings as _w
+
+    from difflow import OperatingPointWarning, Pipe, PipeParams, operating_point, pumps_in_parallel, system_curve
+    from difflow.units.pump import PumpCurve
+
+    a = PumpCurve([31.92, 45.0, -15814.0])
+    b = PumpCurve([31.92 * 0.64, 45.0 * 0.8, -15814.0])
+    pipe = Pipe(PipeParams(L=150.0, D=0.10226, rho=998.96, mu=1.0016e-3,
+                           fittings={"entrance_sharp": 1, "elbow_90_standard": 6, "gate_valve": 2,
+                                     "check_valve_swing": 1, "exit": 1}))
+    sysc = system_curve(15.0, pipe)
+    with pytest.warns(OperatingPointWarning, match="< 0"):
+        Q = operating_point(pumps_in_parallel(a, b, check_valves=False), sysc)
+    assert float(Q) < 0
+    with _w.catch_warnings():
+        _w.simplefilter("error", OperatingPointWarning)
+        assert float(operating_point(pumps_in_parallel(a, b), sysc)) > 0
+        jax.grad(lambda h: operating_point(pumps_in_parallel(a, b, check_valves=False), system_curve(h, pipe)))(15.0)
