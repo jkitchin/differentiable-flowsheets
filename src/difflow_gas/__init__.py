@@ -67,6 +67,9 @@ from difflow_gas.physics import (
     smoothed_power_w,
     specific_gas_constant,
     weymouth_beta,
+    isothermal_pipe_beta,
+    weymouth_friction,
+    PIPE_FRICTION_LAWS,
 )
 
 # =============================================================================
@@ -176,6 +179,9 @@ __all__ = [
     "__version__",
     # physics
     "weymouth_beta",
+    "isothermal_pipe_beta",
+    "weymouth_friction",
+    "PIPE_FRICTION_LAWS",
     "resistor_xi",
     "nikuradse_friction",
     "specific_gas_constant",
