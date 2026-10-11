@@ -4108,7 +4108,8 @@ $$
 
 $$
 Q \propto N D, \quad H \propto N^2 D^2, \quad P \propto N^3 D^3, \qquad
-\mathrm{NPSH}_a = \frac{P_s - P_\mathrm{sat}}{\rho g} + \frac{v_s^2}{2g} + z_s - h_{f,s}
+\mathrm{NPSH}_a = \frac{P_{s,\mathrm{total}} - P_\mathrm{sat}}{\rho g}
+= \frac{P_{s,\mathrm{static}} - P_\mathrm{sat}}{\rho g} + \frac{v_s^2}{2g}
 $$
 
 In the default (flow-given) mode the inlet stream fixes $Q=\dot m/\rho$ and the
@@ -4126,12 +4127,29 @@ outlet is $P_\mathrm{in}+\rho g H(Q)$; temperature and molar flows pass through
 | `motor_efficiency` | – | `electric_power = shaft_power / motor_efficiency` |
 | `MW` | g/mol | molar mass (number or `{species: MW}`); omit if a `thermo` is passed |
 | `Psat` | Pa | vapour pressure for NPSHa (number or callable); otherwise `thermo.Psat(species, T)` |
-| `D_suction` | m | suction nozzle diameter for the velocity head in NPSHa |
+| `D_suction` | m | suction nozzle diameter: reports `suction_velocity` and `suction_velocity_head` |
+| `suction_pressure` | – | `"total"` (default) or `"static"`: what the inlet `P` means (below) |
 | `cp` | J/kg/K | liquid heat capacity; enables the temperature rise |
 
 `info` holds `Q`, `head`, `efficiency`, `hydraulic_power`, `shaft_power`,
 `electric_power` (W) and, when the curves and a vapour pressure are given,
 `NPSHr`, `NPSHa` and `npsh_margin = NPSHa - NPSHr` (negative: cavitation risk).
+
+**Static or total suction pressure.** A difflow stream's `P` is the *total*
+pressure: static plus the velocity head $\rho v^2/2$. A stream from a tank is at
+rest, so the two are equal there. `Pipe` subtracts only friction, fittings and
+elevation, so its outlet `P` is the static flange pressure *plus* $\rho v^2/2$.
+Bernoulli from the tank surface to the flange gives
+$P_\mathrm{static}/\rho g + v^2/2g = P_\mathrm{tank}/\rho g + z_s - h_{f,s}$, and so
+$\mathrm{NPSH}_a = (P - P_\mathrm{sat})/\rho g$ with no separate velocity-head term. That is
+the default, `suction_pressure="total"`. Feed a `Pipe` outlet straight in, and
+`D_suction` only reports the nozzle velocity. Set `suction_pressure="static"` only
+when `P` is a measured wall-tap pressure at the flange. NPSHa then adds
+$v_s^2/2g$, which needs `D_suction`. Older versions always added $v_s^2/2g$ when
+`D_suction` was set. That counted the velocity head twice for a `Pipe` outlet:
+0.28 m too much NPSHa for 40 m³/h in a 3-in line, enough to hide cavitation.
+`tests/test_pump.py::TestNPSH::test_pipe_outlet_to_pump_counts_velocity_head_once`
+checks the Bernoulli result for several nozzle sizes.
 Like `Pipe`, liquid density is an explicit input; see the design note under
 [Pipe](#op-pipe).
 
@@ -4161,9 +4179,24 @@ Q_star = operating_point(pump, sys_)                  # m^3/s; differentiable
   pump and system parameters (`D`, `N`, pipe diameter, ...) use the implicit
   function theorem, not the iterations. It has no meaningful answer when the
   shutoff head is below the static head.
-- `pumps_in_series(*pumps)` adds heads at equal flow; `pumps_in_parallel(*pumps)`
-  adds flows at equal head (a small Newton solve for the branch flows,
-  `.split(Q)`). Both return curves usable by `operating_point`.
+- `pumps_in_series(*pumps)` adds heads at equal flow. `pumps_in_parallel(*pumps,
+  check_valves=True)` adds flows at equal head. Both return curves usable by
+  `operating_point`.
+- **Check valves in parallel.** A pump whose shutoff head $H_i(0)$ is below the
+  common head is held at zero flow by its check valve. It does not run
+  backwards. The branch flows and the head solve $\sum q_i = Q$ together with
+  the complementarity $q_i \ge 0$, $H - H_i(q_i) \ge 0$, $q_i\,(H-H_i(q_i)) = 0$.
+  That is a smoothed Fischer-Burmeister system, solved by Newton with implicit
+  gradients. The smoothing (`smoothing=1e-6`, in scaled units) rounds the switch
+  corner, so the combined curve stays differentiable. Its slope still changes
+  sharply where a pump cuts in, which is a real kink in the physics.
+  `split(Q, return_info=True)` returns the branch flows plus `head`, `running`
+  (False for a branch whose valve is shut), `shutoff_head` and `converged`.
+  A stopped pump adds no shaft power and no NPSHr. Here is the case that used
+  to be wrong: pumps with shutoff heads of 40 m and 25 m ($-3000\,Q^2$ each)
+  at $Q = 0.03$ m³/s. Before, the weak pump got $-0.068$ m³/s and the head was
+  11 m. Now that pump is shut and the strong pump carries all 0.03 m³/s at
+  37.3 m. `check_valves=False` keeps the valveless (reverse-flow) solution.
 - `npsh_available(P_suction, Psat, rho, v, z_suction, losses)`.
 - `pump.curve` is a `difflow.units.pump.PumpCurve` (`head`, `efficiency`, `npshr`,
   `shaft_power` at the operating `N` and `D`); build one directly from
