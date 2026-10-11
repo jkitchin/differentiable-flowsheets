@@ -4161,8 +4161,10 @@ differential-pressure flow meters. The functions live in
 [`difflow.fluids`](#fluids-module) (JAX, SI, differentiable) and the unit
 operation is [`Pipe`](#op-pipe). Compressible gas flow (nozzles, isothermal
 and adiabatic lines) is in [`difflow.compressible`](#compressible-module), and
-gas networks are in `difflow_gas`. Two-phase flow, non-Newtonian fluids and
-transients are out of scope.
+gas networks are in `difflow_gas`. Liquid networks are solved by
+[`PipeNetwork`](#pipe-networks), power-law and Bingham fluids have their own
+[friction factors](#non-newtonian-friction), and a rotameter model sits with the
+flow meters. Two-phase flow and transients are out of scope.
 
 (op-pipe)=
 ### Pipe
@@ -4188,6 +4190,7 @@ Temperature and molar flows pass through unchanged.
 | `fittings` | – | `{name: count}` using the K table below, plus an optional `"K"` entry for a numeric extra K (a strainer, a meter); or a total K |
 | `flow_area` | m² | flow cross-section for a non-circular duct; then `D` is the hydraulic diameter 4A/P. Default `None`: πD²/4 |
 | `P_vap` | Pa | vapour pressure for the cavitation check. Default `None`: Raoult's law over the inlet species with data (IAPWS for water, the database Antoine otherwise) |
+| `profile` | m | optional elevation profile `[(distance, elevation), ...]` from inlet to outlet; the minimum pressure along the line is checked (default `None`: outlet only) |
 | `friction_method` | – | `"colebrook"` (default), `"churchill"`, `"haaland"`, `"swamee_jain"` |
 | `MW` | g/mol | molar mass (number or `{species: MW}`) to turn molar into mass flow; omit if a `thermo` is passed |
 
@@ -4231,9 +4234,22 @@ the pipe raises `PipeCavitationWarning`. Under `jit`/`grad` only the flag is
 set; the warning never fires on a tracer. Water at 20 °C pumped 40 m uphill
 through 100 m of 2-in pipe at 3 L/s from 4 bar gives P_out = -33 kPa against
 P_vap = 2339 Pa: flagged.
-Only the outlet is checked: a line that climbs over a high point and comes back
-down can fall below the vapour pressure at the crest with a healthy outlet
-pressure. Model such a line as two `Pipe` units, splitting it at the crest.
+Without a profile only the outlet is checked, and a line that climbs over a
+high point and comes back down can fall below the vapour pressure at the crest
+with a healthy outlet pressure. Give the route as
+`profile=[(0, 0), (100, 32), (200, 0)]` (distance from the inlet, elevation; m)
+and the pipe evaluates
+$P(s_i)=P_\mathrm{in}-\Delta P_m-\Delta P_f\,\frac{s_i-s_0}{s_N-s_0}-\rho g(z_i-z_0)$
+at every point (friction spread evenly, all fitting losses put at the inlet,
+which is conservative). `info` then also has `P_profile`, `P_min`, `s_P_min`,
+`z_P_min`, `P_min_below_vapour`, `cavitation_margin` ($P_\min-P_\mathrm{vap}$,
+Pa) and `cavitation_margin_head` (the same in m of liquid, an NPSH-type
+margin), and `PipeCavitationWarning` names the location. The elevation gain is
+$z_N - z_0$ (leave `dz` at 0, or give the same value); `Pipe.elevation_gain()`
+returns it and `Pipe.pressure_profile(inlet)` returns the arrays. With 3 L/s of
+water from 3 bar over a 32 m crest halfway along 200 m of 2-in Sch 40 pipe the
+outlet is at 2.18 bar, but the crest computes to -0.54 bar (absolute): flagged,
+where the outlet check alone would pass.
 
 **Flow from the available head.** `Pipe.flow_at_head(H, inlet=None, Q0=None)`
 returns the volumetric flow at which friction plus minor losses equal `H`
@@ -4304,6 +4320,57 @@ Also in the module: `reynolds_number`, `hydraulic_diameter` (4A/P),
 `darcy_pressure_drop`, `minor_loss`, `fully_rough_friction_factor` and the L/D
 helper `equivalent_length(K, D, f)` = K D / f.
 
+(non-newtonian-friction)=
+### Non-Newtonian Friction Factors
+
+All of these return the **Darcy** factor, like `friction_factor`, so
+`darcy_pressure_drop(f, L, D, rho, v)` applies unchanged; the source
+correlations are written for the Fanning factor $f_F = f/4$ and are quoted that
+way below. Smooth pipes only.
+
+**Power-law fluid** ($\tau = K\dot\gamma^{\,n}$).
+`metzner_reed_reynolds(rho, v, D, K, n)` is
+$\mathrm{Re}_{MR}=\rho v^{2-n}D^n/\left[K\,8^{n-1}\left(\frac{3n+1}{4n}\right)^n\right]$
+(Metzner and Reed, 1955), which makes the laminar factor exactly
+$f_F = 16/\mathrm{Re}_{MR}$ for every $n$.
+`power_law_friction_factor(Re_MR, n)` blends that with the turbulent
+Dodge-Metzner (1959) equation
+$1/\sqrt{f_F} = (4/n^{0.75})\log_{10}\!\left(\mathrm{Re}_{MR}\,f_F^{\,1-n/2}\right) - 0.4/n^{1.2}$,
+solved by Newton iteration with implicit-function gradients, using the same
+2100-4000 smootherstep as the Newtonian methods. The blend window is a
+convention: the true critical $\mathrm{Re}_{MR}$ rises somewhat as $n$ falls,
+and that is not modelled. Dodge and Metzner's data covered $0.36\le n\le 1$ and
+$\mathrm{Re}_{MR}$ up to about $10^5$. `power_law_pressure_drop(Q, L, D, rho, K, n)`
+is the Darcy-Weisbach drop; in laminar flow it is the Rabinowitsch-Mooney
+result $\Delta P = \frac{4KL}{D}\left(\frac{8v}{D}\right)^n\left(\frac{3n+1}{4n}\right)^n$
+exactly.
+
+**Bingham plastic** ($\tau = \tau_y + \mu_p\dot\gamma$).
+`hedstrom_number(rho, tau_y, D, mu_p)` is $\mathrm{He}=\rho\tau_y D^2/\mu_p^2$ and
+the Reynolds number is $\mathrm{Re}_B=\rho v D/\mu_p$.
+`bingham_friction_factor(Re_B, He, method="darby1992")`:
+
+| Regime | Fanning form | Source |
+|--------|--------------|--------|
+| laminar (`method="laminar"`) | $f_L=\frac{16}{\mathrm{Re}}\left[1+\frac{\mathrm{He}}{6\,\mathrm{Re}}-\frac{\mathrm{He}^4}{3 f_L^3\mathrm{Re}^7}\right]$ | Buckingham-Reiner, solved by Newton with implicit gradients |
+| turbulent | $f_T = 10^{a}\,\mathrm{Re}^{-0.193}$, $a=-1.47\left[1+0.146\,e^{-2.9\times10^{-5}\mathrm{He}}\right]$ | Darby, Mun and Boger (1992) |
+| all (`"darby1992"`, default) | $f=\left(f_L^{m}+f_T^{m}\right)^{1/m}$, $m = 1.7+40000/\mathrm{Re}$ | Darby, Mun and Boger (1992), evaluated in log space |
+
+The original Darby and Melson (1981) fit had $-1.378$ in place of $-1.47$.
+The 1992 constants were checked against secondary reprints, not the original
+article. The turbulent fit is for slurries and pastes and does not reduce to
+the Newtonian curve at He = 0 (it is about half of it at Re = 1e5); only the
+laminar branch has an exact Newtonian limit. `bingham_pressure_drop(Q, L, D,
+rho, tau_y, mu_p)` is the Darcy-Weisbach drop.
+
+What is tested (`tests/test_non_newtonian.py`): $n=1$ and $\tau_y=0$ give
+exactly 64/Re in laminar flow; Dodge-Metzner at $n=1$ (Prandtl's smooth-pipe
+law) is within 1 % of smooth Colebrook for Re 1e4-1e7; the laminar Bingham
+pressure drop reproduces the Buckingham flow equation
+$Q=\frac{\pi D^4\Delta P}{128\mu_p L}\left[1-\frac43\xi+\frac{\xi^4}{3}\right]$,
+$\xi=\tau_y/\tau_w$; the implicit solutions match an independent bracketing
+root; gradients pass `check_grads`.
+
 (nps-table)=
 ### Standard Pipe Sizes (NPS and Schedule)
 
@@ -4317,6 +4384,7 @@ B36.19M stainless "S" schedules are not included.
 | `pipe_wall_thickness(nps, schedule="40")` | wall, m |
 | `pipe_inside_diameter(nps, schedule="40")` (alias `pipe_id`) | ID = OD − 2t, m |
 | `standard_sizes(schedule="40")` | sorted list of `(NPS, ID_m)` |
+| `pipe_weight_per_length(nps, schedule="40")` | plain-end steel mass, kg/m (B36.10M: $0.0246615\,(OD-t)\,t$, mm) |
 | `snap_to_standard_size(D, schedule="40", direction="up")` | `(NPS, ID_m)`: the next standard size up (or `"down"`, `"nearest"`) |
 
 `nps` may be a number or a string (`2`, `1.5`, `"1-1/2"`, `'2"'`); the schedule
@@ -4414,35 +4482,85 @@ recovered.
   resampled from the `fluids` library's digitization of the standard's figure
   and reproduces its `dP_venturi_tube` example (1788.6 Pa) to 0.5 %.
 
-### Pipe Networks: Parallel Branches
+**Rotameter.** A float in a vertical tapered tube rises until the pressure
+difference across it carries its weight less its buoyancy,
+$\Delta P\,A_f = V_f(\rho_f-\rho)g$ (`rotameter_float_dp`), so the differential
+is fixed and the flow area changes. With the tube diameter
+$D_t = D_{t,0} + \text{taper}\cdot h$ (`D_tube_0` defaults to the float
+diameter, the float seated at $h=0$), the annulus $A_a = \frac{\pi}{4}(D_t^2-D_f^2)$
+passes
 
-A full network solver is out of scope (`difflow_gas` covers gas networks), but a
-parallel pair between two nodes is a one-unknown root find with the existing
-solvers: the fraction $x$ of the flow in branch A satisfies
-$\Delta P_A(xQ)=\Delta P_B((1-x)Q)$.
+$$
+Q = C_R\,\frac{A_a}{\sqrt{1-(A_a/A_t)^2}}\,\sqrt{\frac{2 g V_f(\rho_f-\rho)}{\rho A_f}}
+$$
+
+(McCabe, Smith and Harriott, *Unit Operations*, 7e, Ch. 8; Perry's Sec. 10).
+`rotameter_flow(h, D_float, V_float, rho_float, rho, C_R, taper, D_tube_0=None)`
+returns $Q$ and `rotameter_height(Q, ...)` inverts it (Newton in $\ln A_a$, one
+implicit-function step for the derivatives). $C_R$ depends on the float shape
+and Reynolds number and has no default: take it from the calibration. The mass
+flow at a given reading scales with $\sqrt{\rho(\rho_f-\rho)}$, the usual density
+correction. `tests/test_rotameter.py` checks the force-balance identity, the
+inverse, and the inverse-function derivative $\frac{dh}{dQ}\frac{dQ}{dh}=1$.
+
+### Pipe Networks
+
+`PipeNetwork` solves looped and branched liquid networks built from `Pipe`
+units (or `ResistanceBranch(r, n)`, $\Delta P = rQ|Q|^{n-1}$, for a textbook
+$kQ^2$ or Hazen-Williams $n=1.852$ element). A node has either a fixed
+pressure (reservoir, header, discharge) or an external demand (m³/s leaving
+the network; negative for an injection), and at least one node must be fixed.
+Flows are positive from a branch's `from` node to its `to` node; a `Pipe`'s
+`dz` (or `profile`) is the rise along that direction, so its static head is
+part of the branch $\Delta P$.
 
 ```python
-import jax.numpy as jnp, optimistix as optx
-from difflow import Pipe, PipeParams, make_stream
+from difflow import Pipe, PipeParams, PipeNetwork
 
-RHO, MU, MW = 998.2, 1.002e-3, 18.015          # water at 20 C
-def stream_with_flow(Q):                        # Q in m^3/s
-    return make_stream({"W": Q * RHO / (MW * 1e-3)}, 293.15, 3e5)
+w = dict(rho=998.2, mu=1.002e-3)
+net = PipeNetwork()
+net.add_node("S", pressure=4e5)                      # supply header, Pa
+for n, d in {"A": 0.004, "B": 0.006, "C": 0.012, "D": 0.003}.items():
+    net.add_node(n, demand=d)                        # m^3/s drawn off
+net.add_branch("SA", "S", "A", Pipe(PipeParams(L=300.0, D=0.1541, **w)))
+net.add_branch("AB", "A", "B", Pipe(PipeParams(L=400.0, D=0.1023, **w)))
+net.add_branch("AC", "A", "C", Pipe(PipeParams(L=500.0, D=0.0779, **w)))
+net.add_branch("BC", "B", "C", Pipe(PipeParams(L=250.0, D=0.0779, dz=5.0, **w)))
+net.add_branch("BD", "B", "D", Pipe(PipeParams(L=350.0, D=0.0525, **w)))
+net.add_branch("CD", "C", "D", Pipe(PipeParams(L=300.0, D=0.0525, dz=-5.0, **w)))
 
-pipe_a = Pipe(PipeParams(L=80.0, D=0.0525, rho=RHO, mu=MU, MW=MW))
-pipe_b = Pipe(PipeParams(L=150.0, D=0.0409, rho=RHO, mu=MU, MW=MW,
-                         fittings={"globe_valve": 1}))
-Q_total = 6e-3
-
-dP = lambda pipe, Q: pipe(stream_with_flow(Q))[1]["dP"]
-res = lambda x, _: dP(pipe_a, x * Q_total) - dP(pipe_b, (1 - x) * Q_total)
-x = optx.root_find(res, optx.Newton(rtol=1e-12, atol=1e-10), jnp.asarray(0.5)).value
-print(f"branch A carries {float(x):.1%} of the flow")
+res = net.solve()                       # method="newton" (default) or "hardy_cross"
+res.branch_flows, res.node_pressures    # dicts, m^3/s and Pa
+res.supply                              # {"S": 0.025}: flow delivered by each fixed node
+res.converged, res.mass_imbalance, res.energy_residual, res.iterations
+net.loops()                             # cycle basis: [{branch: +/-1, ...}, ...]
 ```
 
-Both branches then have equal ΔP, the flows sum to the total, and the split is
-differentiable by the implicit function theorem (`tests/test_pipe.py::
-TestParallelBranches`).
+`method="newton"` solves the branch momentum equations
+$\Delta P_k(Q_k) = P_\mathrm{from}-P_\mathrm{to}$ and the free-node continuity
+equations together (the global-gradient formulation of Todini and Pilati, 1988,
+used by EPANET), started from the network linearized at 1 m/s, with
+`optimistix.root_find`: derivatives of any output with respect to demands,
+fixed pressures or pipe parameters are implicit-function-theorem derivatives.
+`method="hardy_cross"` is the classical Hardy Cross (1936) loop correction,
+$\Delta Q = -\sum_k o_k\Delta P_k/\sum_k|\partial\Delta P_k/\partial Q_k|$, swept
+over a cycle basis for a fixed `iterations` count (default 200; unrolled for
+differentiation); fixed-pressure nodes are joined through a virtual datum node,
+which supplies the pseudo-loops between reservoirs. It converges linearly and is
+offered for teaching and cross-checks. $|Q|$ is smoothed at zero flow, so a
+branch can reverse and stay differentiable.
+
+`tests/test_pipe_network.py` checks a laminar parallel header against
+Hagen-Poiseuille ($Q_k \propto D_k^4/L_k$), turbulent parallel pipes between two
+headers against `Pipe.flow_at_dp`, a two-loop network and a three-reservoir
+junction whose answers are known by construction (resistances set from chosen
+flows and pressures, including a reversed branch), mass balance at every node,
+zero pressure loss around every loop, agreement of the two methods, `jit`, and
+gradients (`check_grads`, and Hardy Cross vs Newton).
+
+For a single parallel pair the same answer is also a one-unknown root find on
+the split fraction $x$, $\Delta P_A(xQ)=\Delta P_B((1-x)Q)$, as in
+`tests/test_pipe.py::TestParallelBranches`.
 
 (compressible-module)=
 ## Compressible Gas Flow
