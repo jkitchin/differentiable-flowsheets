@@ -29,6 +29,8 @@ exclude_patterns:
   - "src/difflow_*/README.md"
   - differentiable-flowsheets-ree.md
   - docs/estimation-deliverables.md
+  - docs/spikes
+  - docs/spikes/**
   - "**/.ipynb_checkpoints"
   - "**/.ipynb_checkpoints/**"
 
