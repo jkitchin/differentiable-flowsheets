@@ -1440,6 +1440,9 @@ def _eos_saturation(eos, z, T, P, k_ij, kind: str, unknown: str, guess=None,
     a_w = 5.373 * (1.0 + p.omega) * p.Tc  # -d ln K_wilson / d(1/T)
     bubble = kind == "bubble"
     sgn = 1.0 if bubble else -1.0
+    # K = 1 is the answer, not a failure, for a pure component (or a mixture
+    # with one species present): x = y and the saturation point is Psat/Tsat.
+    multicomp = jnp.sum(z > 1e-12) >= 2
 
     def phases(lnK):
         K = jnp.exp(lnK)
@@ -1506,7 +1509,7 @@ def _eos_saturation(eos, z, T, P, k_ij, kind: str, unknown: str, guess=None,
                    - safe_log(eos.fugacity_coefficient(T_, P_, y, "vapor", k_ij)))
         S = phases(lnK_new)[2]
         bad = (~jnp.all(jnp.isfinite(lnK_new)) | ~jnp.isfinite(S)
-               | (jnp.max(jnp.abs(lnK_new)) < 0.02))
+               | (multicomp & (jnp.max(jnp.abs(lnK_new)) < 0.02)))
         lnK_new = jnp.where(jnp.all(jnp.isfinite(lnK_new)), lnK_new, lnK_g)
         ls_ok = s_step(ls, lnK_new, jnp.log(jnp.where(jnp.isfinite(S), S, 1.0)), damp)
         return (jnp.where(bad, lnK_g, lnK_new),
@@ -1530,7 +1533,7 @@ def _eos_saturation(eos, z, T, P, k_ij, kind: str, unknown: str, guess=None,
         u_ = jnp.where(jnp.all(jnp.isfinite(sol.value)), sol.value, u0)
         r_ = resid(u_, args)
         ok = (jnp.all(jnp.isfinite(u_)) & (jnp.max(jnp.abs(r_)) < 1e-8)
-              & (jnp.max(jnp.abs(u_[:n])) >= 1e-3))
+              & (~multicomp | (jnp.max(jnp.abs(u_[:n])) >= 1e-3)))
         return u_, ok
 
     if guess is not None:
@@ -1554,7 +1557,7 @@ def _eos_saturation(eos, z, T, P, k_ij, kind: str, unknown: str, guess=None,
     x, y, _ = phases(lnK)
     r = resid(u, args)
     converged = jnp.all(jnp.isfinite(u)) & (jnp.max(jnp.abs(r)) < 1e-8)
-    trivial = jnp.max(jnp.abs(lnK)) < 1e-3
+    trivial = multicomp & (jnp.max(jnp.abs(lnK)) < 1e-3)
     out = {"T": jnp.asarray(T_out), "P": jnp.asarray(P_out), "K": jnp.exp(lnK),
            "x": x, "y": y, "converged": converged, "trivial": trivial}
 

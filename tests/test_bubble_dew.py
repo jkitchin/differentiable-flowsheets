@@ -397,3 +397,22 @@ class TestAntoineRangeWarning:
         ok = jax.jit(lambda T: th.Psat_with_info("benzene", T)[1]["antoine_in_range"])
         assert bool(ok(350.0)) and not bool(ok(250.0))
         assert th.Psat_with_info("benzene", 350.0)[1]["antoine_in_range"] is True
+
+
+def test_pure_component_is_not_flagged_trivial():
+    """K = 1 is the answer for a pure species; no trivial flag, no warning."""
+    import warnings as _w
+
+    from difflow import PengRobinson, get_critical_props
+    from difflow.eos import eos_bubble_P, eos_bubble_T, eos_dew_P
+
+    pr = PengRobinson({"propane": get_critical_props("propane")})
+    with _w.catch_warnings():
+        _w.simplefilter("error")
+        r = eos_bubble_P(pr, jnp.array([1.0]), 300.0)
+        d = eos_dew_P(pr, jnp.array([1.0]), 300.0)
+        t = eos_bubble_T(pr, jnp.array([1.0]), float(r["P"]))
+    assert bool(r["converged"]) and not bool(r["trivial"])
+    assert float(r["P"]) == pytest.approx(float(d["P"]), rel=1e-8)
+    assert float(t["T"]) == pytest.approx(300.0, abs=1e-6)
+    assert 9.5e5 < float(r["P"]) < 1.05e6   # NIST propane Psat(300 K) = 9.97 bar

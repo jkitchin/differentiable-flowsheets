@@ -831,6 +831,8 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- `eos_bubble_P`/`eos_dew_P`/`_T` no longer flag a pure component (or a mixture with one species present) as
+  `trivial` and warn: K = 1 is the answer there. Test `tests/test_bubble_dew.py`.
 - `CubicThermo` treats a species absent from a stream as zero flow, as
   `IdealThermo` already did. A condenser whose vapour listed only n-pentane
   against a water-only coolant raised a bare `KeyError: 'water'` from
