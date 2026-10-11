@@ -3233,18 +3233,23 @@ too coarse for a steam economy.
 | `colligative` | `dT = R Tw^2 i m / lambda`, the dilute limit | exact in the limit |
 | `duhring` | your own lines `T_soln = a(x) + b(x) T_water` (`duhring_x/a/b`) | your data |
 | `polynomial` | BPR in K as a polynomial in `x` (`bpr_coeffs`) | your data |
-| `naoh`, `nacl` | built-in 1 atm tables turned into Duhring lines | **unverified, see below** |
-| `sucrose` | `1.78 x + 6.22 x^2` K (Geankoplis Ex. 8.4-1) | **recalled, unverified** |
+| `naoh` | built-in 1 atm table turned into Duhring lines nearly parallel to the water line | 30 and 50 wt % checked against Geankoplis Ex. 8.4-2/8.4-3 and McCabe Ex. 16.1; other points unverified |
+| `nacl` | built-in 1 atm table turned into Duhring lines (colligative slope) | **unverified, see below** |
+| `sucrose` | `1.78 x + 6.22 x^2` K (Geankoplis 4e Ex. 8.5-1) | the book's correlation |
 | callable | `Evaporator(params, bpr_fn=f)`, `f(x, T_water, P) -> K` | yours |
 
 ```{warning}
-The built-in `naoh`, `nacl` and `sucrose` data are **approximate recollections,
-not transcriptions of the Duhring chart** (McCabe/Perry). Only a couple of
-anchor points per table are firm (NaOH 50 wt % boiling near 143 C at 1 atm; the
-saturated NaCl solution near 108.7 C). Selecting one raises
-`UnverifiedDataWarning`. The acceptance criterion "NaOH BPR matches the cited
-chart values" is therefore **not met**: read your chart and pass it through
-`duhring=` or `bpr_fn`. The tabulated models are piecewise linear in `x`.
+The built-in `naoh` and `nacl` tables are only partly verified, and selecting
+one raises `UnverifiedDataWarning`. For NaOH the 50 wt % line is anchored on
+cited values (141.7 C at 1 atm; 89.5 C over water at 48.9 C, Geankoplis 4e
+Ex. 8.4-3; 197 F over water at 124 F, McCabe-Smith-Harriott 7e Ex. 16.1) and
+the 30 % line reproduces Geankoplis Ex. 8.4-2 (79.5 C over 65.6 C) within
+0.4 K. The NaOH lines use an empirical slope `b = 1 + k BPR` fitted to the 50 %
+line (`DUHRING_SLOPE_COEFF`); the colligative slope used before put the 50 %
+line 12 K low at 49 C. The other NaOH points, and all of NaCl except the
+saturated solution near 108.7 C, are recollections: read your chart and pass
+it through `duhring=` or `bpr_fn` when the number matters. The tabulated
+models are piecewise linear in `x`.
 ```
 
 **Solution enthalpy** is a Cp mixing rule by default
@@ -3399,12 +3404,18 @@ print("steam saved (kg/s):", round(float(m["steam_saved"]), 2))
 * **Steam properties**: `Psat`/`Tsat` are the IAPWS-IF97 equations; `h_f` and
   `h_fg` are fits to eight steam-table points recalled from a standard table
   (not regenerated from IAPWS), within about 0.1 % over 20-200 C.
-* **NOT verified**: no textbook worked example is claimed to be reproduced to
-  2-3 %. The Geankoplis Example 8.4-1 inputs (as recalled) run, and
-  `tests/test_evaporator.py` pins them as a regression value, but the book's
-  printed answers were not available to compare with. The NaOH, NaCl and
-  sucrose BPR data are unverified (above). Nothing here models fouling,
-  hydraulics, entrainment, or crystallization.
+* **Published examples** (`TestPublishedExamples`, issue #421): Geankoplis
+  4e Ex. 8.4-1 (single effect, steam 4108 kg/h, area 149.3 m^2, within 0.5 %),
+  Ex. 8.4-3 (50 % NaOH: steam 3255 kg/h, economy 0.836, area 49.2 m^2, with the
+  book's chart enthalpies passed as `enthalpy_fn`), Ex. 8.5-1 (triple effect,
+  forward feed, equal areas: steam 8936 kg/h and economy 2.03 within 1 %,
+  liquid flows within 2 %), McCabe-Smith-Harriott 7e Ex. 16.1 (steam
+  15 340 lb/h, area 930 ft^2 within 3 %), and the `h_f`/`h_fg` fits against
+  Geankoplis Appendix A.2-9 within 0.1 %.
+* **NOT verified**: the NaOH table away from 30 and 50 wt %, the NaCl table,
+  and any NaOH enthalpy-concentration data (difflow has none built in; pass the
+  chart through `enthalpy_fn`). Nothing here models fouling, hydraulics,
+  entrainment, or crystallization.
 
 For an economics pass use `heat_exchanger_cost(area)` and
 `steam_cost_from_duty`; the optimal-number-of-effects study is in

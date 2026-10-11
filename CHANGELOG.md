@@ -831,6 +831,18 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- **Built-in NaOH boiling-point rise was 12 K low at evaporator vacuum.**
+  The `naoh` Dühring lines were drawn from the 1 atm table with the
+  colligative slope (`BPR ~ R T^2/lambda`), but concentrated NaOH lines are
+  nearly parallel to the water line. At 11.7 kPa the 50 wt % solution boiled
+  at 77 C instead of the chart's 89.5 C, so Geankoplis Ex. 8.4-3 came out
+  with 33.0 m^2 instead of 49.2 m^2. The lines now use an empirical slope
+  fitted to cited 50 % values (`DUHRING_SLOPE_COEFF`); the 1 atm 50 % point is
+  141.7 C. Geankoplis Ex. 8.4-2/8.4-3 and McCabe Ex. 16.1 are reproduced
+  (`TestPublishedExamples`, issue #421). The sucrose BPR is credited to
+  Geankoplis Ex. 8.5-1 (not 8.4-1) and no longer warns as unverified; the
+  former regression pin on those inputs is now a textbook-agreement test.
+
 - **`plan_sensitivity` reported half the elastic penalty as a shadow price.**
   The stationarity gradient that the multipliers are solved from included
   the elastic penalty of the active specs as well. When the plan meets a spec

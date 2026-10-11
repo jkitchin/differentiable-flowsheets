@@ -83,20 +83,24 @@ class UnverifiedDataWarning(UserWarning):
 
 
 #: Built-in BPR tables: solute -> (mass fractions, BPR at 1 atm in K, note).
-#: EVERY NUMBER HERE IS AN APPROXIMATE RECOLLECTION, not a transcription of the
-#: cited chart (McCabe, Smith & Harriott, Unit Operations of Chemical
-#: Engineering, Dühring chart for NaOH; Perry's Chemical Engineers' Handbook,
-#: boiling points of aqueous solutions). They are good to the shape of the
-#: curve (a few K at most for NaOH below 50 %), and they are NOT a substitute
-#: for reading the chart. Pass your own table through ``duhring_x`` /
+#: Most numbers here are approximate recollections of the cited charts
+#: (McCabe, Smith & Harriott, Unit Operations of Chemical Engineering, 7th ed.,
+#: Fig. 16.3, Dühring lines for NaOH-water; Perry's Chemical Engineers'
+#: Handbook, boiling points of aqueous solutions). The NaOH 50 wt % line is
+#: anchored on cited values (see :data:`DUHRING_SLOPE_COEFF`); the other
+#: points are good to the shape of the curve and are NOT a substitute for
+#: reading the chart. Pass your own table through ``duhring_x`` /
 #: ``duhring_a`` / ``duhring_b`` or a ``bpr_fn`` when the number matters.
 DUHRING_TABLES: dict[str, tuple[tuple[float, ...], tuple[float, ...], str]] = {
     "naoh": (
         (0.0, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70),
-        (0.0, 2.6, 7.0, 14.5, 27.0, 43.0, 63.0, 88.0),
-        "NaOH: only the ~50 wt % point (about 43 K above water at 1 atm, "
-        "boiling near 143 C) is a firm recollection; the others are "
-        "interpolated shape and unverified",
+        (0.0, 2.6, 7.0, 14.5, 27.0, 41.7, 63.0, 88.0),
+        "NaOH: the 50 wt % line is cited (141.7 C at 1 atm, Fisher Scientific "
+        "50 % w/w specification; 89.5 C over water at 48.9 C, Geankoplis 4e "
+        "Ex. 8.4-3; 197 F over water at 124 F, McCabe-Smith-Harriott 7e "
+        "Ex. 16.1) and the 30 % line reproduces Geankoplis Ex. 8.4-2 "
+        "(79.5 C over 65.6 C) within 0.4 K; the 10, 20, 40, 60 and 70 % "
+        "points are interpolated shape and unverified",
     ),
     "nacl": (
         (0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.264),
@@ -106,27 +110,40 @@ DUHRING_TABLES: dict[str, tuple[tuple[float, ...], tuple[float, ...], str]] = {
     ),
 }
 
+#: Slope rule of the built-in Dühring lines, ``b = 1 + k BPR_1atm``, per
+#: table. ``None`` uses the colligative scaling ``BPR ~ R T^2 / lambda``
+#: (``k = 2/T + 0.38/(Tc - T)`` at 1 atm, about 0.0067 1/K). Concentrated
+#: NaOH does NOT follow it: its Dühring lines are nearly parallel to the
+#: water line. The colligative slope put the 50 % line 12 K low at 49 C
+#: (BPR 28.2 K against the chart's 40.6 K), which cut the area of
+#: Geankoplis Ex. 8.4-3 by a third. ``k`` for NaOH is fitted to the 50 %
+#: line through (48.9 C, 89.5 C) and (100 C, 141.7 C): b = 1.0215.
+DUHRING_SLOPE_COEFF: dict[str, float | None] = {
+    "naoh": (((141.7 - 89.5) / (100.0 - 48.9)) - 1.0) / 41.7,
+    "nacl": None,
+}
+
 #: Polynomial BPR (K versus solute mass fraction, coefficients ascending) for
-#: sucrose solutions, the correlation used in Geankoplis, Transport Processes
-#: and Separation Process Principles, Example 8.4-1: BPR = 1.78 x + 6.22 x^2,
-#: taken as independent of pressure. Recalled from the textbook, unverified.
+#: sucrose solutions, the correlation given in Geankoplis, Transport Processes
+#: and Separation Process Principles (4e), Example 8.5-1 (triple-effect sugar
+#: evaporator): BPR = 1.78 x + 6.22 x^2, taken as independent of pressure.
 SUCROSE_BPR_COEFFS = (0.0, 1.78, 6.22)
 
 #: Reference temperature of the built-in Dühring tables (1 atm saturation)
 _T_1ATM = 373.15
 
 
-def _duhring_lines(x_tab, bpr_1atm) -> tuple[Array, Array]:
+def _duhring_lines(x_tab, bpr_1atm, k: float | None = None) -> tuple[Array, Array]:
     """Linear Dühring lines ``T_soln = a + b T_water`` from a 1 atm BPR table.
 
     Each line passes through (373.15 K, 373.15 + BPR) and has the slope
-    ``b = 1 + BPR d ln(T^2/lambda)/dT``, i.e. the colligative scaling
-    ``BPR ~ R T^2 / lambda(T)`` carried to other pressures. The slope is
-    evaluated with the Watson exponent 0.38 for lambda. This is an
-    approximation to the chart's measured slopes.
+    ``b = 1 + k BPR``. With ``k=None`` the slope is the colligative scaling
+    ``BPR ~ R T^2 / lambda(T)`` carried to other pressures,
+    ``k = d ln(T^2/lambda)/dT`` with the Watson exponent 0.38 for lambda; a
+    table can give its own empirical ``k`` (:data:`DUHRING_SLOPE_COEFF`).
     """
     bpr = jnp.asarray(bpr_1atm, dtype=jnp.float64)
-    slope = 2.0 / _T_1ATM + 0.38 / (T_CRIT_WATER - _T_1ATM)
+    slope = (2.0 / _T_1ATM + 0.38 / (T_CRIT_WATER - _T_1ATM)) if k is None else k
     b = 1.0 + bpr * slope
     a = (_T_1ATM + bpr) - b * _T_1ATM
     return a, b
@@ -153,8 +170,8 @@ def boiling_point_rise(
             boils where ``x_w Psat(T) = P``), ``"colligative"``
             (``dT = R Tw^2 i m / lambda``, the dilute limit), ``"duhring"``
             (user lines, ``duhring=(x, a, b)``), ``"naoh"`` / ``"nacl"``
-            (built-in tables, **unverified**, see :data:`DUHRING_TABLES`),
-            ``"sucrose"`` (:data:`SUCROSE_BPR_COEFFS`, unverified),
+            (built-in tables, **partly verified**, see :data:`DUHRING_TABLES`),
+            ``"sucrose"`` (:data:`SUCROSE_BPR_COEFFS`, Geankoplis Ex. 8.5-1),
             ``"polynomial"`` (``coeffs``, K versus ``x``, ascending powers),
             ``"callable"`` (``bpr_fn(x, Tw, P)``) or ``"none"``.
         solute_MW: Solute molar mass (g/mol); needed by ``ideal`` and
@@ -195,7 +212,7 @@ def boiling_point_rise(
         return 8.314462618 * Tw**2 * molality / (water_latent_heat(Tw))
     if m in DUHRING_TABLES:
         x_tab, bpr_tab, _ = DUHRING_TABLES[m]
-        a, b = _duhring_lines(x_tab, bpr_tab)
+        a, b = _duhring_lines(x_tab, bpr_tab, DUHRING_SLOPE_COEFF.get(m))
         xt = jnp.asarray(x_tab, dtype=jnp.float64)
         return jnp.interp(x, xt, a) + (jnp.interp(x, xt, b) - 1.0) * Tw
     if m == "duhring":
@@ -221,7 +238,7 @@ def boiling_point_rise(
     )
 
 
-_UNVERIFIED_MODELS = ("naoh", "nacl", "sucrose")
+_UNVERIFIED_MODELS = ("naoh", "nacl")
 
 
 # =============================================================================
@@ -249,9 +266,7 @@ class _Solution:
             model = "callable"
         self.model = model
         if model in _UNVERIFIED_MODELS:
-            note = (DUHRING_TABLES[model][2] if model in DUHRING_TABLES
-                    else "sucrose BPR = 1.78 x + 6.22 x^2 (Geankoplis Ex. 8.4-1), "
-                         "recalled, not checked against the book")
+            note = DUHRING_TABLES[model][2]
             warnings.warn(
                 f"bpr_model={model!r} uses a built-in correlation that has not been "
                 f"verified against its source ({note}). Supply duhring=/coeffs= or "
@@ -372,8 +387,8 @@ class EvaporatorParams(ParamsMixin):
             ``steam_P``. A steam stream passed to the call overrides both.
         bpr_model: Boiling-point-rise model: ideal, colligative, duhring, naoh,
             nacl, sucrose, polynomial, callable or none. See
-            :func:`boiling_point_rise`; naoh, nacl and sucrose are built-in
-            *unverified* data.
+            :func:`boiling_point_rise`; naoh and nacl are built-in tables that
+            are only partly verified (they warn).
         vant_hoff_i: Particles per solute formula unit (ideal, colligative).
         bpr_coeffs: Polynomial BPR coefficients (K versus mass fraction,
             ascending), for bpr_model polynomial.
