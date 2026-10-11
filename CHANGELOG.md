@@ -13,6 +13,11 @@ All notable changes to difflow are recorded here. The format follows
   cubic's P(T, V). `flash_TP_eos` uses it to label a stable feed (see Fixed, #442). Test
   `tests/test_eos.py::TestPhaseIdentification`.
 
+- **`flash_drum_size` (book Ch. 11 gap).** `difflow.units.column_design.flash_drum_size(Q_V, Q_L, rho_L, rho_V,
+  ...)` sizes a vertical flash drum by Souders-Brown with Walas's rules of thumb (k = 0.107 m/s with a mesh pad,
+  L/D = 3, 5 min holdup half full); the larger of the vapor and liquid diameters; differentiable. Test
+  `tests/test_column_design.py::TestFlashDrumSize`.
+
 - **`OperatingPointWarning`.** `operating_point` warns on a concrete negative `Q*` (no forward-flow operating
   point, e.g. a valveless parallel pair with a weak pump running backwards) or an unconverged Newton solve; silent
   under `jit`/`grad`. `PipeCavitationWarning` is exported from `difflow`. Test `tests/test_pump.py`.

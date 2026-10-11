@@ -30,6 +30,7 @@ Contents
   (the packing records are :class:`difflow.mass_transfer.PackingData` and
   :data:`difflow.mass_transfer.PACKINGS`).
 * Whole column: :func:`size_column`, :func:`column_hardware_cost`.
+* Flash drums: :func:`flash_drum_size` (Souders-Brown, Walas rules of thumb).
 
 Limits (weeping, entrainment, flooding) are returned as **continuous margins**
 and are never raised on traced values, so an optimizer can use them as smooth
@@ -53,7 +54,7 @@ __all__ = [
     "tray_pressure_drop", "weep_point", "fractional_entrainment",
     "oconnell_efficiency", "gpdc_flood", "gpdc_pressure_drop",
     "kister_gill_flood_dp", "packed_column_diameter", "hetp", "size_column",
-    "column_hardware_cost", "PackingData", "PACKINGS",
+    "column_hardware_cost", "flash_drum_size", "PackingData", "PACKINGS",
 ]
 
 
@@ -635,3 +636,77 @@ def column_hardware_cost(sizing: dict[str, Array], kind: str = "sieve_tray") -> 
     else:
         raise ValueError("kind must be sieve_tray, valve_tray, packing_random or packing_structured")
     return {"shell": shell, "internals": internals, "total": shell + internals}
+
+
+# =============================================================================
+# Flash (knockout) drums: Souders-Brown sizing
+# =============================================================================
+
+
+def flash_drum_size(
+    Q_V, Q_L, rho_L, rho_V, k=0.107, holdup_time=300.0, fill_fraction=0.5,
+    L_over_D=3.0,
+) -> tuple[Array, dict[str, Array]]:
+    """Size a vertical vapor-liquid separator (flash drum) by Souders-Brown.
+
+    The vapor may rise no faster than the Souders-Brown velocity
+
+    ``u_max = k sqrt((rho_L - rho_V) / rho_V)``,
+
+    at which a droplet of a given size just hangs in the up-flowing gas. The
+    cross-section that keeps the vapor below ``u_max`` gives one diameter,
+    ``D_vapor = sqrt(4 Q_V / (pi u_max))``. The liquid gives a second: the drum
+    must hold ``Q_L holdup_time`` of liquid in ``fill_fraction`` of its volume,
+    and with height ``H = L_over_D D`` that is
+    ``D_liquid = (4 Q_L holdup_time / (pi fill_fraction L_over_D))^(1/3)``.
+    The drum takes the larger, ``D = max(D_vapor, D_liquid)``, and
+    ``H = L_over_D D``. Every output is differentiable in every argument
+    (the ``max`` has a kink only where the two diameters are equal).
+
+    The defaults are Walas's rules of thumb for drums and gas-liquid
+    separators (S. M. Walas, *Chemical Process Equipment*, Butterworths 1988,
+    "Rules of thumb"; also quoted at the front of Perry's Handbook, sec. 1 in
+    the 7th and 8th editions): ``k = 0.35 ft/s = 0.107 m/s`` with a wire-mesh
+    deentrainer (``0.1 ft/s = 0.0305 m/s`` without one), ``L/D = 3`` (range
+    2.5-5) and a liquid holdup of 5 min with the drum half full
+    (``holdup_time = 300 s``, ``fill_fraction = 0.5``); 5-10 min is usual for
+    a drum feeding a column, about 30 min for one feeding a furnace. They are
+    screening numbers, not a mechanical design.
+
+    Args:
+        Q_V: Vapor volumetric flow at drum conditions (m^3/s).
+        Q_L: Liquid volumetric flow (m^3/s).
+        rho_L: Liquid density (kg/m^3).
+        rho_V: Vapor density (kg/m^3).
+        k: Souders-Brown coefficient (m/s).
+        holdup_time: Liquid residence time (s).
+        fill_fraction: Fraction of the drum volume the held-up liquid fills.
+        L_over_D: Height-to-diameter ratio.
+
+    Returns:
+        ``(D, info)``: the diameter (m) and a dict with ``u_max`` (m/s),
+        ``D_vapor``, ``D_liquid``, ``height`` (m), ``volume`` (m^3),
+        ``liquid_volume`` (m^3), ``u_vapor`` (actual superficial vapor
+        velocity, m/s) and ``fraction_of_u_max`` (1 when the vapor sets the
+        diameter, below 1 when the liquid holdup does).
+
+    Example:
+        >>> D, info = flash_drum_size(Q_V=0.5, Q_L=0.002, rho_L=600.0, rho_V=20.0)
+        >>> bool(info["u_max"] > 0.5) and bool(D > info["D_liquid"] - 1e-12)
+        True
+    """
+    Q_V, Q_L = _f(Q_V), _f(Q_L)
+    rho_L, rho_V = _f(rho_L), _f(rho_V)
+    u_max = _f(k) * jnp.sqrt((rho_L - rho_V) / rho_V)
+    D_vapor = jnp.sqrt(4.0 * Q_V / (jnp.pi * u_max))
+    V_liq = Q_L * _f(holdup_time)
+    D_liquid = (4.0 * V_liq / (jnp.pi * _f(fill_fraction) * _f(L_over_D))) ** (1.0 / 3.0)
+    D = jnp.maximum(D_vapor, D_liquid)
+    area = jnp.pi * D ** 2 / 4.0
+    height = _f(L_over_D) * D
+    u_vapor = Q_V / area
+    return D, {
+        "u_max": u_max, "D_vapor": D_vapor, "D_liquid": D_liquid,
+        "height": height, "volume": area * height, "liquid_volume": V_liq,
+        "u_vapor": u_vapor, "fraction_of_u_max": u_vapor / u_max,
+    }

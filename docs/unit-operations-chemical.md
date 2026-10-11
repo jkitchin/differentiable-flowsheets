@@ -5437,6 +5437,29 @@ the flow parameter, $C_{SB}$ and ignored `sigma` and `tray_spacing`; it is now a
 deprecated wrapper (`DeprecationWarning`) that calls `tray_column_diameter`
 and requires `MW_V`, `L` and `MW_L` as keywords and `sigma` positionally.
 
+(op-flash-drum-size)=
+### Flash Drum Sizing (Souders-Brown)
+
+`flash_drum_size(Q_V, Q_L, rho_L, rho_V, k=0.107, holdup_time=300.0,
+fill_fraction=0.5, L_over_D=3.0)` sizes a vertical vapor-liquid separator. The
+vapor sets one diameter through the Souders-Brown velocity
+$u_{max} = k\sqrt{(\rho_L-\rho_V)/\rho_V}$, $D_V = \sqrt{4Q_V/(\pi u_{max})}$.
+The liquid sets another: the drum holds $Q_L t_{hold}$ in `fill_fraction` of a
+volume with $H = (L/D)\,D$. The drum takes the larger. The defaults are Walas's
+rules of thumb (*Chemical Process Equipment*, 1988): $k = 0.35$ ft/s with a
+wire-mesh deentrainer (0.1 ft/s without), $L/D = 3$, 5 min of holdup with the
+drum half full. It returns `(D, info)` with `u_max`, `D_vapor`, `D_liquid`,
+`height`, `volume`, `liquid_volume`, `u_vapor` and `fraction_of_u_max`, all
+differentiable.
+
+```python
+from difflow.units.column_design import flash_drum_size
+
+D, info = flash_drum_size(Q_V=0.5, Q_L=0.002, rho_L=600.0, rho_V=20.0)
+print(f"D = {float(D):.2f} m, H = {float(info['height']):.2f} m, "
+      f"u_max = {float(info['u_max']):.3f} m/s")
+```
+
 (op-tray-hydraulics)=
 ### Tray Hydraulics
 
