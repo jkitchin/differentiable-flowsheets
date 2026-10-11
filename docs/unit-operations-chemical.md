@@ -5094,6 +5094,264 @@ velocity (through $h$), $X_c$ and the load.
 
 ---
 
+## Crystallization
+
+Crystallization separates a solute as a solid by making the solution supersaturated,
+by cooling, by evaporating solvent, or both. Two questions set the design: **how much**
+solid forms (the yield from the solubility curve, including a hydrate that takes water
+of crystallization into the crystal) and **how big** the crystals are (nucleation and
+growth kinetics and the population balance). `difflow` provides the solubility, yield and
+MSMPR functions as a library and the `Crystallizer` unit that applies them to a stream.
+The REE oxalate, carbonate and hydroxide precipitators in
+[unit-operations-ree](unit-operations-ree.md) (`difflow_ree`) are the *reactive*
+precipitation version (a solubility-product-driven conversion, no size distribution);
+the `Crystallizer` is the generic solubility-driven one.
+
+**No solubility data, kinetic constant or hydrate transition temperature is built in.**
+Every curve and constant in this section is synthetic and labelled illustrative; the
+published worked examples (Geankoplis Sec. 12.11, McCabe, Smith & Harriott Ch. 27,
+Wankat Ch. 17) were **not reproduced**, because their inputs and printed answers could not be
+recalled with confidence. The tests check the closed forms against independent
+oracles instead.
+
+(op-crystallizer)=
+### Crystallizer
+
+**Location**: `difflow/units/crystallizer.py`
+
+**Class**: `Crystallizer`
+
+**Description**: Solubility-driven crystallizer, cooling, evaporative or both, with an
+equilibrium yield (a hydrate or an anhydrous crystal) or an MSMPR kinetic mode.
+
+#### Process Role
+
+One inlet (the feed) and two outlets (`crystals`, `mother_liquor`), plus an `info`
+dictionary. An `Evaporator` concentrate goes straight in (give the crystallizer the
+evaporator's solvent name), or the unit evaporates itself (`mode="evaporative"`,
+`"cooling_evaporative"`) and reports the evaporation duty with
+`difflow.water.water_latent_heat`. Palette category: `crystallization` (the one category of
+this unit, as `evaporation` and `drying` are for theirs).
+
+**Streams.** mol/s, K, Pa. The crystal stream carries the hydrate as **solute plus bound
+water**: `F_<solute>` is the moles of anhydrous solute in the crystals and `F_<solvent>`
+is $\nu$ times that, the water of crystallization. Every species appears in every
+outlet (zero where absent), so the mole balance closes species by species and a recycle
+keeps one species list. The water evaporated leaves as vapor (in `info`, not a stream).
+
+#### Yield balance with hydrates
+
+With $S_0$ the feed solute, $W_0$ the feed solvent, $E$ the solvent evaporated
+($W = W_0 - E$; kg/s) and a crystal of solute mass fraction
+$f_s = M_s/(M_s + \nu M_w)$ and water fraction $f_w = 1 - f_s$, the solute and water balances
+
+$$S_0 = c\,W_L + f_s C, \qquad W = W_L + f_w C$$
+
+with the liquor saturated, $c = c_{sat}(T)$ (kg anhydrous solute per kg solvent), give the
+hydrate mass flow in closed form
+
+$$C = \frac{S_0 - c_{sat}\,W}{f_s - c_{sat}\,f_w}.$$
+
+The numerator is clipped at zero with a softplus of width `soft` $\cdot S_0$ (default
+$10^{-6}$), so an undersaturated feed gives zero yield and a finite gradient with no
+Python `if`. A feed richer in solute than the hydrate stoichiometry would need an anhydrous
+solid; the balance then reports a negative liquor water.
+
+#### Solubility Curves and Hydrate Forms
+
+`Solubility` is a pytree: `Solubility.polynomial(coeffs)` (in $T - 273.15$),
+`Solubility.vant_hoff(A, B)` ($\ln c = A + B/T$) or `Solubility.table(T, c)` (PCHIP), each with
+`hydrate_waters`, the molar masses and `per_100g=True` for data in g/100 g solvent.
+A second solid form (`upper=`, `T_transition=`, `width=`) is a **smooth logistic blend** of
+$c_{sat}$ and $\nu$ in $T$ (never a Python `if` on a traced $T$); the explicit alternative is to
+pass the curve of the form you mean. The blend makes the crystal composition
+fractional within a few widths of the transition, which is an approximation.
+
+```python
+import jax
+from difflow import Solubility, crystal_balance, crystal_yield, supersaturation
+
+# SYNTHETIC curve (illustrative, not data for any salt): c_sat = 0.35 + 0.0075 (T - 273.15)
+sol = Solubility.polynomial([0.35, 0.0075], hydrate_waters=10, solute_MW=142.0)
+S0, W0 = 0.60, 1.0                                   # kg/s solute, solvent in the feed
+b = crystal_balance(S0, W0, 278.15, sol)
+print(f"hydrate {float(b['crystals']):.4f} kg/s, yield {float(b['yield_fraction']):.3f} of the solute")
+print(f"solute closes: {float(S0 - b['crystal_solute'] - b['liquor_solute']):.1e},"
+      f" water closes: {float(W0 - b['crystal_water'] - b['liquor_water']):.1e}")
+print("supersaturation of the feed at 5 C:", float(supersaturation(S0 / W0, 278.15, sol)))
+
+# the yield is differentiable: dC/dT, dC/dE, dC/dS0
+g = jax.grad(crystal_yield, argnums=(0, 2, 4))(S0, W0, 278.15, sol, 0.0)
+print("dC/dS0, dC/dT, dC/dE =", [round(float(x), 4) for x in g])
+
+# an undersaturated feed: zero yield, finite gradient
+print(float(crystal_yield(0.1, 1.0, 278.15, sol)), float(jax.grad(crystal_yield, argnums=2)(0.1, 1.0, 278.15, sol)))
+```
+
+#### Parameters
+
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
+```python
+@dataclass
+class CrystallizerParams:
+    solute: str                         # stream key F_<solute>
+    solute_MW: float                    # g/mol, anhydrous
+    mode: str = "cooling"               # "cooling" | "evaporative" | "cooling_evaporative"
+    T: float = None                     # K (evaporative: defaults to the feed T)
+    water_evaporated: float = None      # kg/s ...
+    evaporation_fraction: float = None  # ... or a fraction of the feed solvent
+    solvent: str = "H2O"
+    solvent_MW: float = 18.015
+    solubility_model: str = "polynomial"   # "polynomial" | "vant_hoff" | "table"
+    solubility_coeffs: list = None
+    solubility_T: list = None
+    solubility_c: list = None
+    solubility_basis: str = "kg_per_kg"    # or "g_per_100g"
+    hydrate_waters: float = 0.0
+    upper_solubility_model: str = "polynomial"   # a second solid form above transition_T
+    upper_solubility_coeffs: list = None
+    upper_solubility_T: list = None
+    upper_solubility_c: list = None
+    upper_hydrate_waters: float = 0.0
+    transition_T: float = None
+    transition_width: float = 0.5          # K, smooth blend
+    kinetics: list = None                  # [k_g, g, k_b, b, j] -> MSMPR kinetic mode
+    residence_time: float = None           # s
+    volume: float = None                   # m^3 (tau = volume / feed liquor flow)
+    crystal_density: float = 2000.0        # kg/m^3
+    shape_factor: float = 0.5236           # k_v, pi/6
+    liquor_density: float = 1000.0
+    cp_solution: float = 4186.0            # J/kg/K
+    heat_of_crystallization: float = 0.0   # J per kg of crystal, released
+    soft: float = 1e-6
+```
+
+#### Equations and Assumptions
+
+- Equilibrium mode: liquor saturated at the outlet temperature; a stoichiometric hydrate
+  (or anhydrous) crystal. Kinetic mode: the liquor leaves at $c_{sat} + \Delta C$ (below).
+- Duty $Q = m_F c_p (T - T_F) + E\,h_{fg}(T) - \Delta H_c C$ (W; negative is cooling),
+  with constant $c_p$ and a user-supplied heat of crystallization (default 0).
+- Constant liquor density converts the liquor flow to a volume flow; no fines destruction,
+  classification, agglomeration, breakage, size-dependent growth or polymorph kinetics.
+- Not implemented: an adiabatic (vacuum flash) mode that solves the evaporation from the
+  heat balance; the evaporation is a specification.
+
+```python
+import jax
+from difflow import Crystallizer, CrystallizerParams, make_stream
+
+# synthetic curve and Na2SO4-like molar masses (illustrative only)
+params = CrystallizerParams(solute="Na2SO4", solute_MW=142.0, mode="cooling", T=278.15,
+                            solubility_coeffs=[0.35, 0.0075], hydrate_waters=10.0)
+feed = make_stream({"Na2SO4": 0.60 * 1000 / 142.0, "H2O": 1.0 * 1000 / 18.015}, T=333.15, P=1e5)
+crystals, liquor, info = Crystallizer(params)(feed)
+print(f"yield {float(info['yield_kg_s']):.4f} kg/s of solute, hydrate {float(info['crystal_mass']):.4f} kg/s")
+print(f"bound water / solute in the crystals = {float(crystals['F_H2O'] / crystals['F_Na2SO4']):.1f} mol/mol")
+print(f"cooling duty {float(info['Q']) / 1e3:.1f} kW")
+
+def yield_of_T(T):
+    p = CrystallizerParams(solute="Na2SO4", solute_MW=142.0, T=T,
+                           solubility_coeffs=[0.35, 0.0075], hydrate_waters=10.0)
+    return Crystallizer(p)(feed)[2]["yield_kg_s"]
+
+print("d(yield)/dT =", float(jax.grad(yield_of_T)(278.15)), "kg/s/K")
+```
+
+**Evaporator then Crystallizer** (the structure of exercise wex20-2, with synthetic data). The
+crystallizer takes the evaporator concentrate; the mother liquor can be recycled to the
+evaporator through a `Mixer` and a tear stream, and at steady state the crystals carry
+exactly the fresh solute:
+
+```python
+from difflow import (Crystallizer, CrystallizerParams, Evaporator, EvaporatorParams, Mixer,
+                     make_stream)
+from difflow.flowsheet import Flowsheet, Unit
+
+evap = Evaporator(EvaporatorParams(solute_species=["Na2SO4"], solute_MW=[142.0], solvent="water",
+                                   x_product=0.30, bpr_model="ideal", vant_hoff_i=3.0,
+                                   P_vapor_space=60e3, steam_P=300e3, U=1500.0))
+xtal = Crystallizer(CrystallizerParams(solute="Na2SO4", solute_MW=142.0, solvent="water", T=278.15,
+                                       solubility_coeffs=[0.35, 0.0075], hydrate_waters=10.0))
+fresh = make_stream({"Na2SO4": 0.30 * 1000 / 142.0, "water": 1.7 * 1000 / 18.015}, T=313.15, P=1e5)
+
+fs = Flowsheet(species_order=["water", "Na2SO4"])
+fs.add_feed("feed", fresh)
+fs.add_unit(Unit("mix", Mixer(["water", "Na2SO4"]), ["feed", "recycle"], ["evap_in"]))
+fs.add_unit(Unit("evap", evap, ["evap_in"], ["conc", "vap"]))
+fs.add_unit(Unit("xtal", xtal, ["conc"], ["crystals", "liquor"]))
+fs.add_recycle("liquor", "recycle")
+guess = {"recycle": make_stream({"Na2SO4": 0.5, "water": 40.0}, T=278.15, P=1e5)}
+out = fs.solve(tear_initial=guess, tol=1e-12, max_iter=400, on_nonconvergence="raise")
+print("crystals / fresh solute =", float(out["crystals"]["F_Na2SO4"] / fresh["F_Na2SO4"]))
+```
+
+### MSMPR Functions
+
+**Location**: `difflow/units/crystallizer.py`
+
+**Functions**: `msmpr_distribution`, `msmpr_moments`, `msmpr_dominant_size`,
+`msmpr_mass_median_size`, `msmpr_mass_cv`, `msmpr_from_magma`, `fit_msmpr`, `growth_rate`,
+`nucleation_rate`, `msmpr_steady_state`
+
+For a steady mixed-suspension, mixed-product-removal crystallizer with residence time
+$\tau$, size-independent growth rate $G$ and nuclei density $n_0$ (Randolph & Larson):
+
+$$n(L) = n_0\,e^{-L/(G\tau)}, \qquad m_k = \int_0^\infty L^k n\,dL = k!\,n_0\,(G\tau)^{k+1},$$
+
+the suspension (magma) density is $M_T = 6\rho_c k_v n_0 (G\tau)^4$, the dominant
+(mass-mode) size, the maximum of $L^3 n(L)$, is $L_D = 3G\tau$, and the mass median size
+$L_{50} = x_{50}\,G\tau$ with $x_{50} = 3.672\ldots$ the root of the cumulative mass
+fraction of the gamma(4) law at one half; `msmpr_mass_median_size` computes it (Newton on
+the gamma(4) law), it is not typed in. The coefficient of variation of the mass
+distribution is $1/\sqrt{4} = 50\%$. `msmpr_from_magma(M_T, rho_c, k_v, G, tau)` gives
+$n_0$ from a measured magma density and `fit_msmpr(L, n)` is the "$\ln n$ vs. $L$" line
+(slope $-1/(G\tau)$, intercept $\ln n_0$).
+
+**Kinetics.** With the absolute supersaturation $\Delta C = c - c_{sat}$ (kg solute per kg
+solvent), $G = k_g\,\Delta C^{g}$ (`growth_rate`) and $B_0 = k_b\,M_T^{\,j}\,\Delta C^{b}$
+(`nucleation_rate`, $M_T$ in kg of crystal per m$^3$ of liquor), $B_0 = n_0 G$.
+`msmpr_steady_state` closes them: the solute balance gives $M_T(\Delta C)$, the third moment
+requires $M_T = 6\rho_c k_v B_0 G^3\tau^4$, and the scalar root in $\Delta C$ is found by a
+bisection in $\ln(\Delta C/\Delta C_{max})$ with an implicit-gradient Newton step
+(`difflow.staged._solve_monotone`), so gradients with respect to $\tau$, $k_g$ and $k_b$ are
+the implicit-function derivatives. In the log form the residual
+$(1-j)\ln M_T - (b+3g)\ln\Delta C - \text{const}$ is monotone for $j \le 1$ (larger $j$ is
+rejected). Since $G$ falls as $\tau$ grows ($\Delta C$ falls), $L_D(\tau)$ is **not**
+$3G\tau$ at a fixed $G$; as $k_g \to \infty$ the supersaturation vanishes and the yield approaches the
+equilibrium yield.
+
+```python
+import math
+import jax
+import jax.numpy as jnp
+import numpy as np
+from difflow import (Solubility, fit_msmpr, msmpr_distribution, msmpr_dominant_size,
+                     msmpr_mass_median_size, msmpr_moments, msmpr_steady_state)
+
+# moments from the closed form, and the "ln n vs L" fit
+n0, G, tau = 3.0e9, 2.0e-8, 1800.0
+print("m0..m3 =", np.asarray(msmpr_moments(n0, G, tau)))
+L = np.linspace(1e-5, 8 * G * tau, 40)
+Gt, n0_fit = fit_msmpr(L, msmpr_distribution(L, n0, G, tau))
+print(f"fit: G tau = {float(Gt):.3e} m (true {G * tau:.3e}), n0 = {float(n0_fit):.3e}")
+print(f"L_D = {float(msmpr_dominant_size(G, tau)) * 1e6:.1f} um,"
+      f" L_50 = {float(msmpr_mass_median_size(G, tau)) * 1e6:.1f} um")
+
+# residence time versus median size, with SYNTHETIC kinetics (k_g, g, k_b, b, j)
+sol = Solubility.polynomial([0.35, 0.0075], hydrate_waters=10, solute_MW=142.0)
+kin = (2.0e-6, 1.5, 1.0e9, 2.0, 0.6)
+
+def median_um(t):
+    r = msmpr_steady_state(0.60, 1.0, 278.15, sol, kin, t, crystal_density=1460.0, liquor_density=1250.0)
+    return r["L_50"] * 1e6
+
+for t in (300.0, 900.0, 3600.0):
+    print(f"tau = {t:6.0f} s: L_50 = {float(median_um(t)):7.1f} um, dL_50/dtau = {float(jax.grad(median_um)(t)):.4f} um/s")
+```
+
+---
+
 ## Summary Tables
 
 ### Reactor Comparison

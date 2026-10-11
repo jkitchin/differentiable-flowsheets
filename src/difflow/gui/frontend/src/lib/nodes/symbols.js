@@ -139,6 +139,18 @@ export const SYMBOLS = {
     ],
   },
 
+  /** A crystallizer: a vessel with a conical draft-tube bottom and a faceted crystal. */
+  crystallizer: {
+    label: 'crystallizer',
+    shapes: [
+      ['path', { d: 'M12 6h24v20l-8 10h-8l-8-10z' }],
+      ['line', { x1: 12, y1: 14, x2: 36, y2: 14 }],
+      ['path', { d: 'M24 18l5 4-2 6h-6l-2-6z', ...WASH }],
+      ['line', { x1: 24, y1: 1, x2: 24, y2: 6 }],
+      ['line', { x1: 24, y1: 36, x2: 24, y2: 40 }],
+    ],
+  },
+
   /** Heat in: the exchanger circle with the arrow pointing at it. */
   heater: {
     label: 'heater',
@@ -488,6 +500,9 @@ export const OPERATION_SYMBOLS = {
   // drying
   Dryer: 'dryer',
 
+  // crystallization
+  Crystallizer: 'crystallizer',
+
   // pressure
   EOSCompressor: 'compressor',
   Turboexpander: 'turbine',
@@ -577,6 +592,7 @@ export const CATEGORY_SYMBOLS = {
   heat_transfer: 'heat_exchanger',
   evaporation: 'evaporator',
   drying: 'dryer',
+  crystallization: 'crystallizer',
   pressure_change: 'compressor',
   power: 'turbine',
   gas_network: 'pipe',

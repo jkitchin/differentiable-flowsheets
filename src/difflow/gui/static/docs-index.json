@@ -1,5 +1,5 @@
 {
- "n_sections": 1159,
+ "n_sections": 1167,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -7078,6 +7078,72 @@
    "source": "unit-operations-chemical.md",
    "targets": [],
    "text": "- Constant-rate period at the wet-bulb temperature, heat-transfer limited (no\n  radiation or conduction from the tray); a falling rate linear in the free\n  moisture, or a tabulated relative rate curve; the constant/falling switch is\n  smooth (above).\n- Batch: air at the inlet state over the whole tray. The solids stream's flow is\n  the throughput and passes through; the exhaust flows are those of the drying step.\n- Continuous: the product-temperature estimate above; no heat of wetting; constant\n  solid and liquid-water specific heats; air out must stay above its dew point\n  (reported, not enforced).\n- Not implemented: the three-zone (preheat, constant-rate, falling-rate) rotary-dryer\n  sizing of McCabe, the Fick-diffusion series, deep-bed humidity profiles, spray\n  drying, fluid-bed hydrodynamics.\n- `psychrometrics.wet_bulb_temperature` now starts its Newton solve below the boiling\n  point, so it works for the 100-200 C air of a dryer (it returned NaN before).\n\n**Gradients.** Drying time, energy per kg, the exhaust and product temperatures are\ndifferentiable with respect to the air temperature, humidity and flow, the air\nvelocity (through $h$), $X_c$ and the load.\n\n---"
+  },
+  {
+   "anchor": "crystallization",
+   "heading": "Crystallization",
+   "path": "Chemical Unit Operations > Crystallization",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "Crystallization separates a solute as a solid by making the solution supersaturated,\nby cooling, by evaporating solvent, or both. Two questions set the design: **how much**\nsolid forms (the yield from the solubility curve, including a hydrate that takes water\nof crystallization into the crystal) and **how big** the crystals are (nucleation and\ngrowth kinetics and the population balance). `difflow` provides the solubility, yield and\nMSMPR functions as a library and the `Crystallizer` unit that applies them to a stream.\nThe REE oxalate, carbonate and hydroxide precipitators in\n[unit-operations-ree](unit-operations-ree.md) (`difflow_ree`) are the *reactive*\nprecipitation version (a solubility-product-driven conversion, no size distribution);\nthe `Crystallizer` is the generic solubility-driven one.\n\n**No solubility data, kinetic constant or hydrate transition temperature is built in.**\nEvery curve and constant in this section is synthetic and labelled illustrative; the\npublished worked examples (Geankoplis Sec. 12.11, McCabe, Smith & Harriott Ch. 27,\nWankat Ch. 17) were **not reproduced**, because their inputs and printed answers could not be\nrecalled with confidence. The tests check the closed forms against independent\noracles instead.\n\n(op-crystallizer)="
+  },
+  {
+   "anchor": "crystallizer",
+   "heading": "Crystallizer",
+   "path": "Chemical Unit Operations > Crystallization > Crystallizer",
+   "source": "unit-operations-chemical.md",
+   "targets": [
+    "op-crystallizer"
+   ],
+   "text": "**Location**: `difflow/units/crystallizer.py`\n\n**Class**: `Crystallizer`\n\n**Description**: Solubility-driven crystallizer, cooling, evaporative or both, with an\nequilibrium yield (a hydrate or an anhydrous crystal) or an MSMPR kinetic mode."
+  },
+  {
+   "anchor": "process-role",
+   "heading": "Process Role",
+   "path": "Chemical Unit Operations > Crystallization > Crystallizer > Process Role",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "One inlet (the feed) and two outlets (`crystals`, `mother_liquor`), plus an `info`\ndictionary. An `Evaporator` concentrate goes straight in (give the crystallizer the\nevaporator's solvent name), or the unit evaporates itself (`mode=\"evaporative\"`,\n`\"cooling_evaporative\"`) and reports the evaporation duty with\n`difflow.water.water_latent_heat`. Palette category: `crystallization` (the one category of\nthis unit, as `evaporation` and `drying` are for theirs).\n\n**Streams.** mol/s, K, Pa. The crystal stream carries the hydrate as **solute plus bound\nwater**: `F_<solute>` is the moles of anhydrous solute in the crystals and `F_<solvent>`\nis $\\nu$ times that, the water of crystallization. Every species appears in every\noutlet (zero where absent), so the mole balance closes species by species and a recycle\nkeeps one species list. The water evaporated leaves as vapor (in `info`, not a stream)."
+  },
+  {
+   "anchor": "yield-balance-with-hydrates",
+   "heading": "Yield balance with hydrates",
+   "path": "Chemical Unit Operations > Crystallization > Crystallizer > Yield balance with hydrates",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "With $S_0$ the feed solute, $W_0$ the feed solvent, $E$ the solvent evaporated\n($W = W_0 - E$; kg/s) and a crystal of solute mass fraction\n$f_s = M_s/(M_s + \\nu M_w)$ and water fraction $f_w = 1 - f_s$, the solute and water balances\n\n$$S_0 = c\\,W_L + f_s C, \\qquad W = W_L + f_w C$$\n\nwith the liquor saturated, $c = c_{sat}(T)$ (kg anhydrous solute per kg solvent), give the\nhydrate mass flow in closed form\n\n$$C = \\frac{S_0 - c_{sat}\\,W}{f_s - c_{sat}\\,f_w}.$$\n\nThe numerator is clipped at zero with a softplus of width `soft` $\\cdot S_0$ (default\n$10^{-6}$), so an undersaturated feed gives zero yield and a finite gradient with no\nPython `if`. A feed richer in solute than the hydrate stoichiometry would need an anhydrous\nsolid; the balance then reports a negative liquor water."
+  },
+  {
+   "anchor": "solubility-curves-and-hydrate-forms",
+   "heading": "Solubility Curves and Hydrate Forms",
+   "path": "Chemical Unit Operations > Crystallization > Crystallizer > Solubility Curves and Hydrate Forms",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "`Solubility` is a pytree: `Solubility.polynomial(coeffs)` (in $T - 273.15$),\n`Solubility.vant_hoff(A, B)` ($\\ln c = A + B/T$) or `Solubility.table(T, c)` (PCHIP), each with\n`hydrate_waters`, the molar masses and `per_100g=True` for data in g/100 g solvent.\nA second solid form (`upper=`, `T_transition=`, `width=`) is a **smooth logistic blend** of\n$c_{sat}$ and $\\nu$ in $T$ (never a Python `if` on a traced $T$); the explicit alternative is to\npass the curve of the form you mean. The blend makes the crystal composition\nfractional within a few widths of the transition, which is an approximation.\n\n```python\nimport jax\nfrom difflow import Solubility, crystal_balance, crystal_yield, supersaturation\n\n# SYNTHETIC curve (illustrative, not data for any salt): c_sat = 0.35 + 0.0075 (T - 273.15)\nsol = Solubility.polynomial([0.35, 0.0075], hydrate_waters=10, solute_MW=142.0)\nS0, W0 = 0.60, 1.0                                   # kg/s solute, solvent in the feed\nb = crystal_balance(S0, W0, 278.15, sol)\nprint(f\"hydrate {float(b['crystals']):.4f} kg/s, yield {float(b['yield_fraction']):.3f} of the solute\")\nprint(f\"solute closes: {float(S0 - b['crystal_solute'] - b['liquor_solute']):.1e},\"\n      f\" water closes: {float(W0 - b['crystal_water'] - b['liquor_water']):.1e}\")\nprint(\"supersaturation of the feed at 5 C:\", float(supersaturation(S0 / W0, 278.15, sol)))\n\n# the yield is differentiable: dC/dT, dC/dE, dC/dS0\ng = jax.grad(crystal_yield, argnums=(0, 2, 4))(S0, W0, 278.15, sol, 0.0)\nprint(\"dC/dS0, dC/dT, dC/dE =\", [round(float(x), 4) for x in g])\n\n# an undersaturated feed: zero yield, finite gradient\nprint(float(crystal_yield(0.1, 1.0, 278.15, sol)), float(jax.grad(crystal_yield, argnums=2)(0.1, 1.0, 278.15, sol)))\n```"
+  },
+  {
+   "anchor": "parameters",
+   "heading": "Parameters",
+   "path": "Chemical Unit Operations > Crystallization > Crystallizer > Parameters",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "<!-- doc-test: skip: field listing (a class sketch), not an executable example -->\n```python\n@dataclass\nclass CrystallizerParams:\n    solute: str                         # stream key F_<solute>\n    solute_MW: float                    # g/mol, anhydrous\n    mode: str = \"cooling\"               # \"cooling\" | \"evaporative\" | \"cooling_evaporative\"\n    T: float = None                     # K (evaporative: defaults to the feed T)\n    water_evaporated: float = None      # kg/s ...\n    evaporation_fraction: float = None  # ... or a fraction of the feed solvent\n    solvent: str = \"H2O\"\n    solvent_MW: float = 18.015\n    solubility_model: str = \"polynomial\"   # \"polynomial\" | \"vant_hoff\" | \"table\"\n    solubility_coeffs: list = None\n    solubility_T: list = None\n    solubility_c: list = None\n    solubility_basis: str = \"kg_per_kg\"    # or \"g_per_100g\"\n    hydrate_waters: float = 0.0\n    upper_solubility_model: str = \"polynomial\"   # a second solid form above transition_T\n    upper_solubility_coeffs: list = None\n    upper_solubility_T: list = None\n    upper_solubility_c: list = None\n    upper_hydrate_waters: float = 0.0\n    transition_T: float = None\n    transition_width: float = 0.5          # K, smooth blend\n    kinetics: list = None                  # [k_g, g, k_b, b, j] -> MSMPR kinetic mode\n    residence_time: float = None           # s\n    volume: float = None                   # m^3 (tau = volume / feed liquor flow)\n    crystal_density: float = 2000.0        # kg/m^3\n    shape_factor: float = 0.5236           # k_v, pi/6\n    liquor_density: float = 1000.0\n    cp_solution: float = 4186.0            # J/kg/K\n    heat_of_crystallization: float = 0.0   # J per kg of crystal, released\n    soft: float = 1e-6\n```"
+  },
+  {
+   "anchor": "equations-and-assumptions",
+   "heading": "Equations and Assumptions",
+   "path": "Chemical Unit Operations > Crystallization > Crystallizer > Equations and Assumptions",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "- Equilibrium mode: liquor saturated at the outlet temperature; a stoichiometric hydrate\n  (or anhydrous) crystal. Kinetic mode: the liquor leaves at $c_{sat} + \\Delta C$ (below).\n- Duty $Q = m_F c_p (T - T_F) + E\\,h_{fg}(T) - \\Delta H_c C$ (W; negative is cooling),\n  with constant $c_p$ and a user-supplied heat of crystallization (default 0).\n- Constant liquor density converts the liquor flow to a volume flow; no fines destruction,\n  classification, agglomeration, breakage, size-dependent growth or polymorph kinetics.\n- Not implemented: an adiabatic (vacuum flash) mode that solves the evaporation from the\n  heat balance; the evaporation is a specification.\n\n```python\nimport jax\nfrom difflow import Crystallizer, CrystallizerParams, make_stream\n\n# synthetic curve and Na2SO4-like molar masses (illustrative only)\nparams = CrystallizerParams(solute=\"Na2SO4\", solute_MW=142.0, mode=\"cooling\", T=278.15,\n                            solubility_coeffs=[0.35, 0.0075], hydrate_waters=10.0)\nfeed = make_stream({\"Na2SO4\": 0.60 * 1000 / 142.0, \"H2O\": 1.0 * 1000 / 18.015}, T=333.15, P=1e5)\ncrystals, liquor, info = Crystallizer(params)(feed)\nprint(f\"yield {float(info['yield_kg_s']):.4f} kg/s of solute, hydrate {float(info['crystal_mass']):.4f} kg/s\")\nprint(f\"bound water / solute in the crystals = {float(crystals['F_H2O'] / crystals['F_Na2SO4']):.1f} mol/mol\")\nprint(f\"cooling duty {float(info['Q']) / 1e3:.1f} kW\")\n\ndef yield_of_T(T):\n    p = CrystallizerParams(solute=\"Na2SO4\", solute_MW=142.0, T=T,\n                           solubility_coeffs=[0.35, 0.0075], hydrate_waters=10.0)\n    return Crystallizer(p)(feed)[2][\"yield_kg_s\"]\n\nprint(\"d(yield)/dT =\", float(jax.grad(yield_of_T)(278.15)), \"kg/s/K\")\n```\n\n**Evaporator then Crystallizer** (the structure of exercise wex20-2, with synthetic data). The\ncrystallizer takes the evaporator concentrate; the mother liquor can be recycled to the\nevaporator through a `Mixer` and a tear stream, and at steady state the crystals carry\nexactly the fresh solute:\n\n```python\nfrom difflow import (Crystallizer, CrystallizerParams, Evaporator, EvaporatorParams, Mixer,\n                     make_stream)\nfrom difflow.flowsheet import Flowsheet, Unit"
+  },
+  {
+   "anchor": "msmpr-functions",
+   "heading": "MSMPR Functions",
+   "path": "Chemical Unit Operations > Crystallization > MSMPR Functions",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "**Location**: `difflow/units/crystallizer.py`\n\n**Functions**: `msmpr_distribution`, `msmpr_moments`, `msmpr_dominant_size`,\n`msmpr_mass_median_size`, `msmpr_mass_cv`, `msmpr_from_magma`, `fit_msmpr`, `growth_rate`,\n`nucleation_rate`, `msmpr_steady_state`\n\nFor a steady mixed-suspension, mixed-product-removal crystallizer with residence time\n$\\tau$, size-independent growth rate $G$ and nuclei density $n_0$ (Randolph & Larson):\n\n$$n(L) = n_0\\,e^{-L/(G\\tau)}, \\qquad m_k = \\int_0^\\infty L^k n\\,dL = k!\\,n_0\\,(G\\tau)^{k+1},$$\n\nthe suspension (magma) density is $M_T = 6\\rho_c k_v n_0 (G\\tau)^4$, the dominant\n(mass-mode) size, the maximum of $L^3 n(L)$, is $L_D = 3G\\tau$, and the mass median size\n$L_{50} = x_{50}\\,G\\tau$ with $x_{50} = 3.672\\ldots$ the root of the cumulative mass\nfraction of the gamma(4) law at one half; `msmpr_mass_median_size` computes it (Newton on\nthe gamma(4) law), it is not typed in. The coefficient of variation of the mass\ndistribution is $1/\\sqrt{4} = 50\\%$. `msmpr_from_magma(M_T, rho_c, k_v, G, tau)` gives\n$n_0$ from a measured magma density and `fit_msmpr(L, n)` is the \"$\\ln n$ vs. $L$\" line\n(slope $-1/(G\\tau)$, intercept $\\ln n_0$).\n\n**Kinetics.** With the absolute supersaturation $\\Delta C = c - c_{sat}$ (kg solute per kg\nsolvent), $G = k_g\\,\\Delta C^{g}$ (`growth_rate`) and $B_0 = k_b\\,M_T^{\\,j}\\,\\Delta C^{b}$\n(`nucleation_rate`, $M_T$ in kg of crystal per m$^3$ of liquor), $B_0 = n_0 G$.\n`msmpr_steady_state` closes them: the solute balance gives $M_T(\\Delta C)$, the third moment\nrequires $M_T = 6\\rho_c k_v B_0 G^3\\tau^4$, and the scalar root in $\\Delta C$ is found by a\nbisection in $\\ln(\\Delta C/\\Delta C_{max})$ with an implicit-gradient Newton step\n(`difflow.staged._solve_monotone`), so gradients with respect to $\\tau$, $k_g$ and $k_b$ are\nthe implicit-function derivatives. In the log form the residual\n$(1-j)\\ln M_T - (b+3g)\\ln\\Delta C - \\text{const}$ is monotone for $j \\le 1$ (larger $j$ is\nrejected). Since $G$ falls as $\\tau$ grows ($\\Delta C$ falls), $L_D(\\tau)$ is **not**\n$3G\\tau$ at a fixed $G$; as $k_g \\to \\infty$ the supersaturation vanishes and the yield approaches the\nequilibrium yield.\n\n```python\nimport math\nimport jax\nimport jax.numpy as jnp\nimport numpy as np\nfrom difflow import (Solubility, fit_msmpr, msmpr_distribution, msmpr_dominant_size,\n                     msmpr_mass_median_size, msmpr_moments, msmpr_steady_state)"
   },
   {
    "anchor": "reactor-comparison",

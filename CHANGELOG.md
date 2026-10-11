@@ -8,6 +8,32 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`Crystallizer` unit and the crystallization library (#433).** `difflow.units.crystallizer` (catalog category
+  `crystallization`, one category for the unit as `evaporation` and `drying` are for theirs; GUI symbol `crystallizer`):
+  `Solubility` pytree (polynomial in degrees C, van 't Hoff `ln c = A + B/T`, or PCHIP table; kg solute per kg
+  solvent, `per_100g=True` for g/100 g) carrying the hydrate form (`hydrate_waters`, molar masses) and an optional
+  second solid form with `T_transition`, joined by a **smooth logistic blend** in `T` (never a Python `if`);
+  `supersaturation` (ratio, absolute, relative); `crystal_yield` / `crystal_balance` (the two-balance hydrate yield
+  `C = (S0 - c_sat W)/(f_s - c_sat f_w)`, evaporation allowed, soft-clipped at zero so undersaturated feeds give
+  zero yield and a finite gradient); the MSMPR functions `msmpr_distribution`, `msmpr_moments`,
+  `msmpr_dominant_size` (3 G tau), `msmpr_mass_median_size` (the gamma(4) half-point, computed by Newton, not
+  typed), `msmpr_mass_cv`, `msmpr_from_magma`, `fit_msmpr`; `growth_rate`, `nucleation_rate` and
+  `msmpr_steady_state`, which closes the power-law kinetics with the third moment by a bisection with
+  implicit-gradient Newton step (`difflow.staged._solve_monotone`, `j <= 1`) so `L_D`, `L_50` are differentiable in
+  tau, `k_g`, `k_b`. `Crystallizer(CrystallizerParams)(feed) -> (crystals, mother_liquor, info)`: modes `cooling`,
+  `evaporative`, `cooling_evaporative`; equilibrium or kinetic mode; crystal stream convention **solute plus bound
+  water** (`F_<solute>`, `F_<solvent> = nu F_<solute>`, mol/s, every species in every outlet); duty from sensible
+  heat, `water_latent_heat` and a user heat of crystallization; takes an `Evaporator` concentrate (tested in a
+  `Flowsheet`, with a mother-liquor recycle). Parameters are flat data (solubility model/coefficients/table), so the
+  unit is declarative and buildable in the GUI. Docs `## Crystallization` (`### Crystallizer`, `### MSMPR Functions`),
+  notebook 57, tests. **Not implemented:** an adiabatic vacuum-flash mode (evaporation is a specification),
+  size-dependent growth, fines destruction, classified removal, agglomeration/breakage, polymorphs, batch cooling
+  profiles. **Unverified/not reproduced:** no Geankoplis, McCabe or Wankat worked example was reproduced (numbers
+  "from recollection" could not be recalled with confidence) and no sucrose, Na2SO4, Na2CO3 or MgSO4 solubility data,
+  decahydrate transition temperature or kinetic constant is included; every curve in tests, docs and the notebook
+  is synthetic and labelled illustrative. Tests use independent oracles (3x3 NumPy balance solve, `scipy` quadrature
+  of the moments, argmax of `L^3 n`, a `brentq` root of the kinetic closure, `k_g -> infinity` equilibrium limit,
+  `check_grads`).
 - **`Dryer` unit and the drying library (#432).** `difflow.units.dryer` (category `drying`, GUI symbol `dryer`):
   moisture bookkeeping (`dry_basis`, `wet_basis`, `free_moisture`, `solids_moisture`), equilibrium-moisture
   isotherms `equilibrium_moisture` / `water_activity` (GAB, BET, PCHIP table or a callable; closed-form inverse for
