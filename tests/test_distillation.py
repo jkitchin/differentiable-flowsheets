@@ -3,6 +3,7 @@
 import jax
 import jax.numpy as jnp
 import pytest
+from difflow.eos import eos_bubble_T
 
 from difflow import (
     IdealThermo,
@@ -1273,11 +1274,21 @@ class TestCubicThermoColumn:
         assert float(jnp.sum(y)) == pytest.approx(1.0)
 
     @pytest.mark.release
-    def test_eos_bubble_point_differs_from_raoult_for_light_ends(
+    def test_eos_and_raoult_bubble_points_at_10_bar(
         self, ideal_column, cubic_column
     ):
-        """The reason the issue matters: Raoult's law is tens of degrees out for
-        light hydrocarbons at 10 bar, and within a degree for the heavy end."""
+        """With sourced vapor pressures, Raoult and PR agree closely at 10 bar.
+
+        This test used to assert that Raoult's law is >10 K out for the light
+        end (70 % propane) at 10 bar. That gap came from the old propane and
+        n-butane Antoine constants, which put their vapor pressures ~45 % and
+        ~30 % high near 300 K; with the NIST fits the two bubble points agree to
+        ~1.4 K at the light end and ~0.7 K at the heavy end: the pure-component
+        saturation pressures are right, and the vapor at Pr ~ 0.2-0.4 is close
+        to ideal. The EOS-K column still matters as the pressure rises toward
+        the critical region; this pins what the two models give here, both
+        ways, so a regression in either shows.
+        """
         col_i = ideal_column
         col_c = cubic_column
         P = jnp.asarray(self.P)
@@ -1288,13 +1299,18 @@ class TestCubicThermoColumn:
         heavy = jnp.array([1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 0.002, 0.25, 0.748])
         heavy = heavy / jnp.sum(heavy)
 
-        d_light = float(col_c._bubble_point_T(light, P, T_guess)[0]
-                        - col_i._bubble_point_T(light, P, T_guess)[0])
-        d_heavy = float(col_c._bubble_point_T(heavy, P, T_guess)[0]
-                        - col_i._bubble_point_T(heavy, P, T_guess)[0])
+        T_light_c = float(col_c._bubble_point_T(light, P, T_guess)[0])
+        T_light_i = float(col_i._bubble_point_T(light, P, T_guess)[0])
+        T_heavy_c = float(col_c._bubble_point_T(heavy, P, T_guess)[0])
+        T_heavy_i = float(col_i._bubble_point_T(heavy, P, T_guess)[0])
 
-        assert abs(d_light) > 10.0
-        assert abs(d_heavy) < 2.0
+        # Independent EOS path: the phi-phi bubble-T solve in difflow.eos.
+        eos = col_c.thermo.eos
+        assert T_light_c == pytest.approx(float(eos_bubble_T(eos, light, P)["T"]), abs=0.05)
+        assert T_heavy_c == pytest.approx(float(eos_bubble_T(eos, heavy, P)["T"]), abs=0.05)
+
+        assert 0.5 < T_light_c - T_light_i < 3.0
+        assert abs(T_heavy_c - T_heavy_i) < 2.0
 
     def test_column_runs_on_cubic_thermo(self, thermo_pair, cubic_column, column_params, feed):
         """The issue's reproducer: no AttributeError, and a physical answer."""

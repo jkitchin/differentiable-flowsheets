@@ -321,9 +321,11 @@ class GasPFRParams(PFRParams):
                            # bed instead: d_p, voidage, mu, rho_gas, u_s0, bed_area
 ```
 
-Instead of a lumped `alpha`, pass `d_p`, `voidage`, `mu`, `rho_gas`, `u_s0`,
-`bed_area` (and optionally `sphericity`) and $\alpha$ is computed from the full
-Ergun equation; see [Particles and Beds](particles-ergun).
+Instead of a lumped `alpha`, pass `d_p`, `voidage`, `mu`, `rho_gas`,
+`bed_area` (and optionally `u_s0` and `sphericity`) and $\alpha$ is computed from the full
+Ergun equation; see [Particles and Beds](particles-ergun). Leave `u_s0=None` to
+take the superficial velocity from the inlet stream ($Q_0/A_c$); a given `u_s0`
+that differs from the stream's by more than 1 % raises `GasPFRBedWarning`.
 
 #### Additional Equations
 
@@ -461,6 +463,47 @@ Everything in [FedBatchReactor](#fedbatchreactor) --- parameters, feed
 and temperature profiles, the material and energy balances, the utility
 functions --- applies unchanged. Pick the name that makes the flowsheet
 read correctly; there is no modelling difference to weigh.
+
+---
+
+### StoichiometricReactor
+
+**Location**: `difflow/units/stoichiometric.py`
+
+**Class**: `StoichiometricReactor` (parameters: `StoichiometricReactorParams`)
+
+**Description**: Fixed-conversion reactor (a simulator's `RStoic` block): the
+conversion $X$ of a key reactant $k$ is specified and the extent follows. No
+kinetics, equilibrium or thermodynamic model; differentiable in the conversion
+and the feed. Several reactions (lists of `stoich`, `key`, `conversion`) run in
+parallel, each conversion based on the reactor inlet.
+
+#### Governing Equations
+
+$$\xi_r = \frac{X_r F^{in}_{k_r}}{-\nu_{k_r,r}}, \qquad F^{out}_i = F^{in}_i + \sum_r \nu_{i,r}\, \xi_r$$
+
+The outlet is at the inlet temperature (or `T_out`) and the inlet pressure less
+`pressure_drop`; no energy balance is solved. Products absent from the inlet are
+added to the outlet. `info` reports `extent`, `conversion`, `key_consumed` and
+`min_outlet_flow` (negative when the specified conversions consume more of a
+species than is fed).
+
+#### Example Usage
+
+```python
+import jax
+from difflow import StoichiometricReactor, StoichiometricReactorParams, make_stream
+
+feed = make_stream({"CO": 100.0, "H2": 200.0, "MeOH": 0.0}, T=500.0, P=5e6)
+
+def methanol_out(X):
+    rx = StoichiometricReactor(StoichiometricReactorParams(
+        stoich={"CO": -1.0, "H2": -2.0, "MeOH": 1.0}, key="CO", conversion=X))
+    out, info = rx(feed)
+    return out["F_MeOH"]
+
+print(float(methanol_out(0.25)), float(jax.grad(methanol_out)(0.25)))   # 25.0, 100.0
+```
 
 ---
 
@@ -678,6 +721,14 @@ liquid, vapor, info = flash(feed)
 
 Performs adiabatic flash at constant pressure and enthalpy. Solves for flash temperature.
 
+With an `IdealThermo` (ideal K-values) it solves the Rachford-Rice energy
+balance as before. With a `CubicThermo` it calls `flash_PH_eos` (see
+[EOS units](#eos-units)): the inlet enthalpy is the EOS enthalpy at the inlet
+T and P, and the split uses the EOS liquid and vapour compositions. `info` then
+also carries `x`, `y`, `residual` and `converged`, and `T_bounds=(100, 1000)`
+can be passed to the call. This path handles a pure component, where the flash
+lands on $T_\mathrm{sat}$ with a lever-rule vapour fraction.
+
 ```python
 from difflow.units.flash import PHFlash, FlashParams
 
@@ -694,7 +745,22 @@ print(f"Vapor fraction: {info['V_frac']:.3f}")
 
 #### Bubble and Dew Point Methods
 
-The `Flash` class provides methods for calculating phase boundaries:
+The `Flash` class provides methods for calculating phase boundaries. They use
+the flash's own thermodynamics:
+
+- With an `eos`: [`eos_bubble_P`, `eos_dew_P`, `eos_bubble_T` and
+  `eos_dew_T`](thermodynamics.md#eos-bubble-dew).
+- With an `activity_model`: the modified Raoult's law,
+  $y_i P = x_i\gamma_i P_i^{sat}$, through `difflow.phase_diagrams`
+  (`bubble_P`, `dew_P`, `bubble_T`, `dew_T`).
+- Otherwise: Raoult's law.
+
+The temperature solves are Newton with implicit differentiation, started from
+the composition-weighted Antoine (or Wilson) estimate. `T_guess` is optional.
+The results are not clipped. A concrete solve that fails (or an EOS solve that
+lands on the trivial $K=1$ root near the critical point) raises a
+`BubbleDewConvergenceWarning`. A temperature outside a species' fitted Antoine
+range raises an `AntoineRangeWarning`.
 
 ```python
 flash = Flash(FlashParams(species_order=['n_pentane', 'n_heptane']), thermo_lh)
@@ -728,11 +794,31 @@ print(f"Dew point: T={T_dew:.1f} K, P={P_dew:.0f} Pa")
 
 $$F_{out,i} = \sum_k F_{k,i}$$
 
-**Energy Balance** (adiabatic mixing):
+**Energy Balance** (adiabatic mixing). With a `thermo` model the outlet
+temperature solves the enthalpy balance exactly,
 
-$$T_{out} = \frac{\sum_k F_k C_{p,k} T_k}{\sum_k F_k C_{p,k}}$$
+$$\sum_i F_{out,i}\, h_i(T_{out}) = \sum_k \sum_i F_{k,i}\, h_i(T_k),$$
 
-(Simplified for ideal mixing with similar heat capacities)
+by Newton's method on $T_{out}$ started at the flow-weighted mean temperature
+(the phase is fixed, so $H$ is smooth), with a bracketed bisection as the
+fallback; `jax.grad` differentiates the converged root by the implicit function
+theorem. Starting at the mean picks the physical root when the enthalpy is not
+monotone: `IdealThermo`'s vapor branch adds a Watson heat of vaporization that
+vanishes at $T_c$, so near a species' critical temperature $H_{vap}(T)$ can fall
+with $T$ and the balance has a second, spurious root. Without `thermo` the outlet
+is at the flow-weighted mean temperature, which is the same balance for equal,
+constant heat capacities:
+
+$$T_{out} = \frac{\sum_k F_k T_k}{\sum_k F_k}$$
+
+(Before this was solved exactly, the thermo path evaluated one $c_p$ at the
+mean inlet temperature: 1 mol/s of methane at 300 K mixed with 10 mol/s at
+800 K came out at 752.7 K instead of 763.6 K.)
+
+**Pressure**: the lowest inlet pressure.
+
+**Missing species**: an inlet that does not carry a species in the mixer's
+list contributes zero flow of it, as in `combine_streams`.
 
 #### Example Usage
 
@@ -743,7 +829,7 @@ mixer = Mixer(['A', 'B', 'C'])   # optional: thermo=..., phase='liquid'
 stream1 = make_stream({'A': 1.0, 'B': 0.5, 'C': 0.0}, T=350.0, P=101325.0)
 stream2 = make_stream({'A': 0.0, 'B': 0.3, 'C': 0.2}, T=360.0, P=101325.0)
 
-# Streams are passed as separate arguments; each carries every species
+# Streams are passed as separate arguments; a species an inlet omits is zero
 outlet, info = mixer(stream1, stream2)
 ```
 
@@ -775,6 +861,41 @@ inlet = make_stream({'A': 1.0, 'B': 0.5}, T=350.0, P=101325.0)
 
 # Split into 3 streams: 50%, 30%, 20%
 out1, out2, out3, info = splitter(inlet, split_frac=[0.5, 0.3, 0.2])
+```
+
+---
+
+### ComponentSplitter
+
+**Location**: `difflow/units/flash.py`
+
+**Class**: `ComponentSplitter` (parameters: `ComponentSplitterParams`)
+
+**Description**: Ideal component splitter: a specified fraction $\phi_i$ of each
+species goes to the first outlet and the rest to the second. The block-flow
+separator of a material-balance calculation ("all the methanol to the liquid,
+none of the gas"); no equilibrium and no thermodynamic model, so it is
+differentiable in the fractions and the feed. Unlike `Splitter`, each species has
+its own split. (`ComponentSeparator` is the same balance with an enthalpy duty and
+needs a `CubicThermo`.)
+
+#### Governing Equations
+
+$$F^{(1)}_i = \phi_i F^{in}_i, \qquad F^{(2)}_i = (1 - \phi_i) F^{in}_i$$
+
+Both outlets leave at the inlet temperature and pressure. Species missing from
+`split_fractions` use `default_fraction` (default 0: all to the second outlet).
+
+#### Example Usage
+
+```python
+from difflow import ComponentSplitter, ComponentSplitterParams, make_stream
+
+sep = ComponentSplitter(ComponentSplitterParams(
+    split_fractions={"MeOH": 0.0, "H2O": 0.05}, default_fraction=1.0))
+feed = make_stream({"CO": 10.0, "H2": 20.0, "MeOH": 5.0, "H2O": 1.0}, T=320.0, P=5e6)
+gas, liquid, info = sep(feed)      # outlets in order: first, second
+print(float(gas["F_CO"]), float(liquid["F_MeOH"]), float(gas["F_H2O"]))
 ```
 
 ---
@@ -1244,10 +1365,13 @@ feed = make_stream(
 distillate, bottoms, info = column(feed, R=2.0, B_spec=40.0)
 ```
 
-Use the EOS for light hydrocarbons at pressure. Raoult's law fails there in a
-one-sided way: a C3-C8 cut at 10 bar puts its heavy end within a degree of the
-EOS answer and its light end tens of degrees off, so an ideal-K column looks
-plausible at the reboiler and is wrong at the condenser.
+Use the EOS for light hydrocarbons at pressure. At moderate pressure Raoult's
+law with accurate vapor pressures is close: for this C3-C8 cut at 10 bar the
+Raoult and Peng-Robinson bubble points agree to about 1.4 K at the light end
+and 0.7 K at the heavy end. The gap grows as the stages approach the critical
+region, where the vapor is far from ideal and the Antoine fits are extrapolated
+past their ranges (which raises `AntoineRangeWarning`); there only the EOS
+K-values are meaningful.
 
 Two things about the EOS path are worth knowing:
 
@@ -2530,13 +2654,17 @@ what the velocity and insulation-thickness optimizations use
 | Natural convection | `churchill_chu_vertical_plate`, `churchill_chu_horizontal_cylinder` |
 | Phase change | `nusselt_film_condensation`, `rohsenow_heat_flux`, `rohsenow_superheat`, `mostinski`, `critical_heat_flux` |
 | Fouling | `difflow.fouling` (see [Threshold Fouling](#threshold-fouling)) |
-| Overall | `overall_U`, `FOULING_RESISTANCES`, `TYPICAL_U_RANGES`, `typical_U_range` |
+| Annulus (laminar) | `annulus_nusselt` |
+| Radiation | `STEFAN_BOLTZMANN`, `blackbody_emissive_power`, `radiation_h`, `net_radiation`, `two_surface_radiation` |
+| Lumped transients | `biot_number`, `lumped_time_constant`, `lumped_temperature`, `lumped_heating_time` |
+| Overall | `overall_U`, `FOULING_RESISTANCES`, `FOULING_RESISTANCE_RANGES`, `FOULING_SOURCES`, `TYPICAL_U_RANGES`, `typical_U_range` |
+| Properties | [`difflow.gas_properties`](#gas-properties) (air and common gases), `difflow.liquid_properties` |
 
 **Tube side.** `internal_h(Re, Pr, k, D, L=None, mu_ratio=1, rel_roughness=0,
 method="gnielinski", heating=True, boundary="T")` returns $h=\mathrm{Nu}\,k/D$:
 
 * $\mathrm{Re}\le2300$: fully developed $\mathrm{Nu}=3.66$ (constant wall
-  temperature) or $4.36$ (`boundary="q"`, constant flux); with `L` given, the
+  temperature) or $48/11=4.364$ (`boundary="q"`, constant flux); with `L` given, the
   Sieder-Tate entry form $1.86(\mathrm{Re\,Pr}\,D/L)^{1/3}(\mu_b/\mu_w)^{0.14}$
   joined to it as $(\mathrm{Nu}_{fd}^3+\mathrm{Nu}_{en}^3)^{1/3}$ (a smooth
   combination chosen here, not a published correlation).
@@ -2629,7 +2757,68 @@ Rohsenow's $C_{sf}$ defaults to 0.013 (water on polished copper/platinum),
 recalled from memory of Incropera Table 10.1: check it for real work. Not
 implemented: annular fins, tube banks (Zukauskas), the Bell-Delaware
 shell-side method (Kern is in [`difflow.shell_and_tube`](#shell-and-tube-design)),
-radiation, transient conduction.
+multi-dimensional transient conduction (Heisler charts), and agitated-vessel
+or jacket-side coefficients (no checkable source for the impeller constants).
+
+(annulus-nusselt)=
+#### Laminar annulus: `annulus_nusselt`
+
+`annulus_nusselt(Di_over_Do, surface="inner")` interpolates Incropera &
+DeWitt Table 8.2 linearly: fully developed laminar flow, one surface at
+constant temperature and the other insulated, Nu based on
+$D_h=D_o-D_i$. Incropera's Example 11.1 interpolates the same way
+($\mathrm{Nu}_i=5.63$ at $D_i/D_o=0.56$; the test checks it).
+
+| $D_i/D_o$ | 0 | 0.05 | 0.10 | 0.25 | 0.50 | 1.00 |
+|---|---|---|---|---|---|---|
+| $\mathrm{Nu}_i$ | -- | 17.46 | 11.56 | 7.37 | 5.74 | 4.86 |
+| $\mathrm{Nu}_o$ | 3.66 | 4.06 | 4.11 | 4.23 | 4.43 | 4.86 |
+
+The table is reproduced to within 1% by a finite-difference solution of the
+Graetz eigenproblem in the test suite. Below $D_i/D_o=0.05$ the inner value
+is held at 17.46; it diverges as the inner tube shrinks. For **turbulent**
+flow in an annulus use `internal_nusselt`/`internal_h` with Re and the
+diameter set to $D_h$ (Incropera Sec. 8.7).
+
+(radiation-helpers)=
+#### Radiation
+
+* `net_radiation(Ts, Tsur, emissivity, area=1)` is
+  $q=\varepsilon A\sigma(T_s^4-T_{sur}^4)$, for a small gray body in large
+  surroundings (Incropera Eq. 1.7). Incropera Ex 9.4, a 100 mm pipe at 165 °C
+  with $\varepsilon=0.85$ in a room at 23 °C, gives 442 W/m.
+* `radiation_h(Ts, Tsur, emissivity)` is
+  $h_r=\varepsilon\sigma(T_s+T_{sur})(T_s^2+T_{sur}^2)$. It is exact, so
+  $h_r(T_s-T_{sur})$ equals `net_radiation`, and it adds to a convection $h$
+  in parallel.
+* `two_surface_radiation(T1, T2, eps1, eps2, A1, A2=None, F12=1)` gives the
+  gray, diffuse two-surface enclosure
+  $q_{12}=\sigma(T_1^4-T_2^4)/[(1-\varepsilon_1)/(\varepsilon_1A_1)+1/(A_1F_{12})+(1-\varepsilon_2)/(\varepsilon_2A_2)]$
+  (Incropera Sec. 13.3). It covers parallel plates, concentric cylinders and
+  spheres. `A2=None` means a large enclosure.
+* `blackbody_emissive_power(T)` is $\sigma T^4$, with
+  `STEFAN_BOLTZMANN` $=5.670374419\times10^{-8}$ (CODATA 2018).
+
+(lumped-capacitance)=
+#### Lumped capacitance and batch heating
+
+The same equation, $(T-T_\infty)/(T_0-T_\infty)=e^{-t/\tau}$ with
+$\tau=mc_p/UA$ (Incropera Eq. 5.6), governs two cases: a small solid with
+$\mathrm{Bi}=hL_c/k<0.1$ and $L_c=V/A_s$, and a well-mixed batch heated
+through a jacket or coil from a medium at constant temperature.
+
+* `biot_number(h, L_c, k)`
+* `lumped_time_constant(m_cp, UA)`
+* `lumped_temperature(t, T0, T_inf, m_cp, UA)`
+* `lumped_heating_time(m, cp, UA, T_st, T0, T)` computes
+  $t=(mc_p/UA)\ln[(T_{st}-T_0)/(T_{st}-T)]$. It handles heating and cooling.
+
+The tests check these against `scipy.integrate.solve_ivp`.
+
+```python
+from difflow import heat_transfer as ht
+t = ht.lumped_heating_time(1000.0, 4180.0, 2000.0, 393.15, 293.15, 353.15)  # ~1915 s
+```
 
 **What is validated (and what is not).** No textbook worked-example number is
 quoted, because none could be reproduced with confidence. Each correlation is
@@ -2646,31 +2835,93 @@ MW/m². The published shell-and-tube `overall_U` example and the textbook
 steam and Rohsenow examples are **not** reproduced; `overall_U` is checked
 against the series-resistance network, its limits and $U_oA_o=U_iA_i$.
 
-**Typical fouling resistances** (`FOULING_RESISTANCES`, m² K/W; transcribed
-from memory of Incropera Table 11.1, which cites TEMA; **not verified**, use
-your own standard for design):
+**Typical fouling resistances** (`FOULING_RESISTANCES`, m² K/W). Each entry
+names its source in `FOULING_SOURCES`, and `FOULING_RESISTANCE_RANGES` holds
+`(low, high)` where the source gives a range. The first block is Incropera &
+DeWitt Table 11.1, which cites TEMA; it was checked against the table while
+the unit-operations book was written. The second block is Sinnott, *Coulson &
+Richardson's Chemical Engineering* Vol. 6 (4th ed.), Table 12.2. That table
+gives coefficient ranges, and the float stored here is the conservative
+(larger-resistance) end. Crude oil by temperature and lube oil (TEMA
+RGP-T-2.4) are **not included** because no copy of the TEMA table could be
+checked. `heavy_hydrocarbons` is the nearest entry. Use your own standard for
+design.
 
-| Service | $R_f$ |
+| Service (Incropera Table 11.1) | $R_f$ |
 |---|---|
 | Seawater, below 50 °C | 0.0001 |
 | Seawater, above 50 °C | 0.0002 |
+| Treated boiler feedwater, below 50 °C | 0.0001 |
 | Treated boiler feedwater, above 50 °C | 0.0002 |
+| River water, below 50 °C | 0.0002-0.001 (stored: 0.001) |
 | Fuel oil | 0.0009 |
 | Refrigerating liquids | 0.0002 |
 | Steam, oil-free | 0.0001 |
 
-**Typical overall U** (`TYPICAL_U_RANGES`, W/m²/K; from memory of Incropera
-Table 11.2, **not verified**; a sanity band for a computed `U`, not a design
-value):
+| Service (Sinnott Table 12.2; key) | $R_f$ range |
+|---|---|
+| River water (`river_water`) | 0.0001-0.0003 |
+| Sea water (`sea_water`) | 0.0003-0.001 |
+| Cooling (tower) water (`cooling_tower_water`) | 0.00017-0.0003 |
+| Town water, soft / hard | 0.0002-0.0003 / 0.0005-0.001 |
+| Steam condensate | 0.0002-0.00067 |
+| Steam, oil traces | 0.0002-0.0005 |
+| Refrigerated brine; aqueous salt solutions | 0.0002-0.0003 |
+| Air and industrial gases | 0.0001-0.0002 |
+| Flue gases | 0.0002-0.0005 |
+| Organic vapours / liquids; light hydrocarbons; condensing organics; heat-transfer fluids | 0.0002 |
+| Heavy hydrocarbons | 0.0005 |
+| Boiling organics | 0.0004 |
+
+**Typical overall U** (`TYPICAL_U_RANGES`, W/m²/K). These are Incropera
+Table 11.2, checked against the table while the unit-operations book was
+written; water-to-oil was corrected from 100-350 to 110-350. Use them as a
+sanity band for a computed `U`, not as a design value.
 
 | Service | U range |
 |---|---|
 | Water to water | 850-1700 |
-| Water to oil | 100-350 |
+| Water to oil | 110-350 |
 | Steam condenser, water in tubes | 1000-6000 |
 | Ammonia condenser, water in tubes | 800-1400 |
 | Alcohol condenser, water in tubes | 250-700 |
 | Finned tube, water in tubes, air in cross flow | 25-50 |
+
+(gas-properties)=
+### Gas Transport Properties
+
+`difflow.gas_properties` covers low-pressure (ideal-gas) transport and heat
+capacity for air, N2, O2, CO2, CO, CH4, H2, Ar, He and H2O (steam). It is a
+pure-JAX library, not a palette operation, and is differentiable in T.
+
+| Function | Returns |
+|---|---|
+| `gas_viscosity(name, T)` | μ (Pa s) |
+| `gas_thermal_conductivity(name, T)` | k (W/m/K) |
+| `gas_heat_capacity(name, T)` | $c_p$ (J/kg/K) |
+| `gas_prandtl(name, T)` | Pr |
+| `gas_density(name, T, P=101325)`, `gas_kinematic_viscosity` | ideal-gas ρ, ν |
+| `gas_transport_properties(name, T, P)` | dict: mu, k, cp, Pr, rho, nu, alpha |
+| `gas_property_range(name, prop)`, `list_gas_species()` | validity range, names |
+| `sutherland_viscosity(T, gas=None, *, mu0, T0, S)`, `sutherland_conductivity` | Sutherland's law (White's constants for air, Ar, N2, O2 in `SUTHERLAND`) |
+
+Each property is a fit $\ln y=\sum a_i[\ln(T/300)]^i$: cubic for μ and k,
+quintic for $c_p$. The fits are made by `scripts/fit_gas_transport.py` to the
+NIST Chemistry WebBook fluid tables at 1 atm (`tests/reference/nist_gases_1atm/`).
+They match every NIST point to 0.2% (μ), 0.55% (k) and 0.15% ($c_p$) over each
+gas's stored range. Air μ and k come from the Engineering ToolBox air tables,
+and air $c_p$ is the mass-weighted N2/O2/Ar NIST mixture. Outside a fit's
+range the value is extrapolated and a `GasRangeWarning` is raised (on
+concrete values only). Air at 300 K gives μ = 18.46 µPa s, k = 26.4 mW/m/K
+and Pr = 0.704, against Incropera Table A.4 values of 18.46, 26.3 and 0.707.
+These properties are for gases at low pressure only; there is no pressure
+correction for dense gases.
+
+```python
+from difflow.gas_properties import gas_transport_properties
+p = gas_transport_properties("air", 350.0)   # film temperature
+p["mu"], p["k"], p["Pr"], p["nu"]
+```
 
 (shell-and-tube-design)=
 ### ShellAndTubeDesign
@@ -3729,6 +3980,7 @@ the variable-underflow table above is synthetic.
 
 ---
 
+(eos-units)=
 ## Pressure-Change & EOS-Consistent Units
 
 These units close energy balances on the **cubic-EOS enthalpy and entropy**
@@ -3736,10 +3988,30 @@ These units close energy balances on the **cubic-EOS enthalpy and entropy**
 constant-Cp models, so they are correct for real gases and near-cryogenic /
 gas-processing service (expander plants, NGL recovery, refrigeration). Each
 takes a [`CubicThermo`](thermodynamics.md) built from an `IdealThermo` (for the
-ideal-gas Cp) and a `PengRobinson`/`SRK` EOS. All internal temperature solves
-use `optimistix` root finds on the two-phase enthalpy/entropy, so every outlet
-temperature, duty and shaft work is differentiable with respect to feed
-conditions, discharge pressures and efficiencies.
+ideal-gas Cp) and a `PengRobinson`/`SRK` EOS.
+
+**Outlet temperature solves.** Every outlet temperature comes from a (P, H) or
+(P, S) flash, also public as `flash_PH_eos(thermo, flows, P, H, T_bounds)` and
+`flash_PS_eos(thermo, flows, P, S, T_bounds)`. The flash bisects on $T$ inside
+`T_bounds` (default 100--1000 K) with the two-phase, stability-tested EOS
+enthalpy or entropy, so it cannot wander outside the bracket. For a pure
+component, $H(T)$ and $S(T)$ jump by the latent heat at $T_\mathrm{sat}$. When the
+target falls in that jump the outlet is at $T_\mathrm{sat}$ and the vapour
+fraction comes from the lever rule. Gradients are attached by the implicit
+function theorem. In a single phase the balance residual supplies them; inside
+a pure-component dome the saturation condition does, so $dT/dP$ is the
+Clausius-Clapeyron slope. Every outlet temperature, duty, shaft work and vapour
+fraction is differentiable with respect to feed conditions, discharge pressures
+and efficiencies.
+
+The flash returns `T`, `vapor_fraction`, `x`, `y`, `H`, `S`, `residual`,
+`bracketed` and `converged`. The units copy `vapor_fraction`, `x`, `y`,
+`residual` and `converged` into their `info`. A target outside `T_bounds`
+returns `converged=False` and raises `EOSUnitConvergenceWarning` (when the
+values are concrete), instead of a silently wrong temperature. The outlet
+*stream* holds only flows, T and P, so the vapour fraction of a two-phase
+outlet is read from `info["vapor_fraction"]`; send the stream through a
+`PHFlash` with the same thermo to split it.
 
 ```python
 from difflow import (
@@ -3772,12 +4044,15 @@ H_\text{out} = H_\text{in} + \eta\,(H_\text{isen} - H_\text{in})$$
 
 The extracted shaft work is $W = H_\text{in} - H_\text{out} > 0$. Both enthalpy
 and entropy are two-phase aware, so an expander whose outlet partly condenses
-(common in cryogenic service) is handled correctly.
+(common in cryogenic service) is handled correctly. For example, methane
+expanded from 300 K and 100 bar to 10 bar has $T_\text{isen}=152.1$ K, a few
+kelvin above its dew point.
 
 ```python
 exp = Turboexpander(TurboexpanderParams(P_out=20e5, eta_isentropic=0.80), thermo)
 outlet, info = exp(feed)
-# info: {"W", "T_isen", "T_out", "H_in", "H_out"}
+# info: W, T_isen, T_out, H_in, H_out, vapor_fraction, vapor_fraction_isen,
+#       x, y, residual, residual_isen, converged
 ```
 
 ### EOSCompressor
@@ -3808,11 +4083,13 @@ constant across the pressure drop and solves for the outlet temperature,
 $H(T_\text{out}, P_\text{out}) = H(T_\text{in}, P_\text{in})$. On a real gas this
 produces the Joule-Thomson temperature change that an ideal-gas or ideal-K valve
 misses. Because no work is extracted, the same pressure drop cools **less** than
-a turboexpander.
+a turboexpander. A letdown into the two-phase region lands on the bubble/dew
+curve (at $T_\mathrm{sat}$ for a pure component), with the liquid fraction in
+`info["vapor_fraction"]`.
 
 ```python
 valve = JTValve(JTValveParams(P_out=20e5), thermo)
-outlet, info = valve(feed)   # info: {"T_out", "H"}
+outlet, info = valve(feed)   # info: T_out, H, vapor_fraction, x, y, residual, converged
 ```
 
 ### ComponentSeparator
@@ -3840,9 +4117,10 @@ Incompressible (liquid) flow in pipes: Darcy-Weisbach friction with a
 Colebrook/Churchill friction factor, fittings, elevation head and
 differential-pressure flow meters. The functions live in
 [`difflow.fluids`](#fluids-module) (JAX, SI, differentiable) and the unit
-operation is [`Pipe`](#op-pipe). Gas pipes are a different model
-(Weymouth, `difflow_gas`); compressible flow, two-phase flow, non-Newtonian
-fluids and transients are out of scope.
+operation is [`Pipe`](#op-pipe). Compressible gas flow (nozzles, isothermal
+and adiabatic lines) is in [`difflow.compressible`](#compressible-module), and
+gas networks are in `difflow_gas`. Two-phase flow, non-Newtonian fluids and
+transients are out of scope.
 
 (op-pipe)=
 ### Pipe
@@ -3861,20 +4139,23 @@ Temperature and molar flows pass through unchanged.
 |-----------|------|---------|
 | `L` | m | straight pipe length |
 | `D` | m | inside diameter |
-| `rho` | kg/m³ | liquid density: a number or a callable of the inlet stream |
-| `mu` | Pa s | liquid viscosity: a number or a callable of the inlet stream |
+| `rho` | kg/m³ | liquid density: a number, a callable of the inlet stream, or `None` (default: `difflow.liquid_properties` at the inlet T and composition) |
+| `mu` | Pa s | liquid viscosity: a number, a callable of the inlet stream, or `None` (default, as for `rho`) |
 | `roughness` | m | absolute roughness, default 4.6e-5 (commercial steel) |
 | `dz` | m | elevation gain, positive uphill |
-| `fittings` | – | `{name: count}` using the K table below, or a total K |
+| `fittings` | – | `{name: count}` using the K table below, plus an optional `"K"` entry for a numeric extra K (a strainer, a meter); or a total K |
+| `flow_area` | m² | flow cross-section for a non-circular duct; then `D` is the hydraulic diameter 4A/P. Default `None`: πD²/4 |
+| `P_vap` | Pa | vapour pressure for the cavitation check. Default `None`: Raoult's law over the inlet species with data (IAPWS for water, the database Antoine otherwise) |
 | `friction_method` | – | `"colebrook"` (default), `"churchill"`, `"haaland"`, `"swamee_jain"` |
 | `MW` | g/mol | molar mass (number or `{species: MW}`) to turn molar into mass flow; omit if a `thermo` is passed |
 
-**Design decision: liquid properties are explicit.** Core `SpeciesData` has no
-liquid density or viscosity, so `rho` and `mu` are *inputs*, as numbers or as
-callables of the stream (for example a correlation in `T`). Putting
-Rackett/DIPPR-105 density and Andrade/DIPPR-101 viscosity into `SpeciesData`
-(with mixing rules) would also serve heat-transfer correlations and pump models
-and is left to a separate issue.
+**Liquid properties.** `rho` and `mu` may be numbers, callables of the stream,
+or `None` (the default). With `None` the pipe reads
+[`difflow.liquid_properties`](thermodynamics.md#liquid-properties) at the inlet
+temperature and composition, which needs a stream and a database species with
+liquid data (`hydraulics_at_flow` without an `inlet` then raises `ValueError`).
+Pass numbers to reproduce a textbook calculation that uses tabulated
+properties.
 
 ```python
 import jax
@@ -3897,8 +4178,42 @@ jax.grad(dP)(0.0525)                   # d(dP)/dD, Pa/m: economic diameter optim
 ```
 
 `info` carries `Q`, `v`, `Re`, `f`, `K_total`, `dP_friction`, `dP_minor`,
-`dP_static`, `dP` (the sum) and `head_loss` (friction plus minor loss, m of
-fluid). `Pipe.eo_residuals` gives `n_species + 2` rows (flows, temperature and
+`dP_static`, `dP` (the sum), `head_loss` (friction plus minor loss, m of
+fluid), `P_vap` (NaN if unknown) and `P_out_below_vapour`.
+
+**Cavitation check.** The pipe is an incompressible model, so an uphill run can
+give an outlet pressure below the vapour pressure, or below zero, without
+complaint from the algebra. `info["P_out_below_vapour"]` flags it (P_out <
+P_vap, or P_out < 0 when no vapour pressure is known), and for concrete values
+the pipe raises `PipeCavitationWarning`. Under `jit`/`grad` only the flag is
+set; the warning never fires on a tracer. Water at 20 °C pumped 40 m uphill
+through 100 m of 2-in pipe at 3 L/s from 4 bar gives P_out = -33 kPa against
+P_vap = 2339 Pa: flagged.
+Only the outlet is checked: a line that climbs over a high point and comes back
+down can fall below the vapour pressure at the crest with a healthy outlet
+pressure. Model such a line as two `Pipe` units, splitting it at the crest.
+
+**Flow from the available head.** `Pipe.flow_at_head(H, inlet=None, Q0=None)`
+returns the volumetric flow at which friction plus minor losses equal `H`
+metres of fluid, and `Pipe.flow_at_dp(dP, inlet=None, Q0=None)` the flow for a
+pressure drop `dP` (the static head ρgΔz is subtracted first; the flow is 0 if
+`dP` cannot lift the column). Both are a Newton solve in ln Q (optimistix),
+started from the fully rough estimate, so the gradients come from the implicit
+function theorem:
+
+```python
+pipe = Pipe(PipeParams(L=120.0, D=0.0525, rho=998.96, mu=1.0214e-3,
+                       fittings={"entrance_sharp": 1, "elbow_90_standard": 4,
+                                 "gate_valve": 1, "exit": 1}))
+pipe.flow_at_head(15.0)     # 5.113e-3 m^3/s
+# jax.grad over roughness: dQ/d(eps) = -8.78 (m^3/s) per m
+```
+
+**Non-circular ducts.** Give `D` as the hydraulic diameter and `flow_area` as
+the true cross-section; the velocity is Q/A and Re, f and the friction loss use
+D_h. A 3-in Sch 40 by 1.5-in (48.26 mm OD) annulus carrying 4 L/s over 24 m:
+v = 1.36 m/s, ΔP = 19.6 kPa. For laminar flow the circular-tube friction factor
+on D_h is only approximate (64/Re becomes about 96/Re for a narrow annulus). `Pipe.eo_residuals` gives `n_species + 2` rows (flows, temperature and
 the pressure balance) so the unit works in the [EO solver](eo-solver.md). The
 example notebook `examples/42_liquid_pipe_flow.ipynb` regenerates the Moody
 chart and finds the economic pipe diameter with `jax.grad`.
@@ -3924,7 +4239,11 @@ support: exactly 0 below 2100, exactly 1 above 4000). Below 2100 the result is
 work, and the gradients are finite across the transition (tested at Re = 1e3,
 2300, 4000 and 1e5 against `check_grads`). In 2100 < Re < 4000 real flow is
 intermittent and no correlation is accurate: the blend is a smooth
-interpolation, not a transition model.
+interpolation, not a transition model. One consequence: across the blend ΔP is
+*not* monotonic in viscosity. A 5 km, 6-in Sch 40 crude line at 12 L/s
+(ρ = 870 kg/m³) drops 217 kPa at 50 cP (Re 1726, laminar) but 234 kPa at 25 cP
+(Re 3450, inside the blend), because the turbulent branch is switching on. A
+real line in that range may be laminar or turbulent; size it for both.
 
 **What was verified, and how** (`tests/test_fluids.py`):
 
@@ -3942,6 +4261,30 @@ interpolation, not a transition model.
 Also in the module: `reynolds_number`, `hydraulic_diameter` (4A/P),
 `darcy_pressure_drop`, `minor_loss`, `fully_rough_friction_factor` and the L/D
 helper `equivalent_length(K, D, f)` = K D / f.
+
+(nps-table)=
+### Standard Pipe Sizes (NPS and Schedule)
+
+`difflow.fluids.NPS_SCHEDULES` holds ASME B36.10M (welded and seamless wrought
+steel pipe): the outside diameter and the wall thickness by schedule, in inches.
+B36.19M stainless "S" schedules are not included.
+
+| Function | Returns |
+|----------|---------|
+| `pipe_outside_diameter(nps)` | OD, m |
+| `pipe_wall_thickness(nps, schedule="40")` | wall, m |
+| `pipe_inside_diameter(nps, schedule="40")` (alias `pipe_id`) | ID = OD − 2t, m |
+| `standard_sizes(schedule="40")` | sorted list of `(NPS, ID_m)` |
+| `snap_to_standard_size(D, schedule="40", direction="up")` | `(NPS, ID_m)`: the next standard size up (or `"down"`, `"nearest"`) |
+
+`nps` may be a number or a string (`2`, `1.5`, `"1-1/2"`, `'2"'`); the schedule
+may be `40`, `"40"`, `"Sch 40"` or `"std"`. A size/schedule pair that B36.10M
+does not list (22-in Sch 40) raises `KeyError`. Check values: 1, 1.5, 2, 3, 4
+and 6 in Sch 40 have IDs 26.64, 40.89, 52.50, 77.93, 102.26 and 154.05 mm. The
+snap is a discrete choice and is not differentiable: optimize a continuous D
+with `jax.grad`, then snap. Sources: ASME B36.10M as tabulated in Wikipedia's
+"Nominal Pipe Size" article, cross-checked against Engineering ToolBox and
+projectmaterials.com.
 
 ### Fitting Loss Coefficients
 
@@ -3969,6 +4312,22 @@ for 2-in pipe.
 | `entrance_sharp` | K | 0.5 | Crane TP-410: sharp-edged flush entrance (also Perry's 9e Sec. 6) |
 | `entrance_rounded` | K | 0.04 | Crane TP-410: well-rounded entrance, r/d ≥ 0.15 |
 | `exit` | K | 1.0 | Crane TP-410: exit into a large volume |
+| `butterfly_valve` | LD | 45 | Crane TP-410: butterfly valve 2-8 in, K = 45 f_T (secondary reprint) |
+| `butterfly_valve_10_14` | LD | 35 | Crane TP-410: butterfly valve 10-14 in |
+| `butterfly_valve_16_24` | LD | 25 | Crane TP-410: butterfly valve 16-24 in |
+| `plug_valve` | LD | 18 | Crane TP-410: plug valve, straightway, K = 18 f_T |
+| `foot_valve` | LD | 420 | Crane TP-410: foot valve with strainer, poppet disc |
+| `foot_valve_hinged` | LD | 75 | Crane TP-410: foot valve with strainer, hinged disc |
+| `strainer_y` | K | 2.0 | NOT Crane: typical manufacturer value, clean Y-strainer |
+| `strainer_basket` | K | 1.5 | NOT Crane: typical manufacturer value, clean basket strainer |
+
+`fittings_K(fittings, rel_roughness=None, f_T=None)` sums a `{name: count}`
+dict; the keys `"K"`, `"K_extra"` or `"other"` add a numeric K directly, so a
+strainer quoted as K = 2 sits alongside named fittings:
+`{"entrance_sharp": 1, "elbow_90_standard": 4, "K": 2.0}`. The butterfly, plug
+and foot-valve rows come from secondary reprints of the Crane table (SimuPipe
+and fluidnetworkstudio.com). The strainer values are manufacturer typicals for
+a clean element; a fouled strainer can be several times higher.
 
 Source: Crane Co., *Flow of Fluids Through Valves, Fittings, and Pipe*,
 Technical Paper 410; the same tables are reprinted in Perry's *Chemical
@@ -3986,9 +4345,32 @@ $Q=C_d\frac{\pi}{4}d^2\sqrt{\frac{2\,\Delta P}{\rho\,(1-\beta^4)}}$,
 $\beta=d/D$. The inverse forms `orifice_dp(Q, ...)` and `venturi_dp(Q, ...)`
 give the differential pressure for a known flow. The discharge coefficients
 are the usual textbook constants (0.61 sharp-edged orifice at high Re; about
-0.98 for a Venturi); ISO 5167 gives $C_d$ as a function of β, Re and tap
-geometry, so pass that value when accuracy matters. Incompressible only, no
-expansibility factor.
+0.98 for a Venturi). Incompressible only, no expansibility factor.
+
+**ISO 5167 orifice coefficient.** `orifice_cd(beta, Re_D, D, taps="flange")`
+is the Reader-Harris/Gallagher equation of ISO 5167-2:2003 (Eq. 4), with tap
+geometry `"corner"`, `"flange"` or `"D-D/2"` and the small-pipe term
+0.011(0.75 − β)(2.8 − D/25.4 mm) for D < 71.12 mm. Validity is that of the
+standard: 0.1 ≤ β ≤ 0.75, D 50-1000 mm, Re_D above about 5000. C depends on Re
+and so on the flow, so `orifice_flow(..., Cd="iso5167", mu=..., taps=...)`
+solves C = C_RHG(Re(Q(C))) with a Newton root find (implicit-function
+gradients); `orifice_dp(Q, ..., Cd="iso5167", mu=...)` is the explicit inverse.
+The implementation reproduces the `fluids` library's example value 0.59903
+(C. Bell, *fluids*, MIT licence).
+
+**Permanent (unrecovered) pressure loss.** The meter differential is not the
+loss: downstream the jet re-expands, and most of a Venturi's differential is
+recovered.
+
+- `orifice_permanent_loss(dP, beta, Cd=0.61)` is ISO 5167-2 (5.4.1):
+  $\Delta\varpi=\frac{\sqrt{1-\beta^4(1-C^2)}-C\beta^2}{\sqrt{1-\beta^4(1-C^2)}+C\beta^2}\,\Delta P$.
+  At β = 0.5 and C = 0.61 that is 0.731 ΔP (20 kPa differential, 14.6 kPa lost).
+- `venturi_permanent_loss(dP, beta, D_pipe)` interpolates the ISO 5167-4 loss
+  ratio curves (D = 65 mm and 500 mm, β 0.30-0.75; `VENTURI_LOSS_TABLE`),
+  linear in D between the two curves and clamped outside them. A 0.5-β Venturi
+  loses 0.14 ΔP in a 65 mm line and 0.075 ΔP in a 500 mm line. The table is
+  resampled from the `fluids` library's digitization of the standard's figure
+  and reproduces its `dP_venturi_tube` example (1788.6 Pa) to 0.5 %.
 
 ### Pipe Networks: Parallel Branches
 
@@ -4020,6 +4402,111 @@ Both branches then have equal ΔP, the flows sum to the total, and the split is
 differentiable by the implicit function theorem (`tests/test_pipe.py::
 TestParallelBranches`).
 
+(compressible-module)=
+## Compressible Gas Flow
+
+`difflow.compressible` covers ideal-gas flow where the density changes along
+the path: nozzles and relief devices, isothermal gas lines and adiabatic
+(Fanno) ducts. It assumes constant $\gamma=C_p/C_v$ and molar mass `MW`
+(kg/mol); friction factors are **Darcy** factors, as in `difflow.fluids`. For an
+isothermal line $\mathrm{Re}=GD/\mu$ is constant along the pipe, so $f$ is one
+call to `fluids.friction_factor`. Functions that use $RT/M$ take an optional
+compressibility factor `Z` (default 1), which replaces it with $ZRT/M$ for a
+real gas at a representative state. JAX, SI and differentiable throughout.
+
+| Function | Relation |
+|----------|----------|
+| `speed_of_sound(T, MW, gamma, Z)`, `mach_number(v, T, MW, gamma, Z)` | $c=\sqrt{\gamma ZRT/M}$, $\mathrm{Ma}=v/c$ |
+| `stagnation_ratios(M, gamma)` | isentropic $T_0/T$, $P_0/P$, $\rho_0/\rho$ |
+| `critical_pressure_ratio(gamma)` | $P^*/P_0=(2/(\gamma+1))^{\gamma/(\gamma-1)}$ (0.528 for air) |
+| `choked_mass_flux(P0, T0, MW, gamma)` | $G^*=P_0\sqrt{\gamma M/(RT_0)}\,(2/(\gamma+1))^{(\gamma+1)/(2(\gamma-1))}$ |
+| `nozzle_mass_flow(P0, T0, P_back, area, MW, gamma, Cd)` | isentropic converging nozzle, subsonic or choked |
+| `nozzle_flow(P0, T0, P_back, area, MW, gamma, Cd)` | the same flow plus `choked`, `P_throat`, `mach_throat` |
+| `isothermal_pipe_mass_flux(P1, P2, T, L, D, f, MW, Z)` | $P_1^2-P_2^2=G^2\frac{ZRT}{M}\left[\frac{fL}{D}+2\ln\frac{P_1}{P_2}\right]$ |
+| `isothermal_pipe_flow(P1, P2, T, L, D, roughness, mu, MW, Z, method)` | the same equation with $f(\mathrm{Re})$ solved simultaneously: `G`, `m_dot`, `f`, `Re` |
+| `isothermal_outlet_pressure(G, P1, T, L, D, f, MW, gamma, Z)` | the same equation solved for $P_2$, with the choking check |
+| `isothermal_distance(P, G, P1, T, D, f, MW, Z)` | closed-form distance $x(P)$ at which the pressure has fallen to $P$ |
+| `isothermal_pressure_profile(x, G, P1, T, D, f, MW, gamma, Z)` | $P(x)$ at an array of positions (choking flagged) |
+| `isothermal_limit_mach(gamma)` | isothermal choking Mach number $1/\sqrt\gamma$ (0.845 for air) |
+| `fanno_parameter(M, gamma)`, `fanno_ratios(M, gamma)` | $fL^*/D$ and $P/P^*$, $T/T^*$, $P_0/P_0^*$ |
+| `adiabatic_outlet_mach(M1, fL_D, gamma)` | outlet Mach, $P_2/P_1$, $T_2/T_1$ of a subsonic adiabatic duct |
+| `polytropic_exponent(eta_p, gamma, compression)` | $n$ from $\frac{n-1}{n}=\frac{\gamma-1}{\gamma\,\eta_p}$ (compression) or $\frac{(\gamma-1)\eta_p}{\gamma}$ (expansion) |
+| `isentropic_efficiency_from_polytropic(r, eta_p, gamma, compression)` | $\eta_s=\dfrac{r^{(\gamma-1)/\gamma}-1}{r^{(\gamma-1)/(\gamma\eta_p)}-1}$ for compression |
+| `polytropic_efficiency_from_isentropic(r, eta_s, gamma, compression)` | the inverse |
+| `optimal_stage_ratios(P_in, P_out, n_stages)` | equal per-stage ratios $(P_\mathrm{out}/P_\mathrm{in})^{1/N}$ (minimum work with intercooling to the inlet temperature) |
+
+**Choking.** `nozzle_flow` reports `choked` (true when $P_\mathrm{back}/P_0$
+is at or below the critical ratio). `nozzle_mass_flow` holds $P_\mathrm{back}/P_0$ at no less than the
+critical ratio. The isentropic flux has its maximum there, so the clamp is
+continuous with a continuous first derivative, and `jax.grad` with respect to
+the back pressure is exactly 0 in choked flow. An isothermal line chokes when
+its exit velocity reaches $\sqrt{RT/M}$ (Mach $1/\sqrt\gamma$, not 1). Past
+that, `isothermal_outlet_pressure` returns `choked=True` and $P_2$ at the choke
+pressure; `adiabatic_outlet_mach` returns `choked=True` and $M_2=1$ when
+$fL/D$ exceeds $fL^*/D$ at the inlet Mach number. In both cases the real flow
+would be lower than the one requested.
+
+**Solvers and gradients.** The two outlet solvers bracket the subsonic root
+(between the choke point and the inlet) and bisect in log space. A final
+Newton step on the stopped root attaches implicit-function-theorem gradients
+with respect to every input. `isothermal_pipe_flow` iterates $f$ and $G$ to a
+fixed point (Colebrook, or `method="swamee_jain"`) and attaches the same kind
+of implicit gradient.
+
+**Polytropic efficiency and staging.** The polytropic efficiency of a stage is
+the small-stage efficiency, so it does not depend on the pressure ratio. The
+isentropic efficiency of a compressor with fixed $\eta_p$ falls as the ratio
+rises (for air, with $\eta_p=0.80$: 0.780 at $r=2$, 0.759 at $r=4$, 0.729 at
+$r=10$). For an expander it rises. `polytropic_exponent` returns $n$ itself, so
+the exponent in $T_2/T_1=r^{(n-1)/n}$ is `1 - 1/n`. `optimal_stage_ratios`
+splits a compression into $N$ equal ratios, which minimises total work for an
+ideal gas intercooled to the inlet temperature with equal stage efficiencies.
+These are ideal-gas relations; the EOS `Compressor`/`Turboexpander` units in
+`difflow.units.eos_units` integrate the real-gas entropy instead.
+
+**What was verified** (`tests/test_compressible.py`):
+
+- The isothermal equation and the Fanno relations agree with an independent
+  `solve_ivp` integration of the differential momentum balance, to 1e-6 or
+  better. This includes a short, high-velocity line where the acceleration term
+  matters.
+- $dP_2/dD$ agrees with finite differences of that integration.
+- `nozzle_mass_flow` is continuous at the critical ratio, equals
+  $\rho^*c^*A$ when choked, and tends to the Bernoulli flow
+  $A\sqrt{2\rho\Delta P}$ at small pressure drop.
+- `isothermal_distance` agrees with `isothermal_outlet_pressure` at every
+  point, `isothermal_pipe_flow` satisfies both the pressure equation and
+  Colebrook at its answer, and `Z` enters exactly as a scaling of $RT/M$.
+- The polytropic relations invert one another, reduce to $\eta_s=\eta_p$ as
+  $r\to1$, and match the closed form above. Gradients of all the new
+  functions pass `check_grads`.
+
+```python
+from difflow import fluids
+from difflow.compressible import (
+    isothermal_pipe_flow, isothermal_pipe_mass_flux, nozzle_flow,
+    isentropic_efficiency_from_polytropic, optimal_stage_ratios,
+)
+
+# 50 km natural-gas line, 0.5 m ID, 60 -> 40 bar at 288 K
+D, mu, MW = 0.5, 1.1e-5, 0.0175
+G = isothermal_pipe_mass_flux(60e5, 40e5, 288.0, 5e4, D, 0.012, MW)
+f = fluids.friction_factor(G * D / mu, 4.6e-5 / D)   # check the assumed f
+print(float(G) * 3.1416 * D**2 / 4, "kg/s;  f =", float(f))
+
+# ... or solve G and f(Re) together
+res = isothermal_pipe_flow(60e5, 40e5, 288.0, 5e4, D, 4.6e-5, mu, MW)
+print(float(res.m_dot), "kg/s;  f =", float(res.f))
+
+# air from a 10 bar vessel through a 1 cm^2 nozzle: choked
+noz = nozzle_flow(10e5, 300.0, 1e5, 1e-4, 0.02897, 1.4, Cd=0.97)
+print(float(noz.m_dot), "kg/s; choked:", bool(noz.choked))
+
+# 1 -> 30 bar in three intercooled stages at eta_p = 0.80
+r = optimal_stage_ratios(1e5, 30e5, 3)
+print(r, isentropic_efficiency_from_polytropic(r[0], 0.80, 1.4))
+```
+
 ---
 
 ## Centrifugal Pumps
@@ -4043,7 +4530,8 @@ $$
 
 $$
 Q \propto N D, \quad H \propto N^2 D^2, \quad P \propto N^3 D^3, \qquad
-\mathrm{NPSH}_a = \frac{P_s - P_\mathrm{sat}}{\rho g} + \frac{v_s^2}{2g} + z_s - h_{f,s}
+\mathrm{NPSH}_a = \frac{P_{s,\mathrm{total}} - P_\mathrm{sat}}{\rho g}
+= \frac{P_{s,\mathrm{static}} - P_\mathrm{sat}}{\rho g} + \frac{v_s^2}{2g}
 $$
 
 In the default (flow-given) mode the inlet stream fixes $Q=\dot m/\rho$ and the
@@ -4061,12 +4549,29 @@ outlet is $P_\mathrm{in}+\rho g H(Q)$; temperature and molar flows pass through
 | `motor_efficiency` | – | `electric_power = shaft_power / motor_efficiency` |
 | `MW` | g/mol | molar mass (number or `{species: MW}`); omit if a `thermo` is passed |
 | `Psat` | Pa | vapour pressure for NPSHa (number or callable); otherwise `thermo.Psat(species, T)` |
-| `D_suction` | m | suction nozzle diameter for the velocity head in NPSHa |
+| `D_suction` | m | suction nozzle diameter: reports `suction_velocity` and `suction_velocity_head` |
+| `suction_pressure` | – | `"total"` (default) or `"static"`: what the inlet `P` means (below) |
 | `cp` | J/kg/K | liquid heat capacity; enables the temperature rise |
 
 `info` holds `Q`, `head`, `efficiency`, `hydraulic_power`, `shaft_power`,
 `electric_power` (W) and, when the curves and a vapour pressure are given,
 `NPSHr`, `NPSHa` and `npsh_margin = NPSHa - NPSHr` (negative: cavitation risk).
+
+**Static or total suction pressure.** A difflow stream's `P` is the *total*
+pressure: static plus the velocity head $\rho v^2/2$. A stream from a tank is at
+rest, so the two are equal there. `Pipe` subtracts only friction, fittings and
+elevation, so its outlet `P` is the static flange pressure *plus* $\rho v^2/2$.
+Bernoulli from the tank surface to the flange gives
+$P_\mathrm{static}/\rho g + v^2/2g = P_\mathrm{tank}/\rho g + z_s - h_{f,s}$, and so
+$\mathrm{NPSH}_a = (P - P_\mathrm{sat})/\rho g$ with no separate velocity-head term. That is
+the default, `suction_pressure="total"`. Feed a `Pipe` outlet straight in, and
+`D_suction` only reports the nozzle velocity. Set `suction_pressure="static"` only
+when `P` is a measured wall-tap pressure at the flange. NPSHa then adds
+$v_s^2/2g$, which needs `D_suction`. Older versions always added $v_s^2/2g$ when
+`D_suction` was set. That counted the velocity head twice for a `Pipe` outlet:
+0.28 m too much NPSHa for 40 m³/h in a 3-in line, enough to hide cavitation.
+`tests/test_pump.py::TestNPSH::test_pipe_outlet_to_pump_counts_velocity_head_once`
+checks the Bernoulli result for several nozzle sizes.
 Like `Pipe`, liquid density is an explicit input; see the design note under
 [Pipe](#op-pipe).
 
@@ -4095,10 +4600,27 @@ Q_star = operating_point(pump, sys_)                  # m^3/s; differentiable
   Newton started from the pump's zero-head flow. Gradients with respect to
   pump and system parameters (`D`, `N`, pipe diameter, ...) use the implicit
   function theorem, not the iterations. It has no meaningful answer when the
-  shutoff head is below the static head.
-- `pumps_in_series(*pumps)` adds heads at equal flow; `pumps_in_parallel(*pumps)`
-  adds flows at equal head (a small Newton solve for the branch flows,
-  `.split(Q)`). Both return curves usable by `operating_point`.
+  shutoff head is below the static head. A concrete negative root (that case,
+  or a `check_valves=False` parallel pair whose weak pump would run backwards)
+  or an unconverged solve raises `OperatingPointWarning`.
+- `pumps_in_series(*pumps)` adds heads at equal flow. `pumps_in_parallel(*pumps,
+  check_valves=True)` adds flows at equal head. Both return curves usable by
+  `operating_point`.
+- **Check valves in parallel.** A pump whose shutoff head $H_i(0)$ is below the
+  common head is held at zero flow by its check valve. It does not run
+  backwards. The branch flows and the head solve $\sum q_i = Q$ together with
+  the complementarity $q_i \ge 0$, $H - H_i(q_i) \ge 0$, $q_i\,(H-H_i(q_i)) = 0$.
+  That is a smoothed Fischer-Burmeister system, solved by Newton with implicit
+  gradients. The smoothing (`smoothing=1e-6`, in scaled units) rounds the switch
+  corner, so the combined curve stays differentiable. Its slope still changes
+  sharply where a pump cuts in, which is a real kink in the physics.
+  `split(Q, return_info=True)` returns the branch flows plus `head`, `running`
+  (False for a branch whose valve is shut), `shutoff_head` and `converged`.
+  A stopped pump adds no shaft power and no NPSHr. Here is the case that used
+  to be wrong: pumps with shutoff heads of 40 m and 25 m ($-3000\,Q^2$ each)
+  at $Q = 0.03$ m³/s. Before, the weak pump got $-0.068$ m³/s and the head was
+  11 m. Now that pump is shut and the strong pump carries all 0.03 m³/s at
+  37.3 m. `check_valves=False` keeps the valveless (reverse-flow) solution.
 - `npsh_available(P_suction, Psat, rho, v, z_suction, losses)`.
 - `pump.curve` is a `difflow.units.pump.PumpCurve` (`head`, `efficiency`, `npshr`,
   `shaft_power` at the operating `N` and `D`); build one directly from
@@ -4271,7 +4793,10 @@ $$\frac{\Delta P}{L} = 150\frac{(1-\varepsilon)^2}{\varepsilon^3}\frac{\mu u_s}{
 + 1.75\frac{1-\varepsilon}{\varepsilon^3}\frac{\rho u_s^2}{\phi d_p}$$
 
 and `info['viscous']` (Blake-Kozeny), `info['inertial']` (Burke-Plummer),
-`info['Re_bed']`. `kozeny_carman(...)` is the laminar limit with the Kozeny
+`info['Re_bed']`. `D_bed=` applies the Mehta & Hawley (1969) wall correction for
+narrow beds ($D/d_p \lesssim 10$): $M = 1 + 2\phi d_p/[3D(1-\varepsilon)]$
+multiplies the viscous term by $M^2$ and the inertial term by $M$
+(`info['wall_factor']`). `kozeny_carman(...)` is the laminar limit with the Kozeny
 constant $k_0$ (prefactor $36k_0 = 180$), the piece to reuse for filter-cake
 resistance.
 
@@ -4284,10 +4809,12 @@ print(float(dpdl), float(info["viscous"]), float(info["inertial"]))
 ```
 
 **GasPFR.** `GasPFRParams` accepts either the lumped `alpha` (Pa/m$^3$) or the
-physical bed (`d_p`, `voidage`, `mu`, `rho_gas`, `u_s0`, `bed_area`,
+physical bed (`d_p`, `voidage`, `mu`, `rho_gas`, `bed_area`, optional `u_s0`,
 `sphericity`); in the second case $\alpha = (\Delta P/L)_0/A_c$ is computed from
-the Ergun equation at the inlet (`ergun_alpha`, `params.effective_alpha`).
-Supplying both is an error.
+the Ergun equation at the inlet (`ergun_alpha`, `params.alpha_for(Q0)`, or
+`params.effective_alpha` when `u_s0` is given). With `u_s0=None` the velocity is
+$Q_0/A_c$ from the inlet stream; a given `u_s0` is checked against it
+(`GasPFRBedWarning` above 1 %). Supplying both `alpha` and the bed is an error.
 
 (particles-fluidization)=
 ### Fluidization
@@ -4302,11 +4829,21 @@ $$Ar = \frac{150(1-\varepsilon_{mf})}{\phi^2\varepsilon_{mf}^3}Re_{mf}
 solved in closed form (`method="ergun"`); `method="wen_yu"` is the Wen & Yu (1966)
 correlation $Re_{mf} = \sqrt{33.7^2 + 0.0408\,Ar} - 33.7$. `bed_expansion(u, u_t, n)`
 gives the Richardson-Zaki voidage $(u/u_t)^{1/n}$ and height
-$H_{mf}(1-\varepsilon_{mf})/(1-\varepsilon)$ (a homogeneous-expansion model; it
-is anchored at $u_t$, so use it well above $u_{mf}$).
+$H_{mf}(1-\varepsilon_{mf})/(1-\varepsilon)$ (a homogeneous-expansion model). By
+default the line is anchored at $u_t$, which can give $\varepsilon < \varepsilon_{mf}$
+(a bed shorter than $H_{mf}$) just above $u_{mf}$; pass `u_mf=` to anchor it at
+$(u_{mf}, \varepsilon_{mf})$ instead, $\varepsilon = \min[\varepsilon_{mf}(u/u_{mf})^{1/n}, 1]$.
 `fluidization_window(...)` returns $(u_{mf}, u_t)$; above $u_t$ particles are
-entrained. `geldart_group(d_p, rho_p, rho_f)` returns A/B/C/D from approximate
-Geldart (1973) boundaries; it is **not differentiable** and not jit-able.
+entrained.
+
+`minimum_bubbling_velocity(d_p, rho_f, mu, fines_fraction)` is the Abrahamsen &
+Geldart (1980) correlation $u_{mb} = 2.07\,e^{0.716F}d_p\rho_f^{0.06}/\mu^{0.347}$
+(gas beds; $F$ is the mass fraction below 45 µm). `geldart_group(d_p, rho_p, rho_f,
+mu, fines_fraction)` returns A/B/C/D: C below 20 µm, D above
+Grace's (1986) B/D line $Ar > 1.45\times10^5$, and otherwise A when
+$u_{mb}/u_{mf} > 1$ (the bed expands before it bubbles), with $u_{mf}$ from the
+Baeyens & Geldart (1974) correlation. This is the sloping A/B boundary, so FCC
+catalyst (60 µm, 1500 kg/m³) is group A. It is **not differentiable** and not jit-able.
 
 ```python
 from difflow.particles import fluidization_window, geldart_group

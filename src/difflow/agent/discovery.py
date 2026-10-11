@@ -202,7 +202,7 @@ def search_species(query: str = "", limit: int = 25) -> dict:
     from difflow import database
 
     words = query.lower().replace("-", "_").split()
-    names = database.list_species()
+    names = database.list_species("any")
     if words:
         try:
             alias = database.resolve_alias(query)

@@ -486,6 +486,7 @@ export const OPERATION_SYMBOLS = {
   GasPFR: 'tubular',
   SemiBatchReactor: 'stirred_tank',
   FedBatchReactor: 'stirred_tank',
+  StoichiometricReactor: 'stirred_tank',
 
   // bio
   ContinuousBioreactor: 'stirred_tank',
@@ -506,6 +507,7 @@ export const OPERATION_SYMBOLS = {
   Mixer: 'mixer',
   Splitter: 'splitter',
   ComponentSeparator: 'separator',
+  ComponentSplitter: 'separator',
 
   // distillation and contacting
   DistillationColumn: 'column',

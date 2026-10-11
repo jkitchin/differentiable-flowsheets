@@ -10,8 +10,10 @@ All key functions are JIT-compiled for performance.
 """
 
 from typing import NamedTuple
+import warnings
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from difflow.cache_key import ValueKeyed
 from jax import Array
@@ -23,6 +25,78 @@ from difflow.numerics import safe_log
 # entropy uses the same convention as difflow.eos (R = 8.314462618).
 R_GAS = 8.314462618
 P_REF_ENTROPY = 101325.0
+
+
+class AntoineRangeWarning(UserWarning):
+    """An Antoine vapor pressure was evaluated outside its fitted range.
+
+    Outside ``[T_antoine_min, T_antoine_max]`` the equation is extrapolated,
+    and Antoine constants extrapolate badly (tens of percent within a few tens
+    of kelvin is common). Raised only for concrete temperatures; under
+    ``jit``/``grad`` the check is skipped, as for difflow's other diagnostics.
+    """
+
+
+class BubbleDewConvergenceWarning(UserWarning):
+    """A bubble/dew-point solve did not converge or found the trivial root.
+
+    Raised only for concrete results, like difflow's other diagnostics; the
+    value is returned unchanged (never silently clipped).
+    """
+
+
+def _concrete_range(T) -> tuple[float, float] | None:
+    """``(min, max)`` of a concrete temperature (array), or None if traced."""
+    try:
+        Tv = np.asarray(T, dtype=float)
+    except Exception:  # a tracer has no numeric value
+        return None
+    if Tv.size == 0 or not np.any(np.isfinite(Tv)):
+        return None
+    return float(np.nanmin(Tv)), float(np.nanmax(Tv))
+
+
+def check_antoine_range(species: str, data, T, stacklevel: int = 3) -> bool:
+    """Warn when concrete ``T`` falls outside the species' Antoine range.
+
+    The message names the species and its range but not ``T``, so Python's
+    warning registry shows it once per species and side (below/above) per
+    call site rather than once per evaluation.
+
+    Args:
+        species: Species name (for the message).
+        data: The species' :class:`SpeciesData`.
+        T: Temperature (K): a scalar or an array (its min and max are tested).
+            Traced values are not checked.
+        stacklevel: Passed to :func:`warnings.warn`.
+
+    Returns:
+        True when a warning was issued.
+
+    Example:
+        >>> import warnings
+        >>> from difflow.database import get_species_data
+        >>> with warnings.catch_warnings(record=True) as w:
+        ...     warnings.simplefilter("always")
+        ...     check_antoine_range("water", get_species_data("water"), 550.0)
+        True
+    """
+    lo_ok, hi_ok = data.T_antoine_min, data.T_antoine_max
+    if lo_ok <= 0.0 and hi_ok >= 1e6:  # no range recorded
+        return False
+    rng = _concrete_range(T)
+    if rng is None:
+        return False
+    lo, hi = rng
+    warned = False
+    for side, bad in (("below", lo < lo_ok), ("above", hi > hi_ok)):
+        if bad:
+            warnings.warn(
+                f"Antoine vapor pressure of {species!r} extrapolated {side} its "
+                f"fitted range {lo_ok:g}-{hi_ok:g} K",
+                AntoineRangeWarning, stacklevel=stacklevel)
+            warned = True
+    return warned
 
 
 # =============================================================================
@@ -236,10 +310,26 @@ class IdealThermo(ValueKeyed):
     ) -> Array:
         """Calculate enthalpy of a pure species relative to reference.
 
-        For liquid: H = integral(Cp_liq, Tref, T)
-        For vapor:  H = integral(Cp_vap, Tref, T) + Hvap(T)
+        The zero is the liquid at ``Tref``. The vapor follows a fixed
+        thermodynamic path -- heat the liquid to a vaporization temperature
+        ``T_v``, vaporize there, then heat the ideal gas::
 
-        When Cp_vapor_coeffs is not available, falls back to Cp_coeffs.
+            liquid: H = integral(Cp_liq, Tref -> T)
+            vapor:  H = integral(Cp_liq, Tref -> T_v) + Hvap(T_v)
+                        + integral(Cp_ig, T_v -> T)
+
+        ``T_v`` is the lower of ``Tref`` and the Antoine normal boiling point
+        (see :meth:`vaporization_T`), where the Watson latent heat is well
+        away from Tc.
+        So ``dH_vap/dT = Cp_ig`` > 0 at every T: the vapor enthalpy is
+        monotone, which an energy balance needs for a unique root. (Adding
+        the Watson ``Hvap(T)`` at the stream's own T instead makes the vapor
+        enthalpy *fall* towards Tc, where ``Hvap -> 0``.) The latent heat
+        ``H_vap(T) - H_liq(T)`` then follows Kirchhoff's law from ``T_v``
+        rather than the Watson correlation.
+
+        ``Cp_ig`` is ``Cp_vapor_coeffs``; when that is unset it falls back to
+        ``Cp_coeffs``, and the latent heat is the constant ``Hvap(T_v)``.
 
         Args:
             species: Species name
@@ -252,21 +342,29 @@ class IdealThermo(ValueKeyed):
         data = self.species[species]
         T_arr = jnp.asarray(T)
         Tref = jnp.asarray(data.Tref)
-
-        # Always use liquid Cp for the base enthalpy integral (reference state
-        # is liquid at Tref). For vapor phase, we add Hvap(T) to account for
-        # the phase change, giving the correct thermodynamic path:
-        # H_vap(T) = integral(Cp_liq, Tref→T) + Hvap(T)
         a, b, c, d = data.Cp_coeffs
+        if phase != "vapor":
+            return _compute_enthalpy_integral(T_arr, Tref, a, b, c, d)
 
-        # Integral of Cp_liquid from Tref to T
-        H = _compute_enthalpy_integral(T_arr, Tref, a, b, c, d)
+        Tv = jnp.asarray(self.vaporization_T(species))
+        ag, bg, cg, dg = self._ig_coeffs(species)
+        return (_compute_enthalpy_integral(Tv, Tref, a, b, c, d)
+                + self.Hvap(species, Tv)
+                + _compute_enthalpy_integral(T_arr, Tv, ag, bg, cg, dg))
 
-        if phase == "vapor":
-            # Add heat of vaporization at T
-            H = H + self.Hvap(species, T_arr)
+    def vaporization_T(self, species: str) -> float:
+        """Temperature (K) at which :meth:`H_pure`'s vapor path vaporizes.
 
-        return H
+        The lower of ``Tref`` and the normal boiling point implied by the
+        Antoine constants: a light species (ethane, Tc = 305 K) vaporizes at
+        its Tb, where the Watson ``Hvap`` is a real latent heat, not at
+        ``Tref`` = 298 K, where it has nearly vanished. A Python float:
+        species data are constants, not traced.
+        """
+        data = self.species[species]
+        A, B, C = (float(v) for v in data.antoine_coeffs)
+        Tb = B / (A - np.log10(101325.0)) - C
+        return min(float(data.Tref), Tb)
 
     def S_ig_T(self, species: str, T: Array | float) -> Array:
         """Ideal-gas entropy temperature integral integral(Cp/T dT, Tref -> T).
@@ -326,8 +424,14 @@ class IdealThermo(ValueKeyed):
 
         Returns:
             Saturation pressure (Pa)
+
+        Warns:
+            AntoineRangeWarning: when a concrete ``T`` lies outside the
+                species' fitted range (``T_antoine_min``-``T_antoine_max``).
         """
-        A, B, C = self.species[species].antoine_coeffs
+        data = self.species[species]
+        check_antoine_range(species, data, T)
+        A, B, C = data.antoine_coeffs
         return _compute_psat_antoine(jnp.asarray(T), A, B, C)
 
     def validate_antoine(self, species: str, T: float) -> dict:
@@ -357,13 +461,20 @@ class IdealThermo(ValueKeyed):
             T: Temperature (K)
 
         Returns:
-            (Psat, info_dict) where info_dict contains 'antoine_in_range' flag
+            (Psat, info_dict) where info_dict contains 'antoine_in_range': a
+            Python bool for a concrete scalar ``T``, otherwise a boolean array
+            (so the call also works under ``jit``/``grad``).
         """
-        Psat = self.Psat(species, T)
         data = self.species[species]
-        T_val = float(T)
+        A, B, C = data.antoine_coeffs
+        Psat = _compute_psat_antoine(jnp.asarray(T), A, B, C)
+        T_arr = jnp.asarray(T)
+        in_range = (T_arr >= data.T_antoine_min) & (T_arr <= data.T_antoine_max)
+        rng = _concrete_range(T) if jnp.ndim(T) == 0 else None
+        if rng is not None:
+            in_range = data.T_antoine_min <= rng[0] <= data.T_antoine_max
         info = {
-            'antoine_in_range': data.T_antoine_min <= T_val <= data.T_antoine_max,
+            'antoine_in_range': in_range,
             'T_antoine_min': data.T_antoine_min,
             'T_antoine_max': data.T_antoine_max,
         }

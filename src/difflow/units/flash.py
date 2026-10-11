@@ -412,12 +412,25 @@ class Flash:
             P_liq_resid, P_vap_resid,
         ])
 
+    def _feed_composition(self, inlet: Stream) -> tuple[tuple[str, ...], Array]:
+        """Feed mole fractions, ordered as the EOS (if any) or ``species_order``."""
+        order = (tuple(self.eos.species_order) if self.eos is not None
+                 else tuple(self.params.species_order))
+        flows = get_flows(inlet)
+        F = jnp.stack([jnp.asarray(flows.get(s, 0.0), dtype=float) for s in order])
+        return order, F / jnp.sum(F)
+
     def bubble_point_pressure(
         self,
         inlet: Stream,
         T: Array | float | None = None,
     ) -> Array:
-        """Calculate bubble point pressure at given temperature.
+        """Bubble-point pressure of the feed (as a liquid) at temperature ``T``.
+
+        Uses the same thermodynamics as the flash itself: the cubic EOS
+        (:func:`~difflow.eos.eos_bubble_P`) when ``eos`` is set, the modified
+        Raoult's law ``sum x_i gamma_i Psat_i`` when ``activity_model`` is set,
+        otherwise Raoult's law.
 
         Args:
             inlet: Stream defining composition
@@ -426,20 +439,24 @@ class Flash:
         Returns:
             Bubble point pressure (Pa)
         """
+        import difflow.phase_diagrams as pd
+        from difflow.eos import eos_bubble_P
         T = jnp.asarray(T) if T is not None else inlet["T"]
-
-        inlet_flows = get_flows(inlet)
-        F_total = sum(inlet_flows.values())
-        x = {s: inlet_flows[s] / F_total for s in self.params.species_order}
-
-        return self.thermo.bubble_pressure(x, T)
+        species, z = self._feed_composition(inlet)
+        if self.eos is not None:
+            return eos_bubble_P(self.eos, z, T, self.k_ij)["P"]
+        return pd.bubble_P(self.thermo, species, z, T, self.activity_model)
 
     def dew_point_pressure(
         self,
         inlet: Stream,
         T: Array | float | None = None,
     ) -> Array:
-        """Calculate dew point pressure at given temperature.
+        """Dew-point pressure of the feed (as a vapor) at temperature ``T``.
+
+        EOS (:func:`~difflow.eos.eos_dew_P`), modified Raoult
+        (:func:`~difflow.phase_diagrams.dew_P`) or Raoult's law, matching the
+        flash's own model.
 
         Args:
             inlet: Stream defining composition
@@ -448,85 +465,77 @@ class Flash:
         Returns:
             Dew point pressure (Pa)
         """
+        import difflow.phase_diagrams as pd
+        from difflow.eos import eos_dew_P
         T = jnp.asarray(T) if T is not None else inlet["T"]
-
-        inlet_flows = get_flows(inlet)
-        F_total = sum(inlet_flows.values())
-        y = {s: inlet_flows[s] / F_total for s in self.params.species_order}
-
-        return self.thermo.dew_pressure(y, T)
+        species, z = self._feed_composition(inlet)
+        if self.eos is not None:
+            return eos_dew_P(self.eos, z, T, self.k_ij)["P"]
+        return pd.dew_P(self.thermo, species, z, T, self.activity_model)
 
     def bubble_point_temperature(
         self,
         inlet: Stream,
         P: Array | float | None = None,
-        T_guess: float = 350.0,
+        T_guess: float | None = None,
     ) -> Array:
-        """Calculate bubble point temperature at given pressure.
+        """Bubble-point temperature of the feed at pressure ``P``.
 
-        Solves: sum(x_i * Psat_i(T)) = P
+        EOS (:func:`~difflow.eos.eos_bubble_T`) when ``eos`` is set, otherwise
+        :func:`~difflow.phase_diagrams.bubble_T` (modified Raoult with the
+        ``activity_model``, or Raoult). Newton with implicit differentiation.
+        The result is never clipped: a solve that fails to converge (or an
+        EOS solve that lands on the trivial K = 1 root) issues a
+        :class:`~difflow.thermo.BubbleDewConvergenceWarning` (concrete values
+        only), and an Antoine evaluation outside its fitted range issues an
+        :class:`~difflow.thermo.AntoineRangeWarning`.
 
         Args:
             inlet: Stream defining composition
             P: Pressure (Pa). If None, uses inlet P.
-            T_guess: Initial temperature guess (K)
+            T_guess: Optional initial temperature guess (K); by default the
+                composition-weighted Antoine (or Wilson, for an EOS) estimate.
 
         Returns:
             Bubble point temperature (K)
         """
+        import difflow.phase_diagrams as pd
+        from difflow.eos import eos_bubble_T
         P = jnp.asarray(P) if P is not None else inlet["P"]
-
-        inlet_flows = get_flows(inlet)
-        F_total = sum(inlet_flows.values())
-        x = {s: inlet_flows[s] / F_total for s in self.params.species_order}
-
-        # Solve: P_bubble(T) - P = 0
-        def residual(T, args):
-            P_target = args
-            P_bubble = self.thermo.bubble_pressure(x, T)
-            return P_bubble - P_target
-
-        solver = optx.Newton(rtol=1e-8, atol=1e-8)
-        T0 = jnp.array(T_guess)
-        sol = optx.root_find(residual, solver, T0, args=P, max_steps=50, throw=False)
-
-        return jnp.clip(sol.value, 150.0, 700.0)
+        species, z = self._feed_composition(inlet)
+        if self.eos is not None:
+            return eos_bubble_T(self.eos, z, P, self.k_ij, T_guess)["T"]
+        return pd.bubble_T(self.thermo, species, z, P, self.activity_model,
+                           T0=T_guess)
 
     def dew_point_temperature(
         self,
         inlet: Stream,
         P: Array | float | None = None,
-        T_guess: float = 350.0,
+        T_guess: float | None = None,
     ) -> Array:
-        """Calculate dew point temperature at given pressure.
+        """Dew-point temperature of the feed at pressure ``P``.
 
-        Solves: 1/sum(y_i / Psat_i(T)) = P
+        EOS (:func:`~difflow.eos.eos_dew_T`) when ``eos`` is set, otherwise
+        :func:`~difflow.phase_diagrams.dew_T` (modified Raoult or Raoult).
+        Never clipped; warns as :meth:`bubble_point_temperature` does.
 
         Args:
             inlet: Stream defining composition
             P: Pressure (Pa). If None, uses inlet P.
-            T_guess: Initial temperature guess (K)
+            T_guess: Optional initial temperature guess (K).
 
         Returns:
             Dew point temperature (K)
         """
+        import difflow.phase_diagrams as pd
+        from difflow.eos import eos_dew_T
         P = jnp.asarray(P) if P is not None else inlet["P"]
-
-        inlet_flows = get_flows(inlet)
-        F_total = sum(inlet_flows.values())
-        y = {s: inlet_flows[s] / F_total for s in self.params.species_order}
-
-        # Solve: P_dew(T) - P = 0
-        def residual(T, args):
-            P_target = args
-            P_dew = self.thermo.dew_pressure(y, T)
-            return P_dew - P_target
-
-        solver = optx.Newton(rtol=1e-8, atol=1e-8)
-        T0 = jnp.array(T_guess)
-        sol = optx.root_find(residual, solver, T0, args=P, max_steps=50, throw=False)
-
-        return jnp.clip(sol.value, 150.0, 700.0)
+        species, z = self._feed_composition(inlet)
+        if self.eos is not None:
+            return eos_dew_T(self.eos, z, P, self.k_ij, T_guess)["T"]
+        return pd.dew_T(self.thermo, species, z, P, self.activity_model,
+                        T0=T_guess)
 
     # =========================================================================
     # Initialization Interface
@@ -767,6 +776,118 @@ class Splitter:
         return jnp.concatenate(all_resid)
 
 
+@dataclass(repr=False)
+class ComponentSplitterParams(ParamsMixin):
+    """Parameters of a :class:`ComponentSplitter`.
+
+    Attributes:
+        split_fractions: ``{species: fraction}`` of each species' inlet flow
+            sent to the *first* outlet (its recovery there); the complement
+            goes to the second. Values in ``[0, 1]``; may be JAX tracers.
+        default_fraction: Fraction to the first outlet for any species not in
+            ``split_fractions`` (default 0: unlisted species all leave in the
+            second outlet).
+    """
+
+    split_fractions: dict
+    default_fraction: float = 0.0
+
+    def __post_init__(self):
+        if not isinstance(self.split_fractions, dict):
+            raise ValueError("split_fractions must be a {species: fraction} dict")
+        for s, f in list(self.split_fractions.items()) + [("default_fraction", self.default_fraction)]:
+            try:
+                value = float(f)
+            except Exception:      # a tracer: nothing to check yet
+                continue
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"split fraction for {s!r} must lie in [0, 1], got {value}")
+
+
+class ComponentSplitter:
+    """Ideal component splitter: a specified fraction of each species to each outlet.
+
+    ``ComponentSplitter(params)(inlet) -> (first, second, info)``. Species
+    ``i`` leaves in the first outlet at ``phi_i F_i`` and in the second at
+    ``(1 - phi_i) F_i``. It is the block-flow separator of a material-balance
+    calculation ("all the methanol to the liquid, 98% of the CO overhead"):
+    no equilibrium, no thermodynamic model, both outlets at the inlet
+    temperature and pressure. Differentiable in the fractions and the feed.
+
+    Unlike :class:`Splitter`, whose outlets share the inlet composition, each
+    species here has its own split. (``ComponentSeparator`` in
+    ``difflow.units.eos_units`` is the same balance with an enthalpy duty and
+    needs a ``CubicThermo``.)
+
+    ``info``: ``split_fractions`` (array in the order of the inlet's
+    species), ``species`` (that order), ``flow_first`` and ``flow_second``
+    (total mol/s).
+
+    Example:
+        >>> from difflow import make_stream, ComponentSplitter, ComponentSplitterParams
+        >>> sep = ComponentSplitter(ComponentSplitterParams({"MeOH": 0.0}, default_fraction=1.0))
+        >>> gas, liq, _ = sep(make_stream({"CO": 10.0, "MeOH": 5.0}, T=320.0, P=5e6))
+        >>> float(gas["F_CO"]), float(liq["F_MeOH"])
+        (10.0, 5.0)
+    """
+
+    symbol = "Component Splitter"
+    equations = [
+        r"F_i^{(1)} = \phi_i\, F_i^{\mathrm{in}},\qquad F_i^{(2)} = (1 - \phi_i)\, F_i^{\mathrm{in}}",
+        r"T^{(1)} = T^{(2)} = T^{\mathrm{in}},\quad P^{(1)} = P^{(2)} = P^{\mathrm{in}}",
+    ]
+    assumptions = [
+        "Specified per-species split fractions (recoveries); no phase equilibrium.",
+        "Isothermal, isobaric; no energy balance.",
+    ]
+    references = [
+        "Felder, Rousseau, Bullard. Elementary Principles of Chemical Processes, 4e, Ch. 4.",
+    ]
+    parameter_symbols = {"split_fractions": r"\phi_i", "default_fraction": r"\phi_0"}
+    parameter_units = {"split_fractions": "-", "default_fraction": "-"}
+    numerical_method = "Closed form (no iteration)."
+    outlet_roles = ["first", "second"]
+
+    def __init__(self, params: ComponentSplitterParams):
+        """Build the splitter.
+
+        Args:
+            params: Per-species fractions to the first outlet.
+        """
+        self.params = params
+
+    def __call__(self, inlet: Stream) -> tuple[Stream, Stream, dict]:
+        """Split the inlet species by species.
+
+        Args:
+            inlet: Feed stream.
+
+        Returns:
+            first: Outlet receiving ``split_fractions`` of each species.
+            second: Outlet receiving the complement.
+            info: Fractions and outlet totals.
+        """
+        flows = get_flows(inlet)
+        p = self.params
+        phi = {
+            s: jnp.asarray(p.split_fractions.get(s, p.default_fraction), dtype=float)
+            for s in flows
+        }
+        first = {s: phi[s] * F for s, F in flows.items()}
+        second = {s: (1.0 - phi[s]) * F for s, F in flows.items()}
+        info = {
+            "species": list(flows),
+            "split_fractions": jnp.stack([phi[s] for s in flows]) if flows else jnp.zeros(0),
+            "flow_first": sum(first.values()),
+            "flow_second": sum(second.values()),
+        }
+        return (
+            make_stream(first, inlet["T"], inlet["P"]),
+            make_stream(second, inlet["T"], inlet["P"]),
+            info,
+        )
+
+
 class Mixer:
     """Stream mixer.
 
@@ -783,7 +904,9 @@ class Mixer:
     assumptions = [
         "Adiabatic mixing (no external heat duty).",
         "Negligible heat of mixing (ideal).",
-        "Outlet pressure set by the lowest inlet pressure unless thermo is None (flow-weighted T).",
+        "Outlet pressure set by the lowest inlet pressure.",
+        "With thermo, T_out solves the enthalpy balance exactly (Newton from the flow-weighted mean T, bracketed fallback; implicit gradient); without thermo it is the flow-weighted mean T (constant, equal heat capacities).",
+        "A species absent from an inlet stream is taken as zero flow in that inlet.",
     ]
     references = ["Smith, Van Ness, Abbott. Introduction to Chemical Engineering Thermodynamics, 7e, Ch. 12."]
     parameter_symbols = {}
@@ -820,42 +943,73 @@ class Mixer:
         if not inlets:
             raise ValueError("At least one inlet required")
 
-        # Sum flows
+        # Sum flows.  An inlet that does not carry a species contributes no
+        # flow of it, as in combine_streams: a stream built without ethanol
+        # is a stream with no ethanol in it, not an error.
+        inlet_flows = [
+            {s: inlet.get(f"F_{s}", 0.0) for s in self.species_order}
+            for inlet in inlets
+        ]
         outlet_flows = {}
         for s in self.species_order:
-            outlet_flows[s] = sum(inlet[f"F_{s}"] for inlet in inlets)
+            outlet_flows[s] = sum(flows[s] for flows in inlet_flows)
+        total_flow = sum(outlet_flows.values())
 
-        # Calculate outlet temperature
+        # Flow-weighted average temperature: the answer without thermo, and
+        # the starting point of the enthalpy solve with it.
+        T_weighted = sum(
+            sum(flows.values()) * inlet["T"]
+            for flows, inlet in zip(inlet_flows, inlets)
+        ) / total_flow
+
         if self.thermo is not None:
-            # Energy balance: find T such that H_out = sum(H_in)
+            # Energy balance: solve H_out(T) = sum_k H_in,k exactly.  The
+            # phase is fixed, so H_out is smooth in T and Newton from the
+            # flow-weighted mean converges to the root nearest it, which
+            # matters because a fixed-phase enthalpy need not be monotone
+            # (IdealThermo's vapor branch adds a Watson Hvap that vanishes
+            # at Tc, so near Tc it has two roots).  Should Newton fail, the
+            # bracketed solve of the heat exchangers is the fallback.  Both
+            # are optimistix root finds, differentiated at the converged
+            # root by the implicit function theorem.
+            import optimistix as optx
+            from difflow.units.heat_exchanger import invert_monotone_T
+
             H_total = jnp.zeros(())
-            for inlet in inlets:
-                flows = get_flows(inlet)
+            for flows, inlet in zip(inlet_flows, inlets):
                 H_total = H_total + self.thermo.stream_enthalpy(
-                    {s: flows[s] for s in self.species_order},
-                    inlet["T"],
-                    phase=self.phase
+                    flows, inlet["T"], phase=self.phase
+                )
+            mole_fracs = {
+                s: outlet_flows[s] / total_flow for s in self.species_order
+            }
+            scale = jnp.maximum(
+                total_flow * self.thermo.Cp_mix(mole_fracs, T_weighted), 1e-12
+            )
+
+            def H_out(T):
+                return self.thermo.stream_enthalpy(
+                    outlet_flows, T, phase=self.phase
                 )
 
-            # Estimate T from enthalpy (simplified - assume Cp is constant)
-            total_flow = sum(outlet_flows.values())
-            mole_fracs = {s: outlet_flows[s] / total_flow for s in self.species_order}
-
-            # Use average inlet T as starting point
-            T_avg = sum(inlet["T"] for inlet in inlets) / len(inlets)
-            Cp_mix = self.thermo.Cp_mix(mole_fracs, T_avg)
-
-            # H = n * Cp * (T - Tref), solve for T
-            # This is approximate; could use Newton iteration for accuracy
-            H_ref = self.thermo.stream_enthalpy(outlet_flows, 298.15, phase=self.phase)
-            T_out = 298.15 + (H_total - H_ref) / (total_flow * Cp_mix)
+            newton = optx.root_find(
+                lambda T, _: (H_out(T) - H_total) / scale,
+                optx.Newton(rtol=1e-12, atol=1e-9),
+                T_weighted, max_steps=50, throw=False,
+            )
+            T_newton = newton.value
+            ok = (
+                (newton.result == optx.RESULTS.successful)
+                & jnp.isfinite(T_newton)
+                & (T_newton > 0.0)
+            )
+            T_out = jax.lax.cond(
+                ok,
+                lambda: T_newton,
+                lambda: invert_monotone_T(H_out, H_total, T_weighted, scale),
+            )
         else:
-            # Flow-weighted average temperature
-            total_flow = sum(outlet_flows.values())
-            T_out = sum(
-                sum(get_flows(inlet).values()) * inlet["T"]
-                for inlet in inlets
-            ) / total_flow
+            T_out = T_weighted
 
         # Use minimum pressure across all inlets (consistent with combine_streams)
         P_out = inlets[0]["P"]
@@ -901,7 +1055,7 @@ class Mixer:
         # Material balance: F_out_i = sum of all inlet F_i
         mat_resid = []
         for s in self.species_order:
-            F_in_total = sum(inlet[f"F_{s}"] for inlet in inlets)
+            F_in_total = sum(inlet.get(f"F_{s}", 0.0) for inlet in inlets)
             mat_resid.append(jnp.atleast_1d(outlet_flows[s] - F_in_total))
 
         # Temperature: flow-weighted average (or energy balance with thermo)
@@ -912,7 +1066,8 @@ class Mixer:
         else:
             total_flow = sum(outlet_flows.values())
             T_expected = sum(
-                sum(get_flows(inlet).values()) * inlet["T"]
+                sum(inlet.get(f"F_{sp}", 0.0) for sp in self.species_order)
+                * inlet["T"]
                 for inlet in inlets
             ) / (total_flow + 1e-10)
 
@@ -1196,6 +1351,17 @@ class PHFlash:
     - Pressure reduction
 
     All calculations are JAX-compatible for automatic differentiation.
+
+    Two thermodynamic paths:
+
+    - :class:`~difflow.thermo.IdealThermo`: ideal-K (Raoult) inner flash, the
+      inlet enthalpy taken as liquid, Newton on T (the original path).
+    - :class:`~difflow.thermo.CubicThermo`: a rigorous cubic-EOS PH flash
+      (:func:`difflow.units.eos_units.flash_PH_eos`). The inlet enthalpy is the
+      two-phase EOS enthalpy at the inlet (T, P); the outlet temperature comes
+      from a bracketed bisection on ``T_bounds`` (no guess, no wrong root); a
+      pure component inside its dome is returned at its saturation temperature
+      with the lever-rule vapour fraction. ``T_guess`` is ignored on this path.
     """
 
     symbol = "PH Flash"
@@ -1233,13 +1399,15 @@ class PHFlash:
         inlet: Stream,
         P: Array | float | None = None,
         T_guess: float = 300.0,
+        T_bounds: tuple[float, float] = (100.0, 1000.0),
     ) -> tuple[Stream, Stream, dict[str, Array]]:
         """Perform PH (isenthalpic) flash calculation.
 
         Args:
             inlet: Feed stream
             P: Flash pressure (Pa). If None, uses inlet P.
-            T_guess: Initial temperature guess (K)
+            T_guess: Initial temperature guess (K); ideal path only.
+            T_bounds: (T_min, T_max) bracket (K) of the cubic-EOS path.
 
         Returns:
             liquid: Liquid outlet stream
@@ -1250,6 +1418,10 @@ class PHFlash:
 
         # Use inlet P if not specified
         P_flash = jnp.asarray(P) if P is not None else inlet["P"]
+
+        from difflow.thermo import CubicThermo
+        if isinstance(self.thermo, CubicThermo):
+            return self._eos_ph_flash(inlet, P_flash, T_bounds)
 
         # Get feed flows and compute inlet enthalpy
         inlet_flows = get_flows(inlet)
@@ -1309,3 +1481,38 @@ class PHFlash:
         flash_info["converged"] = sol.result == optx.RESULTS.successful
 
         return liquid, vapor, flash_info
+
+    def _eos_ph_flash(self, inlet, P_flash, T_bounds):
+        """Cubic-EOS PH flash (``CubicThermo`` path of :meth:`__call__`)."""
+        from difflow.units.eos_units import flash_PH_eos, _warn_unconverged
+
+        order = list(self.thermo.eos.species_order)  # x, y come back in EOS order
+        inlet_flows = get_flows(inlet)
+        flows = {s: inlet_flows[s] for s in order}
+        T_in = inlet["T"]
+        H_inlet = self.thermo.stream_enthalpy_flash(flows, T_in, inlet["P"])
+        res = flash_PH_eos(self.thermo, flows, P_flash, H_inlet, T_bounds)
+
+        F_total = sum(flows[s] for s in order)
+        beta = res["vapor_fraction"]
+        x, y = res["x"], res["y"]
+        # A pure component (or any single-phase TP result at a jump) has x = y
+        # = z, so this split also covers the lever-rule case.
+        liquid = make_stream({s: F_total * (1.0 - beta) * x[i] for i, s in enumerate(order)},
+                             res["T"], P_flash)
+        vapor = make_stream({s: F_total * beta * y[i] for i, s in enumerate(order)},
+                            res["T"], P_flash)
+        info = {
+            "V_frac": beta,
+            "x": {s: x[i] for i, s in enumerate(order)},
+            "y": {s: y[i] for i, s in enumerate(order)},
+            "T_flash": res["T"],
+            "T_out": res["T"],
+            "H_inlet": H_inlet,
+            "T_inlet": T_in,
+            "P_flash": P_flash,
+            "residual": res["residual"],
+            "converged": res["converged"],
+        }
+        _warn_unconverged("PHFlash", info)
+        return liquid, vapor, info

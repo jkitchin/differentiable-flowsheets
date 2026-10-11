@@ -36,13 +36,20 @@ from difflow.streams import (
     mole_fractions,
     scale_stream,
 )
-from difflow.thermo import IdealThermo, CubicThermo, SpeciesData
+from difflow.thermo import (
+    IdealThermo, CubicThermo, SpeciesData,
+    AntoineRangeWarning, BubbleDewConvergenceWarning,
+)
 from difflow.eos import (
     PengRobinson,
     SRK,
     CriticalProperties,
     EOSParams,
     flash_TP_eos,
+    eos_bubble_P,
+    eos_bubble_T,
+    eos_dew_P,
+    eos_dew_T,
 )
 from difflow.database import (
     get_species_data,
@@ -62,6 +69,12 @@ from difflow.liquid_properties import (
     liquid_viscosity,
     liquid_thermal_conductivity,
     stream_liquid_properties,
+)
+from difflow.gas_properties import (
+    gas_viscosity,
+    gas_thermal_conductivity,
+    gas_heat_capacity,
+    gas_prandtl,
 )
 from difflow.base_database import BaseDatabase
 from difflow.uncertainty import (
@@ -86,6 +99,7 @@ from difflow.cantera_import import (
 # optional dependencies, imported lazily inside the adapters' functions.
 from difflow import fluids
 from difflow import heat_transfer
+from difflow import gas_properties
 from difflow import pyglenn_import
 from difflow import dwsim_import
 from difflow.params_mixin import ParamsMixin
@@ -111,6 +125,7 @@ from difflow.units.base import (
     estimate_pfr_conversion,
 )
 from difflow.units.cstr import CSTR, CSTRParams, CSTRDensityWarning
+from difflow.units.pfr import GasPFRBedWarning
 from difflow.units.pfr import PFR, PFRParams, GasPFR, GasPFRParams
 from difflow.units.fed_batch import (
     FedBatchReactor,
@@ -127,6 +142,12 @@ from difflow.units.flash import (
     PHFlash,
     Mixer,
     Splitter,
+    ComponentSplitter,
+    ComponentSplitterParams,
+)
+from difflow.units.stoichiometric import (
+    StoichiometricReactor,
+    StoichiometricReactorParams,
 )
 from difflow.activity import (
     ActivityModel,
@@ -139,6 +160,9 @@ from difflow import staged  # noqa: F401  (difflow.staged: McCabe-Thiele, Kremse
 from difflow.units import column_design  # noqa: F401  (difflow.units.column_design: tray/packing hardware)
 from difflow.phase_diagrams import (
     bubble_T,
+    bubble_P,
+    dew_T,
+    dew_P,
     txy,
     pxy,
     xy_curve,
@@ -305,13 +329,14 @@ from difflow.units.heat_exchanger import (
     design_heat_exchanger,
     size_heat_exchanger,
 )
-from difflow.units.pipe import Pipe, PipeParams
+from difflow.units.pipe import Pipe, PipeCavitationWarning, PipeParams
 from difflow.units.pump import (
     CentrifugalPump,
     CentrifugalPumpParams,
     fit_pump_curve,
     npsh_available,
     operating_point,
+    OperatingPointWarning,
     pumps_in_parallel,
     pumps_in_series,
     system_curve,
@@ -327,6 +352,9 @@ from difflow.units.eos_units import (
     JTValveParams,
     ComponentSeparator,
     ComponentSeparatorParams,
+    flash_PH_eos,
+    flash_PS_eos,
+    EOSUnitConvergenceWarning,
 )
 from difflow.units.gas_turbine import (
     Combustor,
@@ -343,6 +371,7 @@ from difflow.combustion import IdealGasThermo
 from difflow.flowsheet import (
     Flowsheet,
     Unit,
+    DegreesOfFreedom,
     create_objective,
     ConvergenceWarning,
     ConvergenceError,
@@ -525,12 +554,18 @@ __all__ = [
     "IdealThermo",
     "CubicThermo",
     "SpeciesData",
+    "AntoineRangeWarning",
+    "BubbleDewConvergenceWarning",
     # Thermodynamics - Equations of State
     "PengRobinson",
     "SRK",
     "CriticalProperties",
     "EOSParams",
     "flash_TP_eos",
+    "eos_bubble_P",
+    "eos_bubble_T",
+    "eos_dew_P",
+    "eos_dew_T",
     # Property Database
     "get_species_data",
     "get_critical_props",
@@ -549,6 +584,10 @@ __all__ = [
     "liquid_viscosity",
     "liquid_thermal_conductivity",
     "stream_liquid_properties",
+    "gas_viscosity",
+    "gas_thermal_conductivity",
+    "gas_heat_capacity",
+    "gas_prandtl",
     # Uncertainty Propagation
     "linear_propagation",
     "monte_carlo_propagation",
@@ -570,6 +609,7 @@ __all__ = [
     "CSTR",
     "CSTRParams",
     "CSTRDensityWarning",
+    "GasPFRBedWarning",
     # Unit operations - PFR
     "PFR",
     "PFRParams",
@@ -589,6 +629,10 @@ __all__ = [
     "PHFlash",
     "Mixer",
     "Splitter",
+    "ComponentSplitter",
+    "ComponentSplitterParams",
+    "StoichiometricReactor",
+    "StoichiometricReactorParams",
     # Unit operations - LLE
     "MultistageCascade",
     "CascadeParams",
@@ -605,6 +649,9 @@ __all__ = [
     "MargulesParams",
     "VanLaarParams",
     "bubble_T",
+    "bubble_P",
+    "dew_T",
+    "dew_P",
     "txy",
     "pxy",
     "xy_curve",
@@ -754,18 +801,23 @@ __all__ = [
     "CompressorParams",
     "JTValve",
     "Pipe",
+    "PipeCavitationWarning",
     "PipeParams",
     "CentrifugalPump",
     "CentrifugalPumpParams",
     "fit_pump_curve",
     "npsh_available",
     "operating_point",
+    "OperatingPointWarning",
     "pumps_in_parallel",
     "pumps_in_series",
     "system_curve",
     "JTValveParams",
     "ComponentSeparator",
     "ComponentSeparatorParams",
+    "flash_PH_eos",
+    "flash_PS_eos",
+    "EOSUnitConvergenceWarning",
     # Combustion / gas-turbine units
     "Combustor",
     "CombustorParams",
@@ -819,6 +871,7 @@ __all__ = [
     "calculation_order",
     "analyze_tears",
     "TearAnalysis",
+    "DegreesOfFreedom",
     "CycleEnumerationWarning",
     # Plugin infrastructure
     "registry",

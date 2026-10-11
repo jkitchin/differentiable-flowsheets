@@ -126,7 +126,7 @@ class TestAntoineValidation:
         data = {"water": get_species_data("water")}
         thermo = IdealThermo(data)
 
-        # 600 K is above the 473 K max for water
+        # 600 K is above water's recorded Antoine range (max 402.42 K)
         Psat, info = thermo.Psat_with_info("water", 600.0)
         assert float(Psat) > 0  # Still computes, no exception
         assert info['antoine_in_range'] is False
@@ -140,8 +140,11 @@ class TestAntoineValidation:
 
         result = thermo.validate_antoine("water", 350.0)
         assert result['in_range'] is True
-        assert result['T_min'] == pytest.approx(273.0)
-        assert result['T_max'] == pytest.approx(473.0)
+        # The sourced range (database.ANTOINE_SOURCES["water"]): the
+        # Bridgeman-Aldrich fit range extended to where it stays within 1% of
+        # the NIST reference-EOS saturation pressure.
+        assert result['T_min'] == pytest.approx(273.16)
+        assert result['T_max'] == pytest.approx(402.42)
 
     def test_default_range_always_valid(self):
         from difflow.thermo import IdealThermo, SpeciesData

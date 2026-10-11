@@ -150,7 +150,7 @@ class TestInternal:
     def test_laminar_fully_developed_values(self):
         for Re in (10.0, 500.0, 2000.0, 2300.0):
             assert float(ht.internal_nusselt(Re, 7.0)) == 3.66
-            assert float(ht.internal_nusselt(Re, 7.0, boundary="q")) == 4.36
+            assert float(ht.internal_nusselt(Re, 7.0, boundary="q")) == 48.0 / 11.0
 
     def test_laminar_entry_floor_and_growth(self):
         short = float(ht.internal_nusselt(1000.0, 7.0, D_over_L=0.2))
@@ -546,3 +546,147 @@ def test_computed_U_feeds_counter_current_hx():
         U = ht.overall_U(ht.internal_h(Re, PR, K, D, L=L), 800.0, D, D + 0.0025, 16.0)
         return hx(hot, cold, UA=U * jnp.pi * (D + 0.0025) * L * n)[2]["Q"]
     assert np.isfinite(float(jax.grad(Q_of_D)(0.0229)))
+
+
+# -- G07-4: laminar annulus ---------------------------------------------------
+
+def _annulus_nu_fd(ratio, heated, N=200):
+    """Independent check: fully developed Graetz eigenproblem in an annulus.
+
+    Finite differences on (1/r)(r phi')' = -lam u phi with the heated wall at
+    constant temperature and the other wall insulated; Nu on D_h = Do - Di.
+    """
+    from scipy.linalg import eig
+    ri, ro = ratio, 1.0
+    r = np.linspace(ri, ro, N)
+    h = r[1] - r[0]
+    B = (ro**2 - ri**2) / np.log(ro / ri)
+    u = (ro**2 - r**2) + B * np.log(r / ro)
+    A = np.zeros((N, N))
+    M = np.diag(u)
+    for i in range(1, N - 1):
+        rp, rm = r[i] + h / 2, r[i] - h / 2
+        A[i, i - 1] = rm / (r[i] * h * h)
+        A[i, i + 1] = rp / (r[i] * h * h)
+        A[i, i] = -(rp + rm) / (r[i] * h * h)
+    wall, ins, nb = (0, N - 1, N - 2) if heated == "inner" else (N - 1, 0, 1)
+    A[wall, :] = 0.0
+    A[wall, wall] = 1.0
+    M[wall, wall] = 0.0
+    rp, rm = r[ins] + h / 2, r[ins] - h / 2
+    A[ins, nb] = (rp + rm) / (r[ins] * h * h)
+    A[ins, ins] = -(rp + rm) / (r[ins] * h * h)
+    w, V = eig(-A, M)
+    w = np.real(w)
+    k = np.argmin(np.where(np.isfinite(w) & (w > 0), w, np.inf))
+    phi = np.real(V[:, k])
+    I = np.trapezoid(u * phi * r, r)
+    phim = I / np.trapezoid(u * r, r)
+    rw = ri if heated == "inner" else ro
+    return w[k] * I / rw / phim * 2 * (ro - ri)
+
+
+class TestAnnulus:
+    def test_incropera_example_11_1(self):
+        # Incropera Ex 11.1 interpolates Table 8.2 to Nu_i = 5.63 at Di/Do = 0.56
+        assert float(ht.annulus_nusselt(0.56, "inner")) == pytest.approx(5.63, abs=0.005)
+
+    @pytest.mark.parametrize("ratio", [0.05, 0.10, 0.25, 0.50])
+    def test_table_matches_eigen_solution(self, ratio):
+        for surface in ("inner", "outer"):
+            assert float(ht.annulus_nusselt(ratio, surface)) == pytest.approx(
+                _annulus_nu_fd(ratio, surface), rel=0.01)
+
+    def test_limits(self):
+        assert float(ht.annulus_nusselt(0.0, "outer")) == pytest.approx(ht.NU_LAMINAR_TW, abs=0.01)
+        assert float(ht.annulus_nusselt(1.0, "inner")) == float(ht.annulus_nusselt(1.0, "outer"))
+        with pytest.raises(ValueError):
+            ht.annulus_nusselt(0.5, "both")
+
+    def test_grad(self):
+        g = float(jax.grad(lambda r: ht.annulus_nusselt(r, "inner"))(0.4))
+        assert g == pytest.approx((5.74 - 7.37) / 0.25)
+
+
+# -- G07-2: radiation ---------------------------------------------------------
+
+class TestRadiation:
+    def test_incropera_example_9_4(self):
+        q = float(ht.net_radiation(438.15, 296.15, 0.85, jnp.pi * 0.1))
+        assert q == pytest.approx(0.85 * np.pi * 0.1 * 5.670374419e-8 * (438.15**4 - 296.15**4))
+        assert q == pytest.approx(442.0, abs=0.5)
+
+    def test_linearized_h_is_exact(self):
+        Ts, Tsur, eps = 500.0, 300.0, 0.7
+        assert float(ht.radiation_h(Ts, Tsur, eps) * (Ts - Tsur)) == pytest.approx(
+            float(ht.net_radiation(Ts, Tsur, eps)), rel=1e-12)
+
+    def test_blackbody(self):
+        # sigma * 5800^4 ~ 6.42e7 W/m^2 (solar surface)
+        assert float(ht.blackbody_emissive_power(5800.0)) == pytest.approx(5.670374419e-8 * 5800.0**4)
+
+    def test_two_surface_limits(self):
+        # large cavity -> net_radiation
+        q_cav = ht.two_surface_radiation(600.0, 300.0, 0.6, 0.3, 2.0)
+        assert float(q_cav) == pytest.approx(float(ht.net_radiation(600.0, 300.0, 0.6, 2.0)))
+        # parallel plates: q'' = sigma (T1^4 - T2^4) / (1/e1 + 1/e2 - 1)
+        q_pp = ht.two_surface_radiation(600.0, 300.0, 0.6, 0.3, 1.0, 1.0)
+        assert float(q_pp) == pytest.approx(5.670374419e-8 * (600.0**4 - 300.0**4) / (1 / 0.6 + 1 / 0.3 - 1))
+        # concentric cylinders, Incropera Eq. 13.25 form
+        r1, r2 = 0.05, 0.1
+        q_cc = ht.two_surface_radiation(600.0, 300.0, 0.6, 0.3, 2 * np.pi * r1, 2 * np.pi * r2)
+        ref = 5.670374419e-8 * 2 * np.pi * r1 * (600.0**4 - 300.0**4) / (1 / 0.6 + (1 - 0.3) / 0.3 * r1 / r2)
+        assert float(q_cc) == pytest.approx(ref)
+
+    def test_grads(self):
+        x = (jnp.asarray(450.0), jnp.asarray(300.0), jnp.asarray(0.8))
+        check_grads(ht.radiation_h, x, order=2, modes=["fwd", "rev"])
+        check_grads(lambda a, b, c: ht.two_surface_radiation(a, b, c, 0.5, 1.0, 3.0, 0.9),
+                    x, order=1, modes=["fwd", "rev"])
+
+
+# -- G07-9: lumped capacitance -------------------------------------------------
+
+class TestLumped:
+    def test_biot(self):
+        # 10 mm copper sphere (Lc = r/3), h = 100, k = 400 -> Bi = 8.3e-4
+        assert float(ht.biot_number(100.0, 0.005 / 3, 400.0)) == pytest.approx(100 * 0.005 / 3 / 400)
+
+    def test_against_ode(self):
+        from scipy.integrate import solve_ivp
+        m, cp, UA, Tst, T0 = 1000.0, 4180.0, 2000.0, 393.15, 293.15
+        sol = solve_ivp(lambda t, T: [UA * (Tst - T[0]) / (m * cp)], (0, 3000.0), [T0],
+                        rtol=1e-10, atol=1e-10, dense_output=True)
+        t80 = float(ht.lumped_heating_time(m, cp, UA, Tst, T0, 353.15))
+        assert sol.sol(t80)[0] == pytest.approx(353.15, abs=1e-6)
+        assert float(ht.lumped_temperature(1234.0, T0, Tst, m * cp, UA)) == pytest.approx(
+            sol.sol(1234.0)[0], abs=1e-6)
+        assert float(ht.lumped_time_constant(m * cp, UA)) == pytest.approx(2090.0)
+
+    def test_cooling_and_inverse(self):
+        t = ht.lumped_heating_time(2.0, 900.0, 5.0, 300.0, 500.0, 350.0)
+        assert float(ht.lumped_temperature(t, 500.0, 300.0, 1800.0, 5.0)) == pytest.approx(350.0)
+
+    def test_grads(self):
+        f = lambda m, UA, T: ht.lumped_heating_time(m, 4180.0, UA, 393.15, 293.15, T)
+        check_grads(f, (jnp.asarray(1000.0), jnp.asarray(2000.0), jnp.asarray(353.15)),
+                    order=2, modes=["fwd", "rev"], rtol=1e-4)
+        g = lambda t, UA: ht.lumped_temperature(t, 293.15, 393.15, 4.18e6, UA)
+        check_grads(g, (jnp.asarray(1000.0), jnp.asarray(2000.0)), order=2, modes=["fwd", "rev"])
+
+
+# -- G07-3 / G07-7: tables ------------------------------------------------------
+
+def test_fouling_and_U_tables():
+    R, rng = ht.FOULING_RESISTANCES, ht.FOULING_RESISTANCE_RANGES
+    # Incropera Table 11.1
+    assert R["treated_boiler_feedwater_below_50C"] == 1e-4
+    assert rng["river_water_below_50C"] == (2e-4, 1e-3)
+    # Sinnott Table 12.2 (C&R Vol 6): the float is the conservative end of the range
+    for name in ("river_water", "cooling_tower_water", "sea_water", "flue_gases"):
+        assert R[name] == rng[name][1]
+    assert set(R) == set(rng) == set(ht.FOULING_SOURCES)
+    for lo, hi in rng.values():
+        assert 0 < lo <= hi
+    assert ht.typical_U_range("water_to_oil") == (110.0, 350.0)
+    assert ht.NU_LAMINAR_QS == pytest.approx(4.3636, abs=1e-4)

@@ -28,6 +28,7 @@ this system.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
@@ -39,7 +40,7 @@ from jax import Array
 from difflow.fluids import GRAVITY
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, get_flows, get_species, make_stream
-from difflow.units.pipe import Pipe, evaluate_property, stream_mass_flow
+from difflow.units.pipe import Pipe, _is_concrete, evaluate_property, stream_mass_flow
 
 #: Floor on the efficiency curve so shaft power stays finite far off the curve.
 ETA_FLOOR = 0.01
@@ -236,54 +237,149 @@ class SeriesCurve:
 class ParallelCurve:
     """Pumps in parallel: same head across each, flows add.
 
-    ``head(Q)`` solves ``sum_i Q_i(H) = Q`` with ``H_i(Q_i) = H`` for the branch
-    flows by Newton (implicit-function-theorem gradients). Each pump is assumed
-    to have a check valve: a pump whose shutoff head is below the common head is
-    *not* switched off here (its branch flow goes negative), so keep the
-    operating point inside every pump's range.
+    With ``check_valves=True`` (the default) each branch has a check valve: a
+    pump whose shutoff head ``H_i(0)`` is below the common head delivers zero
+    instead of a negative (reverse) flow. The branch flows ``q_i`` and the
+    common head ``H`` solve
+
+    ``sum_i q_i = Q`` and, for each branch, the complementarity
+    ``q_i >= 0, H - H_i(q_i) >= 0, q_i (H - H_i(q_i)) = 0``,
+
+    written as a smoothed Fischer-Burmeister equation
+    ``a + b - sqrt(a^2 + b^2 + eps^2) = 0`` in the scaled ``a = q_i/Q`` and
+    ``b = (H - H_i(q_i))/H_scale``. It is solved by Newton with
+    implicit-function-theorem gradients. The smoothing ``eps``
+    (``smoothing``, default 1e-6) rounds the corner where a pump just reaches
+    shutoff over a band of about ``eps`` in scaled units. Inside that band a
+    closed pump passes a trickle of about ``eps Q``; elsewhere the answer is
+    exact to solver tolerance. Gradients are continuous, but they change
+    steeply at the switch, so an optimizer that crosses it sees a kink.
+
+    With ``check_valves=False`` the old behaviour is kept: all branches share
+    the head and a weak pump's flow goes negative (reverse flow, no valve).
     """
 
-    def __init__(self, curves):
+    def __init__(self, curves, check_valves: bool = True, smoothing: float = 1e-6):
         self.curves = tuple(curves)
+        self.check_valves = bool(check_valves)
+        self.smoothing = float(smoothing)
 
-    def split(self, Q: Array | float) -> Array:
-        """Branch flows ``Q_i`` (m^3/s) at total flow ``Q``."""
+    def _flow_floor(self):
+        """Flow scale for Q -> 0: 1e-3 of the summed runout flows."""
+        return jax.lax.stop_gradient(1e-3 * jnp.maximum(self.runout_flow(), 1e-9))
+
+    def _is_running(self, q, Q):
+        Qa = jnp.maximum(jnp.abs(jnp.asarray(Q, dtype=jnp.float64)), self._flow_floor())
+        return q > 1e-6 * Qa
+
+    def _solve(self, Q):
         n = len(self.curves)
         Q = jnp.asarray(Q, dtype=jnp.float64)
-        if n == 1:
-            return jnp.atleast_1d(Q)
-        scale = jax.lax.stop_gradient(jnp.maximum(jnp.abs(Q), 1e-12))
         curves = self.curves
+        h_shut = jnp.stack([jnp.asarray(c.head(jnp.asarray(0.0)), dtype=jnp.float64) for c in curves])
+        if n == 1:
+            q = jnp.atleast_1d(Q)
+            return q, curves[0].head(q[0]), sol_ok(None)
+        scale = jax.lax.stop_gradient(jnp.maximum(jnp.abs(Q), self._flow_floor()))
+        hscale = jax.lax.stop_gradient(jnp.maximum(jnp.max(jnp.abs(h_shut)), 1e-12))
+        eps = self.smoothing
+
+        if not self.check_valves:
+            def resid(x, Qt):
+                q = x * scale
+                h0 = curves[0].head(q[0])
+                eq = [jnp.sum(q) - Qt] + [(curves[i].head(q[i]) - h0) / hscale for i in range(1, n)]
+                return jnp.stack(eq)
+
+            y0 = jnp.full((n,), 1.0 / n)
+            sol = optx.root_find(resid, optx.Newton(rtol=1e-12, atol=1e-10), y0, args=Q, throw=False)
+            q = sol.value * scale
+            return q, curves[0].head(q[0]), sol_ok(sol)
 
         def resid(x, Qt):
-            q = x * scale
-            h0 = curves[0].head(q[0])
-            eq = [jnp.sum(q) - Qt] + [curves[i].head(q[i]) - h0 for i in range(1, n)]
+            q = x[:n] * scale
+            H = x[n] * hscale
+            eq = [jnp.sum(q) / scale - Qt / scale]
+            for i in range(n):
+                a = x[i]
+                b = (H - curves[i].head(q[i])) / hscale
+                eq.append(a + b - jnp.sqrt(a**2 + b**2 + eps**2))
             return jnp.stack(eq)
 
-        y0 = jnp.full((n,), 1.0 / n)
-        sol = optx.root_find(resid, optx.Newton(rtol=1e-12, atol=1e-10), y0, args=Q, throw=False)
-        return sol.value * scale
+        # Start with every flow on the strongest pump (it always runs).
+        k = jnp.argmax(h_shut)
+        x0 = jnp.zeros((n,)).at[k].set(1.0)
+        y0 = jnp.concatenate([x0 * jnp.abs(Q) / scale, jnp.atleast_1d(jnp.max(h_shut) / hscale)])
+        y0 = jax.lax.stop_gradient(y0)
+        sol = optx.root_find(resid, optx.Newton(rtol=1e-12, atol=1e-12), y0, args=Q, throw=False, max_steps=200)
+        q = sol.value[:n] * scale
+        # At Q = 0 every valve but the strongest pump's is shut and the
+        # complementarity leaves H undetermined above shutoff: dead-heading
+        # puts the common head at the largest shutoff head.
+        H = jnp.where(Q == 0.0, jnp.max(h_shut), sol.value[n] * hscale)
+        return q, H, sol_ok(sol) | (Q == 0.0)
+
+    def split(self, Q: Array | float, return_info: bool = False):
+        """Branch flows ``q_i`` (m^3/s) at total flow ``Q``.
+
+        Args:
+            Q: Total flow (m^3/s).
+            return_info: Also return a dict with ``head`` (m, the common head),
+                ``running`` (bool per branch: False when its check valve is
+                shut, i.e. the branch flow is below 1e-6 of the total flow, which
+                means the pump is at or past shutoff), ``shutoff_head`` (m per
+                branch) and ``converged``.
+
+        Returns:
+            ``q`` (array, one flow per branch), or ``(q, info)``.
+        """
+        q, H, ok = self._solve(Q)
+        if not return_info:
+            return q
+        h_shut = jnp.stack([jnp.asarray(c.head(jnp.asarray(0.0)), dtype=jnp.float64) for c in self.curves])
+        running = self._is_running(q, Q)
+        return q, {"head": H, "running": running, "shutoff_head": h_shut, "converged": ok}
 
     def head(self, Q):
-        q = self.split(Q)
-        return self.curves[0].head(q[0])
+        return self._solve(Q)[1]
 
     def shaft_power(self, Q, rho):
-        q = self.split(Q)
-        return sum(c.shaft_power(q[i], rho) for i, c in enumerate(self.curves))
+        """Total shaft power (W); a pump behind a shut check valve is assumed stopped."""
+        q, _, _ = self._solve(Q)
+        running = self._is_running(q, Q)
+        terms = []
+        for i, c in enumerate(self.curves):
+            P = c.shaft_power(q[i], rho)
+            if self.check_valves:
+                P = jnp.where(running[i], P, 0.0)
+            terms.append(P)
+        return sum(terms)
 
     def efficiency(self, Q, rho=1000.0):
         Q = jnp.asarray(Q)
         return rho * GRAVITY * Q * self.head(Q) / self.shaft_power(Q, rho)
 
     def npshr(self, Q):
-        """Largest NPSHr over the branches at their own flows."""
-        q = self.split(Q)
-        return jnp.max(jnp.stack([c.npshr(q[i]) for i, c in enumerate(self.curves)]))
+        """Largest NPSHr over the running branches at their own flows."""
+        q, _, _ = self._solve(Q)
+        running = self._is_running(q, Q)
+        vals = []
+        for i, c in enumerate(self.curves):
+            v = c.npshr(q[i])
+            if self.check_valves:
+                v = jnp.where(running[i], v, -jnp.inf)
+            vals.append(v)
+        return jnp.max(jnp.stack(vals))
 
     def runout_flow(self):
         return sum(c.runout_flow() for c in self.curves)
+
+
+def sol_ok(sol) -> Array:
+    """Converged flag of an optimistix solution (True when there is none)."""
+    if sol is None:
+        return jnp.asarray(True)
+    return sol.result == optx.RESULTS.successful
 
 
 def _as_curve(pump) -> Any:
@@ -305,16 +401,30 @@ def pumps_in_series(*pumps) -> SeriesCurve:
     return SeriesCurve([_as_curve(p) for p in pumps])
 
 
-def pumps_in_parallel(*pumps) -> ParallelCurve:
+def pumps_in_parallel(*pumps, check_valves: bool = True, smoothing: float = 1e-6) -> ParallelCurve:
     """Combined curve of pumps in parallel: flows add at equal head.
 
     Args:
         *pumps: :class:`CentrifugalPump`, :class:`PumpCurve` or combined curves.
+        check_valves: Each branch has a check valve (default), so a pump whose
+            shutoff head is below the common head delivers zero. False lets a
+            weak pump's flow go negative (reverse flow through it).
+        smoothing: Width of the smoothed corner at shutoff, in scaled units
+            (see :class:`ParallelCurve`).
 
     Returns:
-        A curve as for :func:`pumps_in_series` (plus ``split(Q)`` for the branch flows).
+        A curve as for :func:`pumps_in_series`, plus ``split(Q, return_info=False)``
+        for the branch flows and the ``running`` flag of each check valve.
+
+    Example:
+        >>> a = PumpCurve([40.0, 0.0, -3e3])
+        >>> b = PumpCurve([25.0, 0.0, -3e3])
+        >>> par = pumps_in_parallel(a, b)
+        >>> q, info = par.split(0.03, return_info=True)
+        >>> round(float(q[0]), 4), round(float(q[1]), 4), round(float(info["head"]), 2)
+        (0.03, 0.0, 37.3)
     """
-    return ParallelCurve([_as_curve(p) for p in pumps])
+    return ParallelCurve([_as_curve(p) for p in pumps], check_valves=check_valves, smoothing=smoothing)
 
 
 # ----------------------------------------------------------------------
@@ -387,7 +497,17 @@ def system_curve(
         if not pipes:
             raise ValueError("delta_P needs rho (or at least one Pipe to take it from)")
         rho = pipes[0].params.rho
+        if rho is None:  # read from liquid_properties at the inlet
+            rho = pipes[0]._rho_mu(inlet)[0]
     return SystemCurve(static_head, pipes, delta_P, rho, inlet)
+
+
+class OperatingPointWarning(UserWarning):
+    """No physical operating point: the root is a negative flow, or Newton failed.
+
+    Raised by :func:`operating_point` on concrete values only; under
+    ``jit``/``grad`` the root is returned unchanged.
+    """
 
 
 def operating_point(pump, system, Q_guess: Array | float | None = None, return_info: bool = False):
@@ -400,6 +520,9 @@ def operating_point(pump, system, Q_guess: Array | float | None = None, return_i
     function theorem (``optimistix``), not by differentiating through the
     iterations. If the shutoff head is below the static head there is no
     positive root and the result is not meaningful (check ``H(0)`` first).
+    A concrete negative ``Q*`` (that case, or a valveless parallel pair whose
+    weak pump runs backwards) or an unconverged solve raises
+    :class:`OperatingPointWarning`; the value is still returned.
 
     Args:
         pump: :class:`CentrifugalPump`, :class:`PumpCurve` or a combined curve.
@@ -422,6 +545,21 @@ def operating_point(pump, system, Q_guess: Array | float | None = None, return_i
 
     sol = optx.root_find(resid, optx.Newton(rtol=1e-12, atol=1e-10), jnp.asarray(1.0), throw=False)
     Q = sol.value * Q0
+    if _is_concrete(Q):
+        if not bool(sol.result == optx.RESULTS.successful):
+            warnings.warn(
+                f"operating_point did not converge (Q = {float(Q):.6g} m^3/s).",
+                OperatingPointWarning,
+                stacklevel=2,
+            )
+        elif float(Q) < 0.0:
+            warnings.warn(
+                f"operating_point found Q* = {float(Q):.6g} m^3/s < 0: no forward-flow "
+                "operating point. Check the shutoff head against the static head, or "
+                "use check_valves=True for pumps in parallel.",
+                OperatingPointWarning,
+                stacklevel=2,
+            )
     if not return_info:
         return Q
     info = {"Q": Q, "head": curve.head(Q)}
@@ -467,8 +605,20 @@ class CentrifugalPumpParams(ParamsMixin):
             Antoine ``thermo.Psat(species, T)`` is used.
         npsh_species: Species whose vapour pressure sets NPSHa (default: the
             only species of the stream).
-        D_suction: Suction-nozzle inside diameter (m) for the velocity head in
-            NPSHa; None neglects it.
+        D_suction: Suction-nozzle inside diameter (m). It gives the suction
+            velocity ``v_s`` and velocity head ``v_s^2/(2g)`` reported in
+            ``info``; whether that head is *added* to NPSHa depends on
+            ``suction_pressure``.
+        suction_pressure: What the inlet stream's ``P`` means: ``"total"``
+            (default) or ``"static"``. A difflow stream carries the total
+            (static + velocity-head) pressure: a stream from a tank or vessel
+            is at rest, and :class:`~difflow.units.pipe.Pipe` subtracts only
+            friction, fittings and elevation, so its outlet ``P`` is the static
+            flange pressure plus ``rho v^2/2``. NPSHa is then
+            ``(P - Psat)/(rho g)`` and the velocity head must not be added
+            again. Use ``"static"`` only when ``P`` is a measured static
+            (wall-tap) flange pressure; NPSHa then adds ``v_s^2/(2g)``, which
+            needs ``D_suction``.
         cp: Liquid heat capacity (J/kg/K); with it the outlet is warmed by the
             dissipated shaft work ``g H (1 - eta)/(eta cp)``; None keeps the
             stream isothermal.
@@ -489,6 +639,7 @@ class CentrifugalPumpParams(ParamsMixin):
     Psat: float | None = None
     npsh_species: str | None = None
     D_suction: float | None = None
+    suction_pressure: str = "total"
     cp: float | None = None
 
 
@@ -500,7 +651,10 @@ class CentrifugalPump:
     ``head`` (m), ``efficiency``, ``hydraulic_power``, ``shaft_power``,
     ``electric_power`` (W), and, when the curve / vapour pressure are available,
     ``NPSHr``, ``NPSHa`` and ``npsh_margin = NPSHa - NPSHr`` (m; negative means
-    cavitation risk). ``pump.curve`` is the :class:`PumpCurve`; use
+    cavitation risk); with ``D_suction``, ``suction_velocity`` (m/s) and
+    ``suction_velocity_head`` (m). The inlet ``P`` is the *total* suction
+    pressure (see ``CentrifugalPumpParams.suction_pressure``), so a
+    :class:`~difflow.units.pipe.Pipe` outlet can be fed straight in. ``pump.curve`` is the :class:`PumpCurve`; use
     :func:`operating_point` with a :func:`system_curve` to find the flow instead.
 
     Differentiable in every numeric parameter, including ``N`` and ``D``.
@@ -511,7 +665,7 @@ class CentrifugalPump:
         r"P_{\mathrm{out}} = P_{\mathrm{in}} + \rho g\,H(Q),\qquad H(Q) = h_0 + h_1 Q + h_2 Q^2",
         r"Q \propto N D,\quad H \propto N^2 D^2,\quad P \propto N^3 D^3",
         r"P_{\mathrm{shaft}} = \frac{\rho g Q H}{\eta(Q)},\qquad \eta = \eta_{\max}\left(1 - \left(\frac{Q - Q_{\mathrm{bep}}}{Q_{\mathrm{bep}}}\right)^2\right)",
-        r"\mathrm{NPSH}_a = \frac{P_s - P_{\mathrm{sat}}}{\rho g} + \frac{v_s^2}{2g} + z_s - h_{f,s}",
+        r"\mathrm{NPSH}_a = \frac{P_{s,\mathrm{total}} - P_{\mathrm{sat}}}{\rho g} = \frac{P_{s,\mathrm{static}} - P_{\mathrm{sat}}}{\rho g} + \frac{v_s^2}{2g}",
         r"H_{\mathrm{pump}}(Q^*) = H_{\mathrm{sys}}(Q^*) = \Delta z + \sum_i h_{f,i}(Q^*)",
     ]
     assumptions = [
@@ -519,7 +673,8 @@ class CentrifugalPump:
         "Steady state; the head, efficiency and NPSHr curves are polynomials in Q fitted to vendor data and trusted only inside the fitted range.",
         "Affinity laws Q ~ N D, H ~ N^2 D^2 (so P ~ N^3 D^3) with efficiency and the NPSHr/H ratio unchanged: good for speed changes of tens of percent and small impeller trims, optimistic for large changes (efficiency drops with speed and trim).",
         "Isothermal unless cp is given; then all dissipated shaft work heats the liquid.",
-        "Parallel pumps are assumed to have check valves but are not switched off below their shutoff head.",
+        "The inlet stream's P is the total (static + velocity-head) suction pressure, as every difflow unit produces it; set suction_pressure='static' for a measured wall-tap pressure.",
+        "Parallel pumps have check valves (pumps_in_parallel(check_valves=True), the default): a pump whose shutoff head is below the common head delivers zero.",
     ]
     references = [
         "McCabe, W.L., Smith, J.C., Harriott, P. Unit Operations of Chemical Engineering, 7e, Ch. 8.",
@@ -536,7 +691,7 @@ class CentrifugalPump:
         "head_coeffs": "m, m/(m^3/s), ...", "rho": "kg/m^3", "eta_coeffs": "-", "eta_max": "-",
         "Q_bep": "m^3/s", "npshr_coeffs": "m, m/(m^3/s), ...", "N_ref": "rpm", "D_ref": "m",
         "N": "rpm", "D": "m", "motor_efficiency": "-", "MW": "g/mol", "Psat": "Pa",
-        "npsh_species": "-", "D_suction": "m", "cp": "J/kg/K",
+        "npsh_species": "-", "D_suction": "m", "suction_pressure": "-", "cp": "J/kg/K",
     }
 
     def __init__(self, params: CentrifugalPumpParams, thermo=None):
@@ -595,12 +750,21 @@ class CentrifugalPump:
                 efficiency=eta, hydraulic_power=hyd, shaft_power=shaft,
                 electric_power=shaft / jnp.asarray(p.motor_efficiency, dtype=jnp.float64),
             )
+        if p.suction_pressure not in ("total", "static"):
+            raise ValueError(f"suction_pressure must be 'total' or 'static', got {p.suction_pressure!r}")
+        v = None
+        if p.D_suction is not None:
+            v = Q / (jnp.pi / 4.0 * jnp.asarray(p.D_suction, dtype=jnp.float64) ** 2)
+            info["suction_velocity"] = v
+            info["suction_velocity_head"] = v**2 / (2.0 * GRAVITY)
+        elif p.suction_pressure == "static":
+            raise ValueError("suction_pressure='static' needs D_suction for the velocity head")
         psat = self._psat(inlet)
         if psat is not None:
-            v = 0.0
-            if p.D_suction is not None:
-                v = Q / (jnp.pi / 4.0 * jnp.asarray(p.D_suction, dtype=jnp.float64) ** 2)
-            info["NPSHa"] = npsh_available(inlet["P"], psat, rho, v)
+            # A "total" P already holds the velocity head (Gap: Pipe -> pump
+            # used to count v^2/2g twice); only a static P gets it added.
+            v_add = v if p.suction_pressure == "static" else 0.0
+            info["NPSHa"] = npsh_available(inlet["P"], psat, rho, v_add)
             if curve.npshr_coeffs is not None:
                 info["NPSHr"] = curve.npshr(Q)
                 info["npsh_margin"] = info["NPSHa"] - info["NPSHr"]
@@ -618,7 +782,7 @@ class CentrifugalPump:
 
         Args:
             inlet: Liquid stream at the suction flange (``P`` is the absolute
-                suction pressure).
+                total suction pressure unless ``suction_pressure="static"``).
 
         Returns:
             ``(outlet, info)`` as described on the class.

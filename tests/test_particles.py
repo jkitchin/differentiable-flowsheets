@@ -33,8 +33,10 @@ from difflow.particles import (
     geldart_group,
     hindered_settling_velocity,
     kozeny_carman,
+    minimum_bubbling_velocity,
     minimum_fluidization_velocity,
     richardson_zaki_exponent,
+    terminal_reynolds,
     terminal_velocity,
 )
 
@@ -269,11 +271,53 @@ class TestFluidization:
         f = lambda u: bed_expansion(u, 1.0, n=2.39)[1]
         check_grads(f, (0.5,), order=1, modes=["rev"], rtol=1e-6)
 
+    def test_expansion_anchored_at_umf(self):
+        a = (0.5e-3, 2650.0, 998.2, 1.002e-3)
+        u_t = float(terminal_velocity(*a, 0.85))
+        n = float(richardson_zaki_exponent(terminal_reynolds(*a, 0.85)))
+        u_mf = float(minimum_fluidization_velocity(*a, 0.42, 0.85))
+        # default (u_t-anchored) line is below eps_mf at u_mf; anchored line is exact there
+        assert float(bed_expansion(u_mf, u_t, n=n, voidage_mf=0.42)[0]) < 0.42
+        eps, H = bed_expansion(u_mf, u_t, n=n, voidage_mf=0.42, H_mf=0.7, u_mf=u_mf)
+        assert float(eps) == pytest.approx(0.42) and float(H) == pytest.approx(0.7)
+        eps2, _ = bed_expansion(2 * u_mf, u_t, n=n, voidage_mf=0.42, u_mf=u_mf)
+        assert float(eps2) == pytest.approx(0.42 * 2 ** (1 / n))
+        assert float(bed_expansion(1e3 * u_mf, u_t, n=n, voidage_mf=0.42, u_mf=u_mf)[0]) == 1.0
+
     def test_geldart(self):
         assert geldart_group(300e-6, 2600.0, 1.2) == "B"
         assert geldart_group(60e-6, 1000.0, 1.2) == "A"
+        # FCC catalyst is the defining Group A powder (the old box criterion said B)
+        assert geldart_group(60e-6, 1500.0, 1.2) == "A"
+        assert geldart_group(80e-6, 1500.0, 1.2) == "A"
+        assert geldart_group(200e-6, 2650.0, 1.2) == "B"
         assert geldart_group(5e-6, 2000.0, 1.0) == "C"
         assert geldart_group(3e-3, 2600.0, 1.2) == "D"
+        # B/D at Ar = 1.45e5 (Grace 1986): sand in air crosses near 1.1 mm
+        assert geldart_group(1.0e-3, 2650.0, 1.2) == "B"
+        assert geldart_group(1.2e-3, 2650.0, 1.2) == "D"
+
+    def test_geldart_ab_boundary_is_bubbling_ratio(self):
+        # u_mb/u_mf from the two correlations equals the published closed form
+        from difflow.particles import _baeyens_geldart_umf
+
+        d, drho, rg, mu = 70e-6, 1400.0, 1.2, 1.8e-5
+        ratio = float(minimum_bubbling_velocity(d, rg, mu)) / _baeyens_geldart_umf(d, drho, rg, mu)
+        closed = 2300 * rg**0.126 * mu**0.523 / (d**0.8 * (9.80665 * drho) ** 0.934)
+        assert ratio == pytest.approx(closed, rel=2e-3)  # 2300 is 2.07 x 1111 rounded
+        # fines widen group A
+        assert float(minimum_bubbling_velocity(d, rg, mu, 0.3)) > float(minimum_bubbling_velocity(d, rg, mu))
+
+    def test_mehta_hawley_wall_factor(self):
+        dp0, info0 = ergun_pressure_gradient(1.0, 3e-3, 0.4, 1.2, 1.8e-5)
+        dp1, info1 = ergun_pressure_gradient(1.0, 3e-3, 0.4, 1.2, 1.8e-5, D_bed=0.03)
+        M = 1 + 2 * 3e-3 / (3 * 0.03 * 0.6)
+        assert float(info1["wall_factor"]) == pytest.approx(M)
+        assert float(info1["viscous"]) == pytest.approx(M**2 * float(info0["viscous"]))
+        assert float(info1["inertial"]) == pytest.approx(M * float(info0["inertial"]))
+        # a wide bed tends to the unbounded result
+        dp_wide, _ = ergun_pressure_gradient(1.0, 3e-3, 0.4, 1.2, 1.8e-5, D_bed=100.0)
+        assert float(dp_wide) == pytest.approx(float(dp0), rel=1e-4)
 
 
 class TestGasPFRPhysicalBed:
@@ -307,9 +351,13 @@ class TestGasPFRPhysicalBed:
         from difflow import make_stream
         from difflow.units.pfr import GasPFR
 
+        from difflow.units.pfr import GasPFRBedWarning
+
         inlet = make_stream({"A": 1.0, "B": 0.0}, 400.0, 2.0e5)
         _, info_a = GasPFR(self._params(alpha=16500.0))(inlet)
-        _, info_b = GasPFR(self._params(**self.BED))(inlet)
+        # u_s0 = 1 m/s is not this stream's velocity (0.033 m/s): it is used, with a warning
+        with pytest.warns(GasPFRBedWarning, match="u_s0"):
+            _, info_b = GasPFR(self._params(**self.BED))(inlet)
         assert float(info_b["pressure_drop"]) == pytest.approx(float(info_a["pressure_drop"]), rel=1e-10)
         assert float(info_b["pressure_drop"]) > 0
 
@@ -317,6 +365,23 @@ class TestGasPFRPhysicalBed:
         p = self._params(**self.BED)
         q = p.update(d_p=6e-3)
         assert float(q.effective_alpha) < float(p.effective_alpha)
+
+    def test_u_s0_from_stream(self):
+        import warnings
+
+        from difflow import make_stream
+        from difflow.units.pfr import GasPFR
+
+        inlet = make_stream({"A": 1.0, "B": 0.0}, 400.0, 2.0e5)
+        u = 1.0 * 8.314 * 400.0 / 2.0e5 / 0.5          # Q0 / bed_area, GasPFR's ideal-gas R
+        bed = {**self.BED, "u_s0": None}
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            _, info_none = GasPFR(self._params(**bed))(inlet)
+            _, info_match = GasPFR(self._params(**{**self.BED, "u_s0": u}))(inlet)
+        assert float(info_none["pressure_drop"]) == pytest.approx(float(info_match["pressure_drop"]), rel=1e-10)
+        with pytest.raises(ValueError, match="alpha_for"):
+            self._params(**bed).effective_alpha
 
     def test_validation(self):
         with pytest.raises(ValueError):

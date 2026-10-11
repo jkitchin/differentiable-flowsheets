@@ -8,6 +8,51 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`OperatingPointWarning`.** `operating_point` warns on a concrete negative `Q*` (no forward-flow operating
+  point, e.g. a valveless parallel pair with a weak pump running backwards) or an unconverged Newton solve; silent
+  under `jit`/`grad`. `PipeCavitationWarning` is exported from `difflow`. Test `tests/test_pump.py`.
+- **Compressible flow, compressors, expanders, valves (book Ch. 5 gaps).**
+  (1) EOS `Turboexpander`/`Compressor`/`JTValve` solve the outlet temperature with a bracketed (P, S)/(P, H) flash,
+  also public as `flash_PS_eos`/`flash_PH_eos`. Two-phase, pure-component jump handled by the lever rule. Implicit
+  gradients use the saturation condition inside a dome. The old unbracketed Newton gave methane 300 K, 100 -> 10 bar
+  `T_isen = 261.5 K` (true 152.1 K) with negative work, and JT letdowns into the dome returned the 100 K bound, all
+  unflagged. `info` gains `vapor_fraction`, `x`, `y`, `residual` and `converged`; an unbracketed solve warns
+  `EOSUnitConvergenceWarning`. (2) `PHFlash` with a `CubicThermo` uses `flash_PH_eos`. (3) `difflow.compressible`:
+  `Z` keyword on `speed_of_sound`, `mach_number`, `isothermal_pipe_mass_flux` and `isothermal_outlet_pressure`;
+  new `nozzle_flow` (with `choked`), `isothermal_pipe_flow` (G and Colebrook f together), `isothermal_distance`,
+  `isothermal_pressure_profile`, `isothermal_limit_mach`, `polytropic_exponent`,
+  `isentropic_efficiency_from_polytropic`, `polytropic_efficiency_from_isentropic` and `optimal_stage_ratios`.
+  (4) `difflow_gas.isothermal_pipe_beta` (alias `weymouth_beta`) is jnp and differentiable, with
+  `friction="nikuradse" | "colebrook" | "weymouth"`. **It now returns a JAX scalar, not a Python float.** The
+  docs say it is the isothermal pipe law without the acceleration term. (5) `equipment_cost` warns
+  `difflow.economics.CostRangeWarning` for a concrete size outside the entry's stored `S_min`..`S_max`.
+  Tests `tests/test_eos_units_two_phase.py`, `tests/test_compressible.py`, `tests/gas/test_physics.py`,
+  `tests/test_economics.py`.
+- **Chapter 1 flowsheet gaps.** `StoichiometricReactor` / `StoichiometricReactorParams(stoich, key, conversion,
+  T_out=None, pressure_drop=0.0)` (fixed conversion of a key reactant, parallel reactions, no thermo;
+  `difflow/units/stoichiometric.py`) and `ComponentSplitter` / `ComponentSplitterParams(split_fractions,
+  default_fraction=0.0)` (ideal per-species split, returns `(first, second, info)`), both palette operations.
+  `Flowsheet.degrees_of_freedom()` returns a `DegreesOfFreedom` (variables, specified feeds, unit and recycle
+  equations, unit parameters, unknowns, `problems`; zero for a well-posed flowsheet).
+- **Thermo gaps from the textbook's Ch. 2.** EOS saturation points
+  `eos_bubble_P(eos, x, T, k_ij=None, P_guess=None)`, `eos_dew_P(eos, y, T, ...)`,
+  `eos_bubble_T(eos, x, P, k_ij=None, T_guess=None)` and `eos_dew_T(eos, y, P, ...)`
+  in `difflow.eos`. They solve phi-phi with Newton (optimistix, implicit
+  differentiation) from Wilson K-values and safeguarded substitution, with four
+  starts and the first converged non-trivial root kept. They return a dict with
+  `T`, `P`, `x`, `y`, `K`, `converged` and `trivial`. Modified-Raoult
+  `bubble_P`, `dew_P(thermo, species, y, T, activity_model=None)` and
+  `dew_T(thermo, species, y, P, activity_model=None, T0=None)` join
+  `bubble_T(..., activity_model=None, T0=None)` in `difflow.phase_diagrams`.
+  New warnings: `AntoineRangeWarning` (concrete T outside a species' fitted
+  range; once per species and side; silent under `jit`/`grad`; from
+  `IdealThermo.Psat`, `bubble_T`, `txy`, `pxy` and the flash helpers) and
+  `BubbleDewConvergenceWarning` (unconverged or trivial). Also added:
+  `thermo.check_antoine_range`, `database.ANTOINE_SOURCES` (a source for every
+  ideal-thermo species), `list_species(kind="ideal"|"critical"|"any")` and
+  `IdealThermo.vaporization_T`. Tests: `tests/test_antoine_database.py`,
+  `tests/test_bubble_dew.py`.
+
 - **Shell-and-tube gaps (#435).** (1) `ShellAndTubeDesignParams.shell_h` callables now receive the wall state of the
   current `U` iterate (`q_flux`, `T_wall`, `dT_film`, `T_shell`, `T_tube`, `area_total`, besides the geometry keys),
   closed inside the existing `optimistix.fixed_point` (and on the heat flux in `rate()`), so condensing and boiling
@@ -347,7 +392,239 @@ All notable changes to difflow are recorded here. The format follows
   values only, so `jit`/`grad` are unaffected) and point to
   `EnthalpyCounterCurrentHX`.
 
+- **`difflow.staged`: McCabe-Thiele stepper, pinches and Kremser (#424).**
+  A library (not a palette unit) of graphical equilibrium-stage design.
+  Operating lines as `(a, b, c)` (`operating_line`, `rectifying_line`,
+  `stripping_line` incl. open steam, `stripping_line_from_boilup`,
+  `q_line` for any `q` including 1, `feed_intersection`, `to_ratio`),
+  `EquilibriumCurve` (`constant_alpha`, `linear_equilibrium`, `tabulated` with
+  monotone PCHIP and an inverse, optional Murphree efficiency),
+  `mccabe_thiele` (a `lax.scan` stepper with a fractional, differentiable
+  stage count, optimal or specified feed stage, partial condenser),
+  `minimum_reflux` (feed-line and tangent pinch, not floored),
+  `total_reflux_stages` / `minimum_stages` (Fenske at constant alpha),
+  `minimum_solvent_ratio` for a curved equilibrium line, and
+  `kremser_fraction` / `kremser_stages` (any `A > 0`, smooth through
+  `A = 1`; re-exported from `difflow.units.lle` and `difflow_ree`). Plot
+  helper `difflow.visualization.plot_mccabe_thiele`. Verified against hand
+  loops, closed forms, SciPy PCHIP and the Lewis relation; no published
+  textbook example is reproduced (see the docs). Example notebook
+  `examples/48_mccabe_thiele_staged.ipynb`.
+
+- **Phase-diagram helpers and Wilson / Margules / van Laar activity models
+  (#398).** `difflow.activity` defines the `ActivityModel` protocol (a
+  `gamma(x, T)` method; `activity_gamma` dispatches) with `WilsonParams`,
+  `MargulesParams` (two-/three-suffix) and `VanLaarParams`; `NRTLParams` and
+  `UNIQUACParams` gained `gamma` adapters, and `Flash(activity_model=...)` now
+  accepts any of them (NRTL results unchanged). `difflow.phase_diagrams` adds
+  `txy`, `pxy`, `xy_curve`, `find_azeotrope` (masked, no Python branch on
+  traced values) and `ternary_lle`; `difflow.visualization` adds `plot_txy`,
+  `plot_pxy`, `plot_xy`, `plot_ternary`. Example notebook
+  `examples/41_phase_diagrams.ipynb`. UNIFAC is a follow-up.
+- **Centrifugal pump (#400).** New `CentrifugalPump` / `CentrifugalPumpParams`
+  unit (`difflow.units.pump`): polynomial head curve, BEP-centred or
+  polynomial efficiency, `NPSHr` curve, affinity-law scaling for operating
+  speed `N` and impeller diameter `D` (Q ~ N D, H ~ N^2 D^2, P ~ N^3 D^3),
+  outlet `P = P_in + rho g H(Q)`, `info` with head, efficiency, shaft and
+  electric power, `NPSHr`, `NPSHa` and `npsh_margin`, optional temperature
+  rise (`cp`) and `eo_residuals`. Helpers: `PumpCurve`, `fit_pump_curve`,
+  `npsh_available`, `pumps_in_series` / `pumps_in_parallel` (combined curves),
+  `system_curve(static_head, *pipes)` built from `Pipe` runs, and
+  `operating_point(pump, system)` solving the pump/system intersection with
+  implicit-function-theorem gradients (w.r.t. D, N, pipe diameter, ...).
+  Liquid `rho` is an explicit input, as for `Pipe`. `Pipe` gained
+  `hydraulics_at_flow(Q)`, and `evaluate_property` / `stream_mass_flow` helpers
+  that the pump shares. GUI palette symbol, docs (`### CentrifugalPump`, with
+  a cross-reference to the CO2 `difflow_cc.Pump`, which is intentionally left
+  as a separate fixed-outlet-pressure model), tests and
+  `examples/43_centrifugal_pump.ipynb` (operating point, affinity laws,
+  series/parallel, NPSH, economic pipe diameter with a VFD-speed constraint).
+  The vendor curve in tests and notebook is illustrative, not a published
+  datasheet; the operating point is verified against an independent
+  numpy/scipy calculation rather than a textbook figure.
+- **Shell-and-tube design (#403).** New `difflow.shell_and_tube` (JAX, SI,
+  differentiable; a library, not a palette unit): the Kern shell side
+  (`equivalent_diameter`, `kern_shell_side`, `kern_shell_pressure_drop`),
+  `tube_side_pressure_drop` (friction from `fluids.friction_factor` plus return
+  losses), continuous `tube_count` and `bundle_diameter`, BWG / TEMA tables,
+  and `ShellAndTubeDesign`, which iterates `U` (area from `Q/(U F LMTD)`,
+  geometry, `heat_transfer.internal_h` and Kern films, `overall_U` with
+  fouling) as an `optx.fixed_point`, so the area is differentiable in baffle
+  spacing, tube velocity, passes, flows, fouling and properties. Returns the
+  geometry, `U`, area, both `dP`, `F` and flags (`F < 0.75`, `dP` limits,
+  convergence, laminar tubes), with a simple isothermal mode for a condensing
+  or boiling side, `rate()` to re-rate a geometry and `round_design()` to
+  turn the continuous tube count, passes and baffle spacing into a buildable
+  one. Docs (`### ShellAndTubeDesign`), tests and example notebook 46
+  (gradient-based cost minimisation; placeholder prices). **The Kern
+  kerosene-crude textbook example is not reproduced** and the Kern constants,
+  bundle-diameter constants and tube tables are recalled from memory and
+  unverified; the docs and tests say what was and was not checked. The `U`
+  fixed point is not unique with a fixed tube length (a second, large-area
+  laminar solution exists); it is flagged.
+- `effectiveness_shell_and_tube(NTU, Cr, n_shells)`: exact 1-2N effectiveness
+  for one or several shells in series.
+- **Heat-transfer coefficients (#402).** New `difflow.heat_transfer` (pure JAX
+  functions, SI, differentiable; not a palette unit): `reynolds`, `prandtl`,
+  `grashof`, `rayleigh`, `nusselt_to_h`; conduction (`slab_`/`cylinder_`/
+  `sphere_resistance`, `composite_wall`, `critical_insulation_radius`,
+  `fin_efficiency_straight`); tube-side `dittus_boelter`, `sieder_tate`,
+  `sieder_tate_laminar`, `gnielinski` (takes the Darcy factor from
+  `difflow.fluids.friction_factor`) and the dispatcher `internal_h` /
+  `internal_nusselt` with a C2 laminar-transition-turbulent blend over Re
+  2300-4000 and no Python branching on Re; `churchill_bernstein`,
+  `flat_plate_nusselt`, Churchill-Chu natural convection; Nusselt film
+  condensation (plate, tube, n-tube column), Rohsenow boiling (flux and closed
+  form inverse), `mostinski`, Zuber `critical_heat_flux`; and
+  `overall_U(h_i, h_o, D_i, D_o, k_wall, R_fi, R_fo, basis)`. Docs section
+  "Heat-Transfer Coefficients" in `unit-operations-chemical.md`, tests in
+  `tests/test_heat_transfer.py` and `examples/45_heat_transfer_coefficients.ipynb`
+  (U to `CounterCurrentHX`, optimal tube velocity with `difflow.economics`;
+  its prices are illustrative placeholders). Validation is against
+  independent evaluations of the stated formulas and derivations (Nusselt's
+  0.943, fin, cylinder resistance), **not** textbook worked-example numbers,
+  which were not reproduced; the `FOULING_RESISTANCES` and `TYPICAL_U_RANGES`
+  tables, the Rohsenow `C_sf` default and the Mostinski constants are from
+  memory and flagged unverified. Not done: callable `U`/`UA` on the exchangers
+  (compute `U` and pass the number), annular fins, tube banks, Kern /
+  Bell-Delaware (#403).
+
+- **Liquid pipe flow (#399).** New `difflow.fluids` (JAX, SI, differentiable):
+  `reynolds_number`, `hydraulic_diameter`, the Darcy `friction_factor` by
+  Colebrook-White (Newton solve, implicit-function-theorem gradients),
+  Churchill, Haaland or Swamee-Jain with a C2 laminar blend (exactly 64/Re
+  below Re 2100), `darcy_pressure_drop`, `minor_loss`, a `FITTINGS` table of
+  Crane TP-410 K / L/D values with `fitting_K` and `equivalent_length`, and
+  `orifice_flow`/`orifice_dp`/`venturi_flow`/`venturi_dp`. New `Pipe` /
+  `PipeParams` unit (`L`, `D`, `roughness`, `dz`, `fittings`,
+  `friction_method`; liquid `rho` and `mu` are explicit numbers or callables of
+  the stream, molar mass via `MW` or a `thermo`) with `info` (`v`, `Re`, `f`,
+  `dP_friction`, `dP_minor`, `dP_static`, `head_loss`), `eo_residuals`, GUI
+  palette symbol, docs (`### Pipe`, friction methods, K table) and
+  `examples/42_liquid_pipe_flow.ipynb` (Moody chart, economic diameter). The
+  K-values were transcribed from the Crane/Perry's reprints, not checked against
+  the TP-410 scan; the notebook's $/m piping cost is an illustrative
+  placeholder, not a cited correlation.
+- `difflow.particles` (#401): pure JAX functions for flow past particles and
+  through beds. `drag_coefficient` (Haider-Levenspiel 1989, Turton-Levenspiel
+  1986, Schiller-Naumann), `terminal_velocity` (implicit root find in ln Re,
+  implicit differentiation), `hindered_settling_velocity` and
+  `richardson_zaki_exponent`, `ergun_pressure_gradient` (viscous and inertial
+  terms in `info`), `kozeny_carman`, `minimum_fluidization_velocity` (Ergun
+  quadratic or Wen-Yu), `bed_expansion`, `fluidization_window`, and
+  `geldart_group` (approximate boundaries; not differentiable). Verified
+  against first principles and independent scipy solves, not against copied
+  textbook tables (see `docs/unit-operations-chemical.md`). `GasPFRParams`
+  also accepts a physical bed (`d_p`, `voidage`, `mu`, `rho_gas`, `u_s0`,
+  `bed_area`, `sphericity`) from which alpha is computed by the Ergun
+  equation (`effective_alpha`); the lumped `alpha` input is unchanged.
+  Example notebook `examples/44_particles_and_beds.ipynb`.
+- **Evaporators (#404).** `Evaporator` (single effect, rating by area or design
+  by product concentration), `MultiEffectEvaporator` (forward, backward and
+  parallel feed; equal-area design solved as one Newton system, or rating with
+  given areas; per-effect `U`) and `MechanicalVaporRecompression` (ideal-gas
+  isentropic compression, compressor work against steam saved), in
+  `difflow/units/evaporator.py`. Each returns `(concentrate, vapor, info)` with
+  steam rate, steam economy, per-effect T, P, BPR, vapor, area and Q, and
+  closure residuals; `info` is differentiable with respect to `U`, the feed and
+  the steam pressure (implicit gradients through `optimistix`). The
+  non-volatile solute is an ordinary stream species whose vapor flow is exactly
+  zero. `boiling_point_rise` offers Raoult (`ideal`), `colligative`, user
+  Duhring lines, polynomial, callable and built-in `naoh`/`nacl`/`sucrose`
+  models, plus `bpr_fn=` and `enthalpy_fn=` hooks (heat of dilution). Water
+  saturation uses IAPWS-IF97; the enthalpy fits are to recalled steam-table
+  points. **Not verified**: the built-in NaOH, NaCl and sucrose BPR data are
+  approximate recollections (they raise `UnverifiedDataWarning`), and no
+  textbook worked example is claimed to be reproduced. Registered in the
+  palette under a new `evaporation` category with its own symbol (GUI bundle
+  rebuilt), documented in `docs/unit-operations-chemical.md`, example notebook
+  `examples/47_evaporators.ipynb` (optimal number of effects, with illustrative
+  placeholder prices). No evaporator cost curve was added to
+  `economics/capital.py` (no citable constants at hand); use
+  `heat_exchanger_cost` as a stand-in.
+
+- `difflow.solvers.pounce_problem` builds the configured pounce Problem once
+  so repeated solves reuse the compiled residual and Jacobian (about 0.1 s
+  against 30 s on a nested-EOS flowsheet, #394). `solve_with_pounce` is now a
+  thin wrapper over it and still rebuilds on every call; its docstring and
+  `docs/external-solvers.md` say so.
+- `InstantaneousUnit` sees time and the integrator `args` (#396): an `fn`
+  taking `(t, inputs, params)` or `(t, inputs, params, args)`, and
+  `call_params` callables taking `(t, params)` or `(t, params, args)`, chosen
+  by arity (the 2-argument `fn` and 1-argument callable forms are unchanged).
+  `DynamicFlowsheet.simulate(args=...)` is documented as the one place for
+  time-varying disturbances, read by feeds and units alike.
+
+### Changed
+
+- **Recycle tears no longer lock a pressurized loop at 1 atm.** `Flowsheet(default_T=None, default_P=None)` is the
+  new default: a tear with no better guess starts at the highest pressure and flow-weighted temperature of the
+  other inlets of the unit it feeds (feeds, or units upstream of every tear), with `stop_gradient`. Before, the
+  101325 Pa start was carried round the loop by the Mixer's minimum-pressure rule and the solve converged at 1 atm
+  with `dP/dP_feed = 0`. A number passed explicitly still pins the guess; inference survives `to_dict`/`from_dict`,
+  codegen and `_apply_params` (`infer_tear_T` / `infer_tear_P`).
+- **An unconverged recycle under `jax.grad`/`jit` warns.** The traced optimistix fixed point now carries a
+  `jax.debug.callback` that issues `ConvergenceWarning` at run time when the loop stopped short of `tol` (its
+  implicit gradient is then wrong). It stays a warning for `on_nonconvergence="raise"` (a traced solve never
+  raises); `"ignore"` compiles no check.
+- **`last_solve_gain` after Anderson.** When the post-solve probe finds the residual at round-off, the gain is the
+  dominant eigenvalue of the tear map's Jacobian (`jax.jacfwd`, tears up to 400 variables; variables the loop only
+  carries through unchanged are excluded) instead of `None`.
+- **`Mixer` with thermo solves the enthalpy balance exactly** (Newton from the flow-weighted mean T, bracketed
+  fallback, implicit gradient) instead of using one Cp at the mean T (752.7 K vs the exact 763.6 K for 1 mol/s CH4 at
+  300 K + 10 mol/s at 800 K). A species missing from an inlet is now zero flow instead of a `KeyError`.
+
 ### Breaking
+
+- **Antoine constants corrected and sourced; flash bubble/dew helpers honour
+  the thermo model; `IdealThermo` vapour enthalpy made monotone.** Results that
+  depend on these move, by design:
+  - **Antoine constants.** 18 species had constants whose implied normal
+    boiling point was 2.5-100 K off: O2, NH3, CO2, methane, ethane, propane,
+    n-butane, ethylene, propylene, styrene, the propanols, 1-butanol, formic
+    acid, diethyl and dimethyl ether, CHCl3 and CCl4. Five more were 0.2-1 K
+    off: N2, n-pentane, isobutane, isopentane and acetic acid. They were
+    replaced with NIST WebBook fits, or with the PPO 5e and Landolt IV/20 sets
+    where no NIST fit works. Every species now has a `T_antoine_min/max` and a
+    source in `ANTOINE_SOURCES`. Water keeps its constants, but its range is
+    now 273.16-402.42 K, not the unsourced 273-473 K. Ethyl acetate's range
+    runs to 493.15 K, on a 1% check against the McGarry Wagner equation.
+  - **`list_species()`** now returns the species `get_species_data` accepts
+    (`kind="ideal"`). Pass `kind="any"` for the old union with
+    critical-only species. `agent.discovery`, `tests/refinery/test_fcc.py`,
+    `tests/test_dwsim_import.py` and `tests/test_liquid_properties.py` changed
+    only for this.
+  - **`Flash.bubble_point_*` / `dew_point_*`** use the flash's `eos`
+    (`eos_bubble_P` etc.) or `activity_model` (modified Raoult), where they
+    used Raoult before. The silent clip to 150-700 K is removed: an
+    unconverged result warns instead.
+  - **`IdealThermo.H_pure(phase="vapor")`** used to be
+    `int Cp_liq (Tref->T) + Watson Hvap(T)`, which falls towards Tc
+    (ethane: 9.5 kJ/mol at 200 K, 1.9 at 305 K) and gave energy balances
+    spurious roots. It is now `int Cp_liq (Tref->T_v) + Hvap(T_v) +
+    int Cp_ig (T_v->T)` with `T_v = min(Tref, Antoine Tb)`, so
+    `dH/dT = Cp_ig`. The docstring promised `Cp_vap`; the code now uses it.
+    Liquid enthalpies are unchanged, and so is every vapour enthalpy at `T_v`.
+    `tests/test_core_unit_bugs.py::test_issue_73` pinned the old path and was
+    rewritten.
+  - **Tests whose numbers moved:**
+    - `test_heat_exchanger` (n-pentane boils at 321.2 K at 1.5 bar, not 320.x;
+      the NIST reference EOS gives 321.24 K).
+    - `test_planning` and `test_planning_diagram`, and section 9 of
+      `examples/30_delta_base_planning.ipynb`. The NGL cold-box gas (75 %
+      methane) bubbles at about 196 K at 40 bar (Peng-Robinson: 198.5 K), so it
+      is two-phase across the whole 218-244 K envelope. The old methane
+      constants put methane's Psat 2.3x too low and made a spurious bubble
+      point near 224 K. The phase-crossing tests and the notebook now open the
+      envelope to 185 K and start at 190 K. The reference chain run no longer
+      crosses a phase boundary.
+    - `test_distillation`. The ">10 K Raoult vs PR at the light end at 10 bar"
+      claim came from propane and n-butane vapour pressures that were 45 % and
+      30 % high. Raoult and PR now agree to 1.4 K (light end) and 0.7 K (heavy
+      end); the test pins that and checks it against `eos_bubble_T`. The docs
+      claim is corrected.
+    - `test_tier3_enhancements` (the water range) and `test_database` (ethyl
+      acetate's Tb is now inside its recorded range).
 
 - **`column_diameter` is deprecated and its signature changed (#429).** The old
   body ignored `sigma` and `tray_spacing`, hard-coded a vapor molecular weight
@@ -552,173 +829,21 @@ All notable changes to difflow are recorded here. The format follows
   recovery). `ViralClearanceTrain` step methods return `((kept, lost), info)`
   and low-pH recovery no longer exceeds 0.98.
 
-### Added
-
-- **`difflow.staged`: McCabe-Thiele stepper, pinches and Kremser (#424).**
-  A library (not a palette unit) of graphical equilibrium-stage design.
-  Operating lines as `(a, b, c)` (`operating_line`, `rectifying_line`,
-  `stripping_line` incl. open steam, `stripping_line_from_boilup`,
-  `q_line` for any `q` including 1, `feed_intersection`, `to_ratio`),
-  `EquilibriumCurve` (`constant_alpha`, `linear_equilibrium`, `tabulated` with
-  monotone PCHIP and an inverse, optional Murphree efficiency),
-  `mccabe_thiele` (a `lax.scan` stepper with a fractional, differentiable
-  stage count, optimal or specified feed stage, partial condenser),
-  `minimum_reflux` (feed-line and tangent pinch, not floored),
-  `total_reflux_stages` / `minimum_stages` (Fenske at constant alpha),
-  `minimum_solvent_ratio` for a curved equilibrium line, and
-  `kremser_fraction` / `kremser_stages` (any `A > 0`, smooth through
-  `A = 1`; re-exported from `difflow.units.lle` and `difflow_ree`). Plot
-  helper `difflow.visualization.plot_mccabe_thiele`. Verified against hand
-  loops, closed forms, SciPy PCHIP and the Lewis relation; no published
-  textbook example is reproduced (see the docs). Example notebook
-  `examples/48_mccabe_thiele_staged.ipynb`.
-
-- **Phase-diagram helpers and Wilson / Margules / van Laar activity models
-  (#398).** `difflow.activity` defines the `ActivityModel` protocol (a
-  `gamma(x, T)` method; `activity_gamma` dispatches) with `WilsonParams`,
-  `MargulesParams` (two-/three-suffix) and `VanLaarParams`; `NRTLParams` and
-  `UNIQUACParams` gained `gamma` adapters, and `Flash(activity_model=...)` now
-  accepts any of them (NRTL results unchanged). `difflow.phase_diagrams` adds
-  `txy`, `pxy`, `xy_curve`, `find_azeotrope` (masked, no Python branch on
-  traced values) and `ternary_lle`; `difflow.visualization` adds `plot_txy`,
-  `plot_pxy`, `plot_xy`, `plot_ternary`. Example notebook
-  `examples/41_phase_diagrams.ipynb`. UNIFAC is a follow-up.
-- **Centrifugal pump (#400).** New `CentrifugalPump` / `CentrifugalPumpParams`
-  unit (`difflow.units.pump`): polynomial head curve, BEP-centred or
-  polynomial efficiency, `NPSHr` curve, affinity-law scaling for operating
-  speed `N` and impeller diameter `D` (Q ~ N D, H ~ N^2 D^2, P ~ N^3 D^3),
-  outlet `P = P_in + rho g H(Q)`, `info` with head, efficiency, shaft and
-  electric power, `NPSHr`, `NPSHa` and `npsh_margin`, optional temperature
-  rise (`cp`) and `eo_residuals`. Helpers: `PumpCurve`, `fit_pump_curve`,
-  `npsh_available`, `pumps_in_series` / `pumps_in_parallel` (combined curves),
-  `system_curve(static_head, *pipes)` built from `Pipe` runs, and
-  `operating_point(pump, system)` solving the pump/system intersection with
-  implicit-function-theorem gradients (w.r.t. D, N, pipe diameter, ...).
-  Liquid `rho` is an explicit input, as for `Pipe`. `Pipe` gained
-  `hydraulics_at_flow(Q)`, and `evaluate_property` / `stream_mass_flow` helpers
-  that the pump shares. GUI palette symbol, docs (`### CentrifugalPump`, with
-  a cross-reference to the CO2 `difflow_cc.Pump`, which is intentionally left
-  as a separate fixed-outlet-pressure model), tests and
-  `examples/43_centrifugal_pump.ipynb` (operating point, affinity laws,
-  series/parallel, NPSH, economic pipe diameter with a VFD-speed constraint).
-  The vendor curve in tests and notebook is illustrative, not a published
-  datasheet; the operating point is verified against an independent
-  numpy/scipy calculation rather than a textbook figure.
-- **Shell-and-tube design (#403).** New `difflow.shell_and_tube` (JAX, SI,
-  differentiable; a library, not a palette unit): the Kern shell side
-  (`equivalent_diameter`, `kern_shell_side`, `kern_shell_pressure_drop`),
-  `tube_side_pressure_drop` (friction from `fluids.friction_factor` plus return
-  losses), continuous `tube_count` and `bundle_diameter`, BWG / TEMA tables,
-  and `ShellAndTubeDesign`, which iterates `U` (area from `Q/(U F LMTD)`,
-  geometry, `heat_transfer.internal_h` and Kern films, `overall_U` with
-  fouling) as an `optx.fixed_point`, so the area is differentiable in baffle
-  spacing, tube velocity, passes, flows, fouling and properties. Returns the
-  geometry, `U`, area, both `dP`, `F` and flags (`F < 0.75`, `dP` limits,
-  convergence, laminar tubes), with a simple isothermal mode for a condensing
-  or boiling side, `rate()` to re-rate a geometry and `round_design()` to
-  turn the continuous tube count, passes and baffle spacing into a buildable
-  one. Docs (`### ShellAndTubeDesign`), tests and example notebook 46
-  (gradient-based cost minimisation; placeholder prices). **The Kern
-  kerosene-crude textbook example is not reproduced** and the Kern constants,
-  bundle-diameter constants and tube tables are recalled from memory and
-  unverified; the docs and tests say what was and was not checked. The `U`
-  fixed point is not unique with a fixed tube length (a second, large-area
-  laminar solution exists); it is flagged.
-- `effectiveness_shell_and_tube(NTU, Cr, n_shells)`: exact 1-2N effectiveness
-  for one or several shells in series.
-- **Heat-transfer coefficients (#402).** New `difflow.heat_transfer` (pure JAX
-  functions, SI, differentiable; not a palette unit): `reynolds`, `prandtl`,
-  `grashof`, `rayleigh`, `nusselt_to_h`; conduction (`slab_`/`cylinder_`/
-  `sphere_resistance`, `composite_wall`, `critical_insulation_radius`,
-  `fin_efficiency_straight`); tube-side `dittus_boelter`, `sieder_tate`,
-  `sieder_tate_laminar`, `gnielinski` (takes the Darcy factor from
-  `difflow.fluids.friction_factor`) and the dispatcher `internal_h` /
-  `internal_nusselt` with a C2 laminar-transition-turbulent blend over Re
-  2300-4000 and no Python branching on Re; `churchill_bernstein`,
-  `flat_plate_nusselt`, Churchill-Chu natural convection; Nusselt film
-  condensation (plate, tube, n-tube column), Rohsenow boiling (flux and closed
-  form inverse), `mostinski`, Zuber `critical_heat_flux`; and
-  `overall_U(h_i, h_o, D_i, D_o, k_wall, R_fi, R_fo, basis)`. Docs section
-  "Heat-Transfer Coefficients" in `unit-operations-chemical.md`, tests in
-  `tests/test_heat_transfer.py` and `examples/45_heat_transfer_coefficients.ipynb`
-  (U to `CounterCurrentHX`, optimal tube velocity with `difflow.economics`;
-  its prices are illustrative placeholders). Validation is against
-  independent evaluations of the stated formulas and derivations (Nusselt's
-  0.943, fin, cylinder resistance), **not** textbook worked-example numbers,
-  which were not reproduced; the `FOULING_RESISTANCES` and `TYPICAL_U_RANGES`
-  tables, the Rohsenow `C_sf` default and the Mostinski constants are from
-  memory and flagged unverified. Not done: callable `U`/`UA` on the exchangers
-  (compute `U` and pass the number), annular fins, tube banks, Kern /
-  Bell-Delaware (#403).
-
-- **Liquid pipe flow (#399).** New `difflow.fluids` (JAX, SI, differentiable):
-  `reynolds_number`, `hydraulic_diameter`, the Darcy `friction_factor` by
-  Colebrook-White (Newton solve, implicit-function-theorem gradients),
-  Churchill, Haaland or Swamee-Jain with a C2 laminar blend (exactly 64/Re
-  below Re 2100), `darcy_pressure_drop`, `minor_loss`, a `FITTINGS` table of
-  Crane TP-410 K / L/D values with `fitting_K` and `equivalent_length`, and
-  `orifice_flow`/`orifice_dp`/`venturi_flow`/`venturi_dp`. New `Pipe` /
-  `PipeParams` unit (`L`, `D`, `roughness`, `dz`, `fittings`,
-  `friction_method`; liquid `rho` and `mu` are explicit numbers or callables of
-  the stream, molar mass via `MW` or a `thermo`) with `info` (`v`, `Re`, `f`,
-  `dP_friction`, `dP_minor`, `dP_static`, `head_loss`), `eo_residuals`, GUI
-  palette symbol, docs (`### Pipe`, friction methods, K table) and
-  `examples/42_liquid_pipe_flow.ipynb` (Moody chart, economic diameter). The
-  K-values were transcribed from the Crane/Perry's reprints, not checked against
-  the TP-410 scan; the notebook's $/m piping cost is an illustrative
-  placeholder, not a cited correlation.
-- `difflow.particles` (#401): pure JAX functions for flow past particles and
-  through beds. `drag_coefficient` (Haider-Levenspiel 1989, Turton-Levenspiel
-  1986, Schiller-Naumann), `terminal_velocity` (implicit root find in ln Re,
-  implicit differentiation), `hindered_settling_velocity` and
-  `richardson_zaki_exponent`, `ergun_pressure_gradient` (viscous and inertial
-  terms in `info`), `kozeny_carman`, `minimum_fluidization_velocity` (Ergun
-  quadratic or Wen-Yu), `bed_expansion`, `fluidization_window`, and
-  `geldart_group` (approximate boundaries; not differentiable). Verified
-  against first principles and independent scipy solves, not against copied
-  textbook tables (see `docs/unit-operations-chemical.md`). `GasPFRParams`
-  also accepts a physical bed (`d_p`, `voidage`, `mu`, `rho_gas`, `u_s0`,
-  `bed_area`, `sphericity`) from which alpha is computed by the Ergun
-  equation (`effective_alpha`); the lumped `alpha` input is unchanged.
-  Example notebook `examples/44_particles_and_beds.ipynb`.
-- **Evaporators (#404).** `Evaporator` (single effect, rating by area or design
-  by product concentration), `MultiEffectEvaporator` (forward, backward and
-  parallel feed; equal-area design solved as one Newton system, or rating with
-  given areas; per-effect `U`) and `MechanicalVaporRecompression` (ideal-gas
-  isentropic compression, compressor work against steam saved), in
-  `difflow/units/evaporator.py`. Each returns `(concentrate, vapor, info)` with
-  steam rate, steam economy, per-effect T, P, BPR, vapor, area and Q, and
-  closure residuals; `info` is differentiable with respect to `U`, the feed and
-  the steam pressure (implicit gradients through `optimistix`). The
-  non-volatile solute is an ordinary stream species whose vapor flow is exactly
-  zero. `boiling_point_rise` offers Raoult (`ideal`), `colligative`, user
-  Duhring lines, polynomial, callable and built-in `naoh`/`nacl`/`sucrose`
-  models, plus `bpr_fn=` and `enthalpy_fn=` hooks (heat of dilution). Water
-  saturation uses IAPWS-IF97; the enthalpy fits are to recalled steam-table
-  points. **Not verified**: the built-in NaOH, NaCl and sucrose BPR data are
-  approximate recollections (they raise `UnverifiedDataWarning`), and no
-  textbook worked example is claimed to be reproduced. Registered in the
-  palette under a new `evaporation` category with its own symbol (GUI bundle
-  rebuilt), documented in `docs/unit-operations-chemical.md`, example notebook
-  `examples/47_evaporators.ipynb` (optimal number of effects, with illustrative
-  placeholder prices). No evaporator cost curve was added to
-  `economics/capital.py` (no citable constants at hand); use
-  `heat_exchanger_cost` as a stand-in.
-
-- `difflow.solvers.pounce_problem` builds the configured pounce Problem once
-  so repeated solves reuse the compiled residual and Jacobian (about 0.1 s
-  against 30 s on a nested-EOS flowsheet, #394). `solve_with_pounce` is now a
-  thin wrapper over it and still rebuilds on every call; its docstring and
-  `docs/external-solvers.md` say so.
-- `InstantaneousUnit` sees time and the integrator `args` (#396): an `fn`
-  taking `(t, inputs, params)` or `(t, inputs, params, args)`, and
-  `call_params` callables taking `(t, params)` or `(t, params, args)`, chosen
-  by arity (the 2-argument `fn` and 1-argument callable forms are unchanged).
-  `DynamicFlowsheet.simulate(args=...)` is documented as the one place for
-  time-varying disturbances, read by feeds and units alike.
-
 ### Fixed
 
+- **`plan_sensitivity` reported half the elastic penalty as a shadow price.**
+  The stationarity gradient that the multipliers are solved from included
+  the elastic penalty of the active specs as well. When the plan meets a spec
+  exactly, that penalty sits on the kink of `relu(v - rhs)`. JAX's
+  subgradient there is 0.5, so `penalty/2` leaked into the multiplier.
+  Notebook 30, section 8, reported 4999.64 $/h per K on `T_colfeed`,
+  while a re-solve gave 0.35. The fix leaves the penalty of an active spec
+  out of the gradient, because its multiplier already carries it. Now the
+  multiplier is the constraint's shadow price (0.359 against a 0.1 K
+  re-solve of 0.358). Regression tests are in `tests/test_planning.py`
+  (`TestPlanSensitivity`).
+- `eos_bubble_P`/`eos_dew_P`/`_T` no longer flag a pure component (or a mixture with one species present) as
+  `trivial` and warn: K = 1 is the answer there. Test `tests/test_bubble_dew.py`.
 - `CubicThermo` treats a species absent from a stream as zero flow, as
   `IdealThermo` already did. A condenser whose vapour listed only n-pentane
   against a water-only coolant raised a bare `KeyError: 'water'` from

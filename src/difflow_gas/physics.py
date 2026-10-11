@@ -5,17 +5,23 @@ Steady-state isothermal approximations in the standard benchmark form
 equation-oriented models, so sequential and simultaneous solutions of
 the same network are directly comparable):
 
-* squared-pressure Weymouth pipe law
-  ``p_from^2 - p_to^2 = beta q |q|`` with q in kg/s and p in Pa,
+* the squared-pressure isothermal pipe law
+  ``p_from^2 - p_to^2 = beta q |q|`` with q in kg/s and p in Pa (the
+  GasLib literature calls this the "Weymouth" form; see
+  :func:`isothermal_pipe_beta` for what that does and does not mean),
 * resistors in the same squared-pressure form with coefficient xi,
 * generic adiabatic compressor shaft power with an optional smoothed
   |q| (matching the smoothing used in NLP objectives, so reduced-space
   and full-space optimizations minimize the same function).
 
-For operational work one would replace the Nikuradse friction factor
-and the constant compressibility with something richer; every
-coefficient here is a plain float, so doing that does not disturb the
-rest of the plugin.
+The pipe law drops the kinetic-energy (acceleration) term of the full
+isothermal line equation,
+``p1^2 - p2^2 = (q/A)^2 z R_s T [lambda L / D + 2 ln(p1/p2)]``; the
+``2 ln(p1/p2)`` term is negligible for transmission lines (lambda L / D
+of order 10^3 against 2 ln(p1/p2) of order 1) but not for short, fast
+lines. :func:`difflow.compressible.isothermal_outlet_pressure` solves the
+full equation. All coefficients are computed with ``jax.numpy`` and are
+differentiable in every float argument.
 
 Conventions: pressure in Pa, mass flow in kg/s, temperature in K.
 GasLib XML files use bar, 1000 Nm^3/h and Celsius; the conversion
@@ -46,6 +52,9 @@ KNM3H_TO_M3S = 1000.0 / 3600.0   # 1000 Nm^3/h -> Nm^3/s
 #: NLP convention sqrt(q^2 + eps^2)
 EPS_FLOW = 1.0e-4
 
+#: Friction laws accepted by :func:`isothermal_pipe_beta`.
+PIPE_FRICTION_LAWS = ("nikuradse", "colebrook", "weymouth")
+
 
 def knm3h_to_kg_s(flow_knm3h: float, norm_density_kg_m3: float) -> float:
     """Convert 1000 m^3/h (normal conditions) to kg/s."""
@@ -62,44 +71,116 @@ def specific_gas_constant(molar_mass_kg_kmol: float) -> float:
     return R_UNIVERSAL / molar_mass_kg_kmol
 
 
-def nikuradse_friction(diameter_m: float, roughness_m: float) -> float:
+def nikuradse_friction(diameter_m, roughness_m):
     """Fully-rough-turbulent Darcy friction factor (Nikuradse).
 
-    lambda = (2 log10(D/k) + 1.138)^-2
+    ``lambda = (2 log10(D/k) + 1.138)^-2``, the Re -> infinity limit of
+    Colebrook-White (``2 log10(3.7) = 1.136``, so this equals
+    ``(2 log10(3.7 D/k))^-2`` to 0.05%). Independent of the Reynolds
+    number, so it overestimates nothing in fully rough flow but
+    underestimates lambda for smooth or moderately rough lines (by about
+    1% on a 0.6 m, 45 um line at Re = 2e7). Differentiable (``jnp``).
     """
-    return (2.0 * math.log10(diameter_m / roughness_m) + 1.138) ** -2
+    return (2.0 * jnp.log10(jnp.asarray(diameter_m) / roughness_m) + 1.138) ** -2
 
 
-def weymouth_beta(
-    length_m: float,
-    diameter_m: float,
-    roughness_m: float,
-    gas_temp_k: float = DEFAULT_TEMP_K,
-    molar_mass_kg_kmol: float = 18.0,
-    z_factor: float = DEFAULT_Z,
-) -> float:
-    """Coefficient beta for the squared-pressure Weymouth equation.
+def weymouth_friction(diameter_m):
+    """Darcy friction factor of the Weymouth (1912) gas-pipeline equation.
+
+    ``lambda = 0.032 / d^(1/3)`` with d the inner diameter in inches, i.e.
+    ``lambda = 0.009406 / D^(1/3)`` with D in m. Equivalent to the Weymouth
+    transmission factor ``F = 2/sqrt(lambda) = 11.18 d^(1/6)`` (Menon, *Gas
+    Pipeline Hydraulics*, CRC 2005, Ch. 2). An empirical fit to old
+    small-bore lines: it ignores roughness and Reynolds number and is
+    conservative (high) for large modern lines.
+    """
+    d_in = jnp.asarray(diameter_m) / 0.0254
+    return 0.032 * d_in ** (-1.0 / 3.0)
+
+
+def isothermal_pipe_beta(
+    length_m,
+    diameter_m,
+    roughness_m,
+    gas_temp_k=DEFAULT_TEMP_K,
+    molar_mass_kg_kmol=18.0,
+    z_factor=DEFAULT_Z,
+    friction: str = "nikuradse",
+    mass_flow_kg_s=None,
+    viscosity_pa_s=None,
+):
+    """Coefficient beta of the squared-pressure isothermal pipe law.
 
         p_from^2 - p_to^2 = beta * q * |q|      (Pa^2, q in kg/s)
         beta = 16 lambda L R_s T z / (pi^2 D^5)
 
+    This is the isothermal line equation without its kinetic-energy term
+    ``2 ln(p_from/p_to)`` (see the module docstring), the form the GasLib
+    literature calls "Weymouth". Strictly, the Weymouth *equation* is this
+    law with Weymouth's diameter-only friction correlation
+    (``friction="weymouth"``); the default here is the fully rough
+    Nikuradse factor of the GasLib benchmarks.
+
     Args:
         length_m: pipe length (m)
         diameter_m: inner diameter (m)
-        roughness_m: absolute roughness (m)
+        roughness_m: absolute roughness (m); unused by ``"weymouth"``
         gas_temp_k: gas temperature (K)
         molar_mass_kg_kmol: molar mass (kg/kmol)
         z_factor: compressibility factor
+        friction: ``"nikuradse"`` (fully rough, Re-independent; default and
+            the historical behaviour), ``"colebrook"`` (Colebrook-White at
+            the Reynolds number of ``mass_flow_kg_s``, via
+            :func:`difflow.fluids.friction_factor`), or ``"weymouth"``
+            (:func:`weymouth_friction`).
+        mass_flow_kg_s: mass flow (kg/s); required for ``"colebrook"``.
+            beta then depends on the flow, so a network solve that holds
+            beta fixed must update it.
+        viscosity_pa_s: gas dynamic viscosity (Pa s); required for
+            ``"colebrook"``.
 
     Returns:
-        beta in Pa^2 / (kg/s)^2.
+        beta in Pa^2 / (kg/s)^2 (a JAX scalar, differentiable in every
+        float argument).
+
+    Raises:
+        ValueError: unknown ``friction`` or missing Colebrook inputs.
+
+    Example:
+        >>> beta = isothermal_pipe_beta(50e3, 0.6, 45e-6, 288.15, 16.04, 0.851,
+        ...                             friction="colebrook",
+        ...                             mass_flow_kg_s=121.5, viscosity_pa_s=1.2e-5)
     """
-    lam = nikuradse_friction(diameter_m, roughness_m)
+    if friction == "nikuradse":
+        lam = nikuradse_friction(diameter_m, roughness_m)
+    elif friction == "weymouth":
+        lam = weymouth_friction(diameter_m)
+    elif friction == "colebrook":
+        if mass_flow_kg_s is None or viscosity_pa_s is None:
+            raise ValueError(
+                "friction='colebrook' needs mass_flow_kg_s and viscosity_pa_s "
+                "(the Reynolds number)"
+            )
+        from difflow.fluids import friction_factor
+
+        D = jnp.asarray(diameter_m)
+        Re = 4.0 * jnp.abs(mass_flow_kg_s) / (PI * D * viscosity_pa_s)
+        lam = friction_factor(Re, roughness_m / D, method="colebrook")
+    else:
+        raise ValueError(
+            f"Unknown friction law {friction!r}; use one of {PIPE_FRICTION_LAWS}"
+        )
     r_s = specific_gas_constant(molar_mass_kg_kmol)
     return (
         16.0 * lam * length_m * r_s * gas_temp_k * z_factor
-        / (PI ** 2 * diameter_m ** 5)
+        / (PI ** 2 * jnp.asarray(diameter_m) ** 5)
     )
+
+
+#: Historical name of :func:`isothermal_pipe_beta` (same signature and
+#: defaults, Nikuradse friction). Kept for existing callers; "Weymouth"
+#: refers to the squared-pressure form, not Weymouth's friction factor.
+weymouth_beta = isothermal_pipe_beta
 
 
 def resistor_xi(

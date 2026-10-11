@@ -298,7 +298,7 @@ solver swap:
 
 - `LPSolution.duals` and `LPSolution.active_bounds` have **no consumers**
   anywhere in the repository. `plan_sensitivity` derives its multipliers by AD
-  on the caller's *nonlinear* blocks (`sensitivity.py:304`), not from LP duals —
+  on the caller's *nonlinear* blocks (`sensitivity.py:313`), not from LP duals —
   deliberately, and consistent with the invariant that violations are scored
   from the nonlinear model and never from LP slacks. The LP is a throwaway
   subproblem; its duals are shadow prices of a Taylor model, not of the plant.

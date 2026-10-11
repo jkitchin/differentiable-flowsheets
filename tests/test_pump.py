@@ -224,6 +224,47 @@ class TestSeriesParallel:
         assert float(par.npshr(Q)) == pytest.approx(float(a.npshr(Q / 2)), rel=1e-9)
         assert float(pumps_in_series(a, a).npshr(Q)) == pytest.approx(float(a.npshr(Q)), rel=1e-12)
 
+    def test_parallel_check_valve_shuts_weak_pump(self):
+        """Regression (Ch 4 gap 8): the weak pump used to get a negative flow."""
+        a = CentrifugalPump(CentrifugalPumpParams(head_coeffs=[40.0, 0.0, -3e3], rho=1000.0, eta_max=0.7, Q_bep=0.06))
+        b = CentrifugalPump(CentrifugalPumpParams(head_coeffs=[25.0, 0.0, -3e3], rho=1000.0, eta_max=0.7, Q_bep=0.06))
+        par = pumps_in_parallel(a, b)
+        q, info = par.split(0.03, return_info=True)
+        assert float(q[0]) == pytest.approx(0.03, rel=1e-6)
+        assert abs(float(q[1])) < 1e-7
+        assert float(info["head"]) == pytest.approx(37.3, rel=1e-9)
+        assert float(par.head(0.03)) == pytest.approx(37.3, rel=1e-9)
+        assert list(np.asarray(info["running"])) == [True, False]
+        assert bool(info["converged"])
+        np.testing.assert_allclose(np.asarray(info["shutoff_head"]), [40.0, 25.0])
+        # the stopped pump draws no power
+        assert float(par.shaft_power(0.03, 1000.0)) == pytest.approx(float(a.curve.shaft_power(0.03, 1000.0)), rel=1e-6)
+        # dH/dQ is pump a's alone: -2 * 3e3 * Q
+        assert float(jax.grad(par.head)(0.03)) == pytest.approx(-180.0, rel=1e-6)
+        # the old (valveless) behaviour is still available
+        qn = pumps_in_parallel(a, b, check_valves=False).split(0.03)
+        assert float(qn[1]) < 0
+
+    def test_parallel_check_valve_both_running(self):
+        a = PumpCurve([40.0, 0.0, -3e3])
+        b = PumpCurve([25.0, 0.0, -3e3])
+        par = pumps_in_parallel(a, b)
+        # both run above the switch flow sqrt(15/3e3) = 0.0707: 40 - 3e3 qa^2 = 25 - 3e3 qb^2
+        Q = 0.1
+        qa = (15.0 / 3e3 + Q**2) / (2 * Q)
+        q, info = par.split(Q, return_info=True)
+        np.testing.assert_allclose(np.asarray(q), [qa, Q - qa], rtol=1e-9)
+        assert list(np.asarray(info["running"])) == [True, True]
+        dH = -2 * 3e3 * qa * (0.5 - 15.0 / 3e3 / (2 * Q**2))
+        assert float(jax.grad(par.head)(Q)) == pytest.approx(dH, rel=1e-6)
+        check_grads(par.head, (Q,), order=1, modes=["rev"], atol=1e-5, rtol=1e-5)
+        check_grads(par.head, (0.03,), order=1, modes=["rev"], atol=1e-5, rtol=1e-5)
+        # dead-headed: the common head is the largest shutoff head
+        assert float(par.head(0.0)) == pytest.approx(40.0, rel=1e-12)
+        # continuous across the switch flow
+        Qs = np.sqrt(15.0 / 3e3)
+        assert float(par.head(Qs * (1 - 1e-4))) == pytest.approx(float(par.head(Qs * (1 + 1e-4))), rel=1e-3)
+
     def test_accepts_pump_units(self):
         u = CentrifugalPump(CentrifugalPumpParams(**PUMP))
         assert float(pumps_in_series(u, u).head(0.01)) == pytest.approx(2 * float(u.curve.head(0.01)), rel=1e-12)
@@ -265,12 +306,47 @@ class TestNPSH:
         _, ref = CentrifugalPump(CentrifugalPumpParams(**{**PUMP, "Psat": float(th.Psat("W", 293.15))}))(inlet)
         assert float(info["NPSHa"]) == pytest.approx(float(ref["NPSHa"]), rel=1e-12)
 
-    def test_suction_velocity_head(self):
+    def test_suction_velocity_head_static_pressure(self):
+        # A measured static (wall-tap) flange pressure gets v^2/2g added.
+        a = CentrifugalPump(CentrifugalPumpParams(**{**PUMP, "Psat": 2339.0}))
+        b = CentrifugalPump(CentrifugalPumpParams(**{**PUMP, "Psat": 2339.0, "D_suction": 0.1,
+                                                     "suction_pressure": "static"}))
+        v = 0.02 / (np.pi / 4 * 0.1**2)
+        _, ib = b(water(0.02))
+        d = float(ib["NPSHa"] - a(water(0.02))[1]["NPSHa"])
+        assert d == pytest.approx(v**2 / (2 * G), rel=1e-9)
+        assert float(ib["suction_velocity"]) == pytest.approx(v, rel=1e-12)
+
+    def test_total_pressure_default_does_not_add_velocity_head(self):
         a = CentrifugalPump(CentrifugalPumpParams(**{**PUMP, "Psat": 2339.0}))
         b = CentrifugalPump(CentrifugalPumpParams(**{**PUMP, "Psat": 2339.0, "D_suction": 0.1}))
+        _, ia = a(water(0.02))
+        _, ib = b(water(0.02))
+        assert float(ib["NPSHa"]) == float(ia["NPSHa"])
         v = 0.02 / (np.pi / 4 * 0.1**2)
-        d = float(b(water(0.02))[1]["NPSHa"] - a(water(0.02))[1]["NPSHa"])
-        assert d == pytest.approx(v**2 / (2 * G), rel=1e-9)
+        assert float(ib["suction_velocity_head"]) == pytest.approx(v**2 / (2 * G), rel=1e-12)
+
+    def test_pipe_outlet_to_pump_counts_velocity_head_once(self):
+        """Regression (Ch 4 gap 4): Pipe -> pump with D_suction overstated NPSHa by v^2/2g.
+
+        Bernoulli from the tank surface (at rest, P_tank, liquid z_s above the
+        pump) to the flange: P_static/(rho g) + v^2/2g = P_tank/(rho g) + z_s - h_f,
+        so NPSHa = (P_tank - Psat)/(rho g) + z_s - h_f whatever the nozzle size.
+        """
+        Ptank, zs, Psat, Q, D = 101325.0, 3.0, 2339.0, 0.012, 0.0779
+        suction = pipe(D=D, L=6.0, dz=-zs, fittings={"entrance_sharp": 1, "elbow_90_standard": 2})
+        flange, pinfo = suction(water(Q, P=Ptank))
+        hf = float(pinfo["dP_friction"] + pinfo["dP_minor"]) / (RHO * G)
+        expected = (Ptank - Psat) / (RHO * G) + zs - hf
+        for kw in ({}, {"D_suction": D}, {"D_suction": 0.05}):
+            _, info = CentrifugalPump(CentrifugalPumpParams(**{**PUMP, "Psat": Psat, **kw}))(flange)
+            assert float(info["NPSHa"]) == pytest.approx(expected, rel=1e-12)
+
+    def test_suction_pressure_validation(self):
+        with pytest.raises(ValueError, match="D_suction"):
+            CentrifugalPump(CentrifugalPumpParams(**{**PUMP, "Psat": 2339.0, "suction_pressure": "static"}))(water(0.01))
+        with pytest.raises(ValueError, match="suction_pressure"):
+            CentrifugalPump(CentrifugalPumpParams(**{**PUMP, "suction_pressure": "gauge"}))(water(0.01))
 
 
 class TestUnit:
@@ -421,3 +497,25 @@ class TestRegistration:
         for n in ("CentrifugalPump", "CentrifugalPumpParams", "system_curve",
                   "operating_point", "pumps_in_series", "pumps_in_parallel", "fit_pump_curve", "npsh_available"):
             assert hasattr(difflow, n)
+
+
+def test_operating_point_warns_on_reverse_flow():
+    """A valveless parallel pair with a weak pump can put Q* < 0; say so."""
+    import warnings as _w
+
+    from difflow import OperatingPointWarning, Pipe, PipeParams, operating_point, pumps_in_parallel, system_curve
+    from difflow.units.pump import PumpCurve
+
+    a = PumpCurve([31.92, 45.0, -15814.0])
+    b = PumpCurve([31.92 * 0.64, 45.0 * 0.8, -15814.0])
+    pipe = Pipe(PipeParams(L=150.0, D=0.10226, rho=998.96, mu=1.0016e-3,
+                           fittings={"entrance_sharp": 1, "elbow_90_standard": 6, "gate_valve": 2,
+                                     "check_valve_swing": 1, "exit": 1}))
+    sysc = system_curve(15.0, pipe)
+    with pytest.warns(OperatingPointWarning, match="< 0"):
+        Q = operating_point(pumps_in_parallel(a, b, check_valves=False), sysc)
+    assert float(Q) < 0
+    with _w.catch_warnings():
+        _w.simplefilter("error", OperatingPointWarning)
+        assert float(operating_point(pumps_in_parallel(a, b), sysc)) > 0
+        jax.grad(lambda h: operating_point(pumps_in_parallel(a, b, check_valves=False), system_curve(h, pipe)))(15.0)

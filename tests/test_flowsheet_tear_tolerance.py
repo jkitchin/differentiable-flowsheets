@@ -90,17 +90,19 @@ class TestTheMeasurement:
         assert fs.last_solve_gain < 0
         assert fs.last_solve_error_estimate < fs.last_solve_residual
 
-    def test_a_residual_at_round_off_reports_no_gain(self):
-        """Nothing to measure, and a ratio of noise lands near one.
+    def test_a_residual_at_round_off_takes_the_gain_from_the_jacobian(self):
+        """Nothing for the probe to measure, and a ratio of noise lands near one.
 
         Near one is exactly where ``1/(1 - gain)`` blows up, so an
-        estimator that did not stop here would invent its loudest alarms on
-        its best solves.
+        estimator that used the noise would invent its loudest alarms on
+        its best solves. The probe stops there; the gain then comes from
+        the tear map's Jacobian at the solution (gaps-ch01 #7: it used to
+        be ``None`` after every Anderson solve), and the error is zero.
         """
         fs = _loop(slope=0.2)
         _solve(fs, tol=1e-14, acceleration="anderson")
         assert fs.last_solve_residual < 1e-13
-        assert fs.last_solve_gain is None
+        assert fs.last_solve_gain == pytest.approx(0.2, abs=1e-6)
         assert fs.last_solve_error_estimate == 0.0
 
     def test_error_probe_zero_measures_nothing(self):

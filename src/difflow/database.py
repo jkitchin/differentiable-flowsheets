@@ -298,11 +298,9 @@ def get_critical_props(name: str) -> CriticalProperties:
 #         Note: A = A_NIST + 5 because NIST uses bar and we use Pa (1 bar = 1e5 Pa).
 #     "Hf": standard heat of formation (J/mol) at 298.15 K,
 # }
-# Antoine sources: NIST Chemistry WebBook (https://webbook.nist.gov)
-#   Hydrocarbons: Williamham, Taylor, et al., 1945
-#   Alcohols: Ambrose and Sprake, 1970
-#   Acetone: Ambrose, Sprake, et al., 1974
-#   Water: Bridgeman and Aldrich, 1964 (304-333 K range)
+# Antoine sources: per species in ANTOINE_SOURCES (after these tables), with
+# the range recorded in "T_antoine_min"/"T_antoine_max". Every entry
+# reproduces its normal boiling point (tests/test_antoine_database.py).
 
 _IDEAL_THERMO_DATA = {
     # Light gases
@@ -314,7 +312,9 @@ _IDEAL_THERMO_DATA = {
         "Cp_ig": (31.15, -1.357e-2, 2.680e-5, -1.168e-8),
         "Hvap": (5577.0, 0.38, 126.2),
         "Hvap_T": 77.34,
-        "antoine": (8.61, 255.68, -6.6),
+        "antoine": (8.63792, 257.877, -6.344),
+        "T_antoine_min": 63.14,
+        "T_antoine_max": 95.73,
         "Hf": 0.0,
     },
     "oxygen": {
@@ -323,7 +323,9 @@ _IDEAL_THERMO_DATA = {
         "Cp_ig": (29.3183, -0.00735043, 3.10953e-05, -1.86327e-08),
         "Hvap": (6820.0, 0.38, 154.6),
         "Hvap_T": 90.2,
-        "antoine": (8.68, 319.01, -6.45),
+        "antoine": (8.85845, 325.675, -5.667),
+        "T_antoine_min": 54.36,
+        "T_antoine_max": 131.01,
         "Hf": 0.0,
     },
     "carbon_dioxide": {
@@ -336,7 +338,9 @@ _IDEAL_THERMO_DATA = {
         # Clausius-Clapeyron value "at 288 K", where the true latent heat is 7.8.
         "Hvap": (15420.0, 0.38, 304.2),
         "Hvap_T": 216.59,
-        "antoine": (9.81, 1347.79, -35.52),
+        "antoine": (9.46212, 748.28, -16.9),
+        "T_antoine_min": 216.0,
+        "T_antoine_max": 289.38,
         "Hf": -393510.0,
     },
     "ammonia": {
@@ -345,7 +349,9 @@ _IDEAL_THERMO_DATA = {
         "Cp_ig": (31.567, -0.0028806, 6.93064e-05, -4.3892e-08),
         "Hvap": (23350.0, 0.38, 405.4),
         "Hvap_T": 239.82,
-        "antoine": (10.20, 1596.49, -28.16),
+        "antoine": (9.86886, 1113.928, -10.409),
+        "T_antoine_min": 239.6,
+        "T_antoine_max": 401.79,
         "Hf": -45940.0,
     },
 
@@ -356,7 +362,9 @@ _IDEAL_THERMO_DATA = {
         "Cp_ig": (19.25, 5.213e-2, 1.197e-5, -1.132e-8),
         "Hvap": (8180.0, 0.38, 190.6),
         "Hvap_T": 111.67,
-        "antoine": (8.68, 405.42, -26.09),
+        "antoine": (8.9895, 443.028, -0.49),
+        "T_antoine_min": 90.99,
+        "T_antoine_max": 189.99,
         "Hf": -74870.0,
     },
     "ethane": {
@@ -365,7 +373,9 @@ _IDEAL_THERMO_DATA = {
         "Cp_ig": (5.409, 1.781e-1, -6.938e-5, 8.713e-9),
         "Hvap": (14690.0, 0.38, 305.3),
         "Hvap_T": 184.6,
-        "antoine": (9.04, 663.70, -16.47),
+        "antoine": (8.93835, 659.739, -16.719),
+        "T_antoine_min": 135.74,
+        "T_antoine_max": 249.99,
         "Hf": -84000.0,
     },
     "propane": {
@@ -374,7 +384,9 @@ _IDEAL_THERMO_DATA = {
         "Cp_ig": (-4.224, 3.063e-1, -1.586e-4, 3.215e-8),
         "Hvap": (19040.0, 0.38, 369.8),
         "Hvap_T": 231.1,
-        "antoine": (9.10, 803.81, -26.11),
+        "antoine": (9.01158, 834.26, -22.763),
+        "T_antoine_min": 147.9,
+        "T_antoine_max": 339.78,
         "Hf": -104700.0,
     },
     "n_butane": {
@@ -383,7 +395,9 @@ _IDEAL_THERMO_DATA = {
         "Cp_ig": (9.487, 3.313e-1, -1.108e-4, -2.822e-9),
         "Hvap": (22390.0, 0.38, 425.1),
         "Hvap_T": 273.0,
-        "antoine": (9.05, 935.86, -34.42),
+        "antoine": (8.93266, 935.773, -34.361),
+        "T_antoine_min": 200.5,
+        "T_antoine_max": 331.23,
         "Hf": -125600.0,
     },
     "n_pentane": {
@@ -392,7 +406,9 @@ _IDEAL_THERMO_DATA = {
         "Cp_ig": (-3.626, 4.873e-1, -2.580e-4, 5.305e-8),
         "Hvap": (25790.0, 0.38, 469.7),
         "Hvap_T": 309.2,
-        "antoine": (9.02, 1075.78, -40.45),
+        "antoine": (8.9892, 1070.617, -40.454),
+        "T_antoine_min": 220.72,
+        "T_antoine_max": 394.17,
         "Hf": -146800.0,
     },
     "n_hexane": {
@@ -401,7 +417,9 @@ _IDEAL_THERMO_DATA = {
         "Cp_ig": (-4.413, 5.820e-1, -3.119e-4, 6.494e-8),
         "Hvap": (28850.0, 0.38, 507.6),
         "Hvap_T": 341.9,
-        "antoine": (9.00266, 1171.530, -48.784),
+        "antoine": (9.00266, 1171.53, -48.784),
+        "T_antoine_min": 243.54,
+        "T_antoine_max": 425.99,
         "Hf": -167200.0,
     },
     "n_heptane": {
@@ -413,6 +431,8 @@ _IDEAL_THERMO_DATA = {
         "Hvap": (31770.0, 0.38, 540.2),
         "Hvap_T": 371.5,
         "antoine": (9.02832, 1268.636, -56.199),
+        "T_antoine_min": 270.03,
+        "T_antoine_max": 464.18,
         "Hf": -187800.0,
     },
     "n_octane": {
@@ -424,6 +444,8 @@ _IDEAL_THERMO_DATA = {
         "Hvap": (34410.0, 0.38, 568.7),
         "Hvap_T": 398.7,
         "antoine": (9.04867, 1355.126, -63.633),
+        "T_antoine_min": 289.96,
+        "T_antoine_max": 494.37,
         "Hf": -208600.0,
     },
 
@@ -437,9 +459,10 @@ _IDEAL_THERMO_DATA = {
         # Watson Hvap interpolated between propane and n-butane (approximate).
         "Hvap": (21300.0, 0.38, 407.8),
         "Hvap_T": 262.0,
-        # Antoine: NIST WebBook, Das, Reed et al. 1973 (261-408 K); the NIST
-        # log10(P/bar) A is shifted +5 for difflow's Pa convention.
-        "antoine": (9.3281, 1132.108, 0.918),
+        # Antoine: NIST WebBook, Aston, Kennedy et al. 1940 (see ANTOINE_SOURCES).
+        "antoine": (8.94417, 912.141, -29.808),
+        "T_antoine_min": 163.1,
+        "T_antoine_max": 346.25,
         "Hf": -134200.0,
     },
     "isopentane": {
@@ -449,9 +472,11 @@ _IDEAL_THERMO_DATA = {
         # Watson Hvap interpolated between n-butane and n-pentane (approximate).
         "Hvap": (24700.0, 0.38, 460.4),
         "Hvap_T": 301.1,
-        # Antoine: NIST WebBook, Stull 1947 (190-301 K); NIST log10(P/bar) A
-        # shifted +5 for difflow's Pa convention.
-        "antoine": (8.90935, 1018.516, -40.081),
+        # Antoine: NIST WebBook, Willingham, Taylor et al. 1945 (see
+        # ANTOINE_SOURCES).
+        "antoine": (8.91457, 1020.012, -40.053),
+        "T_antoine_min": 220.96,
+        "T_antoine_max": 358.81,
         "Hf": -153700.0,
     },
 
@@ -468,45 +493,45 @@ _IDEAL_THERMO_DATA = {
         "Cp_ig": (-4.7482e-01, 4.2488e-01, -2.0783e-04, 2.9140e-08),
         "Hvap": (37641.0, 0.38, 464.8),
         "antoine": (8.96914, 1044.01, -39.7),
-        "Hf": -21100.0,
         "T_antoine_min": 223.89,
         "T_antoine_max": 324.32,
+        "Hf": -21100.0,
     },
     "2_methyl_2_butene": {
         "MW": 70.13,
         "Cp_ig": (-5.2007, 4.3102e-01, -2.2737e-04, 4.6403e-08),
         "Hvap": (39786.0, 0.38, 470.0),
         "antoine": (9.09149, 1124.33, -36.52),
-        "Hf": -41700.0,
         "T_antoine_min": 230.69,
         "T_antoine_max": 333.14,
+        "Hf": -41700.0,
     },
     "2_2_4_trimethylpentane": {
         "MW": 114.23,
         "Cp_ig": (-23.936, 8.4297e-01, -4.6936e-04, 1.0446e-07),
         "Hvap": (47745.0, 0.38, 543.8),
         "antoine": (8.93646, 1257.85, -52.383),
-        "Hf": -224000.0,
         "T_antoine_min": 275.5,
         "T_antoine_max": 398.38,
+        "Hf": -224000.0,
     },
     "2_3_4_trimethylpentane": {
         "MW": 114.23,
         "Cp_ig": (-30.448, 9.0998e-01, -6.0879e-04, 1.7711e-07),
         "Hvap": (50052.0, 0.38, 566.4),
         "antoine": (8.977, 1314.31, -55.669),
-        "Hf": -217300.0,
         "T_antoine_min": 300.19,
         "T_antoine_max": 413.19,
+        "Hf": -217300.0,
     },
     "2_5_dimethylhexane": {
         "MW": 114.23,
         "Cp_ig": (-30.405, 8.6874e-01, -5.2198e-04, 1.2478e-07),
         "Hvap": (51098.0, 0.38, 550.0),
         "antoine": (8.98112, 1285.47, -58.902),
-        "Hf": -222500.0,
         "T_antoine_min": 285.2,
         "T_antoine_max": 408.2,
+        "Hf": -222500.0,
     },
 
     # Alkenes
@@ -516,7 +541,9 @@ _IDEAL_THERMO_DATA = {
         "Cp_ig": (22.9868, 0.0331137, 0.00015057, -1.2105e-07),
         "Hvap": (13540.0, 0.38, 282.3),
         "Hvap_T": 169.0,
-        "antoine": (9.08, 595.42, -15.09),
+        "antoine": (8.87261, 584.146, -18.307),
+        "T_antoine_min": 126.97,
+        "T_antoine_max": 219.87,
         "Hf": 52470.0,
     },
     "propylene": {
@@ -525,7 +552,9 @@ _IDEAL_THERMO_DATA = {
         "Cp_ig": (20.8685, 0.128863, 8.86068e-05, -1.01328e-07),
         "Hvap": (18420.0, 0.38, 365.6),
         "Hvap_T": 225.6,
-        "antoine": (9.10, 786.00, -25.52),
+        "antoine": (8.97488, 795.819, -24.884),
+        "T_antoine_min": 146.2,
+        "T_antoine_max": 317.66,
         "Hf": 20410.0,
     },
     # cis-2-butene, trans-2-butene, isobutylene. Cp: a cubic fitted here, by
@@ -544,27 +573,27 @@ _IDEAL_THERMO_DATA = {
         "Cp_ig": (29.245, 0.11883, 2.4322e-4, -2.1312e-7),
         "Hvap": (34248.0, 0.38, 435.75),
         "antoine": (8.98744, 957.06, -36.504),
-        "Hf": -7700.0,
         "T_antoine_min": 203.06,
         "T_antoine_max": 295.91,
+        "Hf": -7700.0,
     },
     "trans_2_butene": {
         "MW": 56.106,
         "Cp_ig": (35.445, 0.14124, 1.6382e-4, -1.5586e-7),
         "Hvap": (33472.0, 0.38, 428.61),
         "antoine": (9.0436, 982.166, -30.775),
-        "Hf": -10800.0,
-        "T_antoine_min": 201.70,
+        "T_antoine_min": 201.7,
         "T_antoine_max": 274.13,
+        "Hf": -10800.0,
     },
     "isobutylene": {
         "MW": 56.106,
         "Cp_ig": (23.064, 0.21696, 3.1111e-5, -8.2884e-8),
         "Hvap": (32837.0, 0.38, 418.09),
         "antoine": (8.64709, 799.055, -46.615),
-        "Hf": -17900.0,
-        "T_antoine_min": 216.40,
+        "T_antoine_min": 216.4,
         "T_antoine_max": 273.0,
+        "Hf": -17900.0,
     },
 
     # The C6 isomers and naphthenes of light-naphtha isomerization (#311).
@@ -584,55 +613,55 @@ _IDEAL_THERMO_DATA = {
         "MW": 86.177,
         "Cp_ig": (-6.882, 0.57438, -2.5124e-4, 1.6512e-8),
         "Hvap": (42344.0, 0.38, 497.7),
-        "antoine": (8.9640, 1135.41, -46.578),
+        "antoine": (8.964, 1135.41, -46.578),
+        "T_antoine_min": 238.84,
+        "T_antoine_max": 402.79,
         "Hf": -174300.0,
-        "T_antoine_min": 285.91,
-        "T_antoine_max": 334.22,
     },
     "3_methylpentane": {
         "MW": 86.177,
         "Cp_ig": (-4.5919, 0.54702, -2.0104e-4, -1.1154e-8),
         "Hvap": (42553.0, 0.38, 504.6),
         "antoine": (8.97377, 1152.368, -46.021),
-        "Hf": -171600.0,
         "T_antoine_min": 288.44,
         "T_antoine_max": 337.23,
+        "Hf": -171600.0,
     },
     "2_2_dimethylbutane": {
         "MW": 86.177,
         "Cp_ig": (-3.1491, 0.54281, -1.8902e-4, -6.8825e-9),
         "Hvap": (39577.0, 0.38, 489.0),
         "antoine": (8.87973, 1081.176, -43.807),
-        "Hf": -185600.0,
         "T_antoine_min": 288.53,
         "T_antoine_max": 323.68,
+        "Hf": -185600.0,
     },
     "2_3_dimethylbutane": {
         "MW": 86.177,
         "Cp_ig": (-20.012, 0.6334, -3.5449e-4, 8.1562e-8),
         "Hvap": (41104.0, 0.38, 500.0),
         "antoine": (8.93473, 1127.187, -44.2),
-        "Hf": -177800.0,
         "T_antoine_min": 287.41,
         "T_antoine_max": 331.94,
+        "Hf": -177800.0,
     },
     "methylcyclopentane": {
         "MW": 84.161,
         "Cp_ig": (-35.499, 0.53993, -1.5819e-4, -5.2279e-8),
         "Hvap": (43295.0, 0.38, 532.7),
         "antoine": (8.98773, 1186.059, -47.108),
-        "Hf": -106700.0,
         "T_antoine_min": 288.18,
         "T_antoine_max": 345.78,
+        "Hf": -106700.0,
     },
     "cyclohexane": {
         "MW": 84.161,
         "Cp_ig": (-30.506, 0.46222, 3.0128e-5, -1.5954e-7),
         "Hvap": (44401.0, 0.38, 553.8),
         "antoine": (8.96988, 1203.526, -50.287),
+        "T_antoine_min": 279.86,
+        "T_antoine_max": 462.35,
         "Hf": -123100.0,
-        "T_antoine_min": 293.06,
-        "T_antoine_max": 354.73,
     },
 
     # Aromatics
@@ -645,9 +674,9 @@ _IDEAL_THERMO_DATA = {
         "Hvap": (30720.0, 0.38, 562.0),
         "Hvap_T": 353.3,
         "antoine": (9.01814, 1203.835, -53.226),
+        "T_antoine_min": 278.67,
+        "T_antoine_max": 458.26,
         "Hf": 82880.0,
-        "T_antoine_min": 287.7,
-        "T_antoine_max": 354.07,
     },
     "toluene": {
         "MW": 92.14,
@@ -658,6 +687,8 @@ _IDEAL_THERMO_DATA = {
         "Hvap": (33180.0, 0.38, 591.8),
         "Hvap_T": 383.8,
         "antoine": (9.07827, 1343.943, -53.773),
+        "T_antoine_min": 278.07,
+        "T_antoine_max": 496.74,
         "Hf": 50170.0,
     },
     "ethylbenzene": {
@@ -669,6 +700,8 @@ _IDEAL_THERMO_DATA = {
         "Hvap": (35570.0, 0.38, 617.2),
         "Hvap_T": 409.3,
         "antoine": (9.07488, 1419.315, -60.539),
+        "T_antoine_min": 329.74,
+        "T_antoine_max": 410.27,
         "Hf": 29790.0,
     },
     "styrene": {
@@ -679,7 +712,9 @@ _IDEAL_THERMO_DATA = {
         "Cp": (182.0, 0.0, 0.0, 0.0),
         "Hvap": (36820.0, 0.38, 636.0),
         "Hvap_T": 419.0,
-        "antoine": (9.10, 1420.00, -60.00),
+        "antoine": (9.21948, 1525.059, -56.379),
+        "T_antoine_min": 303.07,
+        "T_antoine_max": 417.92,
         "Hf": 147360.0,
     },
 
@@ -692,10 +727,10 @@ _IDEAL_THERMO_DATA = {
         "Cp": (81.0, 0.0, 0.0, 0.0),
         "Hvap": (35210.0, 0.38, 512.6),
         "Hvap_T": 337.8,
-        "antoine": (10.20409, 1581.341, -33.500),
+        "antoine": (10.20409, 1581.341, -33.5),
+        "T_antoine_min": 266.42,
+        "T_antoine_max": 506.96,
         "Hf": -201200.0,
-        "T_antoine_min": 288.1,
-        "T_antoine_max": 356.83,
     },
     "ethanol": {
         "MW": 46.07,
@@ -706,9 +741,9 @@ _IDEAL_THERMO_DATA = {
         "Hvap": (38560.0, 0.38, 513.9),
         "Hvap_T": 351.5,
         "antoine": (10.24677, 1598.673, -46.424),
-        "Hf": -234800.0,
         "T_antoine_min": 292.77,
         "T_antoine_max": 366.63,
+        "Hf": -234800.0,
     },
     "1_propanol": {
         "MW": 60.10,
@@ -718,7 +753,9 @@ _IDEAL_THERMO_DATA = {
         "Cp": (144.0, 0.0, 0.0, 0.0),
         "Hvap": (41440.0, 0.38, 536.8),
         "Hvap_T": 370.3,
-        "antoine": (10.24, 1796.27, -48.25),
+        "antoine": (10.31384, 1690.864, -51.804),
+        "T_antoine_min": 292.4,
+        "T_antoine_max": 370.5,
         "Hf": -255200.0,
     },
     "2_propanol": {
@@ -729,7 +766,9 @@ _IDEAL_THERMO_DATA = {
         "Cp": (155.0, 0.0, 0.0, 0.0),
         "Hvap": (39850.0, 0.38, 508.3),
         "Hvap_T": 355.5,
-        "antoine": (10.16, 1664.17, -50.88),
+        "antoine": (10.24268, 1580.92, -53.54),
+        "T_antoine_min": 281.28,
+        "T_antoine_max": 373.46,
         "Hf": -272700.0,
     },
     "1_butanol": {
@@ -740,7 +779,9 @@ _IDEAL_THERMO_DATA = {
         "Cp": (177.0, 0.0, 0.0, 0.0),
         "Hvap": (43290.0, 0.38, 563.1),
         "Hvap_T": 390.6,
-        "antoine": (9.97, 1778.02, -59.08),
+        "antoine": (9.54607, 1351.555, -93.34),
+        "T_antoine_min": 295.8,
+        "T_antoine_max": 391.0,
         "Hf": -274600.0,
     },
 
@@ -754,9 +795,9 @@ _IDEAL_THERMO_DATA = {
         "Hvap": (29100.0, 0.38, 508.2),
         "Hvap_T": 329.3,
         "antoine": (9.42448, 1312.253, -32.445),
-        "Hf": -217100.0,
         "T_antoine_min": 259.16,
-        "T_antoine_max": 507.60,
+        "T_antoine_max": 507.6,
+        "Hf": -217100.0,
     },
 
     # Ethers
@@ -766,7 +807,9 @@ _IDEAL_THERMO_DATA = {
         "Cp_ig": (30.0773, 0.104655, 7.19138e-05, -7.38989e-08),
         "Hvap": (21510.0, 0.38, 400.1),
         "Hvap_T": 248.2,
-        "antoine": (9.21, 987.31, -25.18),
+        "antoine": (9.11475, 894.669, -30.604),
+        "T_antoine_min": 194.93,
+        "T_antoine_max": 248.24,
         "Hf": -184100.0,
     },
     "diethyl_ether": {
@@ -777,7 +820,9 @@ _IDEAL_THERMO_DATA = {
         "Cp": (172.0, 0.0, 0.0, 0.0),
         "Hvap": (26520.0, 0.38, 466.7),
         "Hvap_T": 307.7,
-        "antoine": (9.12, 1098.20, -38.00),
+        "antoine": (9.10962, 1090.64, -41.95),
+        "T_antoine_min": 229.71,
+        "T_antoine_max": 328.31,
         "Hf": -252100.0,
     },
 
@@ -790,7 +835,9 @@ _IDEAL_THERMO_DATA = {
         "Cp": (99.0, 0.0, 0.0, 0.0),
         "Hvap": (22690.0, 0.38, 588.0),
         "Hvap_T": 373.9,
-        "antoine": (9.37, 1563.28, -42.15),
+        "antoine": (9.48436, 1551.38, -27.44),
+        "T_antoine_min": 278.0,
+        "T_antoine_max": 398.0,
         "Hf": -378600.0,
     },
     "acetic_acid": {
@@ -805,7 +852,9 @@ _IDEAL_THERMO_DATA = {
         # is vaporization to monomer (Hf liquid -484.3 vs gas -432.8 kJ/mol).
         "Hvap": (52100.0, 0.38, 592.0),
         "Hvap_T": 298.15,
-        "antoine": (9.68, 1642.54, -39.76),
+        "antoine": (9.68206, 1642.54, -39.764),
+        "T_antoine_min": 290.26,
+        "T_antoine_max": 391.01,
         "Hf": -432800.0,
     },
 
@@ -822,10 +871,13 @@ _IDEAL_THERMO_DATA = {
         "Hvap_T": 350.3,
         # log10(P/Pa): Polak & Mertl (1965) as fitted by NIST, +5 for bar -> Pa.
         "antoine": (9.22809, 1245.702, -55.189),
+        # Fit range 288.73-348.98 K (below Tb); recorded to 493.15 K, the
+        # contiguous interval over which it is within 1% of the McGarry Wagner
+        # equation (see ANTOINE_SOURCES).
+        "T_antoine_min": 288.73,
+        "T_antoine_max": 493.15,
         # Gas phase, like the other organics here (Wiberg & Waldron 1991).
         "Hf": -444800.0,
-        "T_antoine_min": 288.73,
-        "T_antoine_max": 348.98,
     },
 
     # Water
@@ -838,9 +890,9 @@ _IDEAL_THERMO_DATA = {
         "Hvap": (40660.0, 0.38, 647.1),
         "Hvap_T": 373.12,
         "antoine": (10.20389, 1733.926, -39.485),
+        "T_antoine_min": 273.16,
+        "T_antoine_max": 402.42,
         "Hf": -285830.0,  # Liquid-phase formation enthalpy (consistent with liquid Cp)
-        "T_antoine_min": 273.0,
-        "T_antoine_max": 473.0,
     },
 
     # Halogenated
@@ -852,7 +904,9 @@ _IDEAL_THERMO_DATA = {
         "Cp": (114.0, 0.0, 0.0, 0.0),
         "Hvap": (29240.0, 0.38, 536.4),
         "Hvap_T": 334.3,
-        "antoine": (9.08, 1163.03, -46.38),
+        "antoine": (9.20772, 1233.129, -40.953),
+        "T_antoine_min": 215.0,
+        "T_antoine_max": 334.4,
         "Hf": -134100.0,
     },
     "carbon_tetrachloride": {
@@ -863,7 +917,9 @@ _IDEAL_THERMO_DATA = {
         "Cp": (131.0, 0.0, 0.0, 0.0),
         "Hvap": (29820.0, 0.38, 556.4),
         "Hvap_T": 349.8,
-        "antoine": (9.02, 1212.02, -45.19),
+        "antoine": (9.02291, 1221.781, -45.739),
+        "T_antoine_min": 293.03,
+        "T_antoine_max": 350.86,
         "Hf": -128200.0,
     },
 }
@@ -914,45 +970,45 @@ _ALKYLATION_IDEAL = {
         "Cp_ig": (2.6419, 3.2085e-01, -1.4671e-04, 1.9026e-08),
         "Hvap": (32410.0, 0.38, 419.5),
         "antoine": (8.9178, 908.8, -34.61),
-        "Hf": 100.0,
         "T_antoine_min": 196.41,
         "T_antoine_max": 285.88,
+        "Hf": 100.0,
     },
     "2_3_dimethylpentane": {
         "MW": 100.20,
         "Cp_ig": (-35.121, 7.9476e-01, -5.0099e-04, 1.3257e-07),
         "Hvap": (46715.0, 0.38, 537.3),
         "antoine": (8.98066, 1238.986, -51.208),
-        "Hf": -198700.0,
         "T_antoine_min": 281.56,
         "T_antoine_max": 387.89,
+        "Hf": -198700.0,
     },
     "2_4_dimethylpentane": {
         "MW": 100.20,
         "Cp_ig": (-23.801, 7.9644e-01, -5.2659e-04, 1.4802e-07),
         "Hvap": (45580.0, 0.38, 519.8),
         "antoine": (8.95442, 1193.612, -51.343),
-        "Hf": -201600.0,
         "T_antoine_min": 262.4,
         "T_antoine_max": 378.01,
+        "Hf": -201600.0,
     },
     "2_2_5_trimethylhexane": {
         "MW": 128.26,
         "Cp_ig": (-35.917, 9.7760e-01, -5.7667e-04, 1.3805e-07),
         "Hvap": (52981.0, 0.38, 569.8),
         "antoine": (8.97372, 1332.86, -61.34),
-        "Hf": -253300.0,
         "T_antoine_min": 296.3,
         "T_antoine_max": 424.25,
+        "Hf": -253300.0,
     },
     "n_dodecane": {
         "MW": 170.34,
         "Cp_ig": (-15.412, 1.1537, -5.8026e-04, 7.2305e-08),
         "Hvap": (73982.0, 0.38, 658.0),
         "antoine": (9.12285, 1639.27, -91.31),
+        "T_antoine_min": 355.61,
+        "T_antoine_max": 585.63,
         "Hf": -289400.0,
-        "T_antoine_min": 372.89,
-        "T_antoine_max": 520.24,
     },
 }
 _ALKYLATION_NOTES = {
@@ -1025,7 +1081,7 @@ _HDS_IDEAL = {
         "Hvap_T": 213.6,
         "antoine": (9.22882, 806.933, -21.76),
         "T_antoine_min": 185.51,
-        "T_antoine_max": 227.2,
+        "T_antoine_max": 254.79,
         "Hf": -20600.0,
     },
     "thiophene": {
@@ -1054,6 +1110,230 @@ _IDEAL_THERMO_DATA.update(_HDS_IDEAL)
 for _name in _HDS_IDEAL:
     SOURCE_CITATIONS[_name] = _HDS_SOURCE
 del _name
+
+
+# Antoine provenance, one entry per species in _IDEAL_THERMO_DATA. How the
+# sets were chosen (2026-10): every entry's
+# implied normal boiling point, B / (A - log10 101325) - C, was compared with
+# the NIST WebBook value -- the reference-EOS saturation temperature at 1 atm
+# where NIST has a fluid table, else its averaged Tboil. Eighteen entries
+# were off by 2.5-100 K (O2, NH3, CO2, methane, ethane, propane, n-butane,
+# ethylene, propylene, styrene, the propanols, 1-butanol, formic acid, the
+# two ethers, CHCl3, CCl4) and had no range; five more (N2, n-pentane,
+# isobutane, isopentane, acetic acid) were rounded or off-range sets, off by
+# 0.2-1 K. Each was replaced by a NIST WebBook Antoine fit (log10(P/bar)
+# with A shifted +5 for Pa) bracketing Tb; where no NIST fit reproduces Tb to
+# 0.5 K or covers both ~298 K and Tb, by the Poling-Prausnitz-O'Connell 5e
+# App. A set (already log10(P/Pa)), and for formic acid and CO2 (neither has
+# a usable NIST fit) by the Landolt-Bornstein IV/20 set. PPO and Landolt
+# values were read from the tables shipped with the `chemicals` package
+# (C. Bell et al., v1.5.2), as for the refinery species above.
+# The recorded range is the source's fit range; where NIST has a
+# reference-EOS saturation table, it is extended to the contiguous interval
+# over which the set is within 1% of that table (stated per entry).
+# Names in the sources are as NIST prints them ('Williamham' is NIST's
+# spelling of Willingham, Taylor et al. 1945).
+ANTOINE_SOURCES: dict[str, str] = {
+    'nitrogen': (
+        "NIST WebBook (CAS 7727-37-9), Moussa, Muijlwijk, et al., 1966; fit "
+        "range 63.14-78.00 K; recorded range 63.14-95.73 K, where it is within "
+        "1% of the NIST WebBook reference-EOS saturation pressure"),
+    'oxygen': (
+        "NIST WebBook (CAS 7782-44-7), Brower and Thodos, 1968; fit range "
+        "54.36-100.16 K; recorded range 54.36-131.01 K, where it is within 1% "
+        "of the NIST WebBook reference-EOS saturation pressure"),
+    'carbon_dioxide': (
+        "Landolt-Bornstein New Series IV/20 (Dykyj, Svoboda, Wilhoit, Frenkel "
+        "& Hall, Vapor Pressure of Chemicals), ln(P/Pa) form divided by ln 10 "
+        "here; as tabulated in chemicals v1.5.2; range 216-273 K; recorded "
+        "range 216-289.38 K, where it is within 1% of the NIST WebBook "
+        "reference-EOS saturation pressure. CO2 has no normal boiling point "
+        "(it sublimes at 1 atm): the set covers the liquid from the triple "
+        "point (216.6 K) up"),
+    'ammonia': (
+        "NIST WebBook (CAS 7664-41-7), Stull, 1947; fit range 239.6-371.5 K; "
+        "recorded range 239.6-401.79 K, where it is within 1% of the NIST "
+        "WebBook reference-EOS saturation pressure"),
+    'methane': (
+        "NIST WebBook (CAS 74-82-8), Prydz and Goodwin, 1972; fit range "
+        "90.99-189.99 K"),
+    'ethane': (
+        "NIST WebBook (CAS 74-84-0), Loomis and Walters, 1926; fit range "
+        "135.74-199.91 K; recorded range 135.74-249.99 K, where it is within "
+        "1% of the NIST WebBook reference-EOS saturation pressure"),
+    'propane': (
+        "NIST WebBook (CAS 74-98-6), Kemp and Egan, 1938; fit range "
+        "166.02-231.41 K; recorded range 147.9-339.78 K, where it is within 1% "
+        "of the NIST WebBook reference-EOS saturation pressure"),
+    'n_butane': (
+        "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
+        "v1.5.2); range 200.5-292.03 K; recorded range 200.5-331.23 K, where "
+        "it is within 1% of the NIST WebBook reference-EOS saturation pressure"),
+    'n_pentane': (
+        "NIST WebBook (CAS 109-66-0), Osborn and Douslin, 1974; fit range "
+        "268.8-341.37 K; recorded range 220.72-394.17 K, where it is within 1% "
+        "of the NIST WebBook reference-EOS saturation pressure"),
+    'n_hexane': (
+        "NIST WebBook (CAS 110-54-3), Williamham, Taylor, et al., 1945; fit "
+        "range 286.18-342.69 K; recorded range 243.54-425.99 K, where it is "
+        "within 1% of the NIST WebBook reference-EOS saturation pressure"),
+    'n_heptane': (
+        "NIST WebBook (CAS 142-82-5), Williamham, Taylor, et al., 1945; fit "
+        "range 299.07-372.43 K; recorded range 270.03-464.18 K, where it is "
+        "within 1% of the NIST WebBook reference-EOS saturation pressure"),
+    'n_octane': (
+        "NIST WebBook (CAS 111-65-9), Williamham, Taylor, et al., 1945; fit "
+        "range 326.08-399.72 K; recorded range 289.96-494.37 K, where it is "
+        "within 1% of the NIST WebBook reference-EOS saturation pressure"),
+    'isobutane': (
+        "NIST WebBook (CAS 75-28-5), Aston, Kennedy, et al., 1940, 2; fit "
+        "range 188.06-261.54 K; recorded range 163.1-346.25 K, where it is "
+        "within 1% of the NIST WebBook reference-EOS saturation pressure"),
+    'isopentane': (
+        "NIST WebBook (CAS 78-78-4), Williamham, Taylor, et al., 1945; fit "
+        "range 289.44-301.74 K; recorded range 220.96-358.81 K, where it is "
+        "within 1% of the NIST WebBook reference-EOS saturation pressure"),
+    '1_pentene': (
+        "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
+        "v1.5.2); range 223.89-324.32 K"),
+    '2_methyl_2_butene': (
+        "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
+        "v1.5.2); range 230.69-333.14 K"),
+    '2_2_4_trimethylpentane': (
+        "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
+        "v1.5.2); range 275.5-398.38 K"),
+    '2_3_4_trimethylpentane': (
+        "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
+        "v1.5.2); range 300.19-413.19 K"),
+    '2_5_dimethylhexane': (
+        "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
+        "v1.5.2); range 285.2-408.2 K"),
+    'ethylene': (
+        "NIST WebBook (CAS 74-85-1), Michels and Wassenaar, 1950; fit range "
+        "149.37-188.57 K; recorded range 126.97-219.87 K, where it is within "
+        "1% of the NIST WebBook reference-EOS saturation pressure"),
+    'propylene': (
+        "NIST WebBook (CAS 115-07-1), Powell and Giauque, 1939; fit range "
+        "165.81-225.98 K; recorded range 146.2-317.66 K, where it is within 1% "
+        "of the NIST WebBook reference-EOS saturation pressure"),
+    'cis_2_butene': (
+        "NIST WebBook (CAS 590-18-1), Scott, Ferguson, et al., 1944; fit range "
+        "203.06-295.91 K"),
+    'trans_2_butene': (
+        "NIST WebBook (CAS 624-64-6), Guttman and Pitzer, 1945, 2; fit range "
+        "201.70-274.13 K"),
+    'isobutylene': (
+        "NIST WebBook (CAS 115-11-7), Lamb and Roper, 1940; fit range "
+        "216.40-273. K"),
+    '2_methylpentane': (
+        "NIST WebBook (CAS 107-83-5), Williamham, Taylor, et al., 1945; fit "
+        "range 285.91-334.22 K; recorded range 238.84-402.79 K, where it is "
+        "within 1% of the NIST WebBook reference-EOS saturation pressure"),
+    '3_methylpentane': (
+        "NIST WebBook (CAS 96-14-0), Williamham, Taylor, et al., 1945; fit "
+        "range 288.44-337.23 K"),
+    '2_2_dimethylbutane': (
+        "NIST WebBook (CAS 75-83-2), Williamham, Taylor, et al., 1945; fit "
+        "range 288.53-323.68 K"),
+    '2_3_dimethylbutane': (
+        "NIST WebBook (CAS 79-29-8), Williamham, Taylor, et al., 1945; fit "
+        "range 287.41-331.94 K"),
+    'methylcyclopentane': (
+        "NIST WebBook (CAS 96-37-7), Williamham, Taylor, et al., 1945; fit "
+        "range 288.18-345.78 K"),
+    'cyclohexane': (
+        "NIST WebBook (CAS 110-82-7), Williamham, Taylor, et al., 1945; fit "
+        "range 293.06-354.73 K; recorded range 279.86-462.35 K, where it is "
+        "within 1% of the NIST WebBook reference-EOS saturation pressure"),
+    'benzene': (
+        "NIST WebBook (CAS 71-43-2), Williamham, Taylor, et al., 1945; fit "
+        "range 287.70-354.07 K; recorded range 278.67-458.26 K, where it is "
+        "within 1% of the NIST WebBook reference-EOS saturation pressure"),
+    'toluene': (
+        "NIST WebBook (CAS 108-88-3), Williamham, Taylor, et al., 1945; fit "
+        "range 308.52-384.66 K; recorded range 278.07-496.74 K, where it is "
+        "within 1% of the NIST WebBook reference-EOS saturation pressure"),
+    'ethylbenzene': (
+        "NIST WebBook (CAS 100-41-4), Williamham, Taylor, et al., 1945; fit "
+        "range 329.74-410.27 K"),
+    'styrene': (
+        "NIST WebBook (CAS 100-42-5), Dreyer, Martin, et al., 1955; fit range "
+        "303.07-417.92 K"),
+    'methanol': (
+        "NIST WebBook (CAS 67-56-1), Ambrose and Sprake, 1970; fit range "
+        "288.1-356.83 K; recorded range 266.42-506.96 K, where it is within 1% "
+        "of the NIST WebBook reference-EOS saturation pressure"),
+    'ethanol': (
+        "NIST WebBook (CAS 64-17-5), Ambrose and Sprake, 1970; fit range "
+        "292.77-366.63 K"),
+    '1_propanol': (
+        "NIST WebBook (CAS 71-23-8), Kemme and Kreps, 1969; fit range "
+        "292.4-370.5 K"),
+    '2_propanol': (
+        "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
+        "v1.5.2); range 281.28-373.46 K"),
+    '1_butanol': (
+        "NIST WebBook (CAS 71-36-3), Kemme and Kreps, 1969; fit range "
+        "295.8-391.0 K"),
+    'acetone': (
+        "NIST WebBook (CAS 67-64-1), Ambrose, Sprake, et al., 1974; fit range "
+        "259.16-507.60 K"),
+    'dimethyl_ether': (
+        "NIST WebBook (CAS 115-10-6), Kennedy, Sagenkahn, et al., 1941, 2; fit "
+        "range 194.93-248.24 K"),
+    'diethyl_ether': (
+        "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
+        "v1.5.2); range 229.71-328.31 K"),
+    'formic_acid': (
+        "Landolt-Bornstein New Series IV/20 (Dykyj, Svoboda, Wilhoit, Frenkel "
+        "& Hall, Vapor Pressure of Chemicals), ln(P/Pa) form divided by ln 10 "
+        "here; as tabulated in chemicals v1.5.2; range 278-398 K. The vapor is "
+        "partly dimerized; this is the total pressure"),
+    'acetic_acid': (
+        "NIST WebBook (CAS 64-19-7), McDonald, Shrader, et al., 1959; fit "
+        "range 290.26-391.01 K"),
+    'ethyl_acetate': (
+        "NIST WebBook (CAS 141-78-6), Polák and Mertl, 1965; fit range "
+        "288.73-348.98 K; recorded range 288.73-493.15 K, where it is within "
+        "1% of the McGarry (1983) Wagner equation (A=-7.68521, B=1.36511, "
+        "C=-4.0898, D=-1.75342, Tc=523.2 K, Pc=3.8301 MPa, as tabulated in "
+        "`chemicals` v1.5.2; NIST has no reference-EOS table for it)"),
+    'water': (
+        "NIST WebBook (CAS 7732-18-5), Bridgeman and Aldrich, 1964; fit range "
+        "304.-333. K; recorded range 273.16-402.42 K, where it is within 1% of "
+        "the NIST WebBook reference-EOS saturation pressure"),
+    'chloroform': (
+        "NIST WebBook (CAS 67-66-3), Stull, 1947; fit range 215.-334.4 K"),
+    'carbon_tetrachloride': (
+        "NIST WebBook (CAS 56-23-5), Hildenbrand and McDonald, 1959, 2; fit "
+        "range 293.03-350.86 K"),
+    '1_butene': (
+        "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
+        "v1.5.2); range 196.41-285.88 K"),
+    '2_3_dimethylpentane': (
+        "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
+        "v1.5.2); range 281.56-387.89 K"),
+    '2_4_dimethylpentane': (
+        "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
+        "v1.5.2); range 262.4-378.01 K"),
+    '2_2_5_trimethylhexane': (
+        "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
+        "v1.5.2); range 296.3-424.25 K"),
+    'n_dodecane': (
+        "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
+        "v1.5.2); range 372.89-520.24 K; recorded range 355.61-585.63 K, where "
+        "it is within 1% of the NIST WebBook reference-EOS saturation pressure"),
+    'hydrogen': (
+        "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
+        "v1.5.2); range 10.25-22.82 K"),
+    'hydrogen_sulfide': (
+        "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
+        "v1.5.2); range 185.51-227.2 K; recorded range 185.51-254.79 K, where "
+        "it is within 1% of the NIST WebBook reference-EOS saturation pressure"),
+    'thiophene': (
+        "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
+        "v1.5.2); range 267.2-381.16 K"),
+}
 
 
 def get_species_data(name: str) -> SpeciesData:
@@ -1106,14 +1386,43 @@ def get_species_data(name: str) -> SpeciesData:
 # =============================================================================
 
 
-def list_species() -> list[str]:
-    """List all available species in the database.
+def list_species(kind: str = "ideal") -> list[str]:
+    """List the species in the database.
+
+    The database holds two tables: ideal-thermo records (Cp, Hvap,
+    Antoine, Hf; :func:`get_species_data`) and critical constants (Tc, Pc,
+    omega; :func:`get_critical_props`). Some species are only in the second
+    (helium, the xylenes, n-decane, ...), so ``kind`` says which table the
+    names must be in.
+
+    Args:
+        kind: ``"ideal"`` (default): names :func:`get_species_data`
+            accepts. ``"critical"``: names :func:`get_critical_props`
+            accepts. ``"any"``: names in either table, which
+            :func:`get_species_info` accepts.
 
     Returns:
         Sorted list of species names
+
+    Raises:
+        ValueError: For any other ``kind``.
+
+    Example:
+        >>> "water" in list_species()
+        True
+        >>> "helium" in list_species(), "helium" in list_species("critical")
+        (False, True)
     """
-    all_species = set(_CRITICAL_DATA.keys()) | set(_IDEAL_THERMO_DATA.keys())
-    return sorted(all_species)
+    if kind == "ideal":
+        names = set(_IDEAL_THERMO_DATA)
+    elif kind == "critical":
+        names = set(_CRITICAL_DATA)
+    elif kind == "any":
+        names = set(_CRITICAL_DATA) | set(_IDEAL_THERMO_DATA)
+    else:
+        raise ValueError(
+            f"kind must be 'ideal', 'critical' or 'any', not {kind!r}")
+    return sorted(names)
 
 
 def get_species_info(name: str) -> dict:

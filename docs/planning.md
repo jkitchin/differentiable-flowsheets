@@ -589,6 +589,13 @@ in `s.note` rather than letting you read a vertex as if it were an interior
 solution. A rank-deficient KKT matrix is reported through `s.degenerate`, and a
 plan that is not actually stationary is called out in `s.note` too.
 
+A multiplier is the shadow price of its *constraint*, not of the elastic slack.
+The elastic penalty of an active spec is left out of the stationarity gradient,
+because the multiplier already carries that spec. A plan often meets a spec
+exactly, and there the penalty sits on the kink of `max(v - rhs, 0)`. AD's
+subgradient at that kink (0.5 in JAX) would put half the penalty into the
+multiplier.
+
 ## Modifier adaptation
 
 Under **structural** plant-model mismatch — the model has the wrong form, not
