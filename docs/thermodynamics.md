@@ -170,9 +170,22 @@ $$H(T) = H_f + \int_{T_{ref}}^T C_p \, dT$$
 
 $$H(T) = H_f + a(T - T_{ref}) + \frac{b}{2}(T^2 - T_{ref}^2) + \frac{c}{3}(T^3 - T_{ref}^3) + \frac{d}{4}(T^4 - T_{ref}^4)$$
 
-For vapor phase, add heat of vaporization:
+(vapor-enthalpy-path)=
+The vapor follows a fixed path: heat the liquid to a vaporization temperature
+$T_v$, vaporize there, then heat the ideal gas:
 
-$$H^V(T) = H^L(T) + \Delta H_{vap}(T)$$
+$$H^V(T) = H^L(T_v) + \Delta H_{vap}(T_v) + \int_{T_v}^{T} C_p^{ig}\, dT,
+\qquad T_v = \min(T_{ref}, T_b)$$
+
+$T_b$ is the normal boiling point implied by the Antoine constants
+(`thermo.vaporization_T(species)`), and $C_p^{ig}$ is `Cp_vapor_coeffs`
+(falling back to `Cp_coeffs`). So $dH^V/dT = C_p^{ig} > 0$ at every $T$: the
+vapor enthalpy is monotone, which an energy balance (Mixer, PH flash) needs for
+a unique root. The latent heat $H^V(T) - H^L(T)$ then follows Kirchhoff's law
+from $T_v$ rather than the Watson correlation at $T$. Adding the Watson
+$\Delta H_{vap}(T)$ at the stream's own $T$, as difflow did before, makes the
+vapor enthalpy fall towards $T_c$, where $\Delta H_{vap} \to 0$: ethane's
+dropped from 9.5 kJ/mol at 200 K to 1.9 kJ/mol at 305 K.
 
 #### Saturation Pressure
 
@@ -183,6 +196,37 @@ P_sat = thermo.Psat('ethanol', T=350.0)  # Pa
 **Equation** (Antoine):
 
 $$P^{sat} = 10^{A - B/(T + C)}$$
+
+with $P$ in Pa and $T$ in K (a NIST WebBook set, $\log_{10}$ bar, has
+$A_\text{Pa} = A_\text{bar} + 5$).
+
+(antoine-range)=
+**Provenance and fitted range.** Every built-in species records where its
+constants come from in `difflow.database.ANTOINE_SOURCES` (NIST WebBook, Poling,
+Prausnitz & O'Connell 5e, or Landolt-Bornstein IV/20) and a fitted range
+`T_antoine_min`-`T_antoine_max`. The range is the source's own fit range,
+extended where a NIST reference-EOS saturation table shows the set stays within
+1%. Each set reproduces its species' normal boiling point to within
+max(0.5 K, the reference uncertainty); `tests/test_antoine_database.py`
+checks this. CO2 sublimes at 1 atm, so its set covers the liquid only, from the
+triple point (216 K) to 289 K. An Antoine equation extrapolates badly, so a
+concrete temperature outside the range raises an `AntoineRangeWarning`, once per
+species and side. Under `jit`/`grad` the check is skipped, as for difflow's
+other diagnostics. `validate_antoine` and `Psat_with_info` report the range
+without warning; `Psat_with_info` also works on traced input.
+
+```python
+import warnings
+from difflow import AntoineRangeWarning
+from difflow.database import ANTOINE_SOURCES
+
+print(ANTOINE_SOURCES['ethanol'])
+print(thermo.validate_antoine('ethanol', 350.0))   # in_range, T_min, T_max
+with warnings.catch_warnings(record=True) as w:
+    warnings.simplefilter("always")
+    thermo.Psat('ethanol', 600.0)                   # far above the fit
+print(any(issubclass(x.category, AntoineRangeWarning) for x in w))  # True
+```
 
 #### Heat of Vaporization
 
@@ -237,6 +281,11 @@ P_dew = thermo.dew_pressure(y={'ethanol': 0.4, 'water': 0.6}, T=350.0)
 Bubble point: $P = \sum_i x_i P_i^{sat}$
 
 Dew point: $\frac{1}{P} = \sum_i \frac{y_i}{P_i^{sat}}$
+
+These two are Raoult's law only. For bubble/dew temperatures, or for an
+activity model, use `bubble_T`, `bubble_P`, `dew_T` and `dew_P` from
+[Phase Diagrams](#phase-diagrams). For a cubic EOS, use
+[`eos_bubble_P` and the rest](#eos-bubble-dew).
 
 ---
 
@@ -435,6 +484,64 @@ print(f"Vapor composition: {dict(zip(names, map(float, y)))}")
 
 5. **Iterate** until convergence
 
+(eos-bubble-dew)=
+### EOS bubble and dew points
+
+`eos_bubble_P(eos, x, T)`, `eos_bubble_T(eos, x, P)`, `eos_dew_P(eos, y, T)`
+and `eos_dew_T(eos, y, P)` (in `difflow.eos`, exported from `difflow`) solve
+the phi-phi saturation condition directly. The unknowns are
+$\ln K_i$ and $\ln P$ (or $\ln T$):
+
+$$\ln K_i + \ln\phi_i^V(y) - \ln\phi_i^L(x) = 0, \qquad
+\ln\textstyle\sum_i K_i x_i = 0 \ \text{(bubble)} \quad\text{or}\quad
+\ln\textstyle\sum_i y_i/K_i = 0 \ \text{(dew)}$$
+
+The solve has three stages:
+
+1. It starts from Wilson K-values, on the low-pressure (or low-temperature)
+   side of the Wilson estimate.
+2. Successive substitution follows. It rejects any iterate whose K-values
+   collapse towards 1, and backs off to the last good point.
+3. A Newton solve (optimistix) finishes with implicit differentiation, so
+   `jax.grad` through the result is exact.
+
+Near the critical region no single start serves every mixture, so without a
+guess the solve tries four starts (pressure at 0.25, 0.1, 0.5 and 1 times the
+Wilson estimate; temperature at 0.95, 0.9, 1 and 0.85 times it) and keeps the
+first converged, non-trivial root. Derivatives flow through that root only. A
+given `P_guess`/`T_guess` is a single start.
+
+All four take `k_ij=None` and an optional `P_guess`/`T_guess`, and return a
+dict:
+
+- `P` and `T`.
+- `x` and `y`: the given phase and the incipient one.
+- `K`.
+- `converged`, a boolean array.
+- `trivial`, a boolean array. It is True when the solve fell onto the trivial
+  root, $K_i = 1$ ($y = x$). That happens near or beyond the mixture critical
+  point, where there is no bubble (or dew) point of that kind, and the `P`/`T`
+  is then meaningless.
+
+A concrete result that is unconverged or trivial raises a
+`BubbleDewConvergenceWarning`.
+
+```python
+import jax
+from difflow import PengRobinson, eos_bubble_P, eos_dew_P
+from difflow.database import get_critical_props
+
+pr2 = PengRobinson({n: get_critical_props(n) for n in ("methane", "propane")})
+x = jnp.array([0.2, 0.8])
+r = eos_bubble_P(pr2, x, 277.6)
+print(float(r["P"]) / 1e5, r["y"], bool(r["converged"]))  # 33.4 bar, y_CH4 0.77
+print(float(eos_dew_P(pr2, x, 277.6)["P"]) / 1e5)          # 6.9 bar
+dPdT = jax.grad(lambda T: eos_bubble_P(pr2, x, T)["P"])(277.6)  # Pa/K
+```
+
+The `Flash` unit's `bubble_point_*` and `dew_point_*` helpers call these when
+the flash has an `eos`.
+
 ---
 
 (cubic-thermo-k-values)=
@@ -573,11 +680,21 @@ vapor pressures are the thermo object's Antoine equations.
 
 | Function | Returns |
 |----------|---------|
+| `bubble_T(thermo, species, x, P, activity_model=None, T0=None)` | bubble temperature (Newton, implicit diff.) |
+| `bubble_P(thermo, species, x, T, activity_model=None)` | bubble pressure $\sum_i x_i\gamma_i P_i^{sat}$ |
+| `dew_T(thermo, species, y, P, activity_model=None, T0=None)` | dew temperature: solves for $x$ and $T$ |
+| `dew_P(thermo, species, y, T, activity_model=None)` | dew pressure (closed form for Raoult) |
 | `txy(thermo, species, P, n=51, activity_model=None)` | `dict(x, y, T)`: bubble $T(x)$, $y$ from the K-values |
 | `pxy(thermo, species, T, n=51, activity_model=None)` | `dict(x, y, P)` |
 | `xy_curve(thermo, species, P, n=51, activity_model=None)` | `dict(x, y, T, alpha)`: $\alpha(x)=K_1/K_2$ |
 | `find_azeotrope(thermo, species, P=..., T=..., activity_model=None)` | `dict(found, x, T, P)`; NaN (masked, no Python branch) if none |
 | `ternary_lle(lle_model, T, n_tie=15)` | `dict(binodal, tie_lines, plait)` by isoactivity continuation |
+
+`bubble_T`, `dew_T`, `txy` and `pxy` warn (`AntoineRangeWarning`, once per
+species) when the computed temperatures leave a species'
+[fitted Antoine range](#antoine-range). They also raise a
+`BubbleDewConvergenceWarning` when a concrete solve did not converge; the value
+is returned as is, never clipped.
 
 `ternary_lle` takes an `LLEEquilibrium` (NRTL/UNIQUAC) or any three-species
 activity model; species 0 and 1 are the partially miscible pair, species 2 the
@@ -690,8 +807,10 @@ ethanol_crit = get_critical_props('ethanol')
 info = get_species_info('ethanol')
 print(info)
 
-# List all available species
+# Species get_species_data accepts (the default, kind="ideal");
+# list_species("critical") for get_critical_props, "any" for either
 species_list = list_species()
+critical_only = sorted(set(list_species("critical")) - set(species_list))
 
 # Get groups of species
 alkanes = get_alkanes()  # {'methane': ..., 'ethane': ..., ...}

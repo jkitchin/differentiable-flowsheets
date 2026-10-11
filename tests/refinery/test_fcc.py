@@ -121,7 +121,7 @@ class TestCitedCoefficients:
     def test_species_are_difflow_database_names(self):
         from difflow.database import list_species
 
-        known = set(list_species())
+        known = set(list_species("any"))
         names = (sp.DRY_GAS_SPECIES + ("hydrogen_sulfide",) + sp.C3_SPECIES + sp.C4_SPECIES
                  + sp.FLUE_SPECIES)
         missing = [n for n in names if n not in known and n != "carbon_monoxide"]

@@ -412,12 +412,25 @@ class Flash:
             P_liq_resid, P_vap_resid,
         ])
 
+    def _feed_composition(self, inlet: Stream) -> tuple[tuple[str, ...], Array]:
+        """Feed mole fractions, ordered as the EOS (if any) or ``species_order``."""
+        order = (tuple(self.eos.species_order) if self.eos is not None
+                 else tuple(self.params.species_order))
+        flows = get_flows(inlet)
+        F = jnp.stack([jnp.asarray(flows.get(s, 0.0), dtype=float) for s in order])
+        return order, F / jnp.sum(F)
+
     def bubble_point_pressure(
         self,
         inlet: Stream,
         T: Array | float | None = None,
     ) -> Array:
-        """Calculate bubble point pressure at given temperature.
+        """Bubble-point pressure of the feed (as a liquid) at temperature ``T``.
+
+        Uses the same thermodynamics as the flash itself: the cubic EOS
+        (:func:`~difflow.eos.eos_bubble_P`) when ``eos`` is set, the modified
+        Raoult's law ``sum x_i gamma_i Psat_i`` when ``activity_model`` is set,
+        otherwise Raoult's law.
 
         Args:
             inlet: Stream defining composition
@@ -426,20 +439,24 @@ class Flash:
         Returns:
             Bubble point pressure (Pa)
         """
+        import difflow.phase_diagrams as pd
+        from difflow.eos import eos_bubble_P
         T = jnp.asarray(T) if T is not None else inlet["T"]
-
-        inlet_flows = get_flows(inlet)
-        F_total = sum(inlet_flows.values())
-        x = {s: inlet_flows[s] / F_total for s in self.params.species_order}
-
-        return self.thermo.bubble_pressure(x, T)
+        species, z = self._feed_composition(inlet)
+        if self.eos is not None:
+            return eos_bubble_P(self.eos, z, T, self.k_ij)["P"]
+        return pd.bubble_P(self.thermo, species, z, T, self.activity_model)
 
     def dew_point_pressure(
         self,
         inlet: Stream,
         T: Array | float | None = None,
     ) -> Array:
-        """Calculate dew point pressure at given temperature.
+        """Dew-point pressure of the feed (as a vapor) at temperature ``T``.
+
+        EOS (:func:`~difflow.eos.eos_dew_P`), modified Raoult
+        (:func:`~difflow.phase_diagrams.dew_P`) or Raoult's law, matching the
+        flash's own model.
 
         Args:
             inlet: Stream defining composition
@@ -448,85 +465,77 @@ class Flash:
         Returns:
             Dew point pressure (Pa)
         """
+        import difflow.phase_diagrams as pd
+        from difflow.eos import eos_dew_P
         T = jnp.asarray(T) if T is not None else inlet["T"]
-
-        inlet_flows = get_flows(inlet)
-        F_total = sum(inlet_flows.values())
-        y = {s: inlet_flows[s] / F_total for s in self.params.species_order}
-
-        return self.thermo.dew_pressure(y, T)
+        species, z = self._feed_composition(inlet)
+        if self.eos is not None:
+            return eos_dew_P(self.eos, z, T, self.k_ij)["P"]
+        return pd.dew_P(self.thermo, species, z, T, self.activity_model)
 
     def bubble_point_temperature(
         self,
         inlet: Stream,
         P: Array | float | None = None,
-        T_guess: float = 350.0,
+        T_guess: float | None = None,
     ) -> Array:
-        """Calculate bubble point temperature at given pressure.
+        """Bubble-point temperature of the feed at pressure ``P``.
 
-        Solves: sum(x_i * Psat_i(T)) = P
+        EOS (:func:`~difflow.eos.eos_bubble_T`) when ``eos`` is set, otherwise
+        :func:`~difflow.phase_diagrams.bubble_T` (modified Raoult with the
+        ``activity_model``, or Raoult). Newton with implicit differentiation.
+        The result is never clipped: a solve that fails to converge (or an
+        EOS solve that lands on the trivial K = 1 root) issues a
+        :class:`~difflow.thermo.BubbleDewConvergenceWarning` (concrete values
+        only), and an Antoine evaluation outside its fitted range issues an
+        :class:`~difflow.thermo.AntoineRangeWarning`.
 
         Args:
             inlet: Stream defining composition
             P: Pressure (Pa). If None, uses inlet P.
-            T_guess: Initial temperature guess (K)
+            T_guess: Optional initial temperature guess (K); by default the
+                composition-weighted Antoine (or Wilson, for an EOS) estimate.
 
         Returns:
             Bubble point temperature (K)
         """
+        import difflow.phase_diagrams as pd
+        from difflow.eos import eos_bubble_T
         P = jnp.asarray(P) if P is not None else inlet["P"]
-
-        inlet_flows = get_flows(inlet)
-        F_total = sum(inlet_flows.values())
-        x = {s: inlet_flows[s] / F_total for s in self.params.species_order}
-
-        # Solve: P_bubble(T) - P = 0
-        def residual(T, args):
-            P_target = args
-            P_bubble = self.thermo.bubble_pressure(x, T)
-            return P_bubble - P_target
-
-        solver = optx.Newton(rtol=1e-8, atol=1e-8)
-        T0 = jnp.array(T_guess)
-        sol = optx.root_find(residual, solver, T0, args=P, max_steps=50, throw=False)
-
-        return jnp.clip(sol.value, 150.0, 700.0)
+        species, z = self._feed_composition(inlet)
+        if self.eos is not None:
+            return eos_bubble_T(self.eos, z, P, self.k_ij, T_guess)["T"]
+        return pd.bubble_T(self.thermo, species, z, P, self.activity_model,
+                           T0=T_guess)
 
     def dew_point_temperature(
         self,
         inlet: Stream,
         P: Array | float | None = None,
-        T_guess: float = 350.0,
+        T_guess: float | None = None,
     ) -> Array:
-        """Calculate dew point temperature at given pressure.
+        """Dew-point temperature of the feed at pressure ``P``.
 
-        Solves: 1/sum(y_i / Psat_i(T)) = P
+        EOS (:func:`~difflow.eos.eos_dew_T`) when ``eos`` is set, otherwise
+        :func:`~difflow.phase_diagrams.dew_T` (modified Raoult or Raoult).
+        Never clipped; warns as :meth:`bubble_point_temperature` does.
 
         Args:
             inlet: Stream defining composition
             P: Pressure (Pa). If None, uses inlet P.
-            T_guess: Initial temperature guess (K)
+            T_guess: Optional initial temperature guess (K).
 
         Returns:
             Dew point temperature (K)
         """
+        import difflow.phase_diagrams as pd
+        from difflow.eos import eos_dew_T
         P = jnp.asarray(P) if P is not None else inlet["P"]
-
-        inlet_flows = get_flows(inlet)
-        F_total = sum(inlet_flows.values())
-        y = {s: inlet_flows[s] / F_total for s in self.params.species_order}
-
-        # Solve: P_dew(T) - P = 0
-        def residual(T, args):
-            P_target = args
-            P_dew = self.thermo.dew_pressure(y, T)
-            return P_dew - P_target
-
-        solver = optx.Newton(rtol=1e-8, atol=1e-8)
-        T0 = jnp.array(T_guess)
-        sol = optx.root_find(residual, solver, T0, args=P, max_steps=50, throw=False)
-
-        return jnp.clip(sol.value, 150.0, 700.0)
+        species, z = self._feed_composition(inlet)
+        if self.eos is not None:
+            return eos_dew_T(self.eos, z, P, self.k_ij, T_guess)["T"]
+        return pd.dew_T(self.thermo, species, z, P, self.activity_model,
+                        T0=T_guess)
 
     # =========================================================================
     # Initialization Interface

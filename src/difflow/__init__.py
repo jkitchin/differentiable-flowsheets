@@ -36,13 +36,20 @@ from difflow.streams import (
     mole_fractions,
     scale_stream,
 )
-from difflow.thermo import IdealThermo, CubicThermo, SpeciesData
+from difflow.thermo import (
+    IdealThermo, CubicThermo, SpeciesData,
+    AntoineRangeWarning, BubbleDewConvergenceWarning,
+)
 from difflow.eos import (
     PengRobinson,
     SRK,
     CriticalProperties,
     EOSParams,
     flash_TP_eos,
+    eos_bubble_P,
+    eos_bubble_T,
+    eos_dew_P,
+    eos_dew_T,
 )
 from difflow.database import (
     get_species_data,
@@ -139,6 +146,9 @@ from difflow import staged  # noqa: F401  (difflow.staged: McCabe-Thiele, Kremse
 from difflow.units import column_design  # noqa: F401  (difflow.units.column_design: tray/packing hardware)
 from difflow.phase_diagrams import (
     bubble_T,
+    bubble_P,
+    dew_T,
+    dew_P,
     txy,
     pxy,
     xy_curve,
@@ -525,12 +535,18 @@ __all__ = [
     "IdealThermo",
     "CubicThermo",
     "SpeciesData",
+    "AntoineRangeWarning",
+    "BubbleDewConvergenceWarning",
     # Thermodynamics - Equations of State
     "PengRobinson",
     "SRK",
     "CriticalProperties",
     "EOSParams",
     "flash_TP_eos",
+    "eos_bubble_P",
+    "eos_bubble_T",
+    "eos_dew_P",
+    "eos_dew_T",
     # Property Database
     "get_species_data",
     "get_critical_props",
@@ -605,6 +621,9 @@ __all__ = [
     "MargulesParams",
     "VanLaarParams",
     "bubble_T",
+    "bubble_P",
+    "dew_T",
+    "dew_P",
     "txy",
     "pxy",
     "xy_curve",

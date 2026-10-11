@@ -8,6 +8,25 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Thermo gaps from the textbook's Ch. 2.** EOS saturation points
+  `eos_bubble_P(eos, x, T, k_ij=None, P_guess=None)`, `eos_dew_P(eos, y, T, ...)`,
+  `eos_bubble_T(eos, x, P, k_ij=None, T_guess=None)` and `eos_dew_T(eos, y, P, ...)`
+  in `difflow.eos`. They solve phi-phi with Newton (optimistix, implicit
+  differentiation) from Wilson K-values and safeguarded substitution, with four
+  starts and the first converged non-trivial root kept. They return a dict with
+  `T`, `P`, `x`, `y`, `K`, `converged` and `trivial`. Modified-Raoult
+  `bubble_P`, `dew_P(thermo, species, y, T, activity_model=None)` and
+  `dew_T(thermo, species, y, P, activity_model=None, T0=None)` join
+  `bubble_T(..., activity_model=None, T0=None)` in `difflow.phase_diagrams`.
+  New warnings: `AntoineRangeWarning` (concrete T outside a species' fitted
+  range; once per species and side; silent under `jit`/`grad`; from
+  `IdealThermo.Psat`, `bubble_T`, `txy`, `pxy` and the flash helpers) and
+  `BubbleDewConvergenceWarning` (unconverged or trivial). Also added:
+  `thermo.check_antoine_range`, `database.ANTOINE_SOURCES` (a source for every
+  ideal-thermo species), `list_species(kind="ideal"|"critical"|"any")` and
+  `IdealThermo.vaporization_T`. Tests: `tests/test_antoine_database.py`,
+  `tests/test_bubble_dew.py`.
+
 - **Shell-and-tube gaps (#435).** (1) `ShellAndTubeDesignParams.shell_h` callables now receive the wall state of the
   current `U` iterate (`q_flux`, `T_wall`, `dT_film`, `T_shell`, `T_tube`, `area_total`, besides the geometry keys),
   closed inside the existing `optimistix.fixed_point` (and on the heat flux in `rate()`), so condensing and boiling
@@ -348,6 +367,56 @@ All notable changes to difflow are recorded here. The format follows
   `EnthalpyCounterCurrentHX`.
 
 ### Breaking
+
+- **Antoine constants corrected and sourced; flash bubble/dew helpers honour
+  the thermo model; `IdealThermo` vapour enthalpy made monotone.** Results that
+  depend on these move, by design:
+  - **Antoine constants.** 18 species had constants whose implied normal
+    boiling point was 2.5-100 K off: O2, NH3, CO2, methane, ethane, propane,
+    n-butane, ethylene, propylene, styrene, the propanols, 1-butanol, formic
+    acid, diethyl and dimethyl ether, CHCl3 and CCl4. Five more were 0.2-1 K
+    off: N2, n-pentane, isobutane, isopentane and acetic acid. They were
+    replaced with NIST WebBook fits, or with the PPO 5e and Landolt IV/20 sets
+    where no NIST fit works. Every species now has a `T_antoine_min/max` and a
+    source in `ANTOINE_SOURCES`. Water keeps its constants, but its range is
+    now 273.16-402.42 K, not the unsourced 273-473 K. Ethyl acetate's range
+    runs to 493.15 K, on a 1% check against the McGarry Wagner equation.
+  - **`list_species()`** now returns the species `get_species_data` accepts
+    (`kind="ideal"`). Pass `kind="any"` for the old union with
+    critical-only species. `agent.discovery`, `tests/refinery/test_fcc.py`,
+    `tests/test_dwsim_import.py` and `tests/test_liquid_properties.py` changed
+    only for this.
+  - **`Flash.bubble_point_*` / `dew_point_*`** use the flash's `eos`
+    (`eos_bubble_P` etc.) or `activity_model` (modified Raoult), where they
+    used Raoult before. The silent clip to 150-700 K is removed: an
+    unconverged result warns instead.
+  - **`IdealThermo.H_pure(phase="vapor")`** used to be
+    `int Cp_liq (Tref->T) + Watson Hvap(T)`, which falls towards Tc
+    (ethane: 9.5 kJ/mol at 200 K, 1.9 at 305 K) and gave energy balances
+    spurious roots. It is now `int Cp_liq (Tref->T_v) + Hvap(T_v) +
+    int Cp_ig (T_v->T)` with `T_v = min(Tref, Antoine Tb)`, so
+    `dH/dT = Cp_ig`. The docstring promised `Cp_vap`; the code now uses it.
+    Liquid enthalpies are unchanged, and so is every vapour enthalpy at `T_v`.
+    `tests/test_core_unit_bugs.py::test_issue_73` pinned the old path and was
+    rewritten.
+  - **Tests whose numbers moved:**
+    - `test_heat_exchanger` (n-pentane boils at 321.2 K at 1.5 bar, not 320.x;
+      the NIST reference EOS gives 321.24 K).
+    - `test_planning` and `test_planning_diagram`, and section 9 of
+      `examples/30_delta_base_planning.ipynb`. The NGL cold-box gas (75 %
+      methane) bubbles at about 196 K at 40 bar (Peng-Robinson: 198.5 K), so it
+      is two-phase across the whole 218-244 K envelope. The old methane
+      constants put methane's Psat 2.3x too low and made a spurious bubble
+      point near 224 K. The phase-crossing tests and the notebook now open the
+      envelope to 185 K and start at 190 K. The reference chain run no longer
+      crosses a phase boundary.
+    - `test_distillation`. The ">10 K Raoult vs PR at the light end at 10 bar"
+      claim came from propane and n-butane vapour pressures that were 45 % and
+      30 % high. Raoult and PR now agree to 1.4 K (light end) and 0.7 K (heavy
+      end); the test pins that and checks it against `eos_bubble_T`. The docs
+      claim is corrected.
+    - `test_tier3_enhancements` (the water range) and `test_database` (ethyl
+      acetate's Tb is now inside its recorded range).
 
 - **`column_diameter` is deprecated and its signature changed (#429).** The old
   body ignored `sigma` and `tray_spacing`, hard-coded a vapor molecular weight

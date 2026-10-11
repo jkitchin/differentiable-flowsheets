@@ -254,8 +254,15 @@ class TestEthylAcetate:
         return IdealThermo({"ethyl_acetate": get_species_data("ethyl_acetate")})
 
     def test_normal_boiling_point(self, thermo):
-        # Tb = 350.2 K (NIST average of 58 values): Psat there is 1 atm.
-        assert float(thermo.Psat("ethyl_acetate", 350.2)) == pytest.approx(101325, rel=0.005)
+        # Tb = 350.2 K (NIST average of 58 values): Psat there is 1 atm. Tb is
+        # 1.2 K above the Polak-Mertl fit, inside the range recorded from the
+        # 1% check against the McGarry Wagner equation, so no warning.
+        import warnings
+        from difflow.thermo import AntoineRangeWarning
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", AntoineRangeWarning)
+            P = thermo.Psat("ethyl_acetate", 350.2)
+        assert float(P) == pytest.approx(101325, rel=0.005)
 
     def test_vapor_pressure_at_25C(self, thermo):
         # About 12.6 kPa at 298.15 K.

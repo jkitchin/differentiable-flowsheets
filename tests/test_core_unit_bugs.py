@@ -312,14 +312,38 @@ def test_issue_73_enthalpy_uses_phase_specific_cp():
     # They should differ because of different Cp AND Hvap
     assert H_vap > H_liq, "Vapor enthalpy should exceed liquid enthalpy"
 
-    # Verify thermodynamic path: H_vap = Cp_liq*(T-Tref) + Hvap(T)
-    # (liquid Cp is used for integration since reference state is liquid at Tref)
-    Hvap = float(thermo.Hvap("water", T))
-    H_vap_no_hvap = H_vap - Hvap
-    assert abs(H_vap_no_hvap - 75.3 * (T - Tref)) < 1.0, (
-        f"Vapor enthalpy integral should use liquid Cp (correct thermo path), "
-        f"got {H_vap_no_hvap:.1f} vs expected {75.3 * (T - Tref):.1f}"
-    )
+    # Thermodynamic path: liquid from Tref to the vaporization temperature
+    # T_v = min(Tref, Tb) (= Tref here: water boils at ~373 K), vaporize at
+    # T_v, then heat the vapor with Cp_vap. So dH_vap/dT = Cp_vap exactly and
+    # the vapor enthalpy is monotone in T (Hvap(T) at the stream's own T
+    # made it fall towards Tc).
+    assert thermo.vaporization_T("water") == Tref
+    expected = float(thermo.Hvap("water", Tref)) + 33.6 * (T - Tref)
+    assert abs(H_vap - expected) < 1e-6 * abs(expected), (H_vap, expected)
+    dH = jax.grad(lambda t: thermo.H_pure("water", t, phase="vapor"))(T)
+    assert abs(float(dH) - 33.6) < 1e-9
+
+
+def test_ideal_vapor_enthalpy_is_monotone_below_Tc():
+    """The ethane vapor enthalpy used to fall from 9.5 to 1.9 kJ/mol between
+    200 and 305 K (Watson Hvap(T) -> 0 at Tc), giving energy balances
+    spurious roots. On the fixed vaporization path dH/dT = Cp_ig > 0."""
+    import numpy as np
+    from difflow.database import get_species_data
+    from difflow.thermo import IdealThermo
+
+    th = IdealThermo({"ethane": get_species_data("ethane")})
+    Ts = np.linspace(120.0, 450.0, 67)
+    H = np.array([float(th.stream_enthalpy({"ethane": 1.0}, T, phase="vapor"))
+                  for T in Ts])
+    assert np.all(np.diff(H) > 0)
+    # Ethane vaporizes at its normal boiling point (Tref = 298 K is 7 K below
+    # Tc, where the Watson latent heat has nearly vanished), so the latent
+    # heat there is the Watson value at Tb.
+    Tb = th.vaporization_T("ethane")
+    assert 184.0 < Tb < 185.0
+    dH = float(th.H_pure("ethane", Tb, "vapor") - th.H_pure("ethane", Tb, "liquid"))
+    assert abs(dH - float(th.Hvap("ethane", Tb))) < 1e-6
 
 
 # ============================================================================
