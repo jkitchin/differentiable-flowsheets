@@ -719,6 +719,33 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- **A named acceleration survives `jax.jit` / `jax.jacfwd` (#440).** `Flowsheet.solve(acceleration="anderson"|"wegstein")`
+  used to be replaced by plain substitution whenever a feed or unit parameter was traced. It now runs
+  `difflow.initialization.AcceleratedFixedPoint` inside `optimistix.fixed_point`: the eager Anderson/Wegstein arithmetic
+  in `lax.while_loop`, fixed-size `(anderson_depth, n)` history buffers (one compile, no per-call retrace), the stop
+  test `max|g(x) - x| < tol` as an array predicate, `clip_negative_flows` on the extrapolated guess only, and the same
+  implicit derivative (no differentiation through the iterations). New `Flowsheet.last_solve_acceleration`
+  (`"anderson"`, `"wegstein"`, `"none"`) records what ran; `last_solve_method` stays `"fixed_point (traced)"`.
+  **Behaviour change:** only a NAMED acceleration takes the new path. The unnamed default is still plain substitution
+  under tracing (`tests/test_flowsheet_damping.py` pins that, and changing every jitted default solve is a larger
+  change); eager solves are untouched (`python -m difflow.convergence` output is byte-identical before and after:
+  pass rate 46.5%, convergence rate 49.5%). Callers that pass `acceleration=` explicitly and are traced (the
+  catalytic reformer, `difflow_ree` trains, the isomerization plant) now take the accelerated path; the reformer agrees with the
+  old answers to every printed digit and the `tests/ree`, isomerization and reforming suites pass. `CatalyticReformer.solve` results and `ReformerPlanningModel` expose
+  `solve_method` / `acceleration` (`last_solve_method` / `last_solve_acceleration`), so a traced plain-substitution
+  fallback is visible. Docs: `docs/convergence.md` ("Naming an acceleration under jit and jacfwd"); tests
+  `tests/test_traced_acceleration.py`.
+  **Measured** on the catalytic reformer (lean naphtha, `reformer_block(..., ["wait"], ...)`, tol 1e-10), on a 4-core
+  2.8 GHz Xeon, not the issue's M2 (baseline then after, seconds): eager solve at WAIT+5 C 11.3 then 10.6 (22
+  iterations, unchanged); jitted evaluation 5 C from the stored tear **18.6 then 6.6** (63 then 23 passes); jit
+  compile+first 51.6 then 45.5; jitted evaluation from its own tear 0.5 then 0.6; `jacfwd` compile+first 340.6 then
+  322.0; `jacfwd` warm at +5 C **52.3 then 39.9**. Primal results and the Jacobian agree to every printed digit.
+  **Not solved:** the Jacobian stays expensive. Profiling one tear map `g` (31 tear entries): one primal pass 0.27 s
+  (27.8 s compile), one forward-mode tangent 1.5 s (71 s compile), the dense 31-tangent Jacobian that optimistix's
+  implicit rule materialises 28 s (107 s compile); the three diffrax bed integrators under `ForwardMode` dominate, not
+  the iteration count. A matrix-free GMRES in the implicit rule was tried and was no better (warm 51.9 s, compile
+  457.6 s), so it was not kept.
+
 - `CubicThermo` treats a species absent from a stream as zero flow, as
   `IdealThermo` already did. A condenser whose vapour listed only n-pentane
   against a water-only coolant raised a bare `KeyError: 'water'` from

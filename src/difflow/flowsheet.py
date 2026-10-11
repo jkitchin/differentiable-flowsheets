@@ -23,6 +23,7 @@ import jax
 from difflow.streams import Stream, get_species, get_flows, make_stream
 from difflow.initialization import (
     AndersonAccelerator,
+    AcceleratedFixedPoint,
     wegstein_acceleration,
     Initializable,
     TearInitializationWarning,
@@ -50,6 +51,19 @@ _MAX_TOLERANCE_TIGHTENINGS = 3
 #: regime the warning is for.  See ``Flowsheet._report_tolerance`` for why
 #: a bare ``error > tol`` is the wrong test.
 _TOLERANCE_WARNING_AMPLIFICATION = 10.0
+
+
+class _DefaultAcceleration(str):
+    """The ``acceleration`` default: ``"anderson"``, but knows nobody asked.
+
+    Eagerly it is ``"anderson"``.  Under tracing a *requested* acceleration
+    runs the traced Anderson/Wegstein solver (#440), while the default keeps
+    the plain optimistix fixed point that ``solve`` has always used there, so
+    a flowsheet that never named an accelerator keeps its traced answers.
+    """
+
+
+_DEFAULT_ACCELERATION = _DefaultAcceleration("anderson")
 
 
 class _UndetectedTracer(Exception):
@@ -469,6 +483,11 @@ class Flowsheet:
         #: "none", "fixed_point (traced)" when a tracer forced the
         #: differentiable path, or "direct" for a recycle-free solve)
         self.last_solve_method: str | None = None
+        #: what accelerated the last solve: "anderson", "wegstein" or "none".
+        #: Differs from ``last_solve_method`` under tracing, where the method
+        #: is "fixed_point (traced)" and this says whether the traced solver
+        #: was accelerated or fell back to plain substitution (#440).
+        self.last_solve_acceleration: str | None = None
         #: tolerance requested of the last recycle solve
         self.last_solve_tol: float | None = None
         #: tear-stream (recycle destination) names of the last recycle solve
@@ -539,7 +558,7 @@ class Flowsheet:
         tol: float = 1e-8,
         max_iter: int = 100,
         damping: float = 1.0,
-        acceleration: Literal["none", "wegstein", "anderson"] = "anderson",
+        acceleration: Literal["none", "wegstein", "anderson"] = _DEFAULT_ACCELERATION,
         anderson_depth: int = 5,
         use_initialization: bool = True,
         clip_negative_flows: bool = True,
@@ -589,6 +608,12 @@ class Flowsheet:
                 - "none": Fixed-point iteration, damped by ``damping``
                 - "wegstein": Wegstein acceleration (uses previous 2 iterates)
                 - "anderson": Anderson acceleration (uses history of iterates)
+
+                Under ``jax.jit``/``jax.grad`` a method you NAME runs as a
+                traced solver (``AcceleratedFixedPoint`` inside
+                ``optimistix.fixed_point``, implicit derivative); the
+                unnamed default uses plain substitution there.
+                ``last_solve_acceleration`` records what ran.
             anderson_depth: History depth for Anderson acceleration (default 5)
             use_initialization: If True and units support it, use their
                                initialize() methods for better initial guesses
@@ -623,8 +648,10 @@ class Flowsheet:
                 ``tests/test_flowsheet_tear_clip.py::
                 test_clipping_inside_the_map_would_break_the_gradient``.
 
-                Because a traced solve falls back to ``"none"``, the clip
-                never applies under ``jax.grad`` or ``jit``.
+                Under ``jax.grad`` or ``jit`` the clip applies only when an
+                acceleration was named (the traced Anderson/Wegstein
+                solver, #440); the unnamed default falls back to ``"none"``,
+                which never clips.
 
                 When the projection actually *moves* an iterate it is
                 counted in :attr:`last_solve_clip_active`, and a solve
@@ -764,6 +791,7 @@ class Flowsheet:
         if not self.recycles:
             # No recycles - simple sequential solution
             self.last_solve_method = "direct"
+            self.last_solve_acceleration = "none"
             self.last_solve_iterations = 0
             self.last_solve_residual = 0.0
             self.last_solve_converged = True
@@ -802,19 +830,32 @@ class Flowsheet:
                 # Initialize with small flows
                 tear_streams[dest] = self._make_zero_stream()
 
-        # The accelerated solvers are Python loops that branch on the residual
-        # to stop early, which a tracer cannot answer.  Under jax.grad / jit,
-        # fall back to the optimistix fixed point instead: it converges without
-        # a Python branch and carries an implicit-differentiation rule, so the
-        # gradient comes from the converged solution rather than from an
-        # unrolled iteration.  Recorded in last_solve_method so the report
-        # layer tells the truth about what ran.
-        if acceleration != "none" and self._is_traced():
-            acceleration = "none"
-            self.last_solve_method = "fixed_point (traced)"
-
         if acceleration not in ("none", "wegstein", "anderson"):
             raise ValueError(f"Unknown acceleration method: {acceleration}")
+
+        # The eager accelerated solvers are Python loops that branch on the
+        # residual to stop early, which a tracer cannot answer.  Under
+        # jax.grad / jit the solve goes through optimistix's fixed point
+        # instead: it converges without a Python branch and carries an
+        # implicit-differentiation rule, so the gradient comes from the
+        # converged solution rather than from an unrolled iteration.
+        # ``last_solve_method`` says "fixed_point (traced)" for it, and
+        # ``last_solve_acceleration`` says what ran inside it.
+        #
+        # An acceleration the caller NAMED runs there too, as a traced
+        # Anderson/Wegstein solver (#440).  The unnamed default keeps the
+        # plain substitution it has always used under tracing: it is the
+        # same "anderson" eagerly, but nobody asked for it, and changing
+        # what every jitted default solve computes is not this change.
+        traced_accel = None
+        explicit = type(acceleration) is not _DefaultAcceleration
+        self.last_solve_acceleration = str(acceleration)
+        if acceleration != "none" and self._is_traced():
+            if explicit:
+                traced_accel = str(acceleration)
+            acceleration = "none"
+            self.last_solve_method = "fixed_point (traced)"
+            self.last_solve_acceleration = traced_accel or "none"
 
         tear_names = list(self.recycles.values())
         self.last_solve_gain = None
@@ -829,6 +870,7 @@ class Flowsheet:
         # after the loop rather than at each of the three returns.
         tol_step = tol
         iterations = 0
+        requested = acceleration
         for attempt in range(_MAX_TOLERANCE_TIGHTENINGS + 1):
             if acceleration == "none":
                 # No clip_negative_flows here, and not by omission (#263).
@@ -840,7 +882,9 @@ class Flowsheet:
                 # breaks, are in solve's docstring.
                 self.last_solve_history = None    # optx keeps no history
                 streams = self._solve_with_recycle_damped(
-                    tear_streams, tol_step, max_iter, damping
+                    tear_streams, tol_step, max_iter, damping,
+                    accelerate=traced_accel, anderson_depth=anderson_depth,
+                    clip_negative_flows=clip_negative_flows,
                 )
             else:
                 try:
@@ -860,8 +904,13 @@ class Flowsheet:
                     acceleration = "none"
                     self.last_solve_method = "fixed_point (traced)"
                     self.last_solve_history = None
+                    if explicit:
+                        traced_accel = str(requested)
+                    self.last_solve_acceleration = traced_accel or "none"
                     streams = self._solve_with_recycle_damped(
-                        tear_streams, tol_step, max_iter, damping
+                        tear_streams, tol_step, max_iter, damping,
+                        accelerate=traced_accel, anderson_depth=anderson_depth,
+                        clip_negative_flows=clip_negative_flows,
                     )
 
             # The tolerance reported is the one the caller asked for, not
@@ -1384,8 +1433,17 @@ class Flowsheet:
         tol: float,
         max_iter: int,
         damping: float,
+        accelerate: str | None = None,
+        anderson_depth: int = 5,
+        clip_negative_flows: bool = True,
     ) -> dict[str, Stream]:
         """Solve flowsheet with recycle using damped fixed-point iteration.
+
+        With ``accelerate="anderson"`` or ``"wegstein"`` the iteration is
+        :class:`~difflow.initialization.AcceleratedFixedPoint` instead (the
+        traced accelerated solver, #440): the same optimistix fixed point
+        and implicit derivative, a much shorter iteration.  ``damping`` is
+        not applied there, as it is not on the eager accelerated paths.
 
         Iterates ``x + alpha (g(x) - x)``, which has the same fixed point as
         ``g`` but a contractive iteration wherever ``g`` overshoots: for a
@@ -1451,9 +1509,19 @@ class Flowsheet:
 
         # Solve fixed-point problem.  See the docstring for why the
         # tolerance carries the damping factor.
-        fp_solver = optx.FixedPointIteration(
-            rtol=tol * damping, atol=tol * damping
-        )
+        if accelerate is None:
+            fp_solver = optx.FixedPointIteration(
+                rtol=tol * damping, atol=tol * damping
+            )
+        else:
+            fp_solver = AcceleratedFixedPoint(
+                atol=tol,
+                method=accelerate,
+                depth=anderson_depth,
+                flow_mask=self._tear_flow_mask(len(tear_initial)),
+                clip=clip_negative_flows,
+            )
+            iteration = flowsheet_iteration
         sol = optx.fixed_point(
             iteration,
             fp_solver,
@@ -1463,6 +1531,8 @@ class Flowsheet:
             throw=False,
         )
         tear_converged = sol.value
+        if accelerate is not None:
+            self._record_clip_activity(sol.state.clip_hits)
 
         # Record convergence diagnostics for the report layer.  The verdict
         # is judged against the criterion optimistix ACTUALLY stopped on --

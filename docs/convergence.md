@@ -549,9 +549,10 @@ Three consequences worth knowing before differentiating through a flowsheet:
   `optimistix` carries an implicit-differentiation rule, so the derivative comes
   from the converged solution through the implicit function theorem, not from
   an unrolled loop. It does not depend on how many iterations ran.
-- **You lose the acceleration.** A loop that needs Anderson to converge in 100
-  iterations eagerly may need many more under `grad`. Raise `max_iter` on the
-  differentiated path.
+- **You keep the acceleration only if you name it.** See the next section.
+  The unnamed default stays plain substitution under tracing, so a loop that
+  needs Anderson to converge in 100 iterations eagerly may need many more under
+  `grad` unless `acceleration="anderson"` is passed.
 - **You lose the convergence verdict.** There is no concrete residual to judge,
   so `last_solve_converged` is `None` and the solve stays silent whatever
   `on_nonconvergence` says — guessing would either raise inside a gradient or
@@ -562,6 +563,79 @@ Three consequences worth knowing before differentiating through a flowsheet:
   starts from the flowsheet default stream unless you pass `tear_initial`.
   For a loop the default start is nowhere near, pass the eagerly converged
   tear in explicitly.
+
+### Naming an acceleration under `jit` and `jacfwd`
+
+Passing `acceleration="anderson"` or `"wegstein"` explicitly keeps the
+acceleration when the solve is traced (#440). It runs
+`difflow.initialization.AcceleratedFixedPoint`, the same arithmetic as the eager
+loops written as a solver for `optimistix.fixed_point`:
+
+- the Anderson history is a pair of `(anderson_depth, n)` buffers rolled in
+  place, so the loop carry has one shape and nothing recompiles per call; the
+  weights are the same SVD least squares and an unfilled column drops out of the
+  rank;
+- the stop test is an array predicate, `max|g(x) - x| < tol`, the eager test;
+- on the passing iterate it returns `g(x)`, never an extrapolation;
+- `clip_negative_flows` projects the extrapolated guess only, so the map whose
+  fixed point is differentiated is untouched (the #263 reason, unchanged);
+- the derivative is still the implicit one, so `jax.jacfwd`, `jax.jacrev` and
+  `jax.grad` do not differentiate the iterations and agree with the plain path.
+
+`last_solve_method` stays `"fixed_point (traced)"` (it is the optimistix path)
+and `last_solve_acceleration` says what ran inside it: `"anderson"`,
+`"wegstein"`, or `"none"` for plain substitution, which is what the unnamed
+default gets under tracing.
+
+```python
+import jax
+import jax.numpy as jnp
+from difflow.flowsheet import Flowsheet, Unit
+from difflow.streams import make_stream
+
+jax.config.update("jax_enable_x64", True)
+
+
+class SlowLoop:
+    """g(x) = F + 0.95 x: plain substitution needs hundreds of passes."""
+
+    def __call__(self, feed, tear):
+        return make_stream({"A": feed["F_A"] + 0.95 * tear["F_A"]},
+                           feed["T"], feed["P"])
+
+
+def build(F):
+    fs = Flowsheet(species_order=["A"], default_flow=0.0)
+    fs.add_feed("feed", make_stream({"A": F}, 300.0, 1e5))
+    fs.add_unit(Unit("loop", SlowLoop(), ["feed", "tear"], ["out"]))
+    fs.add_recycle("out", "tear")
+    return fs
+
+
+def objective(F, acceleration):
+    fs = build(F)
+    out = fs.solve(acceleration=acceleration, tol=1e-10, max_iter=2000,
+                   error_probe=0)["out"]["F_A"]
+    objective.fs = fs
+    return out
+
+
+value = jax.jit(lambda F: objective(F, "anderson"))(1.0)
+assert objective.fs.last_solve_method == "fixed_point (traced)"
+assert objective.fs.last_solve_acceleration == "anderson"
+assert abs(value - 20.0) < 1e-6
+assert abs(jax.jacfwd(lambda F: objective(F, "anderson"))(1.0) - 20.0) < 1e-6
+```
+
+Limits, measured on the catalytic reformer (4-core x86 machine, see the
+changelog): the primal solve is shorter (23 passes against 63 for plain
+substitution, a jitted evaluation 5 C from the stored tear 6.6 s against 18.6 s),
+but the *Jacobian* is not much cheaper. Its cost is the dense tear Jacobian that
+`optimistix`'s implicit rule materialises (one forward-mode tangent through the
+three diffrax bed integrators per tear entry, 31 of them), not the iteration
+count. A matrix-free GMRES in the implicit rule was tried and was no faster.
+Reverse mode through a unit that uses `diffrax.ForwardMode` is unavailable
+whatever the solver.
 
 The same rule explains a related gotcha: never record a solve diagnostic with a
 bare `float()` in code that may be traced. `flowsheet._concrete()` returns
@@ -617,6 +691,7 @@ converged:
 | `last_solve_tol` | the tolerance that was asked for |
 | `last_solve_iterations` | iterations used; equals `max_iter` when it did not converge |
 | `last_solve_method` | `"anderson"`, `"wegstein"`, `"none"`, `"fixed_point (traced)"`, or `"direct"` for a recycle-free sequential solve |
+| `last_solve_acceleration` | what accelerated the solve: `"anderson"`, `"wegstein"` or `"none"`. Under tracing `last_solve_method` is `"fixed_point (traced)"` and this says whether the traced solver was accelerated |
 | `last_solve_tear_streams` | the tear (recycle destination) names |
 | `last_solve_clip_active` | iterations on which `clip_negative_flows` actually moved the proposed iterate; always `0` on the unaccelerated path, which does not clip |
 | `last_solve_gain` | measured signed gain of the tear map at the solution, or `None` where there was nothing to measure |
