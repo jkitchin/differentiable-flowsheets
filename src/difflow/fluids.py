@@ -17,7 +17,15 @@ Contents
   :func:`orifice_permanent_loss`, :func:`venturi_permanent_loss`
 * :data:`NPS_SCHEDULES` (ASME B36.10M), :func:`pipe_inside_diameter` /
   :func:`pipe_id`, :func:`pipe_outside_diameter`, :func:`pipe_wall_thickness`,
-  :func:`standard_sizes`, :func:`snap_to_standard_size`
+  :func:`standard_sizes`, :func:`snap_to_standard_size`,
+  :func:`pipe_weight_per_length`
+* Non-Newtonian friction (Darcy, like :func:`friction_factor`): power law
+  (:func:`metzner_reed_reynolds`, :func:`power_law_friction_factor` --
+  laminar 64/Re_MR and Dodge-Metzner -- :func:`power_law_pressure_drop`) and
+  Bingham plastic (:func:`hedstrom_number`, :func:`bingham_friction_factor` --
+  Buckingham-Reiner and Darby et al. 1992 -- :func:`bingham_pressure_drop`)
+* Rotameter: :func:`rotameter_flow`, :func:`rotameter_height`,
+  :func:`rotameter_float_dp`
 
 Liquid density and viscosity are *inputs* to these functions. Look them up
 with :mod:`difflow.liquid_properties` (``liquid_density(name, T)``,
@@ -958,6 +966,496 @@ def snap_to_standard_size(D: float, schedule="40", direction: str = "up") -> tup
     raise ValueError(f"direction must be 'up', 'down' or 'nearest', got {direction!r}")
 
 
+# =============================================================================
+# Non-Newtonian pipe flow (power-law and Bingham plastic)
+# =============================================================================
+#
+# Convention: the public functions below return the **Darcy** friction factor,
+# like :func:`friction_factor`, so ``darcy_pressure_drop(f, L, D, rho, v)``
+# applies unchanged. The literature correlations are all written for the
+# **Fanning** factor ``f_F = f_D / 4``; the docstrings quote them in that form.
+
+_NN_NEWTON_ITERATIONS = 40
+
+
+def metzner_reed_reynolds(
+    rho: Array | float,
+    v: Array | float,
+    D: Array | float,
+    K: Array | float,
+    n: Array | float,
+) -> Array:
+    """Metzner-Reed generalized Reynolds number of a power-law fluid.
+
+    ``Re_MR = rho v^(2-n) D^n / (K 8^(n-1) ((3n+1)/(4n))^n)`` for a fluid
+    with ``tau = K gamma_dot^n``. It is defined so that the laminar Fanning
+    friction factor is ``16/Re_MR`` (Darcy ``64/Re_MR``) for every ``n``, and
+    it reduces to ``rho v D / mu`` at ``n = 1`` (``K = mu``).
+
+    Source: Metzner, A.B. and Reed, J.C. (1955), AIChE J. 1, 434-440; also
+    Perry's Chemical Engineers' Handbook, 9e, Sec. 6 (non-Newtonian flow).
+
+    Args:
+        rho: Density (kg/m^3).
+        v: Mean velocity (m/s).
+        D: Inside diameter (m).
+        K: Consistency index (Pa s^n).
+        n: Flow behaviour index (-); n < 1 shear-thinning, n > 1 shear-thickening.
+
+    Returns:
+        ``Re_MR`` (-).
+
+    Example:
+        >>> round(float(metzner_reed_reynolds(1000.0, 1.0, 0.05, 1e-3, 1.0)), 6)
+        50000.0
+    """
+    rho, v, D, K, n = (jnp.asarray(x, dtype=jnp.float64) for x in (rho, v, D, K, n))
+    return rho * v ** (2.0 - n) * D**n / (K * 8.0 ** (n - 1.0) * ((3.0 * n + 1.0) / (4.0 * n)) ** n)
+
+
+def _dodge_metzner_fanning(Re: Array, n: Array) -> Array:
+    """Dodge-Metzner turbulent Fanning factor, solved implicitly.
+
+    ``1/sqrt(f) = (4/n^0.75) log10(Re f^(1-n/2)) - 0.4/n^1.2``. With
+    ``x = 1/sqrt(f)`` the residual ``g(x) = x - A[log10 Re - (2-n) log10 x] + B``
+    is increasing and concave, so Newton from any ``x >= 1`` lands left of the
+    root and then converges monotonically. The iteration runs on
+    stop-gradient inputs and one implicit-function-theorem step restores the
+    exact derivatives in ``Re`` and ``n`` (as in the Colebrook solver).
+    """
+    sg = jax.lax.stop_gradient
+    Re_s, n_s = sg(Re), sg(n)
+
+    def g(x, Re_, n_):
+        A = 4.0 / n_**0.75
+        return x - A * (jnp.log10(Re_) - (2.0 - n_) * jnp.log10(x)) + 0.4 / n_**1.2
+
+    def gx(x, Re_, n_):
+        return 1.0 + (4.0 / n_**0.75) * (2.0 - n_) / (x * _LN10)
+
+    x = jnp.full_like(Re_s, 10.0)
+    for _ in range(_NN_NEWTON_ITERATIONS):
+        x = jnp.maximum(x - g(x, Re_s, n_s) / gx(x, Re_s, n_s), 1.0)
+    x = sg(x)
+    x = x - g(x, Re, n) / sg(gx(x, Re_s, n_s))
+    return 1.0 / x**2
+
+
+def power_law_friction_factor(Re_MR: Array | float, n: Array | float) -> Array:
+    """**Darcy** friction factor of a power-law fluid in a smooth pipe.
+
+    Laminar (exact for a power-law fluid): Fanning ``f_F = 16/Re_MR``, i.e.
+    Darcy ``f = 64/Re_MR``. Turbulent: Dodge and Metzner (1959), Fanning form
+
+    ``1/sqrt(f_F) = (4.0/n^0.75) log10(Re_MR f_F^(1-n/2)) - 0.4/n^1.2``,
+
+    solved by Newton iteration with implicit-function-theorem gradients and
+    returned as Darcy ``f = 4 f_F``. At ``n = 1`` it is Prandtl's smooth-pipe
+    law ``1/sqrt(f_F) = 4 log10(Re sqrt(f_F)) - 0.4``, which is within about
+    1 % of Colebrook at zero roughness for Re 1e4-1e7.
+
+    The laminar and turbulent branches are joined with the same C2 smootherstep
+    in ``ln Re_MR`` between 2100 and 4000 that :func:`friction_factor` uses
+    (exactly ``64/Re_MR`` below 2100). This is a convention, not a transition
+    model: the critical ``Re_MR`` of a shear-thinning fluid is somewhat higher
+    than 2100 (Ryan and Johnson 1959), and that shift is not modelled.
+
+    Validity of Dodge-Metzner: smooth pipes; their data covered
+    ``0.36 <= n <= 1.0`` and ``Re_MR`` up to about 1e5. Roughness is not
+    included.
+
+    Sources: Dodge, D.W. and Metzner, A.B. (1959), AIChE J. 5, 189-204;
+    Metzner and Reed (1955), AIChE J. 1, 434; Perry's 9e Sec. 6.
+
+    Args:
+        Re_MR: Metzner-Reed Reynolds number (:func:`metzner_reed_reynolds`), positive.
+        n: Flow behaviour index (-), positive.
+
+    Returns:
+        Darcy friction factor (-). Divide by 4 for Fanning.
+
+    Example:
+        >>> float(power_law_friction_factor(1000.0, 0.5)) == 64.0 / 1000.0
+        True
+    """
+    Re = jnp.maximum(jnp.asarray(Re_MR, dtype=jnp.float64), 1e-12)
+    n = jnp.asarray(n, dtype=jnp.float64)
+    Re, n = jnp.broadcast_arrays(Re, n)
+    f_t = 4.0 * _dodge_metzner_fanning(jnp.maximum(Re, RE_LAMINAR), n)
+    w = _laminar_weight(Re)
+    return (1.0 - w) * 64.0 / Re + w * f_t
+
+
+def power_law_pressure_drop(
+    Q: Array | float,
+    L: Array | float,
+    D: Array | float,
+    rho: Array | float,
+    K: Array | float,
+    n: Array | float,
+) -> Array:
+    """Frictional pressure drop (Pa) of a power-law fluid in a smooth round pipe.
+
+    ``dP = f (L/D) rho v^2 / 2`` with ``f`` from :func:`power_law_friction_factor`
+    at ``Re_MR`` of the flow. In laminar flow this is exactly the
+    Rabinowitsch-Mooney result
+    ``dP = (4 K L / D) (8 v / D)^n ((3n+1)/(4n))^n``.
+
+    Args:
+        Q: Volumetric flow (m^3/s), positive.
+        L: Length (m).
+        D: Inside diameter (m).
+        rho: Density (kg/m^3).
+        K: Consistency index (Pa s^n).
+        n: Flow behaviour index (-).
+
+    Returns:
+        Pressure drop (Pa).
+
+    Example:
+        >>> dP = power_law_pressure_drop(1e-4, 10.0, 0.05, 1000.0, 1.0, 0.5)   # laminar
+        >>> v = 1e-4 / (3.141592653589793 / 4 * 0.05**2)
+        >>> exact = 4 * 1.0 * 10.0 / 0.05 * (8 * v / 0.05) ** 0.5 * (2.5 / 2.0) ** 0.5
+        >>> abs(float(dP) / exact - 1.0) < 1e-12
+        True
+    """
+    D = jnp.asarray(D, dtype=jnp.float64)
+    v = jnp.asarray(Q, dtype=jnp.float64) / (jnp.pi / 4.0 * D**2)
+    f = power_law_friction_factor(metzner_reed_reynolds(rho, v, D, K, n), n)
+    return darcy_pressure_drop(f, L, D, rho, v)
+
+
+def hedstrom_number(
+    rho: Array | float,
+    tau_y: Array | float,
+    D: Array | float,
+    mu_p: Array | float,
+) -> Array:
+    """Hedstrom number of a Bingham plastic, ``He = rho tau_y D^2 / mu_p^2``.
+
+    Args:
+        rho: Density (kg/m^3).
+        tau_y: Yield stress (Pa).
+        D: Inside diameter (m).
+        mu_p: Plastic (Bingham) viscosity (Pa s).
+
+    Returns:
+        ``He`` (-). Zero for a Newtonian fluid.
+
+    Example:
+        >>> round(float(hedstrom_number(1000.0, 10.0, 0.1, 0.01)), 6)
+        1000000.0
+    """
+    return jnp.asarray(rho) * jnp.asarray(tau_y) * jnp.asarray(D) ** 2 / jnp.asarray(mu_p) ** 2
+
+
+def _buckingham_reiner_fanning(Re: Array, He: Array) -> Array:
+    """Laminar Fanning factor of a Bingham plastic (Buckingham-Reiner).
+
+    Solves ``r(f) = f - (16/Re)(1 + He/(6 Re)) + (16/3) He^4 / (f^3 Re^8) = 0``
+    (the Buckingham-Reiner equation multiplied out). ``r`` is convex, and
+    increasing at the physical root (``dr/df = 1 - xi^4`` with
+    ``xi = tau_y/tau_w < 1``); Newton started from the upper bound
+    ``(16/Re)(1 + He/(6Re))`` converges monotonically from the right.
+    Derivatives come from one implicit-function-theorem step.
+    """
+    sg = jax.lax.stop_gradient
+    Re_s, He_s = sg(Re), sg(He)
+
+    def r(f, Re_, He_):
+        return f - 16.0 / Re_ * (1.0 + He_ / (6.0 * Re_)) + (16.0 / 3.0) * He_**4 / (f**3 * Re_**8)
+
+    def rf(f, Re_, He_):
+        return 1.0 - 16.0 * He_**4 / (f**4 * Re_**8)
+
+    f = 16.0 / Re_s * (1.0 + He_s / (6.0 * Re_s))
+    for _ in range(_NN_NEWTON_ITERATIONS):
+        f = f - r(f, Re_s, He_s) / rf(f, Re_s, He_s)
+    f = sg(f)
+    return f - r(f, Re, He) / sg(rf(f, Re_s, He_s))
+
+
+BINGHAM_METHODS = ("darby1992", "laminar")
+
+
+def bingham_friction_factor(
+    Re_B: Array | float,
+    He: Array | float,
+    method: str = "darby1992",
+) -> Array:
+    """**Darcy** friction factor of a Bingham plastic in a smooth round pipe.
+
+    ``Re_B = rho v D / mu_p`` (plastic-viscosity Reynolds number) and ``He``
+    from :func:`hedstrom_number`. In the Fanning form of the sources:
+
+    * Laminar, Buckingham-Reiner (exact for a Bingham plastic):
+      ``f_L = (16/Re_B) [1 + He/(6 Re_B) - He^4/(3 f_L^3 Re_B^7)]``, solved by
+      Newton iteration with implicit-function-theorem gradients. At
+      ``He = 0`` it is exactly ``16/Re`` (Darcy ``64/Re``).
+    * Turbulent, Darby, Mun and Boger (1992):
+      ``f_T = 10^a Re_B^-0.193``, ``a = -1.47 [1 + 0.146 exp(-2.9e-5 He)]``.
+    * All regimes (``method="darby1992"``, default), Darby et al. (1992):
+      ``f = (f_L^m + f_T^m)^(1/m)``, ``m = 1.7 + 40000/Re_B``, evaluated in
+      log space so a large ``m`` neither overflows nor underflows.
+
+    ``method="laminar"`` returns the Buckingham-Reiner factor alone.
+
+    The turbulent fit is for slurries and pastes and does **not** reduce to
+    the Newtonian smooth-pipe curve at ``He = 0`` (it is about half of it at
+    ``Re = 1e5``); only the laminar branch has an exact Newtonian limit. The
+    original Darby and Melson (1981) fit used ``-1.378`` in place of
+    ``-1.47``; the 1992 revision is used here.
+
+    Sources: Buckingham, E. (1921), Proc. ASTM 21, 1154; Darby, R. and
+    Melson, J. (1981), Chem. Eng. 88(26), 59-61; Darby, R., Mun, R. and
+    Boger, D.V. (1992), "Predict friction loss in slurry pipes", Chem. Eng.
+    99(9), 116-119; Darby, *Chemical Engineering Fluid Mechanics*, 2e (2001).
+    The 1992 constants were checked against secondary reprints (e.g.
+    arXiv:2501.08999, which quotes the Darcy form ``4 x 10^a Re^-0.193``),
+    not against the original article.
+
+    Args:
+        Re_B: Bingham Reynolds number ``rho v D / mu_p`` (-), positive.
+        He: Hedstrom number (-), non-negative.
+        method: ``"darby1992"`` or ``"laminar"``.
+
+    Returns:
+        Darcy friction factor (-). Divide by 4 for Fanning.
+
+    Example:
+        >>> float(bingham_friction_factor(1000.0, 0.0, "laminar")) == 64.0 / 1000.0
+        True
+    """
+    if method not in BINGHAM_METHODS:
+        raise ValueError(f"Unknown Bingham method {method!r}; use one of {BINGHAM_METHODS}")
+    Re = jnp.maximum(jnp.asarray(Re_B, dtype=jnp.float64), 1e-12)
+    He = jnp.asarray(He, dtype=jnp.float64)
+    Re, He = jnp.broadcast_arrays(Re, He)
+    f_L = _buckingham_reiner_fanning(Re, He)
+    if method == "laminar":
+        return 4.0 * f_L
+    a = -1.47 * (1.0 + 0.146 * jnp.exp(-2.9e-5 * He))
+    log_fT = a * _LN10 - 0.193 * jnp.log(Re)
+    m = 1.7 + 40000.0 / Re
+    log_f = jnp.logaddexp(m * jnp.log(f_L), m * log_fT) / m
+    return 4.0 * jnp.exp(log_f)
+
+
+def bingham_pressure_drop(
+    Q: Array | float,
+    L: Array | float,
+    D: Array | float,
+    rho: Array | float,
+    tau_y: Array | float,
+    mu_p: Array | float,
+    method: str = "darby1992",
+) -> Array:
+    """Frictional pressure drop (Pa) of a Bingham plastic in a smooth round pipe.
+
+    ``dP = f (L/D) rho v^2 / 2`` with ``f`` from :func:`bingham_friction_factor`.
+
+    Args:
+        Q: Volumetric flow (m^3/s), positive.
+        L: Length (m).
+        D: Inside diameter (m).
+        rho: Density (kg/m^3).
+        tau_y: Yield stress (Pa).
+        mu_p: Plastic viscosity (Pa s).
+        method: ``"darby1992"`` (all regimes) or ``"laminar"``.
+
+    Returns:
+        Pressure drop (Pa).
+
+    Example:
+        >>> dP0 = bingham_pressure_drop(1e-4, 10.0, 0.05, 1000.0, 0.0, 0.1)
+        >>> dP1 = bingham_pressure_drop(1e-4, 10.0, 0.05, 1000.0, 5.0, 0.1)
+        >>> bool(dP1 > dP0)          # a yield stress adds to the laminar drop
+        True
+    """
+    D = jnp.asarray(D, dtype=jnp.float64)
+    v = jnp.asarray(Q, dtype=jnp.float64) / (jnp.pi / 4.0 * D**2)
+    Re = reynolds_number(rho, v, D, mu_p)
+    f = bingham_friction_factor(Re, hedstrom_number(rho, tau_y, D, mu_p), method)
+    return darcy_pressure_drop(f, L, D, rho, v)
+
+
+# =============================================================================
+# Rotameter (variable-area meter)
+# =============================================================================
+
+
+def rotameter_float_dp(
+    V_float: Array | float,
+    rho_float: Array | float,
+    rho: Array | float,
+    A_float: Array | float,
+) -> Array:
+    """Pressure difference across a rotameter float (Pa), from its force balance.
+
+    A float at rest carries its weight less its buoyancy on the pressure
+    difference over its largest cross-section:
+    ``dP A_f = V_f (rho_f - rho) g``, so ``dP = V_f (rho_f - rho) g / A_f``,
+    independent of the flow (McCabe, Smith and Harriott, *Unit Operations of
+    Chemical Engineering*, 7e, Ch. 8, area meters; Perry's 9e Sec. 10).
+
+    Args:
+        V_float: Float volume (m^3).
+        rho_float: Float density (kg/m^3).
+        rho: Fluid density (kg/m^3).
+        A_float: Float cross-section at its largest diameter (m^2).
+
+    Returns:
+        Pressure difference (Pa).
+
+    Example:
+        >>> round(float(rotameter_float_dp(4e-6, 8000.0, 1000.0, 1e-4)), 4)
+        2745.862
+    """
+    return (jnp.asarray(V_float) * (jnp.asarray(rho_float) - jnp.asarray(rho)) * GRAVITY
+            / jnp.asarray(A_float))
+
+
+def _rotameter_geometry(D_float, taper, D_tube_0):
+    D_f = jnp.asarray(D_float, dtype=jnp.float64)
+    D_0 = D_f if D_tube_0 is None else jnp.asarray(D_tube_0, dtype=jnp.float64)
+    return D_f, D_0, jnp.asarray(taper, dtype=jnp.float64), jnp.pi / 4.0 * D_f**2
+
+
+def rotameter_flow(
+    h: Array | float,
+    D_float: Array | float,
+    V_float: Array | float,
+    rho_float: Array | float,
+    rho: Array | float,
+    C_R: Array | float,
+    taper: Array | float,
+    D_tube_0: Array | float | None = None,
+) -> Array:
+    """Volumetric flow (m^3/s) through a rotameter with the float at height ``h``.
+
+    The tube is a linear taper, inside diameter ``D_t(h) = D_tube_0 + taper h``
+    (``D_tube_0`` defaults to the float diameter: the float seats at
+    ``h = 0``). The annulus around the float, ``A_a = (pi/4)(D_t^2 - D_f^2)``,
+    passes the flow like an orifice driven by the force-balance pressure
+    difference :func:`rotameter_float_dp`:
+
+    ``Q = C_R A_a / sqrt(1 - (A_a/A_t)^2) * sqrt(2 g V_f (rho_f - rho) / (rho A_f))``
+
+    with ``A_t = (pi/4) D_t^2`` (velocity-of-approach factor) and
+    ``A_f = (pi/4) D_f^2``. Source: McCabe, Smith and Harriott, 7e, Ch. 8
+    (area meters); the same force balance is in Perry's 9e Sec. 10. ``C_R``
+    depends on the float shape and the annulus Reynolds number; take it from
+    the meter's calibration (there is deliberately no default).
+
+    The mass flow ``rho Q`` scales with ``sqrt(rho (rho_f - rho))``, the
+    classic density correction of a rotameter reading.
+
+    Args:
+        h: Float height above the seat (m), non-negative.
+        D_float: Float diameter at its widest (m).
+        V_float: Float volume (m^3).
+        rho_float: Float density (kg/m^3), greater than ``rho``.
+        rho: Fluid density (kg/m^3).
+        C_R: Rotameter discharge coefficient (-).
+        taper: Tube taper ``dD_t/dh`` (m of diameter per m of height).
+        D_tube_0: Tube inside diameter at ``h = 0`` (m); default ``D_float``.
+
+    Returns:
+        Volumetric flow (m^3/s).
+
+    Example:
+        >>> Q = rotameter_flow(0.1, 0.02, 4e-6, 8000.0, 1000.0, 0.7, 0.05)
+        >>> round(float(rotameter_height(Q, 0.02, 4e-6, 8000.0, 1000.0, 0.7, 0.05)), 9)
+        0.1
+    """
+    D_f, D_0, taper, A_f = _rotameter_geometry(D_float, taper, D_tube_0)
+    D_t = D_0 + taper * jnp.asarray(h, dtype=jnp.float64)
+    A_t = jnp.pi / 4.0 * D_t**2
+    A_a = jnp.maximum(A_t - A_f, 0.0)
+    dP = rotameter_float_dp(V_float, rho_float, rho, A_f)
+    return (C_R * A_a / jnp.sqrt(1.0 - (A_a / A_t) ** 2)
+            * safe_sqrt(2.0 * dP / jnp.asarray(rho)))
+
+
+def rotameter_height(
+    Q: Array | float,
+    D_float: Array | float,
+    V_float: Array | float,
+    rho_float: Array | float,
+    rho: Array | float,
+    C_R: Array | float,
+    taper: Array | float,
+    D_tube_0: Array | float | None = None,
+) -> Array:
+    """Float height (m) for a volumetric flow ``Q`` (m^3/s), the inverse of
+    :func:`rotameter_flow`.
+
+    Solves ``A_a / sqrt(1 - (A_a/(A_a + A_f))^2) = Q / (C_R sqrt(2 dP/rho))``
+    for the annulus area ``A_a`` by Newton's method in ``ln A_a`` (the left
+    side is increasing in ``A_a``), with one implicit-function-theorem step
+    for exact derivatives, then ``h = (D_t - D_tube_0)/taper`` with
+    ``D_t = sqrt(4 (A_a + A_f)/pi)``. Arguments as :func:`rotameter_flow`,
+    with ``Q`` (m^3/s, positive) in place of ``h``.
+
+    Returns:
+        Float height (m).
+    """
+    D_f, D_0, taper, A_f = _rotameter_geometry(D_float, taper, D_tube_0)
+    dP = rotameter_float_dp(V_float, rho_float, rho, A_f)
+    k = jnp.asarray(Q, dtype=jnp.float64) / (C_R * safe_sqrt(2.0 * dP / jnp.asarray(rho)))
+
+    def g(y, k_, A_f_):  # residual in y = ln A_a
+        A = jnp.exp(y)
+        return y - 0.5 * jnp.log(1.0 - (A / (A + A_f_)) ** 2) - jnp.log(k_)
+
+    def gy(y, A_f_):
+        A = jnp.exp(y)
+        s = A / (A + A_f_)
+        return 1.0 + s**2 / (1.0 - s**2) * A_f_ / (A + A_f_)
+
+    sg = jax.lax.stop_gradient
+    k_s, A_f_s = sg(k), sg(A_f)
+    y = jnp.log(k_s)  # A_a <= k: start at the upper bound
+    for _ in range(_NN_NEWTON_ITERATIONS):
+        y = y - g(y, k_s, A_f_s) / gy(y, A_f_s)
+    y = sg(y)
+    y = y - g(y, k, A_f) / sg(gy(y, A_f_s))
+    D_t = jnp.sqrt(4.0 * (jnp.exp(y) + A_f) / jnp.pi)
+    return (D_t - D_0) / taper
+
+
+# =============================================================================
+# Pipe metal mass
+# =============================================================================
+
+#: Carbon-steel density (kg/m^3) behind the ASME B36.10M plain-end weights.
+STEEL_DENSITY = 7850.0
+
+
+def pipe_weight_per_length(nps, schedule="40", rho_metal: float = STEEL_DENSITY) -> float:
+    """Plain-end metal mass per metre (kg/m) of a nominal pipe size and schedule.
+
+    ``W = rho_metal pi (OD - t) t``. With ``rho_metal = 7850 kg/m^3`` this is
+    the ASME B36.10M plain-end weight formula ``W = 0.0246615 (OD - t) t``
+    (``OD``, ``t`` in mm, ``W`` in kg/m): 2-in Sch 40 gives 5.44 kg/m.
+
+    Args:
+        nps: Nominal size (in), as for :func:`pipe_inside_diameter`.
+        schedule: Pipe schedule.
+        rho_metal: Metal density (kg/m^3); 7850 for carbon steel.
+
+    Returns:
+        Mass per metre (kg/m), a plain float (table data).
+
+    Example:
+        >>> round(pipe_weight_per_length(2, "40"), 2)
+        5.44
+    """
+    OD = pipe_outside_diameter(nps)
+    t = pipe_wall_thickness(nps, schedule)
+    return float(rho_metal * math.pi * (OD - t) * t)
+
+
 __all__ = [
     "GRAVITY",
     "RE_LAMINAR",
@@ -991,4 +1489,16 @@ __all__ = [
     "pipe_id",
     "standard_sizes",
     "snap_to_standard_size",
+    "metzner_reed_reynolds",
+    "power_law_friction_factor",
+    "power_law_pressure_drop",
+    "hedstrom_number",
+    "BINGHAM_METHODS",
+    "bingham_friction_factor",
+    "bingham_pressure_drop",
+    "rotameter_float_dp",
+    "rotameter_flow",
+    "rotameter_height",
+    "STEEL_DENSITY",
+    "pipe_weight_per_length",
 ]

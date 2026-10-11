@@ -330,6 +330,7 @@ from difflow.units.heat_exchanger import (
     size_heat_exchanger,
 )
 from difflow.units.pipe import Pipe, PipeCavitationWarning, PipeParams
+from difflow.pipe_network import PipeNetwork, PipeNetworkResult, ResistanceBranch
 from difflow.units.pump import (
     CentrifugalPump,
     CentrifugalPumpParams,
@@ -803,6 +804,9 @@ __all__ = [
     "Pipe",
     "PipeCavitationWarning",
     "PipeParams",
+    "PipeNetwork",
+    "PipeNetworkResult",
+    "ResistanceBranch",
     "CentrifugalPump",
     "CentrifugalPumpParams",
     "fit_pump_curve",

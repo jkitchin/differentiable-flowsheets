@@ -82,6 +82,11 @@ from .capital import (
     # Total capital investment
     total_capital_investment,
     total_capital_investment_detailed,
+    # Piping
+    PIPE_COST_EXPONENTS,
+    PIPE_COST_BREAK_DIAMETER,
+    pipe_cost_per_length,
+    pipe_cost_nps,
 )
 
 # Utility costs
@@ -235,6 +240,10 @@ __all__ = [
     "pressure_factor_hx",
     "total_capital_investment",
     "total_capital_investment_detailed",
+    "PIPE_COST_EXPONENTS",
+    "PIPE_COST_BREAK_DIAMETER",
+    "pipe_cost_per_length",
+    "pipe_cost_nps",
     # Utilities - Types
     "UtilityPrices",
     "UtilityConsumption",

@@ -16,7 +16,10 @@ mixture) or build the unit with a ``thermo`` that carries ``SpeciesData``.
 
 The outlet pressure is checked against the liquid's vapour pressure
 (``info["P_out_below_vapour"]``, and a :class:`PipeCavitationWarning` outside
-a trace).
+a trace). With an elevation ``profile`` (``[(distance, elevation), ...]``)
+the minimum pressure along the line -- at a crest, say -- is checked too
+(``info["P_min"]``, ``info["P_min_below_vapour"]``,
+``info["cavitation_margin"]``); see :meth:`Pipe.pressure_profile`.
 """
 
 from __future__ import annotations
@@ -39,7 +42,10 @@ STEEL_ROUGHNESS = 4.6e-5
 
 
 class PipeCavitationWarning(UserWarning):
-    """A :class:`Pipe` outlet pressure is below the liquid's vapour pressure.
+    """A :class:`Pipe` pressure is below the liquid's vapour pressure.
+
+    The outlet, or with an elevation ``profile`` the lowest-pressure point
+    along the line (typically a crest).
 
     The incompressible model has no phase change: a pressure below the vapour
     pressure (or below zero absolute) means the liquid would flash or the
@@ -80,6 +86,13 @@ class PipeParams(ParamsMixin):
             callable ``P_vap(stream)``, or None to take it from the database
             (water: IAPWS saturation curve; other species: Antoine; a mixture:
             Raoult's-law bubble pressure over the species that have data).
+        profile: Optional elevation profile along the line, a sequence of
+            ``(distance from inlet m, elevation m)`` points (at least two;
+            distances increasing, the first at the inlet and the last at the
+            outlet). The pressure is evaluated at every point (it is linear in
+            between) and its minimum is checked against ``P_vap``. The
+            elevation gain is then ``z_last - z_first``; ``dz`` must be left at
+            0 or equal it. None (default): only the outlet is checked.
     """
 
     L: float
@@ -93,6 +106,7 @@ class PipeParams(ParamsMixin):
     MW: dict | float | None = None
     flow_area: float | None = None
     P_vap: float | None = None
+    profile: list | None = None  # [(distance m, elevation m), ...]
 
 
 def evaluate_property(value, stream: Stream | None = None) -> Array:
@@ -196,6 +210,10 @@ class Pipe:
     adds ``P_vap`` (Pa; NaN when unknown) and ``P_out_below_vapour`` (a bool
     array: the outlet is below the vapour pressure, or below zero when that is
     unknown), and raises :class:`PipeCavitationWarning` on concrete values.
+    With an elevation ``profile`` it also adds ``P_profile`` (Pa at each
+    profile point), ``P_min``, ``s_P_min`` and ``z_P_min`` (where it occurs),
+    ``P_min_below_vapour``, ``cavitation_margin`` (``P_min - P_vap``, Pa) and
+    ``cavitation_margin_head`` (the same in m of liquid, an NPSH-type margin).
 
     :meth:`flow_at_dp` and :meth:`flow_at_head` invert the hydraulics (flow
     from an available pressure or head) with implicit derivatives.
@@ -214,7 +232,8 @@ class Pipe:
     assumptions = [
         "Incompressible, single-phase Newtonian liquid; rho and mu are inputs, constant along the pipe.",
         "Full circular pipe of constant diameter (or a duct with D = hydraulic diameter and flow_area = true area), steady state, fully developed flow.",
-        "No phase change: an outlet below the vapour pressure is flagged (P_out_below_vapour, PipeCavitationWarning), not modelled.",
+        "No phase change: an outlet (or, with an elevation profile, any point) below the vapour pressure is flagged (P_out_below_vapour, P_min_below_vapour, PipeCavitationWarning), not modelled.",
+        "With an elevation profile, friction is distributed uniformly along the length and all fitting losses are placed at the inlet (conservative for the minimum pressure).",
         "Isothermal: T and molar flows pass through unchanged.",
         "Friction factor from the chosen correlation, blended to 64/Re below Re = 2100 (transition 2100-4000 is an interpolation, not a model).",
         "Fitting K-values (Crane TP-410) are approximate, about +/-25 percent.",
@@ -229,7 +248,7 @@ class Pipe:
     parameter_units = {
         "L": "m", "D": "m", "rho": "kg/m^3", "mu": "Pa s", "roughness": "m",
         "dz": "m", "fittings": "-", "friction_method": "-", "MW": "g/mol",
-        "flow_area": "m^2", "P_vap": "Pa",
+        "flow_area": "m^2", "P_vap": "Pa", "profile": "m",
     }
 
     def __init__(self, params: PipeParams, thermo=None):
@@ -272,6 +291,81 @@ class Pipe:
         mu = lp["mu"] if p.mu is None else evaluate_property(p.mu, inlet)
         return rho, mu, lp
 
+    def _profile_arrays(self):
+        """``(s, z)`` arrays of the elevation profile, or None."""
+        prof = self.params.profile
+        if prof is None:
+            return None
+        arr = jnp.asarray(prof, dtype=jnp.float64)
+        if arr.ndim != 2 or arr.shape[1] != 2 or arr.shape[0] < 2:
+            raise ValueError(
+                "profile must be a sequence of at least two (distance, elevation) pairs, "
+                f"got shape {arr.shape}"
+            )
+        return arr[:, 0], arr[:, 1]
+
+    def elevation_gain(self) -> Array:
+        """Elevation gain inlet to outlet (m): ``dz``, or ``z_last - z_first`` of the profile.
+
+        Raises:
+            ValueError: A profile and a non-zero ``dz`` that disagree (checked
+                on concrete values only).
+        """
+        dz = jnp.asarray(self.params.dz, dtype=jnp.float64)
+        prof = self._profile_arrays()
+        if prof is None:
+            return dz
+        _, z = prof
+        dz_prof = z[-1] - z[0]
+        if _is_concrete(dz, dz_prof):
+            if float(dz) != 0.0 and abs(float(dz) - float(dz_prof)) > 1e-9 * max(1.0, abs(float(dz_prof))):
+                raise ValueError(
+                    f"PipeParams.dz = {float(dz):g} m disagrees with the profile's elevation gain "
+                    f"{float(dz_prof):g} m; leave dz at 0 when a profile is given"
+                )
+        return dz_prof
+
+    def pressure_profile(self, inlet: Stream) -> dict:
+        """Pressure along the line at the points of the elevation ``profile``.
+
+        ``P(s_i) = P_in - dP_minor - dP_friction (s_i - s_0)/(s_N - s_0)
+        - rho g (z_i - z_0)``: friction is spread uniformly over the length and
+        every fitting loss is placed at the inlet, which can only lower the
+        computed pressures (conservative for a cavitation check). The pressure
+        is linear in ``s`` between points, so its minimum over the line is the
+        minimum over the points. The last point is the outlet pressure.
+
+        Args:
+            inlet: Liquid stream.
+
+        Returns:
+            ``{"s", "z", "P"}`` arrays (m, m, Pa).
+
+        Raises:
+            ValueError: No ``profile`` was given.
+
+        Example:
+            >>> from difflow import Pipe, PipeParams, make_stream
+            >>> water = make_stream({"W": 0.003 * 998.2 / 0.018015}, T=293.15, P=3e5)
+            >>> pipe = Pipe(PipeParams(L=200.0, D=0.0525, rho=998.2, mu=1.002e-3, MW=18.015,
+            ...                        profile=[(0.0, 0.0), (100.0, 25.0), (200.0, 0.0)]))
+            >>> prof = pipe.pressure_profile(water)
+            >>> bool(prof["P"][1] < prof["P"][2])      # the crest is the low point
+            True
+        """
+        prof = self._profile_arrays()
+        if prof is None:
+            raise ValueError("pressure_profile needs PipeParams.profile")
+        info, rho = self._hydraulics_rho(inlet)
+        return {"s": prof[0], "z": prof[1], "P": self._profile_P(inlet["P"], info, rho, prof)}
+
+    @staticmethod
+    def _profile_P(P_in, info, rho, prof) -> Array:
+        s, z = prof
+        frac = (s - s[0]) / (s[-1] - s[0])
+        return (P_in - info["dP_minor"] - info["dP_friction"] * frac
+                - rho * fluids.GRAVITY * (z - z[0]))
+
     def hydraulics_at_flow(self, Q: Array | float, inlet: Stream | None = None) -> dict:
         """Hydraulics at a given volumetric flow ``Q`` (m^3/s).
 
@@ -285,6 +379,9 @@ class Pipe:
         return self._hydraulics_Q(Q, rho, mu, D)
 
     def _hydraulics(self, inlet: Stream) -> dict:
+        return self._hydraulics_rho(inlet)[0]
+
+    def _hydraulics_rho(self, inlet: Stream) -> tuple[dict, Array]:
         p = self.params
         D = jnp.asarray(p.D, dtype=jnp.float64)
         rho, mu, lp = self._rho_mu(inlet)
@@ -292,7 +389,7 @@ class Pipe:
             Q = lp["Q"]
         else:
             Q = self._mass_flow(inlet) / rho
-        return self._hydraulics_Q(Q, rho, mu, D)
+        return self._hydraulics_Q(Q, rho, mu, D), rho
 
     def _area(self, D: Array) -> Array:
         if self.params.flow_area is None:
@@ -323,7 +420,7 @@ class Pipe:
         D = jnp.asarray(p.D, dtype=jnp.float64)
         rho, mu, _ = self._rho_mu(inlet)
         dP = jnp.asarray(dP, dtype=jnp.float64)
-        dP_s = rho * fluids.GRAVITY * jnp.asarray(p.dz, dtype=jnp.float64)
+        dP_s = rho * fluids.GRAVITY * self.elevation_gain()
         drive = dP - dP_s
         ok = drive > 0.0
         drive_safe = jnp.where(ok, drive, 1.0)
@@ -374,7 +471,7 @@ class Pipe:
         K = self._K_total(rel)
         dP_f = fluids.darcy_pressure_drop(f, p.L, D, rho, v)
         dP_m = fluids.minor_loss(K, rho, v)
-        dP_s = rho * fluids.GRAVITY * jnp.asarray(p.dz, dtype=jnp.float64)
+        dP_s = rho * fluids.GRAVITY * self.elevation_gain()
         return {
             "Q": Q, "v": v, "Re": Re, "f": f, "K_total": K,
             "dP_friction": dP_f, "dP_minor": dP_m, "dP_static": dP_s,
@@ -391,7 +488,7 @@ class Pipe:
         Returns:
             ``(outlet, info)`` as described on the class.
         """
-        info = self._hydraulics(inlet)
+        info, rho = self._hydraulics_rho(inlet)
         P_out = inlet["P"] - info["dP"]
         p = self.params
         if p.P_vap is not None:
@@ -401,6 +498,31 @@ class Pipe:
         P_ref = jnp.asarray(0.0) if P_vap is None else P_vap
         info["P_vap"] = jnp.asarray(jnp.nan) if P_vap is None else P_vap
         info["P_out_below_vapour"] = P_out < P_ref
+        prof = self._profile_arrays()
+        if prof is not None:
+            P_line = self._profile_P(inlet["P"], info, rho, prof)
+            i_min = jnp.argmin(P_line)
+            info["P_profile"] = P_line
+            info["P_min"] = jnp.min(P_line)
+            info["s_P_min"] = prof[0][i_min]
+            info["z_P_min"] = prof[1][i_min]
+            info["P_min_below_vapour"] = info["P_min"] < P_ref
+            info["cavitation_margin"] = info["P_min"] - P_ref
+            info["cavitation_margin_head"] = info["cavitation_margin"] / (rho * fluids.GRAVITY)
+            if _is_concrete(info["P_min"], P_ref) and bool(jnp.any(info["P_min"] < P_ref)):
+                what = ("zero (absolute)" if P_vap is None
+                        else f"the vapour pressure ({float(jnp.max(P_ref)):.4g} Pa)")
+                warnings.warn(
+                    f"Pipe pressure falls to {float(jnp.min(info['P_min'])):.4g} Pa at "
+                    f"s = {float(jnp.ravel(info['s_P_min'])[0]):.4g} m "
+                    f"(elevation {float(jnp.ravel(info['z_P_min'])[0]):.4g} m), below {what}: "
+                    "the line would cavitate or the liquid column would separate there, and "
+                    "the incompressible result is not physical. Raise the inlet pressure, "
+                    "lower the flow, or reroute the line below its hydraulic grade line.",
+                    PipeCavitationWarning,
+                    stacklevel=2,
+                )
+                return make_stream(get_flows(inlet), inlet["T"], P_out), info
         if _is_concrete(P_out, P_ref):
             try:
                 below = bool(P_out < P_ref)
