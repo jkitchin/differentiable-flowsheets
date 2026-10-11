@@ -151,6 +151,11 @@ class ReformerResult:
         separator, splitter, compressor, stabilizer: Their info dicts.
         converged: Whether the recycle met its tolerance (``None`` when traced).
         iterations: Recycle iterations used.
+        solve_method: The flowsheet's ``last_solve_method`` ("anderson", or
+            "fixed_point (traced)" under ``jit``/``jacfwd``).
+        acceleration: What accelerated the recycle: "anderson" or "none"
+            (plain substitution). A traced solve that says "none" is the
+            slow path of #440.
     """
 
     streams: dict
@@ -164,6 +169,8 @@ class ReformerResult:
     stabilizer: dict
     converged: bool | None = None
     iterations: int | None = None
+    solve_method: str | None = None
+    acceleration: str | None = None
 
     # ----- products ---------------------------------------------------------
 
@@ -436,10 +443,12 @@ class CatalyticReformer:
         Concrete inputs use the flowsheet's Anderson-accelerated recycle
         solve. Under ``jax.jacfwd``/``jvp``/``jit`` the flowsheet switches to
         optimistix's fixed point with implicit differentiation (difflow's
-        traced path), so gradients come from the converged recycle;
-        warm-start it with ``tear_initial=previous_result.tear``. Use
-        forward-mode transforms (``jax.jacfwd``): the reactor integrations
-        use ``diffrax.ForwardMode`` (see :mod:`.reactor`).
+        traced path), still Anderson-accelerated (#440; the result's
+        ``solve_method`` and ``acceleration`` say what ran), so gradients
+        come from the converged recycle; warm-start it with
+        ``tear_initial=previous_result.tear``. Use forward-mode transforms
+        (``jax.jacfwd``): the reactor integrations use
+        ``diffrax.ForwardMode`` (see :mod:`.reactor`).
         """
         p = params or self.params
         fs, ops, Ws = self.build(feed, p)
@@ -465,7 +474,9 @@ class CatalyticReformer:
                               heaters=heaters, separator=info["separator"],
                               splitter=info["splitter"], compressor=info["compressor"],
                               stabilizer=info["stabilizer"], converged=fs.last_solve_converged,
-                              iterations=fs.last_solve_iterations)
+                              iterations=fs.last_solve_iterations,
+                              solve_method=fs.last_solve_method,
+                              acceleration=fs.last_solve_acceleration)
 
     # ----- RON as a target ----------------------------------------------------
 

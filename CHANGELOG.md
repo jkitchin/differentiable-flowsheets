@@ -901,6 +901,54 @@ All notable changes to difflow are recorded here. The format follows
   otherwise; V now falls continuously to 0 at the bubble point. Affects `EOSFlash`, `Flash(eos=...)` and
   everything that calls `flash_TP_eos`. Test `tests/test_eos.py::TestPhaseIdentification`.
 
+- **A named acceleration survives `jax.jit` / `jax.jacfwd` (#440).** `Flowsheet.solve(acceleration="anderson"|"wegstein")`
+  used to be replaced by plain substitution whenever a feed or unit parameter was traced. It now runs
+  `difflow.initialization.AcceleratedFixedPoint` inside `optimistix.fixed_point`: the eager Anderson/Wegstein arithmetic
+  in `lax.while_loop`, fixed-size `(anderson_depth, n)` history buffers (one compile, no per-call retrace), the stop
+  test `max|g(x) - x| < tol` as an array predicate, `clip_negative_flows` on the extrapolated guess only, and the same
+  implicit derivative (no differentiation through the iterations). New `Flowsheet.last_solve_acceleration`
+  (`"anderson"`, `"wegstein"`, `"none"`) records what ran; `last_solve_method` stays `"fixed_point (traced)"`.
+  **Behaviour change:** only a NAMED acceleration takes the new path. The unnamed default is still plain substitution
+  under tracing (`tests/test_flowsheet_damping.py` pins that, and changing every jitted default solve is a larger
+  change); eager solves are untouched (`python -m difflow.convergence` output is byte-identical before and after:
+  pass rate 46.5%, convergence rate 49.5%). Callers that pass `acceleration=` explicitly and are traced (the
+  catalytic reformer, `difflow_ree` trains, the isomerization plant) now take the accelerated path; the reformer agrees with the
+  old answers to every printed digit and the `tests/ree`, isomerization and reforming suites pass. `CatalyticReformer.solve` results and `ReformerPlanningModel` expose
+  `solve_method` / `acceleration` (`last_solve_method` / `last_solve_acceleration`), so a traced plain-substitution
+  fallback is visible. Docs: `docs/convergence.md` ("Naming an acceleration under jit and jacfwd"); tests
+  `tests/test_traced_acceleration.py`.
+  **Measured** on the catalytic reformer (lean naphtha, `reformer_block(..., ["wait"], ...)`, tol 1e-10), on a 4-core
+  2.8 GHz Xeon, not the issue's M2 (baseline then after, seconds): eager solve at WAIT+5 C 11.3 then 10.6 (22
+  iterations, unchanged); jitted evaluation 5 C from the stored tear **18.6 then 6.6** (63 then 23 passes); jit
+  compile+first 51.6 then 45.5; jitted evaluation from its own tear 0.5 then 0.6; `jacfwd` compile+first 340.6 then
+  322.0; `jacfwd` warm at +5 C **52.3 then 39.9**. Primal results and the Jacobian agree to every printed digit.
+  **The Jacobian half (second commit).** The first measurement above left `jacfwd` at 40-52 s warm, and profiling
+  showed why: not the iteration count but the dense tear Jacobian the implicit rule materialises (one forward-mode
+  tangent per tear entry, 31 here), and a tangent through the three diffrax beds cost 1.5 s against 0.27 s for a pass,
+  because every right-hand-side evaluation solved the bed temperature from the enthalpy with eight unrolled Newton
+  steps and the tangent went through all eight. `reforming.thermo.temperature_from_enthalpy` is now a `custom_jvp`
+  carrying the implicit-function derivative (primal unchanged; derivative matches the unrolled one to 5e-15 in
+  forward and reverse mode). Measured on one tear map `g` (before then after, seconds): one tangent warm 1.53 then
+  0.52; dense 31-tangent Jacobian warm 28.0 then 1.7; compile of that Jacobian 107 then 75.
+  Reformer end to end (same machine): `jacfwd` warm at +5 C, 1 lever, **52.3 (original code) / 39.9 (traced Anderson
+  only) then 12.3** (jit eval of the same point 7.4 in that run, so the Jacobian costs about 0.7 of a primal solve);
+  `jacfwd` compile+first 340.6 / 322.0 then 250.9; 2 levers (WAIT, H2/HC; measured after only): jit eval 9.8,
+  `jacfwd` warm 11.8, compile+first 235.5. Jacobians are identical to every printed digit. Tried and dropped: a
+  matrix-free GMRES in the implicit rule (warm 51.9, compile 457.6; the tear Jacobian needs about 13 Krylov steps
+  for 1e-10), and a `fori_loop` Newton (no compile gain, slower warm). **Still slow:** compile of the differentiated
+  reformer is 4 minutes (primal map 28 s, tangent 60 s, vmapped Jacobian 75 s, plus the loop); a persistent JAX
+  compilation cache (opt-in, config lines in `docs/convergence.md`; nothing is enabled by default) removes most of
+  it for a repeat process. Measured, three separate processes with a warm cache against two cold ones, same machine
+  (shared with another job, so noisy): `jit` compile+first 63.5 and 51.6 s cold, 6.0, 7.4 and 8.9 s cached; `jacfwd`
+  compile+first 223.4 and 249.5 s cold (250.9 in an earlier uncached run), 56.0, 61.9 and 73.5 s cached; building the
+  planning block 54.4 and 46.4 s cold, 21.5-24.1 s cached; warm evaluations and the Jacobian values unchanged; cache
+  directory 14 MB. A different feed misses once (54.7 s against 57.1 s with no cache), then hits (14.6 s), and the
+  cached program returns the eager answer to 1e-11. Looked at and not kept, because they do not pay: per-unit XLA compile
+  of the primal map is 3 x 5.5 s for the identical beds and 12.3 s for the (core) compressor's EOS solves, out of 25 s of
+  XLA; lowering to HLO and tracing are 7 s; `XLA_FLAGS=--xla_backend_optimization_level` 0 or 1 does not change compile
+  time (31.5 and 30.5 s against 33.0 s); a `fori_loop` bed Newton cuts the primal compile 32 to 25 s but makes every pass
+  about 20% slower.
+
 - **`plan_sensitivity` reported half the elastic penalty as a shadow price.**
   The stationarity gradient that the multipliers are solved from included
   the elastic penalty of the active specs as well. When the plan meets a spec

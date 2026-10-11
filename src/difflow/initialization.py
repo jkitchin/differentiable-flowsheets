@@ -16,6 +16,8 @@ import heapq
 import jax.numpy as jnp
 from jax import Array
 import jax
+import equinox as eqx
+import optimistix as optx
 
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.numerics import safe_divide
@@ -253,6 +255,130 @@ class AndersonAccelerator:
         return anderson_acceleration_step(
             x_arr, g_arr, self.m, self.regularization
         )
+
+
+class _AcceleratedState(eqx.Module):
+    """Fixed-size carry of :class:`AcceleratedFixedPoint` (arrays only)."""
+
+    residual: Array      # max |g(y) - y| at the last iterate
+    f_prev: Array        # g(y) - y at the iterate before
+    g_prev: Array        # g(y) at the iterate before
+    y_prev: Array        # the iterate before (Wegstein)
+    dF: Array            # (m, n) residual differences, oldest first
+    dG: Array            # (m, n) g differences, oldest first
+    n_valid: Array       # how many of the m columns hold data
+    has_prev: Array      # whether f_prev/g_prev hold an iterate
+    clip_hits: Array     # steps on which the flow projection moved the guess
+
+
+class AcceleratedFixedPoint(optx.AbstractFixedPointSolver):
+    """Anderson or Wegstein acceleration that traces (#440).
+
+    The eager accelerators in :class:`~difflow.Flowsheet` are Python loops
+    that read the residual to stop, so they cannot run under ``jax.jit`` or
+    ``jax.jacfwd``.  This is the same arithmetic as a solver for
+    :func:`optimistix.fixed_point`, which runs it inside ``lax.while_loop``:
+
+    * the Anderson history is a pair of ``(depth, n)`` buffers rolled in
+      place, with a count of valid columns, so the carry has one shape for
+      the whole solve and nothing recompiles per call;
+    * the mixing weights are the same SVD least squares with the same
+      ``rcond`` as :func:`anderson_acceleration_step`; columns not yet
+      filled are zero and drop out of the rank, which is what a shorter
+      eager history does;
+    * the stop test is an array predicate, ``max|g(y) - y| < tol`` (the
+      eager test, on the same quantity);
+    * on the passing iterate the solver returns ``g(y)``, as
+      :class:`optimistix.FixedPointIteration` does, never an extrapolation;
+    * ``clip_negative_flows`` projects the *extrapolated guess* only, so
+      the map whose fixed point is differentiated is untouched.
+
+    ``optimistix.fixed_point`` differentiates the converged solution with
+    the implicit function theorem (``ImplicitAdjoint``): one linear solve
+    per tangent, and nothing flows through these iterations, whose
+    least-squares step is 0/0 once the iterates agree.
+
+    Attributes:
+        atol: Stop when ``max |g(y) - y| < atol`` (the step test; ``rtol`` and
+            ``norm`` exist for the optimistix interface and are not read).
+        method: ``"anderson"`` or ``"wegstein"``.
+        depth: Anderson history depth.
+        flow_mask: Boolean mask of the entries ``clip`` may touch.
+        clip: Project flow entries onto ``[0, inf)`` after an accelerated step.
+        regularization: ``rcond`` of the least squares.
+    """
+
+    atol: float
+    rtol: float = 0.0
+    norm: Callable = optx.max_norm
+    method: str = eqx.field(static=True, default="anderson")
+    depth: int = eqx.field(static=True, default=5)
+    flow_mask: Any = None
+    clip: bool = eqx.field(static=True, default=True)
+    regularization: float = 1e-10
+
+    def init(self, fn, y, args, options, f_struct, aux_struct, tags):
+        n = y.size
+        m = max(int(self.depth), 1)
+        z = jnp.zeros((n,), dtype=y.dtype)
+        zm = jnp.zeros((m, n), dtype=y.dtype)
+        return _AcceleratedState(
+            residual=jnp.array(jnp.inf, dtype=y.dtype), f_prev=z, g_prev=z,
+            y_prev=z, dF=zm, dG=zm, n_valid=jnp.array(0),
+            has_prev=jnp.array(False), clip_hits=jnp.array(0),
+        )
+
+    def step(self, fn, y, args, options, state, tags):
+        g, aux = fn(y, args)
+        f = g - y
+        residual = jnp.max(jnp.abs(f))
+        converged = residual < self.atol
+
+        m = state.dF.shape[0]
+        if self.method == "wegstein":
+            x_acc = jnp.where(
+                state.has_prev,
+                wegstein_acceleration(state.y_prev, y, state.g_prev, g),
+                g,
+            )
+            dF, dG, n_valid = state.dF, state.dG, state.n_valid
+        else:
+            # Push the newest difference on the end of the fixed buffers.
+            dF = jnp.concatenate([state.dF[1:], (f - state.f_prev)[None]])
+            dG = jnp.concatenate([state.dG[1:], (g - state.g_prev)[None]])
+            dF = jnp.where(state.has_prev, dF, state.dF)
+            dG = jnp.where(state.has_prev, dG, state.dG)
+            n_valid = jnp.where(
+                state.has_prev, jnp.minimum(state.n_valid + 1, m), state.n_valid
+            )
+            live = (jnp.arange(m) >= m - n_valid)[:, None]
+            dFm = jnp.where(live, dF, 0.0)
+            dGm = jnp.where(live, dG, 0.0)
+            alpha = jnp.linalg.lstsq(dFm.T, f, rcond=self.regularization)[0]
+            x_anderson = g - dGm.T @ alpha
+            # A degenerate history falls back to substitution, as the eager
+            # step does; the first step has no history at all.
+            ok = state.has_prev & jnp.all(jnp.isfinite(x_anderson))
+            x_acc = jnp.where(ok, x_anderson, g)
+
+        hit = jnp.array(False)
+        if self.clip and self.flow_mask is not None:
+            clipped = jnp.where(self.flow_mask, jnp.clip(x_acc, 0.0, None), x_acc)
+            hit = jnp.any(clipped != x_acc) & ~converged
+            x_acc = clipped
+        new_y = jnp.where(converged, g, x_acc)
+        new_state = _AcceleratedState(
+            residual=residual, f_prev=f, g_prev=g, y_prev=y, dF=dF, dG=dG,
+            n_valid=n_valid, has_prev=jnp.array(True),
+            clip_hits=state.clip_hits + hit,
+        )
+        return new_y, new_state, aux
+
+    def terminate(self, fn, y, args, options, state, tags):
+        return state.residual < self.atol, optx.RESULTS.successful
+
+    def postprocess(self, fn, y, aux, args, options, state, tags, result):
+        return y, aux, {}
 
 
 # =============================================================================

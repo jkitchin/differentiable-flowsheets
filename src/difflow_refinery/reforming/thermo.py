@@ -28,7 +28,7 @@ edition, unverified). Partial pressures in the rate laws are therefore in bar.
 
 from __future__ import annotations
 
-from functools import lru_cache
+from functools import lru_cache, partial
 
 import jax
 import jax.numpy as jnp
@@ -190,14 +190,22 @@ def total_enthalpy_flash(F: Array, T: Array, P: Array) -> Array:
     return cubic_thermo().stream_enthalpy_flash(flows, T, P) + jnp.asarray(F) @ _HF
 
 
+@partial(jax.custom_jvp, nondiff_argnums=(4,))
 def temperature_from_enthalpy(F: Array, H: Array, P: Array, T_guess: Array,
                               n_iter: int = 8) -> Array:
     """Solve ``total_enthalpy(F, T, P) = H`` for a vapor by Newton's method.
 
-    A fixed number of steps, unrolled, so it differentiates in both modes and
-    traces under ``jit``. The enthalpy is smooth and nearly linear in ``T``
-    over a reactor's temperature drop, so eight steps from the inlet
-    temperature reach round-off.
+    A fixed number of steps, unrolled, so it traces under ``jit``. The
+    enthalpy is smooth and nearly linear in ``T`` over a reactor's
+    temperature drop, so eight steps from the inlet temperature reach
+    round-off.
+
+    The derivative is the implicit-function one, ``dT = -(f_F dF + f_P dP -
+    dH) / f_T`` at the converged ``T`` (``f = total_enthalpy - H``), not the
+    derivative of the eight unrolled steps: at round-off the two are the
+    same number, and the implicit rule is one enthalpy JVP instead of eight
+    nested ones, which is most of what a forward-mode reactor tangent cost
+    (#440). Linear in the tangents, so it also transposes for reverse mode.
     """
     def f(T):
         return total_enthalpy(F, T, P) - H
@@ -207,6 +215,17 @@ def temperature_from_enthalpy(F: Array, H: Array, P: Array, T_guess: Array,
         r, dr = jax.jvp(f, (T,), (jnp.ones_like(T),))
         T = T - r / dr
     return T
+
+
+@temperature_from_enthalpy.defjvp
+def _temperature_from_enthalpy_jvp(n_iter, primals, tangents):
+    F, H, P, T_guess = primals
+    dF, dH, dP, _ = tangents
+    T = temperature_from_enthalpy(F, H, P, T_guess, n_iter)
+    f_T = jax.jvp(lambda t: total_enthalpy(F, t, P), (T,), (jnp.ones_like(T),))[1]
+    f_x = jax.jvp(lambda F_, P_: total_enthalpy(F_, T, P_), (jnp.asarray(F, dtype=float), P),
+                  (dF, dP))[1]
+    return T, -(f_x - dH) / f_T
 
 
 def std_liquid_volume(F: Array) -> Array:
