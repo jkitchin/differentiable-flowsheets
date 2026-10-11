@@ -278,34 +278,29 @@ $$Ha = \frac{\sqrt{k_2 \cdot C_{amine} \cdot D_{CO_2}}}{k_L}$$
 (mass-transfer)=
 ### Mass Transfer
 
+The packed-column correlations now live in core
+([`difflow.mass_transfer`](#mass-transfer-packed): `onda_gas_coefficient`,
+`onda_liquid_coefficient`, `onda_wetted_area`, `htu_og`, `ntu_og_colburn`).
+`difflow_cc.gas_film_coefficient`, `liquid_film_coefficient` and
+`interfacial_area` remain as **deprecated wrappers** (they emit
+`DeprecationWarning`). Their values changed in #427: the earlier
+implementations disagreed with Onda (1968) (liquid coefficient about $10^4$
+too large, gas coefficient too large by $a_p d_p$). `overall_mass_transfer`
+(with the enhancement factor) is unchanged.
+
 ```python
-from difflow_cc import gas_film_coefficient, liquid_film_coefficient, overall_mass_transfer
+from difflow.mass_transfer import onda_gas_coefficient, onda_liquid_coefficient
+from difflow_cc import overall_mass_transfer, henry_constant
 
-from difflow_cc import henry_constant
+# Gas-side coefficient k_c (m/s) and liquid-side k_L (m/s), Onda (1968)
+k_G = onda_gas_coefficient(u_G=1.0, rho_G=1.1, mu_G=1.8e-5, D_G=1.5e-5,
+                           a_p=250.0, d_p=0.05)
+k_L = onda_liquid_coefficient(u_L=0.01, rho_L=1010.0, mu_L=2e-3, D_L=1.5e-9,
+                              sigma=0.072, a_p=250.0, d_p=0.05, sigma_c=0.075)
 
-# Gas-side mass transfer coefficient (Onda)
-k_G = gas_film_coefficient(
-    u_G=1.0,          # m/s superficial gas velocity
-    d_p=0.05,         # m packing nominal diameter
-    mu_G=1.8e-5,      # Pa·s
-    rho_G=1.1,        # kg/m^3
-    D_G=1.5e-5,       # m²/s
-    a_p=250.0,        # m²/m³ packing specific area
-)
-
-# Liquid-side coefficient
-k_L = liquid_film_coefficient(
-    u_L=0.01,         # m/s superficial liquid velocity
-    d_p=0.05,
-    mu_L=2e-3,        # Pa·s
-    rho_L=1010.0,     # kg/m^3
-    D_L=1.5e-9,       # m²/s
-    a_p=250.0,
-)
-
-# Overall gas-side coefficient (H: Henry's constant, P: total pressure)
+# Overall gas-side coefficient (H: Henry's constant, E: enhancement factor)
 H_CO2 = henry_constant(313.15, "MEA")
-K_G = overall_mass_transfer(k_G=k_G, k_L=k_L, E=E, H=H_CO2, P=101325.0)
+K_G = overall_mass_transfer(k_G=k_G, k_L=k_L, E=10.0, H=H_CO2, P=101325.0)
 ```
 
 ---

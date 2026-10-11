@@ -3630,6 +3630,143 @@ ed. (1991); Geldart, *Powder Technol.* 7, 285 (1973).
 
 ---
 
+## Mass Transfer
+
+**Location**: `difflow/mass_transfer.py` (pure JAX functions in SI units; not
+unit operations, so they have no palette entry). They are the building blocks
+for absorbers, strippers, packed-column hardware and any exercise that needs
+a diffusivity, a film coefficient or a transfer-unit height. Properties are
+*inputs*: core has no gas viscosity or surface-tension model, so the Onda
+functions take `mu_G` and `sigma` as required arguments (there is no hidden
+`sigma=0.072`). See the module docstring and `tests/test_mass_transfer.py` for
+exactly what was and was not verified; in short, **no textbook worked example
+is reproduced**, and the tables (diffusion volumes, Le Bas increments,
+packings) are transcribed from memory.
+
+(mass-transfer-diffusivities)=
+### Diffusivity Correlations
+
+`fuller_diffusivity(T, P, MW_A, MW_B, V_A, V_B)` is the Fuller-Schettler-Giddings
+gas correlation ($D \propto T^{1.75}/P$, 5-10 %). `wilke_chang_diffusivity(T,
+mu_B, MW_B, V_A, phi_B)` is the dilute-liquid correlation (10-20 %), with the
+solute molar volume at its normal boiling point `V_A` in cm$^3$/mol from
+`molar_volume_nbp` (Le Bas increments) and the solvent association factor
+`phi_B` from `ASSOCIATION_FACTORS` (water 2.6; there is no silent default for
+water). `stokes_einstein_diffusivity(T, mu, r)` is for large solutes. Both
+published correlations are implemented in their native units (cm$^2$/s, atm,
+cP) and converted at the boundary. Diffusion volumes are in `FULLER_VOLUMES`
+and `FULLER_ATOMIC_VOLUMES`; `diffusion_volume` sums atoms.
+
+```python
+from difflow.mass_transfer import (
+    fuller_diffusivity, wilke_chang_diffusivity, diffusion_volume,
+    molar_volume_nbp, FULLER_VOLUMES, ASSOCIATION_FACTORS,
+)
+
+# water vapour in air, 25 C, 1 atm: experimental about 2.5e-5 m^2/s
+D_air = fuller_diffusivity(298.15, 101325.0, 18.015, 28.96,
+                           FULLER_VOLUMES["H2O"], FULLER_VOLUMES["air"])
+print(f"D(H2O-air) = {float(D_air):.3e} m^2/s")
+
+# ethanol in water at 25 C (experimental about 1.2e-9; Wilke-Chang runs ~20% high)
+V_eth = molar_volume_nbp({"C": 2, "H": 6, "O": 1})          # 59.2 cm^3/mol
+D_liq = wilke_chang_diffusivity(298.15, 0.89e-3, 18.015, V_eth, ASSOCIATION_FACTORS["water"])
+print(f"D(ethanol-water) = {float(D_liq):.3e} m^2/s")
+```
+
+(mass-transfer-film)=
+### Film Theory and Overall Coefficients
+
+`equimolar_flux` and `stagnant_film_flux` give the flux across a film of
+thickness $\delta$; the stagnant-film (Stefan) form carries the bulk-flow
+factor $1/(1-y)_{lm}$, computed with `log_mean`, which is smooth (series form)
+when its two arguments coincide. `mass_transfer_coefficient_conversions` moves
+a gas coefficient among $k_c$ (m/s), $k_G$ (mol/m$^2$/s/Pa) and $k_y$
+(mol/m$^2$/s). Sherwood correlations (`ranz_marshall`, `frossling`,
+`linton_sherwood`, `gilliland_sherwood`, `pipe_sherwood`,
+`flat_plate_sherwood`, `sherwood_from_heat_transfer`) each state their range
+in the docstring; the laminar-turbulent switches use the same smooth blend as
+`difflow.heat_transfer`. Two-resistance theory:
+`overall_gas_coefficient` ($1/K_y = 1/k_y + m/(E k_x)$),
+`overall_liquid_coefficient`, `overall_K_G` (with Henry's constant) and
+`resistance_fractions` (which film controls).
+
+```python
+from difflow.mass_transfer import (
+    fuller_diffusivity, stagnant_film_flux, equimolar_flux, ranz_marshall,
+    resistance_fractions,
+)
+from difflow.units.evaporator import water_saturation_pressure
+
+# evaporation of water at 25 C into dry air across a 1 cm stagnant film
+P, T = 101325.0, 298.15
+D = fuller_diffusivity(T, P, 18.015, 28.96, 13.1, 19.7)
+y_sat = water_saturation_pressure(T) / P
+c = P / (8.314462618 * T)
+N = stagnant_film_flux(D, c, y_sat, 0.0, 0.01)
+print(f"flux = {float(N):.3e} mol/m^2/s (equimolar would be "
+      f"{float(equimolar_flux(D, c, y_sat, 0.0, 0.01)):.3e})")
+
+# sphere in stagnant fluid: Sh -> 2
+print(float(ranz_marshall(0.0, 1.0)))
+
+# which film controls? soluble (small m) vs sparingly soluble (large m)
+for m in (0.01, 1e3):
+    g, l = resistance_fractions(k_y=0.05, k_x=5.0, m=m)
+    print(f"m = {m:g}: gas {float(g):.3f}, liquid {float(l):.3f}")
+```
+
+(mass-transfer-packed)=
+### Packed-Column Mass Transfer (Onda, HTU/NTU)
+
+`onda_wetted_area`, `onda_gas_coefficient` and `onda_liquid_coefficient`
+implement Onda, Takeuchi & Okumoto (1968) for random packing, taking a
+`PackingData` record (`d_p`, `a_p`, void fraction, critical surface tension
+`sigma_c`, packing factor `F_p`; the small table `PACKINGS` is from memory and
+unverified, so check a data sheet) or explicit `a_p`, `d_p`, `sigma_c`. The gas
+function returns $k_c$ in m/s (convert with
+`mass_transfer_coefficient_conversions`). **Corrected in #427**: the earlier
+`difflow_cc` functions returned a liquid coefficient about $10^4$ too large
+(factor $(\rho g/\mu)^{1/3}$ instead of $(\mu g/\rho)^{1/3}$, and $Re$ on the
+dry rather than the wetted area), and a gas coefficient too large by $a_p d_p$
+(the constant is 2.00, not 5.23, below 15 mm packing; blended smoothly between
+12 and 18 mm unless `smooth=False`).
+
+Heights and counts: `htu_og`, `htu_ol`, `htu_og_from_films`
+($H_{OG} = H_G + \lambda H_L$), `ntu_og_colburn` (analytic, straight lines,
+smooth at $\lambda = 1$), `ntu_og_integral` (Gauss-Legendre quadrature of
+$\int dy/(y-y^*)$ for a curved equilibrium line, with an optional
+$(1-y)_{lm}$ correction) and `hetp_from_htu` ($\mathrm{HETP} = H_{OG}\ln\lambda
+/(\lambda-1)$, continuous through $\lambda = 1$). All differentiable, so
+$\partial(\text{height})/\partial(k_G, k_L, a_w, L/G)$ comes from `jax.grad`.
+
+```python
+import jax
+from difflow.mass_transfer import (
+    PACKINGS, onda_wetted_area, onda_gas_coefficient, onda_liquid_coefficient,
+    mass_transfer_coefficient_conversions, k_x_from_k_L, htu_og, htu_ol,
+    htu_og_from_films, ntu_og_colburn, hetp_from_htu,
+)
+
+pk = PACKINGS["pall_metal_50"]          # from memory: verify before design use
+a_w = onda_wetted_area(0.01, 1000.0, 1.0e-3, 0.072, pk)
+k_c = onda_gas_coefficient(1.0, 1.2, 1.8e-5, 1.6e-5, pk)
+k_L = onda_liquid_coefficient(0.01, 1000.0, 1.0e-3, 1.5e-9, 0.072, pk)
+print(f"a_w = {float(a_w):.1f} m2/m3, k_c = {float(k_c):.3e} m/s, k_L = {float(k_L):.3e} m/s")
+
+G_m, y_in, y_out, m = 40.0, 0.02, 0.002, 0.8
+k_y = mass_transfer_coefficient_conversions(k_c, "c", "y", 300.0, 101325.0)
+k_x = k_x_from_k_L(k_L, 55500.0)
+
+def column_height(L_over_G):
+    lam = m / L_over_G
+    H_OG = htu_og_from_films(htu_og(G_m, k_y, a_w), htu_ol(G_m * L_over_G, k_x, a_w), lam)
+    return H_OG * ntu_og_colburn(y_in, y_out, 0.0, m, lam)
+
+print(float(column_height(1.5)), float(jax.grad(column_height)(1.5)))
+print(float(hetp_from_htu(0.5, 1.0)))     # HETP -> H_OG as lambda -> 1
+```
+
 ## Summary Tables
 
 ### Reactor Comparison

@@ -8,6 +8,29 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`difflow.mass_transfer`: diffusivities, film theory, Sherwood, Onda, HTU/NTU
+  (#427).** New core library module (no palette entry): `fuller_diffusivity`,
+  `wilke_chang_diffusivity`, `stokes_einstein_diffusivity` (native-unit
+  implementations, SI at the boundary) with the tables `FULLER_VOLUMES`,
+  `FULLER_ATOMIC_VOLUMES`, `LE_BAS_INCREMENTS`, `ASSOCIATION_FACTORS` and the
+  helpers `diffusion_volume`, `molar_volume_nbp`; `equimolar_flux`,
+  `stagnant_film_flux` (with a smooth `log_mean`), `mass_transfer_coefficient_conversions`;
+  `ranz_marshall`, `frossling`, `linton_sherwood`, `gilliland_sherwood`,
+  `pipe_sherwood`, `flat_plate_sherwood`, `chilton_colburn_jD`;
+  `overall_gas_coefficient`, `overall_liquid_coefficient`, `overall_K_G`,
+  `resistance_fractions` (optional enhancement factor); the shared
+  `PackingData` record and `PACKINGS` table; `onda_wetted_area`,
+  `onda_gas_coefficient`, `onda_liquid_coefficient`; `htu_og`, `htu_ol`,
+  `htu_og_from_films`, `ntu_og_colburn` (analytic, smooth at lambda = 1),
+  `ntu_og_integral` (Gauss-Legendre, optional `(1-y)_lm`), `hetp_from_htu`.
+  Gas viscosity and surface tension are **required arguments** (no
+  `liquid_properties` additions, no hidden `sigma=0.072`). Validated against
+  closed forms, quadrature, independent NumPy transcriptions and two gas and
+  two liquid diffusivity data points; **no published textbook worked example
+  is reproduced**, and the diffusion-volume, Le Bas and packing tables are
+  transcribed from memory (flagged in the docstrings). Docs: `## Mass
+  Transfer` in `docs/unit-operations-chemical.md`; example notebook
+  `examples/51_mass_transfer.ipynb`.
 - **`BatchDistillation`: Rayleigh, constant-reflux and constant-composition
   batch distillation (#426).** New `difflow.units.batch_distillation`: a binary
   batch rectifier (`n_stages` equilibrium stages above the still, total
@@ -67,6 +90,18 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Breaking
 
+- **Onda mass-transfer values corrected; `difflow_cc` functions deprecated
+  (#427).** `difflow_cc.kinetics.liquid_film_coefficient` used
+  `(rho g/mu)^(1/3)` where Onda (1968) has `(mu g/rho)^(1/3)` (about 4600x too
+  large: 0.487 m/s instead of order 1e-4 m/s) and a Reynolds number on the dry
+  area instead of the wetted area; `gas_film_coefficient` was too large by
+  `a_p d_p` and never used the 2.00 constant for packings under 15 mm.
+  `gas_film_coefficient`, `liquid_film_coefficient`, `interfacial_area`,
+  `height_of_transfer_unit` and `number_of_transfer_units` are now
+  `DeprecationWarning` wrappers on `difflow.mass_transfer` and return the
+  corrected values (`interfacial_area` is numerically unchanged apart from
+  g = 9.80665). No unit or cc result depended on the old values (the
+  absorber uses Kremser); the cc tests only checked positivity.
 - **`minimum_reflux_ratio` honours `q`; `stages_kremser` fixed (#424).**
   `difflow.units.distillation.minimum_reflux_ratio` accepted `q` and ignored
   it (every feed was a saturated liquid) and floored the result at 0.1. It now
