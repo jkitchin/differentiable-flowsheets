@@ -14,6 +14,13 @@ References are NOT the constants' own sources:
 - ``TB_WEBBOOK``: the first "Tboil" entry of the NIST WebBook phase-change
   data (TRC-evaluated averages), with its stated uncertainty in K.
 - ``PSAT_NIST``: NIST WebBook fluid-table saturation pressures (bar).
+- ``TB_CRC``: CRC Handbook of Chemistry and Physics normal boiling points
+  (the "Enthalpy of Vaporization" table), for the issue #442 additions that
+  have no reference EOS, with an allowance where sources disagree.
+
+The issue #442 additions with a reference EOS are in ``TB_REFERENCE_EOS``;
+those values were evaluated with CoolProp 8.0, which implements the same
+reference equations (the WebBook itself could not be reached).
 """
 
 import math
@@ -53,6 +60,28 @@ TB_REFERENCE_EOS = {
     "n_dodecane": 489.4416,
     "hydrogen": 20.36891,
     "hydrogen_sulfide": 212.8549,
+    # issue #442 additions (reference EOS via CoolProp 8.0)
+    "carbon_monoxide": 81.6382,
+    "chloromethane": 249.1727,
+    "heavy_water": 374.5488,
+    "m_xylene": 412.2139,
+    "o_xylene": 417.5210,
+    "p_xylene": 411.4704,
+    "n_nonane": 423.9130,
+    "n_decane": 447.2702,
+    "neopentane": 282.6550,
+    "sulfur_dioxide": 263.1370,
+}
+
+TB_CRC = {  # (Tb, allowance), K
+    "dichloromethane": (313.15, 0.5),   # NIST/DIPPR 312.8-312.9
+    "methyl_acetate": (330.02, 0.5),
+    "methyl_ethyl_ketone": (352.74, 0.5),
+    # CRC rounds to 65 C; Perry's DIPPR equation and PPO's Antoine give
+    # 339.12 K, Yaws 338 K.
+    "tetrahydrofuran": (338.15, 1.0),
+    "acetaldehyde": (293.25, 0.5),
+    "formaldehyde": (254.05, 0.5),      # CRC has no Tb; Yaws, as in DIPPR
 }
 
 TB_WEBBOOK = {  # (Tb, stated uncertainty), K
@@ -115,16 +144,19 @@ def _implied_tb(species):
 
 def test_every_species_has_a_reference_or_is_excused():
     names = set(_IDEAL_THERMO_DATA)
-    covered = set(TB_REFERENCE_EOS) | set(TB_WEBBOOK) | NO_TB
+    covered = set(TB_REFERENCE_EOS) | set(TB_WEBBOOK) | set(TB_CRC) | NO_TB
     assert names <= covered, sorted(names - covered)
 
 
-@pytest.mark.parametrize("species", sorted(set(TB_REFERENCE_EOS) | set(TB_WEBBOOK)))
+@pytest.mark.parametrize("species", sorted(set(TB_REFERENCE_EOS) | set(TB_WEBBOOK)
+                                            | set(TB_CRC)))
 def test_implied_normal_boiling_point(species):
     if species in TB_REFERENCE_EOS:
         ref, unc = TB_REFERENCE_EOS[species], 0.0
-    else:
+    elif species in TB_WEBBOOK:
         ref, unc = TB_WEBBOOK[species]
+    else:
+        ref, unc = TB_CRC[species]
     tol = max(0.5, unc)
     assert _implied_tb(species) == pytest.approx(ref, abs=tol)
 
