@@ -466,6 +466,47 @@ read correctly; there is no modelling difference to weigh.
 
 ---
 
+### StoichiometricReactor
+
+**Location**: `difflow/units/stoichiometric.py`
+
+**Class**: `StoichiometricReactor` (parameters: `StoichiometricReactorParams`)
+
+**Description**: Fixed-conversion reactor (a simulator's `RStoic` block): the
+conversion $X$ of a key reactant $k$ is specified and the extent follows. No
+kinetics, equilibrium or thermodynamic model; differentiable in the conversion
+and the feed. Several reactions (lists of `stoich`, `key`, `conversion`) run in
+parallel, each conversion based on the reactor inlet.
+
+#### Governing Equations
+
+$$\xi_r = \frac{X_r F^{in}_{k_r}}{-\nu_{k_r,r}}, \qquad F^{out}_i = F^{in}_i + \sum_r \nu_{i,r}\, \xi_r$$
+
+The outlet is at the inlet temperature (or `T_out`) and the inlet pressure less
+`pressure_drop`; no energy balance is solved. Products absent from the inlet are
+added to the outlet. `info` reports `extent`, `conversion`, `key_consumed` and
+`min_outlet_flow` (negative when the specified conversions consume more of a
+species than is fed).
+
+#### Example Usage
+
+```python
+import jax
+from difflow import StoichiometricReactor, StoichiometricReactorParams, make_stream
+
+feed = make_stream({"CO": 100.0, "H2": 200.0, "MeOH": 0.0}, T=500.0, P=5e6)
+
+def methanol_out(X):
+    rx = StoichiometricReactor(StoichiometricReactorParams(
+        stoich={"CO": -1.0, "H2": -2.0, "MeOH": 1.0}, key="CO", conversion=X))
+    out, info = rx(feed)
+    return out["F_MeOH"]
+
+print(float(methanol_out(0.25)), float(jax.grad(methanol_out)(0.25)))   # 25.0, 100.0
+```
+
+---
+
 (separators)=
 ## Declarative Kinetics
 
@@ -730,11 +771,31 @@ print(f"Dew point: T={T_dew:.1f} K, P={P_dew:.0f} Pa")
 
 $$F_{out,i} = \sum_k F_{k,i}$$
 
-**Energy Balance** (adiabatic mixing):
+**Energy Balance** (adiabatic mixing). With a `thermo` model the outlet
+temperature solves the enthalpy balance exactly,
 
-$$T_{out} = \frac{\sum_k F_k C_{p,k} T_k}{\sum_k F_k C_{p,k}}$$
+$$\sum_i F_{out,i}\, h_i(T_{out}) = \sum_k \sum_i F_{k,i}\, h_i(T_k),$$
 
-(Simplified for ideal mixing with similar heat capacities)
+by Newton's method on $T_{out}$ started at the flow-weighted mean temperature
+(the phase is fixed, so $H$ is smooth), with a bracketed bisection as the
+fallback; `jax.grad` differentiates the converged root by the implicit function
+theorem. Starting at the mean picks the physical root when the enthalpy is not
+monotone: `IdealThermo`'s vapor branch adds a Watson heat of vaporization that
+vanishes at $T_c$, so near a species' critical temperature $H_{vap}(T)$ can fall
+with $T$ and the balance has a second, spurious root. Without `thermo` the outlet
+is at the flow-weighted mean temperature, which is the same balance for equal,
+constant heat capacities:
+
+$$T_{out} = \frac{\sum_k F_k T_k}{\sum_k F_k}$$
+
+(Before this was solved exactly, the thermo path evaluated one $c_p$ at the
+mean inlet temperature: 1 mol/s of methane at 300 K mixed with 10 mol/s at
+800 K came out at 752.7 K instead of 763.6 K.)
+
+**Pressure**: the lowest inlet pressure.
+
+**Missing species**: an inlet that does not carry a species in the mixer's
+list contributes zero flow of it, as in `combine_streams`.
 
 #### Example Usage
 
@@ -745,7 +806,7 @@ mixer = Mixer(['A', 'B', 'C'])   # optional: thermo=..., phase='liquid'
 stream1 = make_stream({'A': 1.0, 'B': 0.5, 'C': 0.0}, T=350.0, P=101325.0)
 stream2 = make_stream({'A': 0.0, 'B': 0.3, 'C': 0.2}, T=360.0, P=101325.0)
 
-# Streams are passed as separate arguments; each carries every species
+# Streams are passed as separate arguments; a species an inlet omits is zero
 outlet, info = mixer(stream1, stream2)
 ```
 
@@ -777,6 +838,41 @@ inlet = make_stream({'A': 1.0, 'B': 0.5}, T=350.0, P=101325.0)
 
 # Split into 3 streams: 50%, 30%, 20%
 out1, out2, out3, info = splitter(inlet, split_frac=[0.5, 0.3, 0.2])
+```
+
+---
+
+### ComponentSplitter
+
+**Location**: `difflow/units/flash.py`
+
+**Class**: `ComponentSplitter` (parameters: `ComponentSplitterParams`)
+
+**Description**: Ideal component splitter: a specified fraction $\phi_i$ of each
+species goes to the first outlet and the rest to the second. The block-flow
+separator of a material-balance calculation ("all the methanol to the liquid,
+none of the gas"); no equilibrium and no thermodynamic model, so it is
+differentiable in the fractions and the feed. Unlike `Splitter`, each species has
+its own split. (`ComponentSeparator` is the same balance with an enthalpy duty and
+needs a `CubicThermo`.)
+
+#### Governing Equations
+
+$$F^{(1)}_i = \phi_i F^{in}_i, \qquad F^{(2)}_i = (1 - \phi_i) F^{in}_i$$
+
+Both outlets leave at the inlet temperature and pressure. Species missing from
+`split_fractions` use `default_fraction` (default 0: all to the second outlet).
+
+#### Example Usage
+
+```python
+from difflow import ComponentSplitter, ComponentSplitterParams, make_stream
+
+sep = ComponentSplitter(ComponentSplitterParams(
+    split_fractions={"MeOH": 0.0, "H2O": 0.05}, default_fraction=1.0))
+feed = make_stream({"CO": 10.0, "H2": 20.0, "MeOH": 5.0, "H2O": 1.0}, T=320.0, P=5e6)
+gas, liquid, info = sep(feed)      # outlets in order: first, second
+print(float(gas["F_CO"]), float(liquid["F_MeOH"]), float(gas["F_H2O"]))
 ```
 
 ---

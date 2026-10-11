@@ -8,6 +8,13 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Chapter 1 flowsheet gaps.** `StoichiometricReactor` / `StoichiometricReactorParams(stoich, key, conversion,
+  T_out=None, pressure_drop=0.0)` (fixed conversion of a key reactant, parallel reactions, no thermo;
+  `difflow/units/stoichiometric.py`) and `ComponentSplitter` / `ComponentSplitterParams(split_fractions,
+  default_fraction=0.0)` (ideal per-species split, returns `(first, second, info)`), both palette operations.
+  `Flowsheet.degrees_of_freedom()` returns a `DegreesOfFreedom` (variables, specified feeds, unit and recycle
+  equations, unit parameters, unknowns, `problems`; zero for a well-posed flowsheet).
+
 - **Shell-and-tube gaps (#435).** (1) `ShellAndTubeDesignParams.shell_h` callables now receive the wall state of the
   current `U` iterate (`q_flux`, `T_wall`, `dT_film`, `T_shell`, `T_tube`, `area_total`, besides the geometry keys),
   closed inside the existing `optimistix.fixed_point` (and on the heat flux in `rate()`), so condensing and boiling
@@ -346,6 +353,25 @@ All notable changes to difflow are recorded here. The format follows
   stream pressure (Antoine inversion, species at least 1% of the flow, concrete
   values only, so `jit`/`grad` are unaffected) and point to
   `EnthalpyCounterCurrentHX`.
+
+### Changed
+
+- **Recycle tears no longer lock a pressurized loop at 1 atm.** `Flowsheet(default_T=None, default_P=None)` is the
+  new default: a tear with no better guess starts at the highest pressure and flow-weighted temperature of the
+  other inlets of the unit it feeds (feeds, or units upstream of every tear), with `stop_gradient`. Before, the
+  101325 Pa start was carried round the loop by the Mixer's minimum-pressure rule and the solve converged at 1 atm
+  with `dP/dP_feed = 0`. A number passed explicitly still pins the guess; inference survives `to_dict`/`from_dict`,
+  codegen and `_apply_params` (`infer_tear_T` / `infer_tear_P`).
+- **An unconverged recycle under `jax.grad`/`jit` warns.** The traced optimistix fixed point now carries a
+  `jax.debug.callback` that issues `ConvergenceWarning` at run time when the loop stopped short of `tol` (its
+  implicit gradient is then wrong). It stays a warning for `on_nonconvergence="raise"` (a traced solve never
+  raises); `"ignore"` compiles no check.
+- **`last_solve_gain` after Anderson.** When the post-solve probe finds the residual at round-off, the gain is the
+  dominant eigenvalue of the tear map's Jacobian (`jax.jacfwd`, tears up to 400 variables; variables the loop only
+  carries through unchanged are excluded) instead of `None`.
+- **`Mixer` with thermo solves the enthalpy balance exactly** (Newton from the flow-weighted mean T, bracketed
+  fallback, implicit gradient) instead of using one Cp at the mean T (752.7 K vs the exact 763.6 K for 1 mol/s CH4 at
+  300 K + 10 mol/s at 800 K). A species missing from an inlet is now zero flow instead of a `KeyError`.
 
 ### Breaking
 

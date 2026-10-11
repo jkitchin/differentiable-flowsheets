@@ -56,6 +56,7 @@ CORE_CATEGORIES = {
     "cstr": "reactors",
     "pfr": "reactors",
     "fed_batch": "reactors",
+    "stoichiometric": "reactors",
     "flash": "separations",
     "absorption": "separations",
     "distillation": "distillation",

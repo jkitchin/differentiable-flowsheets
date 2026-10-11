@@ -557,12 +557,7 @@ def require_eo_residuals(fs: Flowsheet) -> None:
 
 def _copy_flowsheet(fs: Flowsheet) -> Flowsheet:
     """Shallow functional copy: new unit list, new feed dicts, same operations."""
-    new = Flowsheet(
-        species_order=list(fs.species_order),
-        default_flow=fs.default_flow,
-        default_T=fs.default_T,
-        default_P=fs.default_P,
-    )
+    new = Flowsheet(species_order=list(fs.species_order), **fs._default_kwargs())
     new.feeds = {k: dict(v) for k, v in fs.feeds.items()}
     new.units = [replace(u, params=dict(u.params)) for u in fs.units]
     new.recycles = dict(fs.recycles)

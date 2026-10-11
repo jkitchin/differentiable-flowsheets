@@ -767,6 +767,118 @@ class Splitter:
         return jnp.concatenate(all_resid)
 
 
+@dataclass(repr=False)
+class ComponentSplitterParams(ParamsMixin):
+    """Parameters of a :class:`ComponentSplitter`.
+
+    Attributes:
+        split_fractions: ``{species: fraction}`` of each species' inlet flow
+            sent to the *first* outlet (its recovery there); the complement
+            goes to the second. Values in ``[0, 1]``; may be JAX tracers.
+        default_fraction: Fraction to the first outlet for any species not in
+            ``split_fractions`` (default 0: unlisted species all leave in the
+            second outlet).
+    """
+
+    split_fractions: dict
+    default_fraction: float = 0.0
+
+    def __post_init__(self):
+        if not isinstance(self.split_fractions, dict):
+            raise ValueError("split_fractions must be a {species: fraction} dict")
+        for s, f in list(self.split_fractions.items()) + [("default_fraction", self.default_fraction)]:
+            try:
+                value = float(f)
+            except Exception:      # a tracer: nothing to check yet
+                continue
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"split fraction for {s!r} must lie in [0, 1], got {value}")
+
+
+class ComponentSplitter:
+    """Ideal component splitter: a specified fraction of each species to each outlet.
+
+    ``ComponentSplitter(params)(inlet) -> (first, second, info)``. Species
+    ``i`` leaves in the first outlet at ``phi_i F_i`` and in the second at
+    ``(1 - phi_i) F_i``. It is the block-flow separator of a material-balance
+    calculation ("all the methanol to the liquid, 98% of the CO overhead"):
+    no equilibrium, no thermodynamic model, both outlets at the inlet
+    temperature and pressure. Differentiable in the fractions and the feed.
+
+    Unlike :class:`Splitter`, whose outlets share the inlet composition, each
+    species here has its own split. (``ComponentSeparator`` in
+    ``difflow.units.eos_units`` is the same balance with an enthalpy duty and
+    needs a ``CubicThermo``.)
+
+    ``info``: ``split_fractions`` (array in the order of the inlet's
+    species), ``species`` (that order), ``flow_first`` and ``flow_second``
+    (total mol/s).
+
+    Example:
+        >>> from difflow import make_stream, ComponentSplitter, ComponentSplitterParams
+        >>> sep = ComponentSplitter(ComponentSplitterParams({"MeOH": 0.0}, default_fraction=1.0))
+        >>> gas, liq, _ = sep(make_stream({"CO": 10.0, "MeOH": 5.0}, T=320.0, P=5e6))
+        >>> float(gas["F_CO"]), float(liq["F_MeOH"])
+        (10.0, 5.0)
+    """
+
+    symbol = "Component Splitter"
+    equations = [
+        r"F_i^{(1)} = \phi_i\, F_i^{\mathrm{in}},\qquad F_i^{(2)} = (1 - \phi_i)\, F_i^{\mathrm{in}}",
+        r"T^{(1)} = T^{(2)} = T^{\mathrm{in}},\quad P^{(1)} = P^{(2)} = P^{\mathrm{in}}",
+    ]
+    assumptions = [
+        "Specified per-species split fractions (recoveries); no phase equilibrium.",
+        "Isothermal, isobaric; no energy balance.",
+    ]
+    references = [
+        "Felder, Rousseau, Bullard. Elementary Principles of Chemical Processes, 4e, Ch. 4.",
+    ]
+    parameter_symbols = {"split_fractions": r"\phi_i", "default_fraction": r"\phi_0"}
+    parameter_units = {"split_fractions": "-", "default_fraction": "-"}
+    numerical_method = "Closed form (no iteration)."
+    outlet_roles = ["first", "second"]
+
+    def __init__(self, params: ComponentSplitterParams):
+        """Build the splitter.
+
+        Args:
+            params: Per-species fractions to the first outlet.
+        """
+        self.params = params
+
+    def __call__(self, inlet: Stream) -> tuple[Stream, Stream, dict]:
+        """Split the inlet species by species.
+
+        Args:
+            inlet: Feed stream.
+
+        Returns:
+            first: Outlet receiving ``split_fractions`` of each species.
+            second: Outlet receiving the complement.
+            info: Fractions and outlet totals.
+        """
+        flows = get_flows(inlet)
+        p = self.params
+        phi = {
+            s: jnp.asarray(p.split_fractions.get(s, p.default_fraction), dtype=float)
+            for s in flows
+        }
+        first = {s: phi[s] * F for s, F in flows.items()}
+        second = {s: (1.0 - phi[s]) * F for s, F in flows.items()}
+        info = {
+            "species": list(flows),
+            "split_fractions": jnp.stack([phi[s] for s in flows]) if flows else jnp.zeros(0),
+            "flow_first": sum(first.values()),
+            "flow_second": sum(second.values()),
+        }
+        return (
+            make_stream(first, inlet["T"], inlet["P"]),
+            make_stream(second, inlet["T"], inlet["P"]),
+            info,
+        )
+
+
 class Mixer:
     """Stream mixer.
 
@@ -783,7 +895,9 @@ class Mixer:
     assumptions = [
         "Adiabatic mixing (no external heat duty).",
         "Negligible heat of mixing (ideal).",
-        "Outlet pressure set by the lowest inlet pressure unless thermo is None (flow-weighted T).",
+        "Outlet pressure set by the lowest inlet pressure.",
+        "With thermo, T_out solves the enthalpy balance exactly (Newton from the flow-weighted mean T, bracketed fallback; implicit gradient); without thermo it is the flow-weighted mean T (constant, equal heat capacities).",
+        "A species absent from an inlet stream is taken as zero flow in that inlet.",
     ]
     references = ["Smith, Van Ness, Abbott. Introduction to Chemical Engineering Thermodynamics, 7e, Ch. 12."]
     parameter_symbols = {}
@@ -820,42 +934,73 @@ class Mixer:
         if not inlets:
             raise ValueError("At least one inlet required")
 
-        # Sum flows
+        # Sum flows.  An inlet that does not carry a species contributes no
+        # flow of it, as in combine_streams: a stream built without ethanol
+        # is a stream with no ethanol in it, not an error.
+        inlet_flows = [
+            {s: inlet.get(f"F_{s}", 0.0) for s in self.species_order}
+            for inlet in inlets
+        ]
         outlet_flows = {}
         for s in self.species_order:
-            outlet_flows[s] = sum(inlet[f"F_{s}"] for inlet in inlets)
+            outlet_flows[s] = sum(flows[s] for flows in inlet_flows)
+        total_flow = sum(outlet_flows.values())
 
-        # Calculate outlet temperature
+        # Flow-weighted average temperature: the answer without thermo, and
+        # the starting point of the enthalpy solve with it.
+        T_weighted = sum(
+            sum(flows.values()) * inlet["T"]
+            for flows, inlet in zip(inlet_flows, inlets)
+        ) / total_flow
+
         if self.thermo is not None:
-            # Energy balance: find T such that H_out = sum(H_in)
+            # Energy balance: solve H_out(T) = sum_k H_in,k exactly.  The
+            # phase is fixed, so H_out is smooth in T and Newton from the
+            # flow-weighted mean converges to the root nearest it, which
+            # matters because a fixed-phase enthalpy need not be monotone
+            # (IdealThermo's vapor branch adds a Watson Hvap that vanishes
+            # at Tc, so near Tc it has two roots).  Should Newton fail, the
+            # bracketed solve of the heat exchangers is the fallback.  Both
+            # are optimistix root finds, differentiated at the converged
+            # root by the implicit function theorem.
+            import optimistix as optx
+            from difflow.units.heat_exchanger import invert_monotone_T
+
             H_total = jnp.zeros(())
-            for inlet in inlets:
-                flows = get_flows(inlet)
+            for flows, inlet in zip(inlet_flows, inlets):
                 H_total = H_total + self.thermo.stream_enthalpy(
-                    {s: flows[s] for s in self.species_order},
-                    inlet["T"],
-                    phase=self.phase
+                    flows, inlet["T"], phase=self.phase
+                )
+            mole_fracs = {
+                s: outlet_flows[s] / total_flow for s in self.species_order
+            }
+            scale = jnp.maximum(
+                total_flow * self.thermo.Cp_mix(mole_fracs, T_weighted), 1e-12
+            )
+
+            def H_out(T):
+                return self.thermo.stream_enthalpy(
+                    outlet_flows, T, phase=self.phase
                 )
 
-            # Estimate T from enthalpy (simplified - assume Cp is constant)
-            total_flow = sum(outlet_flows.values())
-            mole_fracs = {s: outlet_flows[s] / total_flow for s in self.species_order}
-
-            # Use average inlet T as starting point
-            T_avg = sum(inlet["T"] for inlet in inlets) / len(inlets)
-            Cp_mix = self.thermo.Cp_mix(mole_fracs, T_avg)
-
-            # H = n * Cp * (T - Tref), solve for T
-            # This is approximate; could use Newton iteration for accuracy
-            H_ref = self.thermo.stream_enthalpy(outlet_flows, 298.15, phase=self.phase)
-            T_out = 298.15 + (H_total - H_ref) / (total_flow * Cp_mix)
+            newton = optx.root_find(
+                lambda T, _: (H_out(T) - H_total) / scale,
+                optx.Newton(rtol=1e-12, atol=1e-9),
+                T_weighted, max_steps=50, throw=False,
+            )
+            T_newton = newton.value
+            ok = (
+                (newton.result == optx.RESULTS.successful)
+                & jnp.isfinite(T_newton)
+                & (T_newton > 0.0)
+            )
+            T_out = jax.lax.cond(
+                ok,
+                lambda: T_newton,
+                lambda: invert_monotone_T(H_out, H_total, T_weighted, scale),
+            )
         else:
-            # Flow-weighted average temperature
-            total_flow = sum(outlet_flows.values())
-            T_out = sum(
-                sum(get_flows(inlet).values()) * inlet["T"]
-                for inlet in inlets
-            ) / total_flow
+            T_out = T_weighted
 
         # Use minimum pressure across all inlets (consistent with combine_streams)
         P_out = inlets[0]["P"]
@@ -901,7 +1046,7 @@ class Mixer:
         # Material balance: F_out_i = sum of all inlet F_i
         mat_resid = []
         for s in self.species_order:
-            F_in_total = sum(inlet[f"F_{s}"] for inlet in inlets)
+            F_in_total = sum(inlet.get(f"F_{s}", 0.0) for inlet in inlets)
             mat_resid.append(jnp.atleast_1d(outlet_flows[s] - F_in_total))
 
         # Temperature: flow-weighted average (or energy balance with thermo)
@@ -912,7 +1057,8 @@ class Mixer:
         else:
             total_flow = sum(outlet_flows.values())
             T_expected = sum(
-                sum(get_flows(inlet).values()) * inlet["T"]
+                sum(inlet.get(f"F_{sp}", 0.0) for sp in self.species_order)
+                * inlet["T"]
                 for inlet in inlets
             ) / (total_flow + 1e-10)
 

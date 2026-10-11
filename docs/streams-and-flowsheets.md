@@ -299,6 +299,29 @@ fs.add_recycle(source='recycle', dest='recycle')   # same name: the splitter out
 results = fs.solve(tol=1e-6, max_iter=50)
 ```
 
+### Degrees of Freedom
+
+`fs.degrees_of_freedom()` counts the flowsheet's variables, specifications and
+equations from its topology, without solving anything. Every stream carries
+`n_species + 2` variables (the flows, T and P); the feeds are specified; each
+unit contributes the equations fixing its outlets from its inlets (the length
+of its `eo_residuals` when it has them); a recycle whose source and destination
+are named differently adds `dest = source`. A unit's parameters (a volume, a
+conversion, a split fraction) are its design specifications and are listed per
+unit rather than counted. A well-posed flowsheet has zero degrees of freedom:
+
+```python
+dof = fs.degrees_of_freedom()
+print(dof)                      # variables, specified, equations, per unit
+assert dof.degrees_of_freedom == 0 and dof.is_well_posed
+dof.unknowns                    # the non-feed streams: the EO solver's unknowns
+```
+
+A positive count names an inlet nothing supplies (not a feed, not a unit outlet,
+not a recycle destination); a negative one names a stream fixed twice (made by
+two units, or a feed that a unit also makes). Both are listed in `dof.problems`.
+The result is a `difflow.DegreesOfFreedom`.
+
 ### Sequential Modular Solution
 
 The flowsheet solver uses sequential modular approach:
@@ -520,10 +543,14 @@ What to do about it --- a better tear guess, a different acceleration, the
 equation-oriented solver --- is
 [When a solve does not converge](convergence.md#when-a-solve-does-not-converge).
 
-Under `jax.grad` or `jit` the residual is a tracer with no numeric value, so
-there is nothing to judge: `last_solve_converged` is `None` and the solve stays
-silent whatever `on_nonconvergence` says. That path is the optimistix fixed
-point, which carries its own implicit-differentiation rule.
+Under `jax.grad` or `jit` the residual is a tracer with no numeric value at
+trace time, so `last_solve_converged` is `None`. That path is the optimistix
+fixed point, whose implicit-differentiation rule assumes the loop converged; an
+unconverged one gives a wrong gradient. The check therefore runs when the
+computation does: a `ConvergenceWarning` fires as the gradient is evaluated
+(a warning even with `on_nonconvergence="raise"`, since an exception would make
+the flowsheet undifferentiable), and `on_nonconvergence="ignore"` turns it off. See
+[The traced fallback](convergence.md#the-traced-fallback).
 
 ### Implicit Differentiation
 

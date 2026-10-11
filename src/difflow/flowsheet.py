@@ -408,6 +408,111 @@ class Unit:
         ))
 
 
+@dataclass
+class DegreesOfFreedom:
+    """Degree-of-freedom count of a flowsheet (:meth:`Flowsheet.degrees_of_freedom`).
+
+    Every stream carries ``n_species + 2`` variables (the species flows, T
+    and P). The feeds are the specified streams; every unit contributes the
+    equations that fix its outlets from its inlets (its ``eo_residuals`` when
+    it has them, else one per outlet variable); a recycle whose source and
+    destination streams are named differently adds the ``n_species + 2``
+    equations ``dest = source``. Unit *parameters* (a conversion, a split
+    fraction, a heat duty, ...) are the design specifications that make a
+    unit's equations determinate; they are listed in ``unit_parameters`` and
+    are not counted as variables.
+
+    ``degrees_of_freedom = n_variables - n_specified - n_equations`` is 0 for
+    a well-posed flowsheet. Positive means variables that nothing fixes (an
+    inlet that is neither a feed, a unit outlet nor a recycle destination);
+    negative means streams fixed twice (a stream produced by two units, or a
+    feed that a unit also produces). ``problems`` names the culprits.
+
+    Attributes:
+        n_per_stream: Variables per stream, ``n_species + 2``.
+        streams: Every stream name in the flowsheet.
+        n_variables: ``len(streams) * n_per_stream``.
+        specified: The feed stream names.
+        n_specified: ``len(specified) * n_per_stream``.
+        n_equations: Unit equations plus recycle connection equations.
+        unit_equations: Equations contributed by each unit, by unit name.
+        recycle_equations: Connection equations of each recycle, keyed by
+            ``"source -> dest"``.
+        unit_parameters: The parameter (design-specification) names of each
+            unit, by unit name.
+        unknowns: The unspecified streams (everything but the feeds); the
+            equation-oriented solver's unknowns.
+        degrees_of_freedom: ``n_variables - n_specified - n_equations``.
+        problems: Human-readable reasons the count is not zero.
+    """
+
+    n_per_stream: int
+    streams: list[str]
+    n_variables: int
+    specified: list[str]
+    n_specified: int
+    n_equations: int
+    unit_equations: dict[str, int]
+    recycle_equations: dict[str, int]
+    unit_parameters: dict[str, list[str]]
+    unknowns: list[str]
+    degrees_of_freedom: int
+    problems: list[str] = field(default_factory=list)
+
+    @property
+    def is_well_posed(self) -> bool:
+        """True when the count is zero and no problem was found."""
+        return self.degrees_of_freedom == 0 and not self.problems
+
+    def __str__(self) -> str:
+        lines = [
+            f"Degrees of freedom: {self.degrees_of_freedom}",
+            f"  variables:  {self.n_variables} "
+            f"({len(self.streams)} streams x {self.n_per_stream})",
+            f"  specified:  {self.n_specified} (feeds: {', '.join(self.specified) or 'none'})",
+            f"  equations:  {self.n_equations}",
+        ]
+        for name, n in self.unit_equations.items():
+            params = self.unit_parameters.get(name) or []
+            spec = f"  [specs: {', '.join(params)}]" if params else ""
+            lines.append(f"    {name}: {n}{spec}")
+        for name, n in self.recycle_equations.items():
+            lines.append(f"    recycle {name}: {n}")
+        for problem in self.problems:
+            lines.append(f"  problem: {problem}")
+        return "\n".join(lines)
+
+
+def _unit_parameter_names(unit: "Unit") -> list[str]:
+    """The design-specification names a unit carries: the fields of its
+    ``params`` dataclass, if it has one, and its call-time keyword params."""
+    names: list[str] = []
+    params = getattr(unit.operation, "params", None)
+    if is_dataclass(params) and not isinstance(params, type):
+        names.extend(f.name for f in dc_fields(params))
+    names.extend(k for k in unit.params if k not in names)
+    return names
+
+
+def _unit_equation_count(unit: "Unit", n_per_stream: int, zero: Stream) -> int:
+    """Equations a unit contributes: the length of its ``eo_residuals`` when
+    it has them (shape-only evaluation, nothing is run), else one per outlet
+    variable."""
+    fallback = len(unit.outlet_names) * n_per_stream
+    op = unit.operation
+    if not hasattr(op, "eo_residuals"):
+        return fallback
+    try:
+        shape = jax.eval_shape(
+            lambda ins, outs: op.eo_residuals(ins, outs, **unit.params),
+            [zero for _ in unit.inlet_names],
+            [zero for _ in unit.outlet_names],
+        )
+        return int(jnp.size(jnp.zeros(shape.shape)))
+    except Exception:
+        return fallback
+
+
 class Flowsheet:
     """Process flowsheet with sequential modular solver.
 
@@ -430,8 +535,8 @@ class Flowsheet:
         self,
         species_order: list[str],
         default_flow: float = 0.01,
-        default_T: float = 300.0,
-        default_P: float = 101325.0,
+        default_T: float | None = None,
+        default_P: float | None = None,
     ):
         """Initialize empty flowsheet.
 
@@ -440,8 +545,31 @@ class Flowsheet:
             default_flow: Default molar flow (mol/s) for tear stream
                 initialization when no explicit initial guess is provided.
                 Use a smaller value (e.g. 1e-6) for trace species.
-            default_T: Default temperature (K) for tear stream initialization
-            default_P: Default pressure (Pa) for tear stream initialization
+            default_T: Temperature (K) of a tear stream's starting guess.
+                ``None`` (the default) *infers* it: a tear starts at the
+                flow-weighted temperature of the other streams entering the
+                unit it feeds (the stream "feeding the loop"), and at
+                300 K only when that unit has no other known inlet. A
+                number pins the guess to it.
+            default_P: Pressure (Pa) of a tear stream's starting guess.
+                ``None`` (the default) infers it as the *highest* pressure
+                of the other streams entering the unit the tear feeds,
+                falling back to 101325 Pa. A number pins the guess.
+
+                Why inferred, and why the highest: a :class:`Mixer` passes
+                on the lowest inlet pressure, so a loop with no pressure
+                change inside it has *every* pressure at or below its feed
+                as a fixed point, and a 1 atm guess used to be one of them
+                --- a 50 bar loop reported 1 bar, and ``jax.grad`` through
+                it failed on a singular tear Jacobian (pressure had a loop
+                gain of exactly one). Starting at or above the feed lands
+                on the physical fixed point, where the pressure is pinned
+                to the feed.
+
+        The attributes :attr:`infer_tear_T` / :attr:`infer_tear_P` record
+        which of the two is inferred; assigning a number to
+        ``default_T``/``default_P`` after construction pins it (and assigning
+        ``None`` goes back to inferring).
         """
         self.species_order = species_order
         self.default_flow = default_flow
@@ -474,9 +602,14 @@ class Flowsheet:
         #: tear-stream (recycle destination) names of the last recycle solve
         self.last_solve_tear_streams: list[str] = []
         #: signed dominant contraction ratio of the tear map, measured at
-        #: the last solution.  ``None`` when it was not measured (no
-        #: recycles, a solve that did not converge, ``error_probe=0``, or a
-        #: residual already at round-off).
+        #: the last solution, for every acceleration method.  Measured from
+        #: the probe's residual ratio, or -- when the residual is already at
+        #: round-off, as after a typical Anderson solve -- as the dominant
+        #: eigenvalue of the tear map's Jacobian (``jax.jacfwd``).  ``None``
+        #: when it was not measured: no recycles, a solve that did not
+        #: converge, ``error_probe=0``, a traced solve, or a round-off
+        #: residual on a loop too large (> 400 tear entries) or not
+        #: forward-differentiable.
         self.last_solve_gain: float | None = None
         #: estimated error remaining in the tear at the last solution, in
         #: the same max-norm as ``last_solve_residual``.  This is the
@@ -499,6 +632,41 @@ class Flowsheet:
         #: the solution, or the final iteration). A unit returning no info
         #: is absent; nothing is recorded while tracing.
         self.last_solve_unit_info: dict[str, dict] = {}
+
+    @property
+    def default_T(self) -> float:
+        """Fallback tear temperature (K); see ``__init__``."""
+        return self._default_T
+
+    @default_T.setter
+    def default_T(self, value: float | None) -> None:
+        #: True when the tear guess's T is inferred from the unit it feeds
+        self.infer_tear_T = value is None
+        self._default_T = 300.0 if value is None else value
+
+    @property
+    def default_P(self) -> float:
+        """Fallback tear pressure (Pa); see ``__init__``."""
+        return self._default_P
+
+    @default_P.setter
+    def default_P(self, value: float | None) -> None:
+        #: True when the tear guess's P is inferred from the unit it feeds
+        self.infer_tear_P = value is None
+        self._default_P = 101325.0 if value is None else value
+
+    def _default_kwargs(self) -> dict[str, Any]:
+        """Constructor keywords that reproduce this flowsheet's tear defaults.
+
+        A copy made with ``default_T=self.default_T`` would *pin* a
+        temperature this flowsheet infers; ``None`` is what keeps it
+        inferred.
+        """
+        return {
+            "default_flow": self.default_flow,
+            "default_T": None if self.infer_tear_T else self.default_T,
+            "default_P": None if self.infer_tear_P else self.default_P,
+        }
 
     def add_feed(self, name: str, stream: Stream) -> None:
         """Add a feed stream to the flowsheet.
@@ -644,8 +812,18 @@ class Flowsheet:
                 - ``"ignore"``: return silently.
 
                 A solve under ``jax.grad``/``jit`` has no concrete residual
-                to judge (:func:`_concrete` returns ``None``), so it stays
-                silent whatever this is set to.
+                when ``solve`` runs (:func:`_concrete` returns ``None``, and
+                ``last_solve_converged`` stays ``None``), so the check is
+                deferred to run time with ``jax.debug.callback``: an
+                unconverged traced solve emits the same
+                :class:`ConvergenceWarning` when the computation runs, for
+                ``"warn"`` and ``"raise"`` alike (an exception inside a
+                gradient would make the flowsheet undifferentiable; escalate
+                with ``warnings.simplefilter("error", ConvergenceWarning)``
+                if that is wanted), and nothing for ``"ignore"``. This
+                matters more there, not less: the gradient comes from
+                implicit differentiation at the returned point and is wrong
+                if it is not a fixed point.
             tears: Where the tear streams come from.
 
                 - ``"declared"`` (default): the recycles given to
@@ -790,6 +968,7 @@ class Flowsheet:
         # over tracers.
         tear_streams = {}
         propagated = None
+        upstream = None
         guess_tears = use_initialization and not self._is_traced()
         for source, dest in self.recycles.items():
             if tear_initial and dest in tear_initial:
@@ -797,10 +976,17 @@ class Flowsheet:
             elif guess_tears:
                 if propagated is None:
                     propagated = self._propagate_from_feeds()
-                tear_streams[dest] = self._initialize_tear_stream(source, propagated)
+                tear_streams[dest] = self._initialize_tear_stream(
+                    source, propagated, dest=dest
+                )
             else:
-                # Initialize with small flows
-                tear_streams[dest] = self._make_zero_stream()
+                # Small flows, at the T and P of the streams the tear
+                # joins (when inferred).  Under tracing that needs only
+                # the units the loop does not feed back into, which run on
+                # the same inputs in every iteration anyway.
+                if upstream is None:
+                    upstream = self._upstream_of_tears()
+                tear_streams[dest] = self._tear_default_stream(dest, upstream)
 
         # The accelerated solvers are Python loops that branch on the residual
         # to stop early, which a tracer cannot answer.  Under jax.grad / jit,
@@ -840,7 +1026,8 @@ class Flowsheet:
                 # breaks, are in solve's docstring.
                 self.last_solve_history = None    # optx keeps no history
                 streams = self._solve_with_recycle_damped(
-                    tear_streams, tol_step, max_iter, damping
+                    tear_streams, tol_step, max_iter, damping,
+                    on_nonconvergence=on_nonconvergence,
                 )
             else:
                 try:
@@ -861,7 +1048,8 @@ class Flowsheet:
                     self.last_solve_method = "fixed_point (traced)"
                     self.last_solve_history = None
                     streams = self._solve_with_recycle_damped(
-                        tear_streams, tol_step, max_iter, damping
+                        tear_streams, tol_step, max_iter, damping,
+                        on_nonconvergence=on_nonconvergence,
                     )
 
             # The tolerance reported is the one the caller asked for, not
@@ -952,6 +1140,95 @@ class Flowsheet:
             return self.solve(tears="declared", **solve_kwargs)
         finally:
             self.recycles, self.units = declared, sequence
+
+    def degrees_of_freedom(self) -> DegreesOfFreedom:
+        """Count the flowsheet's variables, specifications and equations.
+
+        Topology only: nothing is solved. See :class:`DegreesOfFreedom` for
+        the accounting. A flowsheet built from difflow units, with every
+        unit inlet supplied by a feed, another unit or a recycle, has zero
+        degrees of freedom: each unit's parameters are its specifications.
+
+        Returns:
+            :class:`~difflow.DegreesOfFreedom`; ``print()`` it for a summary.
+
+        Example:
+            For a mixer -> reactor -> splitter loop over three species
+            (6 streams, one feed, the recycle torn as ``gas -> recycle``):
+
+            >>> dof = fs.degrees_of_freedom()
+            >>> dof.n_variables, dof.n_specified, dof.n_equations
+            (30, 5, 25)
+            >>> dof.degrees_of_freedom
+            0
+        """
+        nps = len(self.species_order) + 2
+        streams: list[str] = list(self.feeds)
+        for unit in self.units:
+            for name in (*unit.inlet_names, *unit.outlet_names):
+                if name not in streams:
+                    streams.append(name)
+        for source, dest in self.recycles.items():
+            for name in (source, dest):
+                if name not in streams:
+                    streams.append(name)
+
+        zero = self._make_zero_stream()
+        unit_equations = {
+            u.name: _unit_equation_count(u, nps, zero) for u in self.units
+        }
+        unit_parameters = {u.name: _unit_parameter_names(u) for u in self.units}
+        recycle_equations = {
+            f"{source} -> {dest}": nps
+            for source, dest in self.recycles.items() if source != dest
+        }
+
+        producers: dict[str, list[str]] = {}
+        for unit in self.units:
+            for name in unit.outlet_names:
+                producers.setdefault(name, []).append(unit.name)
+        problems = []
+        for name in streams:
+            made_by = producers.get(name, [])
+            if len(made_by) > 1:
+                problems.append(
+                    f"stream {name!r} is produced by {len(made_by)} units "
+                    f"({', '.join(made_by)}): over-specified by {nps * (len(made_by) - 1)}"
+                )
+            if name in self.feeds and made_by:
+                problems.append(
+                    f"stream {name!r} is a feed and is also produced by "
+                    f"{', '.join(made_by)}: over-specified by {nps}"
+                )
+            fed_by_recycle = any(
+                d == name and src != name for src, d in self.recycles.items()
+            )
+            if name not in self.feeds and not made_by and not fed_by_recycle:
+                problems.append(
+                    f"stream {name!r} is not a feed, a unit outlet or a "
+                    f"recycle destination: {nps} unspecified variables"
+                )
+        for source, dest in self.recycles.items():
+            if source not in producers:
+                problems.append(f"recycle source {source!r} is produced by no unit")
+
+        n_variables = len(streams) * nps
+        n_specified = len(self.feeds) * nps
+        n_equations = sum(unit_equations.values()) + sum(recycle_equations.values())
+        return DegreesOfFreedom(
+            n_per_stream=nps,
+            streams=streams,
+            n_variables=n_variables,
+            specified=list(self.feeds),
+            n_specified=n_specified,
+            n_equations=n_equations,
+            unit_equations=unit_equations,
+            recycle_equations=recycle_equations,
+            unit_parameters=unit_parameters,
+            unknowns=[n for n in streams if n not in self.feeds],
+            degrees_of_freedom=n_variables - n_specified - n_equations,
+            problems=problems,
+        )
 
     def tear_analysis(self, max_cycles: int = 1000) -> TearAnalysis:
         """Report this flowsheet's recycle loops and where they could be torn.
@@ -1195,12 +1472,14 @@ class Flowsheet:
         if first == 0.0:
             # Every entry at its own round-off. The step test was not
             # merely met, it was met to the limit of the arithmetic, and
-            # there is no amplification left to find.
-            return None, 0.0
+            # there is no amplification left to find -- but the gain is
+            # still a property of the loop worth reporting, and an
+            # accelerated solve (Anderson, Wegstein) lands here routinely.
+            return self._tear_jacobian_gain(x, tear_names), 0.0
 
         denom = _concrete(jnp.vdot(terms[-2], terms[-2]))
         if not denom:
-            return None, first
+            return self._tear_jacobian_gain(x, tear_names), first
         gain = _concrete(jnp.vdot(terms[-2], terms[-1])) / denom
         if abs(1.0 - gain) < 1e-12:
             # An eigenvalue at one: the loop has no isolated fixed point
@@ -1216,6 +1495,72 @@ class Flowsheet:
         # suggests, and reporting the larger of the two would hide that
         # as surely as the bare step hides the high-gain case.
         return gain, _concrete(jnp.max(jnp.abs(total)))
+
+    #: Largest packed tear for which :meth:`_tear_jacobian_gain` forms the
+    #: Jacobian (one forward-mode pass per entry).
+    _MAX_JACOBIAN_GAIN_SIZE = 400
+
+    def _tear_jacobian_gain(
+        self, x: Array, tear_names: list[str]
+    ) -> float | None:
+        """The tear map's dominant eigenvalue, from its Jacobian at ``x``.
+
+        The residual-ratio estimate in :meth:`_estimate_tear_error` needs
+        residuals above round-off, and an accelerated solve usually leaves
+        none: Anderson converges to ~1e-12 where substitution would stop at
+        ``tol``. The tear map is a JAX function, so its Jacobian ``M = dg/dx``
+        is available exactly; its eigenvalue of largest modulus is the gain.
+        Returned signed (its real part) when the dominant eigenvalue is real,
+        else its modulus carrying the sign of its real part. Variables the
+        loop merely carries through unchanged (a Jacobian row equal to
+        ``e_i``, eigenvalue exactly 1) are left out: they are neutral, not
+        slow.
+
+        Returns ``None`` when the tear is larger than
+        :attr:`_MAX_JACOBIAN_GAIN_SIZE` or a unit in the loop cannot be
+        differentiated in forward mode.
+        """
+        if x.size > self._MAX_JACOBIAN_GAIN_SIZE:
+            return None
+        try:
+            jac = jax.jacfwd(lambda y: self._tear_substitution(y, tear_names))(x)
+        except Exception:
+            jac = None
+        try:
+            # The Jacobian ran every unit on forward-mode tracers, and a unit
+            # that keeps its last result (an info dict, a cached state) now
+            # holds tracers that outlived their trace. One concrete pass at
+            # the same point puts concrete values back.
+            self._tear_substitution(x, tear_names)
+        except Exception:
+            pass
+        if jac is None:
+            return None
+        try:
+            import numpy as np
+            jac = np.asarray(jac, dtype=float)
+            if not np.all(np.isfinite(jac)):
+                return None
+            # A variable the loop only carries (a unit passes the tear's T or
+            # P straight through) has a Jacobian row that is exactly e_i: any
+            # value of it is a fixed point, the iteration never moves it, and
+            # its eigenvalue of exactly 1 says nothing about convergence.
+            # Such a row contributes the factor (1 - lambda) alone to the
+            # characteristic polynomial, so dropping its row and column
+            # leaves the other eigenvalues unchanged.
+            off = jac - np.diag(np.diag(jac))
+            carried = (np.diag(jac) == 1.0) & np.all(off == 0.0, axis=1)
+            keep = np.flatnonzero(~carried)
+            if keep.size == 0:
+                return None
+            eig = np.linalg.eigvals(jac[np.ix_(keep, keep)])
+        except Exception:
+            return None
+        lam = eig[int(np.argmax(np.abs(eig)))]
+        if abs(lam.imag) <= 1e-9 * max(abs(lam), 1e-300):
+            return float(lam.real)
+        return float(np.copysign(abs(lam), lam.real))
+
     def _clip_and_count(
         self, x: Array, mask: Array, hits: Array
     ) -> tuple[Array, Array]:
@@ -1245,6 +1590,7 @@ class Flowsheet:
         self,
         stream_name: str,
         propagated: dict[str, Stream] | None = None,
+        dest: str | None = None,
     ) -> Stream:
         """Initial guess for a recycled stream, before any iteration.
 
@@ -1256,6 +1602,8 @@ class Flowsheet:
             propagated: The result of :meth:`_propagate_from_feeds`, when
                 the caller already has it. Computed here otherwise, which
                 makes this callable on its own.
+            dest: The tear destination, used to infer T and P for the
+                fallback (see :meth:`_tear_default_stream`).
 
         Returns:
             The propagated value of the stream, or the flowsheet default
@@ -1266,8 +1614,105 @@ class Flowsheet:
 
         guess = propagated.get(stream_name)
         if guess is None or not self._usable_tear(guess):
-            return self._make_zero_stream()
+            if dest is None:
+                return self._make_zero_stream()
+            return self._tear_default_stream(dest, propagated)
         return guess
+
+    def _tear_default_stream(
+        self, dest: str, available: dict[str, Stream]
+    ) -> Stream:
+        """The starting guess for tear ``dest`` when nothing better is known.
+
+        Flows are ``default_flow``. Temperature and pressure come from the
+        *other* streams entering the unit(s) that ``dest`` feeds --- the
+        streams the recycle joins --- unless ``default_T`` / ``default_P``
+        were given explicitly:
+
+        * ``P`` is the highest of their pressures. A :class:`Mixer` passes on
+          the lowest inlet pressure, so in a loop with no pressure change
+          every pressure at or below the feed's is a fixed point; only a
+          guess at or above it converges to the physical one, where the
+          loop's pressure is pinned to the feed (and has a well-defined,
+          non-unit loop gain, so the implicit gradient exists).
+        * ``T`` is their flow-weighted mean, the adiabatic-mixing estimate.
+
+        Both are wrapped in ``stop_gradient``: the guess is a starting point
+        and the gradient comes from the converged fixed point.
+
+        Args:
+            dest: The tear destination stream name.
+            available: Streams already known (feeds, plus whatever has been
+                computed). Streams that are themselves tear destinations
+                are ignored.
+
+        Returns:
+            A stream with every species at ``default_flow``.
+        """
+        base = self._make_zero_stream()
+        if not (self.infer_tear_T or self.infer_tear_P):
+            return base
+        tears = set(self.recycles.values())
+        siblings = []
+        for unit in self.units:
+            if dest not in unit.inlet_names:
+                continue
+            for name in unit.inlet_names:
+                if name in tears or name not in available:
+                    continue
+                stream = available[name]
+                if isinstance(stream, dict) and "T" in stream and "P" in stream:
+                    siblings.append(stream)
+        if not siblings:
+            return base
+
+        sg = jax.lax.stop_gradient
+        T, P = base["T"], base["P"]
+        if self.infer_tear_P:
+            P = sg(jnp.max(jnp.stack([jnp.asarray(s["P"], float) for s in siblings])))
+        if self.infer_tear_T:
+            temps = jnp.stack([jnp.asarray(s["T"], float) for s in siblings])
+            flows = jnp.stack([
+                jnp.asarray(sum(get_flows(s).values()), float) if get_flows(s)
+                else jnp.asarray(0.0) for s in siblings
+            ])
+            total = jnp.sum(flows)
+            weights = jnp.where(
+                total > 0, flows / jnp.where(total > 0, total, 1.0),
+                1.0 / len(siblings),
+            )
+            T = sg(jnp.sum(weights * temps))
+        flows = {s: jnp.asarray(self.default_flow) for s in self.species_order}
+        return make_stream(flows, T, P)
+
+    def _upstream_of_tears(self) -> dict[str, Stream]:
+        """Feeds plus every stream computable without any tear.
+
+        Runs, in order, the units whose inlets are all known before the
+        loop closes. Those units see exactly these inputs in every iteration
+        of the solve, so running them once more is safe under tracing (no
+        exception is swallowed, nothing is guessed). It is skipped when every
+        tear joins only feeds, which is the common case.
+        """
+        streams: dict[str, Stream] = dict(self.feeds)
+        tears = set(self.recycles.values())
+        needed = {
+            name
+            for unit in self.units
+            if tears & set(unit.inlet_names)
+            for name in unit.inlet_names
+            if name not in tears
+        }
+        if needed <= set(streams):
+            return streams
+        for unit in self.units:
+            if any(n in tears or n not in streams for n in unit.inlet_names):
+                continue
+            result = unit.operation(
+                *[streams[n] for n in unit.inlet_names], **unit.params
+            )
+            streams.update(_parse_outlets(result, unit))
+        return streams
 
     def _usable_tear(self, stream: Any) -> bool:
         """Whether a guess can stand in for a tear stream.
@@ -1305,9 +1750,15 @@ class Flowsheet:
         """
         streams: dict[str, Stream] = dict(self.feeds)
         default = self._make_zero_stream()
+        tears = set(self.recycles.values())
 
         for unit in self.units:
-            inlets = [streams.get(name, default) for name in unit.inlet_names]
+            inlets = [
+                streams[name] if name in streams
+                else self._tear_default_stream(name, streams) if name in tears
+                else default
+                for name in unit.inlet_names
+            ]
             try:
                 result = unit.operation(*inlets, **unit.params)
             except Exception as failure:
@@ -1384,6 +1835,7 @@ class Flowsheet:
         tol: float,
         max_iter: int,
         damping: float,
+        on_nonconvergence: str = "warn",
     ) -> dict[str, Stream]:
         """Solve flowsheet with recycle using damped fixed-point iteration.
 
@@ -1487,6 +1939,22 @@ class Flowsheet:
         except Exception:
             self.last_solve_iterations = max_iter
 
+        if scaled is None and on_nonconvergence != "ignore":
+            # Traced (jax.grad / jit): there is no number to judge here,
+            # but there will be one when the computation runs.  A gradient
+            # taken by implicit differentiation at an unconverged point is
+            # silently wrong (the implicit function theorem assumes
+            # g(x*) = x*), so the check is deferred to run time.
+            jax.debug.callback(
+                self._traced_convergence_check(
+                    on_nonconvergence, max_iter, tol,
+                    list(tear_initial.keys()),
+                ),
+                jnp.max(jnp.abs(delta) / (tol + tol * jnp.abs(tear_converged))),
+                jnp.max(jnp.abs(delta)),
+                sol.stats.get("num_steps", jnp.asarray(max_iter)),
+            )
+
         # Final solve with converged tear streams
         final_tear = self._array_to_streams(tear_converged, list(tear_initial.keys()))
         streams = dict(self.feeds)
@@ -1499,6 +1967,41 @@ class Flowsheet:
             streams.update(_parse_outlets(result, unit))
 
         return streams
+
+    @staticmethod
+    def _traced_convergence_check(
+        action: str, max_iter: int, tol: float, tear_names: list[str]
+    ) -> Callable:
+        """A run-time callback reporting a traced recycle solve that failed.
+
+        Built for ``jax.debug.callback`` in the traced fixed-point path, where
+        the residual is a tracer when ``solve`` runs and only has a value when
+        the computation does. It reports the way :meth:`_report_nonconvergence`
+        does for a concrete solve, but always as a :class:`ConvergenceWarning`:
+        a traced solve never raises, ``on_nonconvergence="raise"`` included,
+        because an exception inside a gradient makes the flowsheet
+        undifferentiable (``TestUnderTracing`` records this). The caller
+        compiles no check at all for ``"ignore"``.
+        """
+        def check(scaled, residual, steps):
+            import numpy as np
+            scaled = np.asarray(scaled)
+            if not np.all(scaled < 1.0):      # also catches NaN
+                message = (
+                    "Recycle solve under jax.grad/jit did not converge: tear "
+                    f"stream(s) {', '.join(tear_names) or '(none)'} reached a "
+                    f"residual of {float(np.max(residual)):.3e} after "
+                    f"{int(np.max(steps))} of {max_iter} iterations "
+                    f"(tolerance {tol:.3e}, method: fixed_point (traced), "
+                    "plain substitution). Values AND GRADIENTS from this solve "
+                    "are wrong: implicit differentiation assumes the loop is "
+                    "converged. Raise max_iter (a loop of gain g needs about "
+                    "log(tol)/log(g) iterations of plain substitution), or "
+                    "converge the loop eagerly first and pass the result as "
+                    "tear_initial."
+                )
+                warnings.warn(message, ConvergenceWarning, stacklevel=2)
+        return check
 
     def _solve_with_wegstein(
         self,
@@ -1763,12 +2266,7 @@ class Flowsheet:
             new_units[idx] = new_unit
 
         # Build a shallow copy of the flowsheet with the new units
-        new_fs = Flowsheet(
-            self.species_order,
-            default_flow=self.default_flow,
-            default_T=self.default_T,
-            default_P=self.default_P,
-        )
+        new_fs = Flowsheet(self.species_order, **self._default_kwargs())
         new_feeds = dict(self.feeds)
         for feed_name, updates in feed_updates.items():
             new_feeds[feed_name] = _update_feed_stream(
