@@ -28,11 +28,13 @@ P_REF_ENTROPY = 101325.0
 
 
 class AntoineRangeWarning(UserWarning):
-    """An Antoine vapor pressure was evaluated outside its fitted range.
+    """A vapor-pressure correlation was evaluated outside its fitted range.
 
     Outside ``[T_antoine_min, T_antoine_max]`` the equation is extrapolated,
     and Antoine constants extrapolate badly (tens of percent within a few tens
-    of kelvin is common). Raised only for concrete temperatures; under
+    of kelvin is common). For a species whose :class:`SpeciesData` carries a
+    Wagner set (``wagner_coeffs``) the range checked is the Wagner one,
+    ``[T_wagner_min, Tc]``. Raised only for concrete temperatures; under
     ``jit``/``grad`` the check is skipped, as for difflow's other diagnostics.
     """
 
@@ -81,7 +83,13 @@ def check_antoine_range(species: str, data, T, stacklevel: int = 3) -> bool:
         ...     check_antoine_range("water", get_species_data("water"), 550.0)
         True
     """
-    lo_ok, hi_ok = data.T_antoine_min, data.T_antoine_max
+    wagner = getattr(data, "wagner_coeffs", None)
+    if wagner is not None:
+        what = "Wagner"
+        lo_ok, hi_ok = float(getattr(data, "T_wagner_min", 0.0)), float(wagner[4])
+    else:
+        what = "Antoine"
+        lo_ok, hi_ok = data.T_antoine_min, data.T_antoine_max
     if lo_ok <= 0.0 and hi_ok >= 1e6:  # no range recorded
         return False
     rng = _concrete_range(T)
@@ -92,7 +100,7 @@ def check_antoine_range(species: str, data, T, stacklevel: int = 3) -> bool:
     for side, bad in (("below", lo < lo_ok), ("above", hi > hi_ok)):
         if bad:
             warnings.warn(
-                f"Antoine vapor pressure of {species!r} extrapolated {side} its "
+                f"{what} vapor pressure of {species!r} extrapolated {side} its "
                 f"fitted range {lo_ok:g}-{hi_ok:g} K",
                 AntoineRangeWarning, stacklevel=stacklevel)
             warned = True
@@ -138,6 +146,52 @@ def _compute_psat_antoine(T: Array, A: float, B: float, C: float) -> Array:
     return jnp.power(10.0, log10_P)
 
 
+#: Exponents of the third and fourth terms of the two Wagner forms in use:
+#: ``"2.5-5"`` (Poling, Prausnitz & O'Connell 5e, ch. 7 and App. A) and
+#: ``"3-6"`` (Wagner's original form, as fitted by McGarry 1983).
+WAGNER_FORMS: dict[str, tuple[float, float]] = {"2.5-5": (2.5, 5.0),
+                                                 "3-6": (3.0, 6.0)}
+
+
+def psat_wagner(T: Array | float, coeffs, form: str = "2.5-5") -> Array:
+    """Wagner vapor pressure (Pa).
+
+    ``ln(P/Pc) = (a tau + b tau^1.5 + c tau^e3 + d tau^e4) / Tr`` with
+    ``tau = 1 - Tr``, ``Tr = T/Tc`` and ``(e3, e4)`` = (2.5, 5) for the
+    ``"2.5-5"`` form or (3, 6) for the ``"3-6"`` form.
+
+    Above ``Tc`` (``tau < 0``) the fractional powers have no real value; the
+    equation is continued by its leading term, ``ln(P/Pc) = a (Tc/T - 1)``,
+    which matches the value and slope of the full equation at ``Tc`` (the
+    other terms and their first derivatives vanish there). A supercritical
+    "Psat" has no physical meaning, but a Raoult K-value of a light gas
+    still needs a smooth, monotone one.
+
+    Args:
+        T: Temperature (K).
+        coeffs: ``(a, b, c, d, Tc, Pc)``, Tc in K and Pc in Pa.
+        form: ``"2.5-5"`` or ``"3-6"`` (see :data:`WAGNER_FORMS`).
+
+    Returns:
+        Saturation pressure (Pa).
+
+    Example:
+        >>> # methane, Poling et al. 5e App. A: 1 atm at 111.67 K
+        >>> P = psat_wagner(111.67, (-6.02242, 1.26652, -0.5707, -1.366,
+        ...                          190.551, 4.5992e6))
+        >>> abs(float(P) / 101325.0 - 1.0) < 0.002
+        True
+    """
+    a, b, c, d, Tc, Pc = coeffs
+    e3, e4 = WAGNER_FORMS[form]
+    T = jnp.asarray(T)
+    Tr = T / Tc
+    tau = 1.0 - Tr
+    tp = jnp.maximum(tau, 0.0)  # fractional powers only of tau >= 0
+    ln_pr = (a * tau + b * tp ** 1.5 + c * tp ** e3 + d * tp ** e4) / Tr
+    return Pc * jnp.exp(ln_pr)
+
+
 class SpeciesData(NamedTuple):
     """Thermodynamic data for a pure species.
 
@@ -166,6 +220,20 @@ class SpeciesData(NamedTuple):
                          PyGLenN importers store it there).
         T_antoine_min: Minimum valid temperature for Antoine equation (K)
         T_antoine_max: Maximum valid temperature for Antoine equation (K)
+        wagner_coeffs: Optional Wagner vapor-pressure constants
+                       ``(a, b, c, d, Tc, Pc)`` (Tc in K, Pc in Pa; the
+                       Wagner set's own critical point, which may differ
+                       slightly from the EOS one). When set,
+                       :meth:`IdealThermo.Psat` uses it instead of the
+                       Antoine equation; see :func:`psat_wagner`. The
+                       Antoine constants are still used for the enthalpy
+                       path's vaporization temperature and as a starting
+                       guess.
+        wagner_form: ``"2.5-5"`` (Poling et al. 5e, the default) or
+                     ``"3-6"`` (McGarry 1983): the exponents of the third
+                     and fourth Wagner terms.
+        T_wagner_min: Lower end of the Wagner set's range (K); the upper
+                      end is its Tc.
     """
     name: str
     MW: float
@@ -177,6 +245,9 @@ class SpeciesData(NamedTuple):
     Cp_vapor_coeffs: tuple[float, float, float, float] | None = None
     T_antoine_min: float = 0.0
     T_antoine_max: float = 1e6
+    wagner_coeffs: tuple[float, float, float, float, float, float] | None = None
+    wagner_form: str = "2.5-5"
+    T_wagner_min: float = 0.0
 
 
 class IdealThermo(ValueKeyed):
@@ -331,6 +402,18 @@ class IdealThermo(ValueKeyed):
         ``Cp_ig`` is ``Cp_vapor_coeffs``; when that is unset it falls back to
         ``Cp_coeffs``, and the latent heat is the constant ``Hvap(T_v)``.
 
+        **Which latent heat is authoritative.** This path is what every
+        unit energy balance (flash, heater, column, ...) integrates, so the
+        latent heat a duty actually contains at ``T`` is
+        :meth:`latent_heat` ``= H_pure(vapor) - H_pure(liquid)``, not the
+        Watson :meth:`Hvap` at ``T``. The two agree at ``T_v`` and drift
+        apart away from it, because ``Cp_liq``, ``Cp_ig`` and the Watson
+        constants are separate fits and Kirchhoff's relation
+        ``d(dHvap)/dT = Cp_ig - Cp_liq`` is not imposed on the Watson curve
+        (toluene at 374.64 K: 34 783 J/mol along the path vs a Watson 33 728,
+        +3.1%). :meth:`Hvap` is the correlation the path is anchored to; read
+        :meth:`latent_heat` when a number must be consistent with the duties.
+
         Args:
             species: Species name
             T: Temperature (K)
@@ -365,6 +448,101 @@ class IdealThermo(ValueKeyed):
         A, B, C = (float(v) for v in data.antoine_coeffs)
         Tb = B / (A - np.log10(101325.0)) - C
         return min(float(data.Tref), Tb)
+
+    def latent_heat(self, species: str, T: Array | float) -> Array:
+        """Path-consistent latent heat ``H_vap(T) - H_liq(T)`` (J/mol).
+
+        The difference of :meth:`H_pure`'s vapor and liquid enthalpies at
+        the same ``T``: the latent heat that the energy balances of every
+        unit using this thermo actually contain, and so the authoritative
+        one for duties. It equals the Watson :meth:`Hvap` at
+        :meth:`vaporization_T` and follows Kirchhoff's law from there::
+
+            latent_heat(T) = Hvap(T_v) + integral(Cp_ig - Cp_liq, T_v -> T)
+
+        whereas :meth:`Hvap` is the Watson correlation at ``T`` itself. They
+        differ away from ``T_v`` because the Cp's and the Watson constants
+        are fitted separately (toluene at 374.64 K: 34 783 vs 33 728 J/mol).
+
+        Args:
+            species: Species name.
+            T: Temperature (K).
+
+        Returns:
+            Latent heat (J/mol), differentiable in ``T``.
+
+        Example:
+            >>> from difflow.database import get_species_data
+            >>> th = IdealThermo({"toluene": get_species_data("toluene")})
+            >>> L = th.latent_heat("toluene", 374.64)
+            >>> float(L) == float(th.H_pure("toluene", 374.64, "vapor")
+            ...                   - th.H_pure("toluene", 374.64, "liquid"))
+            True
+        """
+        return (self.H_pure(species, T, "vapor")
+                - self.H_pure(species, T, "liquid"))
+
+    def saturation_T(self, species: str, P: Array | float,
+                     T0: Array | float | None = None) -> Array:
+        """Saturation temperature (K) at pressure ``P``: ``Psat(T) = P``.
+
+        The inverse of :meth:`Psat`, so it uses the Wagner set when the
+        species has one and the Antoine equation otherwise. For Antoine the
+        inverse is explicit, ``T = B / (A - log10 P) - C``; for Wagner it is
+        a Newton solve of ``ln Psat(T) = ln P`` from the Antoine value, with
+        implicit differentiation. Either way ``dT/dP`` is exact and obeys
+        Clausius-Clapeyron's sign (positive).
+
+        Not to be confused with :meth:`vaporization_T`, the fixed temperature
+        at which :meth:`H_pure`'s vapor path vaporizes.
+
+        Args:
+            species: Species name.
+            P: Pressure (Pa).
+            T0: Optional initial guess for the Wagner solve (K).
+
+        Returns:
+            Saturation temperature (K).
+
+        Warns:
+            AntoineRangeWarning: a concrete result outside the correlation's
+                fitted range.
+
+        Example:
+            >>> from difflow.database import get_species_data
+            >>> th = IdealThermo({"water": get_species_data("water")})
+            >>> abs(float(th.saturation_T("water", 101325.0)) - 373.12) < 0.1
+            True
+        """
+        import optimistix as optx
+
+        data = self.species[species]
+        P = jnp.asarray(P, dtype=float)
+        A, B, C = data.antoine_coeffs
+        T_ant = B / (A - jnp.log10(P)) - C
+        if data.wagner_coeffs is None:
+            T_out = T_ant
+        else:
+            coeffs, form = data.wagner_coeffs, data.wagner_form
+
+            def resid(T, lnP):
+                return jnp.log(psat_wagner(T, coeffs, form)) - lnP
+
+            start = T_ant if T0 is None else jnp.asarray(T0, dtype=float)
+            sol = optx.root_find(resid, optx.Newton(rtol=1e-12, atol=1e-12),
+                                 jax.lax.stop_gradient(start),
+                                 args=jnp.log(P), max_steps=50, throw=False)
+            T_out = sol.value
+            try:
+                r = float(np.max(np.abs(np.asarray(resid(T_out, jnp.log(P))))))
+            except Exception:  # traced: no diagnostic
+                r = 0.0
+            if not r < 1e-8:
+                warnings.warn(f"saturation_T({species!r}) did not converge "
+                              f"(residual {r:.3g})", BubbleDewConvergenceWarning,
+                              stacklevel=2)
+        check_antoine_range(species, data, T_out)
+        return T_out
 
     def S_ig_T(self, species: str, T: Array | float) -> Array:
         """Ideal-gas entropy temperature integral integral(Cp/T dT, Tref -> T).
@@ -403,6 +581,11 @@ class IdealThermo(ValueKeyed):
 
         Uses Watson correlation: Hvap = A * (1 - T/Tc)^n
 
+        This is the correlation :meth:`H_pure` is anchored to at
+        :meth:`vaporization_T`, not the latent heat in the enthalpies at
+        other temperatures; for a value consistent with unit duties use
+        :meth:`latent_heat`.
+
         Args:
             species: Species name
             T: Temperature (K)
@@ -413,10 +596,21 @@ class IdealThermo(ValueKeyed):
         A, n, Tc = self.species[species].Hvap_coeffs
         return _compute_hvap_watson(jnp.asarray(T), A, n, Tc)
 
-    def Psat(self, species: str, T: Array | float) -> Array:
-        """Calculate saturation pressure using Antoine equation.
+    def _psat(self, species: str, T: Array | float) -> Array:
+        """Psat without the range check: Wagner if present, else Antoine."""
+        data = self.species[species]
+        if data.wagner_coeffs is not None:
+            return psat_wagner(T, data.wagner_coeffs, data.wagner_form)
+        A, B, C = data.antoine_coeffs
+        return _compute_psat_antoine(jnp.asarray(T), A, B, C)
 
-        log10(Psat/Pa) = A - B/(T + C)
+    def Psat(self, species: str, T: Array | float) -> Array:
+        """Calculate saturation pressure (Pa).
+
+        By default the Antoine equation, ``log10(Psat/Pa) = A - B/(T + C)``.
+        When the species' :class:`SpeciesData` carries ``wagner_coeffs`` (the
+        light gases, via ``get_species_data(name, vapor_pressure="wagner")``)
+        the Wagner equation is used instead; see :func:`psat_wagner`.
 
         Args:
             species: Species name
@@ -427,12 +621,12 @@ class IdealThermo(ValueKeyed):
 
         Warns:
             AntoineRangeWarning: when a concrete ``T`` lies outside the
-                species' fitted range (``T_antoine_min``-``T_antoine_max``).
+                species' fitted range (``T_antoine_min``-``T_antoine_max``,
+                or ``T_wagner_min``-Tc for a Wagner set).
         """
         data = self.species[species]
         check_antoine_range(species, data, T)
-        A, B, C = data.antoine_coeffs
-        return _compute_psat_antoine(jnp.asarray(T), A, B, C)
+        return self._psat(species, T)
 
     def validate_antoine(self, species: str, T: float) -> dict:
         """Check whether temperature is in valid range for Antoine equation.
@@ -463,20 +657,30 @@ class IdealThermo(ValueKeyed):
         Returns:
             (Psat, info_dict) where info_dict contains 'antoine_in_range': a
             Python bool for a concrete scalar ``T``, otherwise a boolean array
-            (so the call also works under ``jit``/``grad``).
+            (so the call also works under ``jit``/``grad``). For a species
+            with a Wagner set, 'antoine_in_range' tests the Wagner range
+            (``T_wagner_min``-Tc), the correlation ``Psat`` actually used;
+            'uses_wagner' says which correlation that is and 'T_min'/'T_max'
+            give its range.
         """
         data = self.species[species]
-        A, B, C = data.antoine_coeffs
-        Psat = _compute_psat_antoine(jnp.asarray(T), A, B, C)
+        Psat = self._psat(species, T)
+        if data.wagner_coeffs is not None:
+            corr, lo, hi = "wagner", data.T_wagner_min, data.wagner_coeffs[4]
+        else:
+            corr, lo, hi = "antoine", data.T_antoine_min, data.T_antoine_max
         T_arr = jnp.asarray(T)
-        in_range = (T_arr >= data.T_antoine_min) & (T_arr <= data.T_antoine_max)
+        in_range = (T_arr >= lo) & (T_arr <= hi)
         rng = _concrete_range(T) if jnp.ndim(T) == 0 else None
         if rng is not None:
-            in_range = data.T_antoine_min <= rng[0] <= data.T_antoine_max
+            in_range = lo <= rng[0] <= hi
         info = {
             'antoine_in_range': in_range,
             'T_antoine_min': data.T_antoine_min,
             'T_antoine_max': data.T_antoine_max,
+            'uses_wagner': corr == "wagner",
+            'T_min': lo,
+            'T_max': hi,
         }
         return Psat, info
 

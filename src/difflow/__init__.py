@@ -39,7 +39,9 @@ from difflow.streams import (
 from difflow.thermo import (
     IdealThermo, CubicThermo, SpeciesData,
     AntoineRangeWarning, BubbleDewConvergenceWarning,
+    psat_wagner,
 )
+from difflow.saturation import saturation_temperature, saturation_pressure
 from difflow.eos import (
     PengRobinson,
     SRK,
@@ -179,6 +181,13 @@ from difflow.phase_diagrams import (
     tie_line_through,
     difference_point,
     hunter_nash,
+)
+from difflow.binary_params import (
+    get_nrtl_params,
+    get_uniquac_params,
+    list_binary_pairs,
+    binary_parameter_source,
+    MissingBinaryParametersWarning,
 )
 from difflow.units.lle import (
     MultistageCascade,
@@ -566,6 +575,9 @@ __all__ = [
     "SpeciesData",
     "AntoineRangeWarning",
     "BubbleDewConvergenceWarning",
+    "psat_wagner",
+    "saturation_temperature",
+    "saturation_pressure",
     # Thermodynamics - Equations of State
     "PengRobinson",
     "SRK",
@@ -679,6 +691,11 @@ __all__ = [
     "tie_line_through",
     "difference_point",
     "hunter_nash",
+    "get_nrtl_params",
+    "get_uniquac_params",
+    "list_binary_pairs",
+    "binary_parameter_source",
+    "MissingBinaryParametersWarning",
     "uniquac_activity_coefficients",
     "get_K_values",
     "separation_factor",
