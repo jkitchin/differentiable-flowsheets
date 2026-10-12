@@ -157,7 +157,7 @@ jobs:
       # in series on one worker.
       - name: Run tests
         run: |
-          python -m pytest tests/ -v --tb=short -m "not release" \
+          python -m pytest tests/ -q --tb=short -m "not release" \
             -n auto --dist loadfile --no-loadscope-reorder \
             --splits 4 --group ${{ matrix.shard }}
 
