@@ -637,3 +637,129 @@ class TestRigorousCascade:
         feed, solv = _streams(water=80.0, acid=20.0, mibk=5.0)
         _, _, info = MultistageCascade(CascadeParams(3, _eq(tmodel), model="rigorous"))(feed, solv)
         assert not bool(info["converged"])
+
+
+# ---------------------------------------------------------------------------
+# Kremser with solute in the entering solvent, the N-stage profile, crossflow,
+# and the rate-based contactor (unit-ops book Ch. 17 audit)
+# ---------------------------------------------------------------------------
+
+def _one_solute_eq(K=2.0):
+    return LLEEquilibrium(
+        solutes=["A"], aqueous_carrier="W", organic_carrier="S",
+        K_coeffs=DistributionCoeffs(species=("A",), K0=(K,)),
+    )
+
+
+def _ab_streams(F_aq=100.0, A_feed=1.0, S_org=100.0, A_solv=0.0):
+    feed = make_stream({"W": F_aq, "A": A_feed, "S": 0.0}, T=298.15, P=101325.0)
+    solv = make_stream({"W": 0.0, "A": A_solv, "S": S_org}, T=298.15, P=101325.0)
+    return feed, solv
+
+
+class TestKremserWithSoluteInSolvent:
+    """Solute entering with the solvent used to vanish from the balance."""
+
+    def test_hand_kremser_and_balance(self):
+        # E = K S/F = 2, X0 = 0.01, Y_in = 0.005 -> X* = 0.0025;
+        # X3 = X* + (X0 - X*)(E-1)/(E^4-1) = 0.0025 + 0.0075/15 = 0.003
+        feed, solv = _ab_streams(A_solv=0.5)
+        raf, ext, _ = MultistageCascade(CascadeParams(3, _one_solute_eq()))(feed, solv)
+        assert float(raf["F_A"]) == pytest.approx(0.300, rel=1e-5)
+        assert float(raf["F_A"] + ext["F_A"]) == pytest.approx(1.5, rel=1e-12)
+
+    def test_profile_is_the_N_stage_kremser_profile(self):
+        feed, solv = _ab_streams(A_solv=0.5)
+        N, K = 3, 2.0
+        _, _, info = MultistageCascade(CascadeParams(N, _one_solute_eq(K)))(feed, solv)
+        x = np.array([float(v) for v in info["profiles"]["x"]["A"]])
+        y = np.array([float(v) for v in info["profiles"]["y"]["A"]])
+        E, X0, Xs = 2.0, 0.01, 0.0025
+        expect = [Xs + (X0 - Xs) * (E ** (N + 1 - n) - 1) / (E ** (N + 1) - 1) for n in range(N + 1)]
+        np.testing.assert_allclose(x, expect, rtol=1e-5)
+        # every stage balance closes: F (x_{n-1} - x_n) = S (y_n - y_{n+1}), y_{N+1} = Y_in
+        yy = np.append(y[1:], 0.005)
+        for n in range(1, N + 1):
+            assert 100.0 * (x[n - 1] - x[n]) == pytest.approx(100.0 * (yy[n - 1] - yy[n]), rel=1e-5)
+
+
+class TestCrossflow:
+    def test_closed_form_and_balance(self):
+        feed, solv = _ab_streams(A_solv=0.0)
+        raf, ext, info = MultistageCascade(
+            CascadeParams(3, _one_solute_eq(), flow_config="crossflow"))(feed, solv)
+        # (1 + E/N)^-N with E = 2, N = 3
+        assert float(raf["F_A"]) == pytest.approx((1 + 2 / 3) ** -3, rel=1e-12)
+        assert float(raf["F_A"] + ext["F_A"]) == pytest.approx(1.0, rel=1e-12)
+        assert len(info["profiles"]["x"]["A"]) == 4
+
+    def test_countercurrent_beats_crossflow_beats_single_stage(self):
+        feed, solv = _ab_streams()
+        left = {}
+        for fc in ("counter_current", "crossflow"):
+            raf, _, _ = MultistageCascade(
+                CascadeParams(4, _one_solute_eq(), flow_config=fc))(feed, solv)
+            left[fc] = float(raf["F_A"])
+        single = 1.0 / (1.0 + 2.0)
+        assert left["counter_current"] < left["crossflow"] < single
+
+    def test_gradients(self):
+        eq = _one_solute_eq()
+
+        def f(N, S):
+            feed, solv = _ab_streams(S_org=S)
+            raf, _, _ = MultistageCascade(CascadeParams(N, eq, flow_config="crossflow"))(feed, solv)
+            return raf["F_A"]
+
+        check_grads(f, (3.0, 80.0), order=1, modes=["rev"])
+
+    def test_bad_flow_config_raises(self):
+        with pytest.raises(ValueError):
+            CascadeParams(3, _one_solute_eq(), flow_config="crosscurrent")
+
+
+class TestRateBasedContactor:
+    """The rate-based model was off by a soft clip, a sign and a unit."""
+
+    @pytest.mark.parametrize("fc", ["counter_current", "co_current"])
+    @pytest.mark.parametrize("S", [100.0, 30.0])
+    def test_mass_balance(self, fc, S):
+        feed, solv = _ab_streams(S_org=S, A_solv=0.05)
+        p = ContactorParams(length=2.0, area=0.1, equilibrium=_one_solute_eq(),
+                            mass_transfer_model="rate_based", Kla=3e-3, flow_config=fc)
+        raf, ext, info = DifferentialContactor(p)(feed, solv)
+        assert float(raf["F_A"] + ext["F_A"]) == pytest.approx(1.05, rel=1e-10)
+        assert 0.0 < float(raf["F_A"]) < 1.0
+        assert float(ext["F_A"]) == pytest.approx(float(info["Y_out"]["A"]) * S, rel=1e-8)
+
+    @pytest.mark.parametrize("S,E", [(100.0, 2.0), (30.0, 0.6)])
+    def test_counter_current_matches_closed_form_NOR(self, S, E):
+        # N_OR = ln[(X0/XL)(1 - 1/E) + 1/E] / (1 - 1/E) for solute-free solvent
+        feed, solv = _ab_streams(S_org=S)
+        p = ContactorParams(length=2.0, area=0.1, equilibrium=_one_solute_eq(),
+                            mass_transfer_model="rate_based", Kla=3e-3,
+                            aqueous_molar_density=55500.0)
+        raf, _, info = DifferentialContactor(p)(feed, solv)
+        XL, X0 = float(raf["F_A"]) / 100.0, 0.01
+        nor = np.log((X0 / XL) * (1 - 1 / E) + 1 / E) / (1 - 1 / E)
+        assert float(info["NTU_OR"]["A"]) == pytest.approx(3e-3 * 55500.0 * 0.1 * 2.0 / 100.0)
+        assert nor == pytest.approx(float(info["NTU_OR"]["A"]), rel=1e-8)
+
+    def test_co_current_limit_is_one_equilibrium_stage(self):
+        feed, solv = _ab_streams()
+        p = ContactorParams(length=50.0, area=0.1, equilibrium=_one_solute_eq(),
+                            mass_transfer_model="rate_based", Kla=3e-2, flow_config="co_current")
+        raf, _, _ = DifferentialContactor(p)(feed, solv)
+        assert float(raf["F_A"]) == pytest.approx(1.0 / 3.0, rel=1e-6)
+
+    def test_gradients(self):
+        eq = _one_solute_eq()
+
+        def f(L, Kla):
+            feed, solv = _ab_streams()
+            p = ContactorParams(length=L, area=0.1, equilibrium=eq,
+                                mass_transfer_model="rate_based", Kla=Kla)
+            raf, _, _ = DifferentialContactor(p)(feed, solv)
+            return raf["F_A"]
+
+        check_grads(f, (2.0, 3e-3), order=1, modes=["rev"])

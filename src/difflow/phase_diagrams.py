@@ -579,6 +579,70 @@ def ternary_lle(lle_model, T: Array | float, n_tie: int = 15,
             "binodal": jnp.asarray(binodal), "plait": jnp.asarray(plait), "T": T}
 
 
+def tabulated_lle(tie_lines, binodal=None, plait=None, T: float | None = None) -> dict:
+    """Ternary LLE data from measured tie lines, in the format of :func:`ternary_lle`.
+
+    Published LLE data (e.g. from NIST ThermoML or DECHEMA) are a table of
+    conjugate phase compositions. This packs them into the dict that
+    :func:`hunter_nash`, :func:`tie_line_through` and
+    :func:`difflow.visualization.plot_ternary` read, so a graphical stage
+    calculation can run on the data themselves instead of on a fitted
+    activity model.
+
+    Species order is that of :func:`ternary_lle`: species 0 and 1 are the
+    partially miscible pair (phase I is rich in species 0, phase II in
+    species 1) and species 2 is the solute. Each composition is normalised to
+    sum to one and the tie lines are sorted by the solute fraction in phase I
+    (the binary-edge line first, if given). The interpolation used by
+    :func:`hunter_nash` needs at least three tie lines.
+
+    Args:
+        tie_lines: Array-like ``(m, 2, 3)``: ``tie_lines[k, 0]`` is the phase-I
+            (species-0-rich) composition of tie line ``k``, ``tie_lines[k, 1]``
+            the conjugate phase-II composition.
+        binodal: Optional ``(n, 3)`` measured binodal (cloud-point) curve, for
+            plotting. Default: the phase-I ends followed by the reversed
+            phase-II ends of the tie lines.
+        plait: Optional ``(3,)`` plait point. Default: the midpoint of the last
+            tie line (an approximation, as in :func:`ternary_lle`).
+        T: Temperature of the data (K), stored for reference.
+
+    Returns:
+        dict with ``tie_lines`` ``(m, 2, 3)``, ``valid`` (all ``True``),
+        ``binodal``, ``plait`` and ``T``.
+
+    Example:
+        >>> import numpy as np
+        >>> tl = np.array([[[0.99, 0.01, 0.00], [0.02, 0.98, 0.00]],
+        ...                [[0.90, 0.02, 0.08], [0.04, 0.84, 0.12]],
+        ...                [[0.80, 0.04, 0.16], [0.08, 0.70, 0.22]]])
+        >>> d = tabulated_lle(tl, T=298.15)
+        >>> d["tie_lines"].shape
+        (3, 2, 3)
+    """
+    import numpy as np
+    tl = np.asarray(tie_lines, dtype=float)
+    if tl.ndim != 3 or tl.shape[1:] != (2, 3):
+        raise ValueError(f"tie_lines must have shape (m, 2, 3), got {tl.shape}")
+    if np.any(tl < 0.0):
+        raise ValueError("tie-line compositions must be non-negative")
+    tl = tl / tl.sum(axis=2, keepdims=True)
+    if np.any(tl[:, 0, 0] <= tl[:, 1, 0]):
+        raise ValueError("phase I (tie_lines[:, 0]) must be the phase rich in species 0")
+    tl = tl[np.argsort(tl[:, 0, 2], kind="stable")]
+    if binodal is None:
+        b = np.concatenate([tl[:, 0, :], tl[::-1, 1, :]], axis=0)
+    else:
+        b = np.asarray(binodal, dtype=float)
+        if b.ndim != 2 or b.shape[1] != 3:
+            raise ValueError(f"binodal must have shape (n, 3), got {b.shape}")
+        b = b / b.sum(axis=1, keepdims=True)
+    pl = tl[-1].mean(axis=0) if plait is None else np.asarray(plait, dtype=float)
+    return {"tie_lines": jnp.asarray(tl), "valid": jnp.ones(tl.shape[0], dtype=bool),
+            "binodal": jnp.asarray(b), "plait": jnp.asarray(pl),
+            "T": None if T is None else jnp.asarray(T, dtype=float)}
+
+
 # ---------------------------------------------------------------------------
 # Ternary diagram geometry: mixing point, lever rule, tie lines, Hunter-Nash
 # ---------------------------------------------------------------------------

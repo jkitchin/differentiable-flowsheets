@@ -1852,8 +1852,9 @@ Three models, chosen by `params.model`:
 
 **`"kremser"`** (closed form per solute). With the effective absorption factor
 `A_i = L/(K_i V)` (the geometric mean of its top and bottom values, so the flow
-change along the column is carried, Edmister's idea; `variable_flow=False`
-uses the inlet flows) and the equivalent equilibrium stages
+change along the column is carried, the usual textbook simplification of
+Geankoplis 5e Sec. 10.6 and Wankat 4e Ch. 12, not Edmister's effective factor;
+`variable_flow=False` uses the inlet flows) and the equivalent equilibrium stages
 `N_eq = N ln(1+E(S-1))/ln S`, `S = 1/A`, for a Murphree vapor efficiency `E`:
 
 $$
@@ -1884,7 +1885,9 @@ viscosities, density and surface tension default to air and water at
 25 C) or you give `H_OG`. For straight lines the outlet follows Colburn's
 closed form; `ntu_method="integral"` evaluates `N_OG` by quadrature for the key
 solute (`concentrated=True` adds the `(1-y)_lm` correction). **Rating**: give
-`height`; **design**: give `recovery` and read `info["height"]`. Flooding and
+`height`; **design**: give `recovery` and read `info["height"]`. The info
+also carries the liquid-phase basis, `N_OL = N_OG/A` and `H_OL = A H_OG`
+(`N_OL H_OL = Z`), which is the natural one for a stripper. Flooding and
 pressure drop are not part of this unit: give the diameter.
 
 **Design instead of rating.** Setting `recovery` (the fraction of the
@@ -3716,7 +3719,7 @@ they can be empty above.
 
 **Class**: `MultistageCascade`
 
-**Description**: Counter-current multistage extraction cascade for liquid-liquid separation.
+**Description**: Multistage extraction cascade for liquid-liquid separation: counter-current (Kremser), crossflow, or co-current.
 
 #### Process Role
 
@@ -3734,7 +3737,7 @@ LLE is used for:
 class CascadeParams:
     n_stages: int | float        # Equilibrium stages (continuous, for optimization)
     equilibrium: LLEEquilibrium  # The equilibrium model (see above)
-    flow_config: str = 'counter_current'  # or 'co_current'
+    flow_config: str = 'counter_current'  # or 'crossflow', 'co_current'
     stage_efficiency: float = 0.8         # Murphree efficiency, co-current only
     model: str = 'immiscible'             # or 'rigorous' (partially miscible, see below)
 ```
@@ -3757,11 +3760,33 @@ $$R_{j-1} x_{i,j-1} + E_{j+1} y_{i,j+1} = R_j x_{i,j} + E_j y_{i,j}$$
 
 $$y_{i,j} = K_i(T) x_{i,j}$$
 
-**Kremser Equation** (for dilute systems):
+**Kremser Equation** (immiscible carriers, constant $K$). The immiscible model
+works on the solute-free (ratio) basis, $X$ = solute per aqueous carrier and
+$Y$ = solute per organic carrier, with $K = Y/X$ and the extraction factor
+$E = K S/F$ from the *carrier* flows $S$ and $F$. With solute $Y_{in}$ in the
+entering solvent, $X^* = Y_{in}/K$ and
 
-$$\frac{x_{in} - x_{out}}{x_{in} - x_{out}^*} = \frac{A^{N+1} - A}{A^{N+1} - 1}$$
+$$\frac{X_N - X^*}{X_0 - X^*} = \frac{E - 1}{E^{N+1} - 1}$$
 
-Where $A = KE/R$ is the extraction factor.
+(Wankat 4e Ch. 13; Geankoplis 5e Sec. 12.7). The extract carries everything
+that entered and did not leave in the raffinate, so solute in the solvent is
+conserved. The stage profile `info["profiles"]["x"]` is
+$X_n = X^* + (X_0 - X^*)\,(E^{N+1-n} - 1)/(E^{N+1} - 1)$, $n = 0..N$
+(stage 1 is the feed end), and `["y"]` is $Y_n = K X_n$, with entry 0 holding
+the solvent inlet $Y_{in}$.
+
+**Crossflow** (`flow_config="crossflow"`): the raffinate passes through $N$
+stages, each fed $S/N$ of fresh solvent, and the extracts are combined:
+
+$$\frac{X_N - X^*}{X_0 - X^*} = \left(1 + \frac{E}{N}\right)^{-N},$$
+
+smooth in $N$. It always leaves more solute than counter-current flow with the
+same total solvent and stages, and less than a single stage.
+
+A distribution coefficient tabulated on a concentration basis, $K_c$ (mol/L
+over mol/L), goes with volumetric flows: $E = K_c V_{org}/V_{aq}$. For a dilute
+solute the ratio-basis $K$ is $K_c\,\rho_{aq}/\rho_{org}$ (molar densities of
+the two carriers).
 
 #### Activity Coefficient Models
 
@@ -3916,17 +3941,45 @@ N = stages_for_recovery(K, 1.5 * S_min, recovery=0.95)
 
 #### Governing Equations
 
-**Height of Transfer Unit (HTU)**:
+Two models, chosen by `ContactorParams(mass_transfer_model=...)`:
 
-$$HTU = \frac{R}{K_{OC} a A}$$
+- `"equilibrium"`: the column is `length / HETP` Kremser stages (any
+  `flow_config` of `MultistageCascade`).
+- `"rate_based"`: plug flow of both phases with an overall volumetric
+  coefficient based on the raffinate phase. On the ratio basis of the cascade,
+  with $\alpha = K_L a\,c_{aq} A$ (`Kla`, `aqueous_molar_density`, `area`),
 
-**Number of Transfer Units (NTU)**:
+$$F_{aq}\frac{dX}{dz} = -\alpha\,(X - Y/K), \qquad
+F_{org}\frac{dY}{dz} = \mp\alpha\,(X - Y/K)$$
 
-$$NTU = \int_{x_{out}}^{x_{in}} \frac{dx}{x - x^*}$$
+(upper sign counter-current, the organic entering at $z = L$; lower sign
+co-current). With constant $K$ the system is linear and is solved exactly with
+a matrix exponential. `info` reports the height and number of raffinate-phase
+overall transfer units,
 
-**Column Height**:
+$$H_{OR} = \frac{F_{aq}}{K_L a\,c_{aq} A}, \qquad N_{OR} = \frac{L}{H_{OR}},$$
 
-$$H = HTU \times NTU$$
+and the counter-current result obeys the closed form (solute-free solvent)
+
+$$N_{OR} = \frac{\ln\left[\frac{X_0}{X_L}\left(1 - \frac{1}{E}\right) + \frac{1}{E}\right]}{1 - 1/E}$$
+
+(Treybal, *Mass Transfer Operations* 3e, Ch. 10), which `tests/test_lle.py`
+checks. Profiles `info["profiles"]["c_aq"]`, `["c_org"]` are $X(z)$ and $Y(z)$.
+
+```python
+from difflow import make_stream, DifferentialContactor, ContactorParams
+from difflow.units.lle import LLEEquilibrium, DistributionCoeffs
+
+eq = LLEEquilibrium(solutes=["A"], aqueous_carrier="water", organic_carrier="solvent",
+                    K_coeffs=DistributionCoeffs(species=("A",), K0=(2.0,)))
+feed = make_stream({"water": 100.0, "A": 1.0, "solvent": 0.0}, T=298.15, P=101325.0)
+solvent = make_stream({"water": 0.0, "A": 0.0, "solvent": 100.0}, T=298.15, P=101325.0)
+col = DifferentialContactor(ContactorParams(length=2.0, area=0.1, equilibrium=eq,
+                                            mass_transfer_model="rate_based", Kla=3e-3))
+raffinate, extract, info = col(feed, solvent)
+print(f"N_OR = {float(info['NTU_OR']['A']):.3f}")        # N_OR = 0.333
+print(f"A left = {float(raffinate['F_A']):.3f} mol/s")   # A left = 0.734 mol/s
+```
 
 ---
 
@@ -3957,8 +4010,9 @@ $E_{n+1} - R_n = -\Delta$ passes through it. Stages alternate a tie line
 
 `mix` and `lever_rule` are pure `jnp` and differentiable. `tie_line_through`,
 `hunter_nash` and `difference_point` take the tie lines tabulated by
-`ternary_lle` (like it, they are numeric and not differentiated through the
-equilibrium), joined into conjugate curves by monotone cubic interpolation, so
+`ternary_lle` or packed from measured tie lines by `tabulated_lle(tie_lines,
+binodal=None, plait=None, T=None)` (like `ternary_lle`, they are numeric and
+not differentiated through the equilibrium), joined into conjugate curves by monotone cubic interpolation, so
 their accuracy is the interpolation's: use enough tie lines (`n_tie`). The
 difference point and the operating lines are built from the extensive balance
 (amounts times compositions), so they stay valid when $\Delta$ is at infinity
@@ -5655,9 +5709,11 @@ a diffusivity, a film coefficient or a transfer-unit height. Properties are
 *inputs*: core has no gas viscosity or surface-tension model, so the Onda
 functions take `mu_G` and `sigma` as required arguments (there is no hidden
 `sigma=0.072`). See the module docstring and `tests/test_mass_transfer.py` for
-exactly what was and was not verified; in short, **no textbook worked example
-is reproduced**, and the tables (diffusion volumes, Le Bas increments,
-packings) are transcribed from memory.
+exactly what was and was not verified. Fuller is checked against Poling et
+al. 5e Example 11-3 and Geankoplis Example 6.2-5, and Wilke-Chang (with Le Bas
+volumes) against Geankoplis Example 6.3-2; no published Onda worked example is
+reproduced, and the tables (diffusion volumes, Le Bas increments, packings)
+are transcribed from memory.
 
 (mass-transfer-diffusivities)=
 ### Diffusivity Correlations
@@ -5671,7 +5727,12 @@ solute molar volume at its normal boiling point `V_A` in cm$^3$/mol from
 water). `stokes_einstein_diffusivity(T, mu, r)` is for large solutes. Both
 published correlations are implemented in their native units (cm$^2$/s, atm,
 cP) and converted at the boundary. Diffusion volumes are in `FULLER_VOLUMES`
-and `FULLER_ATOMIC_VOLUMES`; `diffusion_volume` sums atoms.
+and `FULLER_ATOMIC_VOLUMES` (the 1969 refit recommended by Poling et al.);
+`diffusion_volume` sums atoms. `diffusion_volume(..., table="1966")` uses the
+original 1966 values (`FULLER_VOLUMES_1966`, `FULLER_ATOMIC_VOLUMES_1966`)
+that Geankoplis, Treybal and Welty tabulate, to reproduce their examples. The
+Le Bas table distinguishes oxygen environments (`O` 7.4, `O_methyl_ester`
+9.1, `O_methyl_ether` 9.9, `O_ester_ether` 11.0, `O_acid` 12.0, `O_SPN` 8.3).
 
 ```python
 from difflow.mass_transfer import (
@@ -5730,6 +5791,29 @@ print(float(ranz_marshall(0.0, 1.0)))
 for m in (0.01, 1e3):
     g, l = resistance_fractions(k_y=0.05, k_x=5.0, m=m)
     print(f"m = {m:g}: gas {float(g):.3f}, liquid {float(l):.3f}")
+```
+
+(mass-transfer-penetration)=
+### Penetration, Surface Renewal and Falling Films
+
+Film theory gives $k \propto D$; the unsteady theories give $k \propto
+D^{1/2}$. `penetration_coefficient(D, t_c)` is Higbie's $k_L =
+2\sqrt{D/(\pi t_c)}$ for an exposure time $t_c$, and
+`surface_renewal_coefficient(D, s)` is Danckwerts' $k_L = \sqrt{D s}$.
+For a wetted-wall column, `falling_film_thickness(Gamma, rho, mu)` is the
+Nusselt film $\delta = (3\mu\Gamma/\rho^2 g)^{1/3}$ ($\Gamma$ in kg/m/s of
+wetted perimeter), and `falling_film_liquid_coefficient(D, Gamma, rho, mu, L)`
+the short-contact mean $k_L = \sqrt{4 D v_{max}/(\pi L)}$ with the surface
+velocity $v_{max} = 1.5\Gamma/(\rho\delta)$ (Bird, Stewart & Lightfoot 2e,
+Sec. 20.1). It is valid for laminar, wave-free films while the penetration
+depth is small compared with $\delta$. The gas side of a wetted-wall column is
+`gilliland_sherwood`.
+
+```python
+from difflow.mass_transfer import falling_film_liquid_coefficient, penetration_coefficient
+
+k_L = falling_film_liquid_coefficient(2.0e-9, 0.02, 998.0, 1.0e-3, 1.0)
+print(f"k_L = {float(k_L):.2e} m/s")
 ```
 
 (mass-transfer-packed)=
@@ -5797,16 +5881,22 @@ tray spacing, packing factor, rates and surface tension. Properties are inputs:
 the surface tension, densities and viscosity are required arguments (there is no
 silent `sigma = 0.02`).
 
-**What was and was not verified.** The correlation constants were **written from
-memory with no book at hand and are unverified**; each is marked so in its
-docstring with the source it is believed to come from. They are fits of
-*charts*: expect 10-20 % on a diameter or a flooding velocity, and worse on a
-pressure drop. The tests check hand calculations, independent re-implementations,
-scaling laws ($D \propto f_{\rm flood}^{-1/2}$, $D \propto (V\,MW/\rho_V)^{1/2}$),
-sign changes of margins and gradients. **No published textbook worked example is
-reproduced** (the issue's example numbers could not be checked), and two pieces
-are placeholders rather than fits: the entrainment function and the GPDC
-pressure-drop shape (below).
+**What was and was not verified.** The correlation constants were first
+**written from memory**; each docstring says which are still unverified. They are
+fits of *charts*: expect 10-20 % on a diameter or a flooding velocity, and worse
+on a pressure drop. Printed worked examples are reproduced in
+`tests/test_column_design.py::TestPublishedExamples`:
+
+| Check | Source | Printed | difflow |
+|---|---|---|---|
+| Fair $C_{SB}$ ($F_{LV} = 0.036$, 18-in spacing, 20.5 mN/m) | Dutta (2007) Ex. 5.1 | 0.285 ft/s | 0.314 ft/s (+10 %) |
+| Dry-plate drop ($u_h = 39.1$ ft/s, $C_0 = 0.73$) | Dutta Ex. 5.1 | 1.75 in liquid | 1.75 in |
+| Weir crest | Dutta Ex. 5.1, $0.48\,(q/l_w)^{2/3}$ | same formula | same (Francis) |
+| Eckert flood line ($X = 0.90$) | Dutta Ex. 5.2 | $Y = 0.021$, $D = 0.90$ m | $Y = 0.024$, $D = 0.87$ m |
+| Packed $\Delta P$ (2-in metal Pall, air-water) | Perry's 8e Sec. 14 Ex. 13 | 0.38 (GPDC), 0.40 (Robbins chart) in H$_2$O/ft | 0.38 in H$_2$O/ft (Robbins) |
+
+The weep constant $K_2$ and the entrainment function are still unverified
+placeholders (below).
 
 (op-tray-flooding)=
 ### Tray Flooding and Column Diameter
@@ -5930,28 +6020,43 @@ softplus clip that stays differentiable. The number of actual trays is
 ### Packed-Column Flooding and Pressure Drop
 
 `gpdc_flood(F_LV, F_p, rho_L, rho_V, mu_L)` is the gas mass flux at flood on
-the Eckert / generalized pressure-drop chart: abscissa
-$X = (L/G)\sqrt{\rho_V/(\rho_L-\rho_V)}$, ordinate
+the Eckert chart: abscissa $X = (L/G)\sqrt{\rho_V/(\rho_L-\rho_V)}$, ordinate
 $Y = G^2 F_p \mu_L^{0.2}/(\rho_V(\rho_L-\rho_V)g)$ ($F_p$ in 1/m, $\mu_L$ in cP
 inside the power), and the flood line
-$\ln Y = -3.5021 - 1.028\ln X - 0.11093(\ln X)^2$ (a literature fit recalled
-without its source: **from memory, unverified**; chart-reading accuracy,
-**about 10-20 %** on $G$). `kister_gill_flood_dp(F_p)` is the pressure drop at
-flood, $0.115\,F_p^{0.7}$ in H$_2$O/ft with $F_p$ in 1/ft (Kister & Gill, 1991;
-**from memory, unverified**), in Pa/m. `gpdc_pressure_drop` is **not a fit of
-the GPDC lines** (they could not be recalled): it anchors the flood value,
-$\Delta P = \Delta P_{flood}(Y/Y_{flood})^{n}$ at fixed $L/G$, with an assumed
-$n = 1.7$ chosen so that 70 % of flood gives about 30 % of the flood drop (the
-common 0.25-0.5 in H$_2$O/ft design rule); expect $\pm 30$-50 % away from flood.
-`packed_column_diameter(..., packing=, fraction_flood=0.7)` returns `(D, info)`
-with the flooding and operating velocities, the pressure drop per metre and the
-wetting rate against a minimum (2.2e-5 m$^2$/s, about 0.08 m$^3$/m/h; **from
-memory, unverified**). `hetp` has the rules of thumb $18\,d_p$ (random packing)
-and $100/a_p + 0.1$ m (structured), both **from memory, unverified**, and
-`method="htu"` for `hetp_from_htu` of the mass-transfer section. `size_column`
-turns stages, efficiency (or HETP), diameter and spacing into height, shell
-volume, tray area and tray count; `column_hardware_cost` feeds them to
-`column_cost`.
+$\log_{10} Y = -1.6678 - 1.085\log_{10} X - 0.29655(\log_{10} X)^2$ (the
+Kessler-Wankat fit quoted by Wankat, recalled from memory; it reproduces Dutta's
+chart reading to 15 % in $Y$, 7 % in $G$; the earlier natural-log fit was 60 %
+high in $Y$ there). Perry's 8e restricts the Eckert flood line to
+$F_p > 60$ ft$^{-1}$ (about 200 m$^{-1}$).
+
+For modern packings the flood point comes from the pressure drop.
+`robbins_pressure_drop(G, L, rho_V, rho_L, mu_L, F_pd)` is the Robbins (1991)
+correlation, Perry's 8e Eqs. (14-145) to (14-151), with the dry packing factor
+$F_{pd}$ (`DRY_PACKING_FACTORS` has Perry's values for the listed packings).
+`kister_gill_flood_dp(F_p)` is the flood pressure drop $0.115\,F_p^{0.7}$
+in H$_2$O/ft with $F_p$ in 1/ft (Kister & Gill, 1991; Perry's Eq. 14-142 rounds
+it to 0.12), in Pa/m, and `robbins_flood(L_over_G, rho_V, rho_L, mu_L, F_p,
+F_pd)` solves for the gas flux at which Robbins reaches it, Robbins' own
+recommendation (a bisection with an implicit-function gradient, so it is
+differentiable). `gpdc_pressure_drop(..., method="robbins")` (the default)
+is Robbins; `method="anchored"` keeps the old flood-anchored power law, which
+gave a third of Perry's Example 13 answer.
+`packed_column_diameter(..., packing=, fraction_flood=0.7, flood="eckert")`
+returns `(D, info)` with the flooding and operating velocities, the Robbins
+pressure drop per metre and the wetting rate against a minimum (2.2e-5 m$^2$/s,
+about 0.08 m$^3$/m/h; **from memory, unverified**); `flood="robbins"` uses
+`robbins_flood` instead of the Eckert line. `hetp` has Perry's rules of thumb,
+$18\,d_p$ (random packing, Eq. 14-156a) and $100\,C_{XY}/a_p + 0.1$ m
+(structured, Eq. 14-159; `C_XY=1.45` for X-type packing below 300 m$^2$/m$^3$),
+both for organic systems below 25 mN/m, and `method="htu"` for
+`hetp_from_htu` of the mass-transfer section. `size_column` turns stages,
+efficiency (or HETP), diameter and spacing into height, shell volume, tray
+area and tray count; `column_hardware_cost` feeds them to `column_cost`.
+
+The Fair chart needs a surface tension: `difflow.liquid_properties.surface_tension(species, T)`
+(IAPWS for water, Brock-Bird for the rest, with a `SurfaceTensionWarning` for
+alcohols and acids, where it fails) and `mixture_surface_tension` (mole-fraction
+average) supply it.
 
 ```python
 import jax
@@ -5966,6 +6071,8 @@ air = dict(V_molar=100.0, MW_V=29.0, rho_V=1.2, L_molar=500.0, MW_L=18.0,
 D, info = packed_column_diameter(**air, packing=pk, fraction_flood=0.7)
 print(f"D = {float(D):.2f} m, dP = {float(info['dP_per_m']):.0f} Pa/m "
       f"(flood {float(info['dP_flood_per_m']):.0f}), wetting margin {float(info['wetting_margin']):+.2f}")
+D_r, _ = packed_column_diameter(**air, packing=pk, fraction_flood=0.7, flood="robbins")
+print(f"Robbins/Kister-Gill flood: D = {float(D_r):.2f} m")
 
 def cost(ff):
     D, _ = packed_column_diameter(**air, packing=pk, fraction_flood=ff)
@@ -5985,7 +6092,9 @@ rings in metal (25, 38, 50 mm) and plastic (25 mm), ceramic Intalox saddles (25,
 functions do not apply to it). **Every value is from memory and unverified**
 (`PackingData.source` says so): packing factors after Treybal / Perry, areas
 after Billet and Schultes. Build your own `PackingData` from a vendor data sheet
-for a real design.
+for a real design. `difflow.units.column_design.DRY_PACKING_FACTORS` holds
+the Robbins dry packing factors $F_{pd}$ from Perry's 8e Tables 14-13/14-14 for
+the metal Pall rings and the ceramic Raschig, Berl and Intalox packings.
 
 ---
 

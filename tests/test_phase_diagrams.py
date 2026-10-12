@@ -742,3 +742,64 @@ class TestHunterNashPlot:
         assert {"-", "--", ":", "-."} <= styles                 # not colour alone
         n_text = [t for t in ax.texts if t.get_text().isdigit()]
         assert len(n_text) == len(r["E"])
+
+
+# ---------------------------------------------------------------------------
+# tabulated_lle: Hunter-Nash and plot_ternary on measured tie lines
+# ---------------------------------------------------------------------------
+
+def _oliveira_mibk():
+    """Water(0)-MIBK(1)-acetic acid(2) tie lines at 293.2 K, mole fractions.
+
+    Oliveira et al., Fluid Phase Equilib. 482 (2019) 48-63 (NIST ThermoML
+    10.1016/j.fluid.2018.10.021), with the binary-edge line first.
+    """
+    aq = [(0.9953, 0.0), (0.9788, 0.0192), (0.958, 0.0382), (0.9344, 0.0588),
+          (0.9083, 0.0804), (0.8829, 0.1002), (0.8528, 0.1221)]
+    org = [(0.0915, 0.0), (0.1455, 0.0586), (0.2092, 0.1153), (0.2747, 0.162),
+           (0.3423, 0.1984), (0.4151, 0.2245), (0.5039, 0.2387)]
+    return np.array([[[w, 1 - w - a, a], [wo, 1 - wo - ao, ao]]
+                     for (w, a), (wo, ao) in zip(aq, org)])
+
+
+class TestTabulatedLLE:
+    def test_format_matches_ternary_lle(self):
+        from difflow import tabulated_lle
+        tl = _oliveira_mibk()
+        d = tabulated_lle(tl[::-1], T=293.15)       # order does not matter
+        assert d["tie_lines"].shape == (7, 2, 3)
+        np.testing.assert_allclose(np.asarray(d["tie_lines"]), tl, atol=1e-12)
+        assert d["binodal"].shape == (14, 3)
+        assert bool(np.all(np.asarray(d["valid"])))
+        np.testing.assert_allclose(np.asarray(d["plait"]), tl[-1].mean(axis=0))
+
+    def test_hunter_nash_on_data(self):
+        from difflow import hunter_nash, tabulated_lle
+        d = tabulated_lle(_oliveira_mibk())
+        F, S = np.array([0.9, 0.0, 0.1]), np.array([0.0, 1.0, 0.0])
+        r = hunter_nash(d, F, S, 0.01, S_over_F=1.0)
+        assert bool(r["feasible"])
+        assert 1.0 < float(r["n_stages"]) < 3.0
+        # every stage pair sits on a measured-data tie line: extract leaving
+        # stage 1 is richer in acid than the raffinate leaving it
+        assert float(r["E"][0, 2]) > float(r["R"][0, 2])
+        # less solvent needs more stages
+        r2 = hunter_nash(d, F, S, 0.01, S_over_F=0.6)
+        assert float(r2["n_stages"]) > float(r["n_stages"])
+
+    def test_rejects_bad_input(self):
+        from difflow import tabulated_lle
+        with pytest.raises(ValueError):
+            tabulated_lle(np.zeros((3, 3)))
+        tl = _oliveira_mibk()
+        with pytest.raises(ValueError):
+            tabulated_lle(tl[:, ::-1, :])   # phases swapped
+
+    def test_plot_ternary_accepts_it(self):
+        pytest.importorskip("matplotlib")
+        import matplotlib
+        matplotlib.use("Agg")
+        from difflow import tabulated_lle
+        from difflow.visualization import plot_ternary
+        ax = plot_ternary(tabulated_lle(_oliveira_mibk()))
+        assert ax is not None
