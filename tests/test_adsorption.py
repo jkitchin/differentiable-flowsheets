@@ -11,10 +11,10 @@ from difflow import adsorption as ad
 
 jax.config.update("jax_enable_x64", True)
 
-# Geankoplis 5e Ex. 12.1-1 phenol on activated carbon (recalled, verify-ch23 V23-1)
+# Geankoplis 5e Ex. 12.1-1 phenol on activated carbon (recalled, unit-ops book verify-against-print E-016)
 C_PHENOL = jnp.array([0.322, 0.117, 0.039, 0.0061, 0.0011])     # kg/m^3
 Q_PHENOL = jnp.array([0.150, 0.122, 0.094, 0.059, 0.045])       # kg/kg
-# Geankoplis 5e Ex. 12.3-1 breakthrough data (recalled, V23-4)
+# Geankoplis 5e Ex. 12.3-1 breakthrough data (recalled, E-019)
 T_BT = jnp.array([0.0, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.2, 6.5, 6.8])   # h
 R_BT = jnp.array([0.0, 0.0, 0.002, 0.030, 0.155, 0.396, 0.658, 0.903, 0.933, 0.975, 0.993])
 
