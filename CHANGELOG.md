@@ -927,6 +927,12 @@ All notable changes to difflow are recorded here. The format follows
   Stokes-trajectory oracle for a thick layer, a gradient in rpm).
 - **Lapple cyclone outlet-duct length.** `CYCLONE_GEOMETRIES["lapple"]` had `S = D/8`; Lapple's standard is
   `S = 5D/8` (Cooper & Alley Table 4.1, recalled). `S` enters no calculation, so no result changes.
+- **`SettlerParams` accepted unsorted or repeated settling data (book Ch. 21).** The PCHIP interpolation behind
+  `coe_clevenger` needs strictly increasing `C_data`; a Kynch table passed in descending order, or with the
+  repeated `C0` of the constant-rate points, silently gave a thickener area of 1442 m^2 instead of 63. It now
+  raises `ValueError` for `C_data` (and for `t_data` in `kynch`/`talmage_fitch`) that is not strictly
+  increasing. Concrete-only: traced values pass unchecked. Test:
+  `TestSettlerUnit.test_unsorted_or_repeated_data_is_rejected`.
 
 - **Le Bas oxygen increment for ethers (book Ch. 14).** `LE_BAS_INCREMENTS["O_ether"]` was 9.1, which is the
   methyl-ester value; it is now 9.9 (methyl ethers), and the table gains `O_methyl_ester` (9.1), `O_methyl_ether`

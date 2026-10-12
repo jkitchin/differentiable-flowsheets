@@ -109,6 +109,7 @@ from typing import Literal
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import Array
 from jax.scipy.special import logsumexp
 
@@ -703,6 +704,15 @@ def _balance_error(feed: dict, *outs: dict) -> Array:
     return err
 
 
+def _strictly_increasing(x) -> bool:
+    """True if the (concrete) sequence ``x`` is strictly increasing; traced values pass unchecked."""
+    try:
+        a = np.asarray(x, dtype=float)
+    except Exception:  # traced (jit/grad): the check is concrete-only
+        return True
+    return bool(np.all(np.diff(a) > 0))
+
+
 @dataclass
 class SettlerParams(ParamsMixin):
     """Parameters of a gravity settler / thickener.
@@ -777,11 +787,16 @@ class SettlerParams(ParamsMixin):
                 raise ValueError("coe_clevenger needs either C_data/v_data or the particle model d_p (not both)")
             if self.C_data is not None and (self.v_data is None or len(self.v_data) != len(self.C_data)):
                 raise ValueError("C_data and v_data must have the same length")
+            if self.C_data is not None and not _strictly_increasing(self.C_data):
+                raise ValueError("C_data must be strictly increasing (sort it and drop repeated "
+                                 "concentrations, e.g. the constant-rate points of a Kynch construction)")
         else:
             if self.t_data is None or self.z_data is None or len(self.t_data) != len(self.z_data):
                 raise ValueError(f"{m} needs t_data and z_data of equal length")
             if self.batch_C0 is None:
                 raise ValueError(f"{m} needs batch_C0")
+            if not _strictly_increasing(self.t_data):
+                raise ValueError("t_data must be strictly increasing")
         if self.d_bins is not None and (self.mass_fractions is None
                                         or len(self.mass_fractions) != len(self.d_bins)):
             raise ValueError("d_bins and mass_fractions must have the same length")

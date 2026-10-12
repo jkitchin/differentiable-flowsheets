@@ -622,6 +622,16 @@ def thick_feed(m_s=5.0, m_l=50.0):
 
 
 class TestSettlerUnit:
+    def test_unsorted_or_repeated_data_is_rejected(self):
+        """Descending C_data, or the repeated C0 of a Kynch construction, gave a silently wrong area."""
+        with pytest.raises(ValueError, match="strictly increasing"):
+            SettlerParams(underflow_concentration=200.0, C_data=[80.0, 60.0, 40.0], v_data=[1e-5, 5e-5, 2e-4])
+        with pytest.raises(ValueError, match="strictly increasing"):
+            SettlerParams(underflow_concentration=200.0, C_data=[40.0, 40.0, 60.0], v_data=[2e-4, 2e-4, 5e-5])
+        with pytest.raises(ValueError, match="strictly increasing"):
+            SettlerParams(underflow_concentration=200.0, method="kynch", t_data=[0.0, 0.0, 60.0],
+                          z_data=[0.5, 0.5, 0.4], batch_C0=40.0)
+
     def test_particle_route_matches_a_hand_calculation(self):
         d_p, C_u, n = 25e-6, 300.0, 4.65
         feed = thick_feed()
