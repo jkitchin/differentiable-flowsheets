@@ -24,6 +24,13 @@ Do not weaken them; each has a regression test that failed before the fix.
 - Kremser must hold for A < 1 (capture <= A); no flooring of `log(A)`.
 - Stripper lean loading is bounded below by the reboiler equilibrium
   (`equilibrium_loading` at `P - x_w Psat(T_reb)`).
+- Absorber rich loading is bounded above by the rich-end pinch
+  (`equilibrium_loading` at `y_CO2_in * P_absorber`, `T_op`), and by the
+  stoichiometric capacity; `rich_loading_limit="stoichiometric"` is the
+  opt-out (#448, `tests/cc/test_amine_rich_pinch_loop.py`).
+- `solve_amine_loop` (closed absorber-stripper loop, lean loading as the
+  tear, bracketed bisection + implicit derivatives) is a library function,
+  not a registered palette operation.
 - Membranes: exact complete-mixing balance per species (no reversed driving
   force, no ad-hoc caps); feed side at the stream pressure unless
   `feed_pressure` is given; `pressure_ratio > 1`.

@@ -125,6 +125,8 @@ from difflow_cc.units import (
     # Amine stripping
     StripperParams,
     AmineStripper,
+    # Closed absorber-stripper loop
+    solve_amine_loop,
     # Membrane separation
     MembraneParams,
     MembraneSeparator,
@@ -354,6 +356,7 @@ def register(registry):
         "operations": [
             "AmineAbsorber",
             "AmineStripper",
+    "solve_amine_loop",
             "MembraneSeparator",
             "MultistageMembrane",
             "PSAUnit",
@@ -425,6 +428,7 @@ __all__ = [
     "AmineAbsorber",
     "StripperParams",
     "AmineStripper",
+    "solve_amine_loop",
     # Units - Membrane
     "MembraneParams",
     "MembraneSeparator",

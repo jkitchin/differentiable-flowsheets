@@ -1876,11 +1876,18 @@ them.
 Equilibrium is Henry's law in mole fractions, `y_i = K_i x_i`, `K_i = H_i(T)/P`,
 with a van 't Hoff dependence
 `H(T) = H_ref exp(-C (1/T - 1/T_ref))` (`C = -dH_abs/R`, positive for an
-exothermic absorption). The column is isothermal; the heat of absorption and
-the adiabatic temperature rise it would cause are reported in `info`, not
-applied. `difflow.units.absorption.HENRY_WATER` holds a small table (acetone,
-NH3, CO2, H2S, SO2, TCE, benzene in water near 25 C) **transcribed from
-memory, unverified, +/-20-30 %**: use measured data for design.
+exothermic absorption). By default the column is isothermal; the heat of
+absorption and the adiabatic temperature rise it would cause are reported in
+`info`, not applied. `energy_balance=True` applies them stage by stage (see
+[the stage energy balance](#absorber-energy-balance) below), and a stripper
+with live steam condenses the steam its heat duty needs (see [the
+Stripper](#stripper-live-steam)). `difflow.units.absorption.HENRY_WATER` holds a
+small table (acetone, NH3, CO2, H2S, SO2, TCE, benzene in water near 25 C)
+**transcribed from memory, unverified, +/-20-30 %** (more for the temperature
+coefficients), plus CH4 from Sander (2015, Atmos. Chem. Phys. 15, 4399):
+`H^cp = 1.4e-5 mol/(m3 Pa)`, `d ln H^cp/d(1/T) = 1600 K`, i.e.
+`H = 55343/H^cp = 3.95e9 Pa` on the mole-fraction basis. Use measured data for
+design.
 
 ### Absorber
 
@@ -2015,6 +2022,55 @@ L_min = minimum_solvent_rate(curve, Y_in=Y_in, Y_out=2e-4, X_in=0.0, G_s=1.0)
 print("L_s,min / G_s =", float(L_min))
 ```
 
+(absorber-energy-balance)=
+**Stage energy balance.** A physical absorber warms up: a 5 % NH3 scrubber
+heats its water by 10-20 K, and with `K = H(T)/P` rising with temperature
+that can multiply the stages a spec needs, or put it out of reach. With
+`model="stages"` and `energy_balance=True` each stage has an enthalpy balance
+(constant `cp_liquid` and `cp_gas`, both phases leave a stage at its
+temperature, the heat of absorption `R C_i` per mol of solute that moves into
+the liquid on the stage), and every stage's `K_i` is evaluated at its own
+temperature:
+
+$$
+c_{p,L} L_{n-1} T^L_{n-1} + c_{p,G} V_{n+1} T_{n+1} + q_n
+= (c_{p,L} L_n + c_{p,G} V_n)\,T_n,\qquad
+q_n = \sum_i R\,C_i\,(v_{i,n+1} - v_{i,n}).
+$$
+
+The inlets enter at their stream temperatures (leave `T=None`).
+`intercooler_stages=(3, 6)` cools the liquid leaving those stages (1 = top) to
+`intercooler_T` (default: the liquid inlet temperature) before the next stage
+down. The equations are solved by damped substitution followed by a Newton
+solve of all stages at once (optimistix, implicit differentiation), so
+`jax.grad` works through it. `info` adds `stage_T` (K, top to bottom),
+`stage_K`, `stage_Q_absorption` (W per stage), `intercooler_duty` (W per
+stage, heat removed; negative if the "cooler" heats), `Q_intercooler`,
+`Q_sensible` (sensible heat gained by both phases), `energy_balance_error`
+(released minus sensible minus intercooler, ~0), `T_gas_out` and
+`T_liquid_out`; `T`, `K`, `A`, `S` and `L_min` are then quoted at the mean stage
+temperature. The outlet streams carry the computed temperatures. The default
+(`energy_balance=False`) is unchanged. Limits: no solvent evaporation (the
+evaporative cooling of a real water scrubber is missing, so the rise is an
+upper bound), constant heats of absorption and heat capacities, and only the
+`"stages"` model (design mode is not available there, so scan `n_stages` to
+size a hot column).
+
+```python
+from difflow import Absorber, AbsorptionParams, make_stream
+from difflow.units.absorption import henry_params
+
+henry, henry_C = henry_params(["NH3"])
+gas = make_stream({"air": 0.95, "NH3": 0.05}, 298.15, 101325.0)
+water = make_stream({"H2O": 1.3}, 298.15, 101325.0)
+for kw in ({}, {"energy_balance": True},
+           {"energy_balance": True, "intercooler_stages": (3, 6, 9)}):
+    _, rich, info = Absorber(AbsorptionParams(henry=henry, henry_C=henry_C,
+                                              model="stages", n_stages=12, **kw))(gas, water)
+    print(kw, "recovery", float(info["recovery"]["NH3"]), "T_out", float(rich["T"]),
+          "Q_ic", float(info.get("Q_intercooler", 0.0)))
+```
+
 Absorber and stripper with solvent recycle go through `Flowsheet.solve` like
 any two-inlet unit; the recycled liquid is the tear stream, and the whole loop
 is differentiable with respect to the solvent rate (the L/G trade-off between
@@ -2023,7 +2079,7 @@ absorber size and stripper duty is a `jax.grad` away; see
 
 Assumptions: dilute-to-moderate solutes with constant `K_i` per solute (no
 activity-coefficient model: modified Raoult with `thermo` is not implemented),
-isothermal, no solvent volatility, no reaction.
+isothermal unless `energy_balance`, no solvent volatility, no reaction.
 
 What was and was not verified: the Kremser closed form (including `A < 1`
 and `A = 1`); the stage-by-stage mode against a separate SciPy `fsolve` of the
@@ -2036,7 +2092,11 @@ absorber-stripper recycle flowsheet through `fs.solve`. **No published
 textbook worked example (Seader-Henley-Roper Ch. 6, McCabe-Smith-Harriott
 Ch. 18, Geankoplis Ch. 10, Wankat Ch. 12/16, Crittenden Ch. 14) is
 reproduced**: the issue's numbers are unverified recollections, so none is
-quoted. See `tests/test_absorption.py`.
+quoted. See `tests/test_absorption.py`. The energy balances
+(`tests/test_absorption_energy.py`) are checked for closure against the outlet
+streams, the stage `K` against the van 't Hoff form, the isothermal limit
+(`C = 0`), and `jax.grad` against finite differences; they are not checked
+against a published adiabatic column.
 
 ### Stripper
 
@@ -2075,6 +2135,43 @@ print("S =", float(info["S"]["TCE"]), " stages for 99 %:", float(info["n_stages"
 
 The TCE case is a hand-worked example with the Henry's constant above, not
 the textbook example of the issue (which could not be retrieved).
+
+(stripper-live-steam)=
+**Live steam.** By default the stripping gas is an inert carrier, whatever it
+is called: nothing condenses and no duty is computed. Name the steam species of
+`gas_in` in `steam_species` to make the steam do its other job. The column runs
+at `T` (default: the steam inlet temperature); the steam that condenses heats
+the liquid feed to it and supplies the heat of desorption, and joins the
+liquid at the top, so the column sees `L_in + n` and `V_in - n`:
+
+$$
+n\,\lambda = c_{p,L} L_{in}(T - T_{L,in}) + c_{p,G} V_{in}(T - T_{G,in}) + Q_{des},
+\qquad Q_{des} = -Q_{absorption},
+$$
+
+with `lambda = steam_latent_heat` (default 40 660 J/mol, water at 100 C;
+change it for another pressure) and `cp_gas` (set about 34 J/(mol K) for
+steam; superheat reduces the condensate). Because `Q_des` depends on what is
+stripped, the balance and the column are passed alternately until the
+condensate settles (a fixed number of passes when traced). `info` adds
+`steam_condensed` (mol/s, also in the liquid outlet under the steam name),
+`steam_duty` (W, `n lambda`), `Q_preheat`, `Q_desorption`, `Q_gas_sensible`
+and `steam_fraction_condensed`; `feasible` is False when the preheat needs
+more steam than is fed. A cold feed can condense most of the steam, which then
+no longer strips: the effect on the recovery is real and large.
+
+```python
+from difflow import Stripper, AbsorptionParams, make_stream
+from difflow.units.absorption import henry_params
+
+henry, henry_C = henry_params(["NH3"])                 # sour water (from memory)
+steam = make_stream({"steam": 15.0}, 373.15, 101325.0)
+feed = make_stream({"H2O": 100.0, "NH3": 1.0}, 323.15, 101325.0)
+_, bottoms, info = Stripper(AbsorptionParams(henry=henry, henry_C=henry_C, n_stages=10.0,
+                                             steam_species="steam", cp_gas=34.0))(steam, feed)
+print("condensed", float(info["steam_condensed"]), "mol/s;  duty", float(info["steam_duty"]),
+      "W;  NH3 removed", float(info["recovery"]["NH3"]))
+```
 
 ---
 
@@ -3781,9 +3878,22 @@ class CascadeParams:
     n_stages: int | float        # Equilibrium stages (continuous, for optimization)
     equilibrium: LLEEquilibrium  # The equilibrium model (see above)
     flow_config: str = 'counter_current'  # or 'crossflow', 'co_current'
-    stage_efficiency: float = 0.8         # Murphree efficiency, co-current only
+    stage_efficiency: float | None = None # Murphree (raffinate phase); None: ideal (co-current: 0.8)
     model: str = 'immiscible'             # or 'rigorous' (partially miscible, see below)
+    profile_stages: int | None = None     # profile rows to tabulate when n_stages is traced (jit)
 ```
+
+`stage_efficiency` is a Murphree raffinate-phase efficiency,
+$X_{n-1} - X_n = \eta (X_{n-1} - X_n^*)$. Counter-current applies it through
+the Lewis overall efficiency $E_o = \ln(1 + \eta(1/E - 1))/\ln(1/E)$, so $N$
+real stages give the raffinate of $E_o N$ ideal ones (exact for straight
+equilibrium and operating lines); crossflow applies it stage by stage,
+$(X_N - X^*)/(X_0 - X^*) = \left[(E + \eta N - \eta E)/(E + \eta N)\right]^N$.
+The extract profile `y` then comes from the stage balances (it is no longer
+$K x$). `None` keeps ideal stages (and the legacy 0.8 for co-current); the
+rigorous model solves ideal stages only. Under `jax.jit` over `n_stages` the
+profile length cannot follow a traced stage count: set `profile_stages` to
+tabulate that many rows (rows past `n_stages` are NaN).
 
 `n_stages` is deliberately continuous: the Kremser solution below is
 smooth in it, so stage count is an ordinary design variable that
@@ -4054,9 +4164,17 @@ $E_{n+1} - R_n = -\Delta$ passes through it. Stages alternate a tie line
 `mix` and `lever_rule` are pure `jnp` and differentiable. `tie_line_through`,
 `hunter_nash` and `difference_point` take the tie lines tabulated by
 `ternary_lle` or packed from measured tie lines by `tabulated_lle(tie_lines,
-binodal=None, plait=None, T=None)` (like `ternary_lle`, they are numeric and
-not differentiated through the equilibrium), joined into conjugate curves by monotone cubic interpolation, so
-their accuracy is the interpolation's: use enough tie lines (`n_tie`). The
+binodal=None, plait=None, T=None)`, joined into conjugate curves by monotone
+cubic interpolation, so their accuracy is the interpolation's: use enough tie
+lines (`n_tie`). The stepping is numeric (a variable number of stages, so not
+under `jax.jit`), but every root it finds is replayed in `jnp` through the
+implicit function theorem: `jax.grad` of `hunter_nash(...)["n_stages"]` with
+respect to `S_over_F`, `F`, `S` or `x_RN`, and of `tie_line_through` with
+respect to the point, are exact for the interpolated curves (the tie-line data
+are constants: not differentiated through the equilibrium model).
+`tie_line_through(..., on_outside="flag")` returns `two_phase=False` (NaN phase
+compositions) for a point outside the tabulated two-phase region instead of
+raising, for sweeps that cross the binodal. The
 difference point and the operating lines are built from the extensive balance
 (amounts times compositions), so they stay valid when $\Delta$ is at infinity
 (parallel operating lines). Species 0 and 1 are the partially miscible pair and
@@ -4095,6 +4213,11 @@ print(f"phase I {float(fI):.3f}, phase II {float(fII):.3f}")   # phase I 0.425, 
 # Countercurrent cascade: 1 kg solvent per kg feed, raffinate down to 2 % solute.
 r = hunter_nash(data, F, S, 0.02, S_over_F=1.0)
 print(f"{r['n_stages']:.2f} stages, {r['n_ideal']} ideal stages")   # 3.18 stages, 4 ideal stages
+
+# Differentiable in the solvent ratio: stages saved per unit of extra solvent.
+import jax
+dN = jax.grad(lambda sf: hunter_nash(data, F, S, 0.02, S_over_F=sf)["n_stages"])(1.0)
+print(f"dN/d(S/F) = {float(dN):.2f}")
 ```
 
 #### Limits
@@ -6008,7 +6131,7 @@ on a pressure drop. Printed worked examples are reproduced in
 | Packed $\Delta P$ (2-in metal Pall, air-water) | Perry's 8e Sec. 14 Ex. 13 | 0.38 (GPDC), 0.40 (Robbins chart) in H$_2$O/ft | 0.38 in H$_2$O/ft (Robbins) |
 
 The weep constant $K_2$ and the entrainment function are still unverified
-placeholders (below).
+placeholders (below), and there is no structured-packing capacity model.
 
 (op-tray-flooding)=
 ### Tray Flooding and Column Diameter
@@ -6090,19 +6213,37 @@ $h_r = 12.5/\rho_L$ m (the constant is **from memory, unverified**; so is the
 orifice coefficient default $C_0 = 0.8$). `info` returns each head and the
 components in Pa, which sum to the total. `weep_point` returns the weeping
 margin $u_h/u_{min} - 1$ (> 0: no weeping) with the Eduljee-type
-$u_{min} = (K_2 - 0.90\,(25.4 - d_h[\text{mm}]))/\sqrt{\rho_V}$; the source reads
-$K_2$ from a chart, and here it is a constant (default 30, **from memory,
-unverified**, about 15 % on the turndown at which the margin changes sign).
+$u_{min} = (K_2 - 0.90\,(25.4 - d_h[\text{mm}]))/\sqrt{\rho_V}$. The source
+(Coulson & Richardson Vol. 6, Fig. 11.30, after Eduljee 1958) reads $K_2$
+from a chart against the clear liquid depth $h_w + h_{ow}$; no published fit
+of that curve could be verified, so none is built in. `K2` is either a
+constant (default 30, **from memory, unverified**, about 15 % on the turndown
+at which the margin changes sign) or a callable `K2(h_mm)` of $h_w + h_{ow}$
+in mm, so you can pass your own chart reading (e.g. a `jnp.interp`); `info`
+returns the `K2` used.
 
-`fractional_entrainment` is a **placeholder, not a published fit**: Fair's
-entrainment chart could not be recalled, so it is
-$\psi = \psi_{ref}\,(\%\text{flood}/80)^{4}(F_{LV}/0.1)$ with the order of
-magnitude $\psi_{ref} = 0.01$ read from the chart; the three constants are
-arguments, expect a factor of 2-3, and replace them with a fit from Kister or
-Fair before a design depends on it (the usual limit is $\psi < 0.1$).
+`downcomer_backup` is the downcomer-flooding check of Coulson & Richardson
+Vol. 6 (Sinnott) Sec. 11.13: the clear-liquid back-up
+$h_b = (h_w + h_{ow}) + h_t + h_{dc}$, with $h_t$ the total tray drop as liquid
+head (`tray_pressure_drop`, or `dP_tray=`) and the apron loss
+$h_{dc} = 166\,(L_{wd}/(\rho_L A_m))^2$ mm, $A_m$ the smaller of the downcomer
+area and the clearance area $h_{ap} l_w$ (default $h_{ap} = h_w - 10$ mm). It
+returns the margin $0.5\,(l_t + h_w)/h_b - 1$ (> 0: no downcomer flooding) and
+the downcomer residence time against 3 s (`residence_margin`). The crest is
+the module's Francis crest (Sinnott's constant gives about 13 % more).
+
+`fractional_entrainment` is a **placeholder, not Fair's correlation or any
+published fit**, and every call raises `EntrainmentPlaceholderWarning`: no fit
+of Fair's entrainment chart could be recalled or found with confidence, so it
+is $\psi = \psi_{ref}\,(\%\text{flood}/80)^{4}(F_{LV}/0.1)$ with an
+order-of-magnitude $\psi_{ref} = 0.01$ and assumed exponents; the three
+constants are arguments, expect a factor of 2-3, and replace them with a fit of
+the chart you design from (the usual limit is $\psi < 0.1$).
 
 ```python
-from difflow.units.column_design import tray_column_diameter, tray_pressure_drop, weep_point
+from difflow.units.column_design import (
+    tray_column_diameter, tray_pressure_drop, weep_point, downcomer_backup,
+)
 
 col = dict(V_molar=100.0, MW_V=80.0, rho_V=2.9, L_molar=80.0, MW_L=85.0,
            rho_L=790.0, sigma=0.021)
@@ -6114,6 +6255,9 @@ print(f"dP/tray = {float(dP):.0f} Pa (dry {float(h['dP_dry']):.0f}, "
 for turn in (1.0, 0.6, 0.4):
     margin, w = weep_point(turn * Q_V, Q_L, 2.9, D)
     print(f"{turn:.0%} of design vapor: weeping margin {float(margin):+.2f}")
+dc, b = downcomer_backup(Q_V, Q_L, 2.9, 790.0, D, tray_spacing=0.6)
+print(f"downcomer back-up {1000 * float(b['h_backup']):.0f} mm "
+      f"(limit {1000 * float(b['h_backup_max']):.0f} mm), residence {float(b['residence_time']):.1f} s")
 ```
 
 (op-oconnell-efficiency)=
@@ -6161,9 +6305,38 @@ about 0.08 m$^3$/m/h; **from memory, unverified**); `flood="robbins"` uses
 $18\,d_p$ (random packing, Eq. 14-156a) and $100\,C_{XY}/a_p + 0.1$ m
 (structured, Eq. 14-159; `C_XY=1.45` for X-type packing below 300 m$^2$/m$^3$),
 both for organic systems below 25 mN/m, and `method="htu"` for
-`hetp_from_htu` of the mass-transfer section. `size_column` turns stages,
-efficiency (or HETP), diameter and spacing into height, shell volume, tray
-area and tray count; `column_hardware_cost` feeds them to `column_cost`.
+`hetp_from_htu` of the mass-transfer section.
+
+**Structured packing has no capacity model here.** The Eckert line is for
+high-$F_p$ random packings and Robbins' correlation is a random-packing one;
+for a packing with no dry factor in `DRY_PACKING_FACTORS` (Mellapak 250Y)
+`packed_column_diameter` uses $F_{pd} = F_p$ and raises
+`PackingCapacityWarning`. Treat such a diameter as a rough screen and size from
+the vendor's capacity chart.
+
+`size_column` turns stages, efficiency (or HETP), diameter and spacing into
+height, shell volume, tray area and tray count; for a packed bed of known depth
+pass `packed_height=` instead of `hetp=` (exactly one of `tray_spacing`, `hetp`,
+`packed_height`). `column_hardware_cost(sizing, kind, *, material=,
+internals_material=, target_year=, structured_installation_factor=)` feeds them
+to `column_cost`:
+
+* **Basis.** Shell, trays and random packing are Turton 5e Table A.1
+  *purchased* costs in 2001 dollars (carbon steel, near-ambient pressure; the
+  loose-packing line is the polyethylene basis). Structured packing is Seider
+  4e's stainless $285/ft$^3$, an *installed* cost in 2013 dollars; with no
+  source for its installation factor it is left installed and flagged
+  (`internals_installed = 1`) unless you pass `structured_installation_factor`.
+  Everything is escalated by CEPCI to `target_year` (default the current year),
+  returned as `cost_year`; the text basis is in `HARDWARE_COST_BASIS`.
+* **Materials** multiply the purchased cost (recalled from Turton 5e Tables A.3
+  and A.6, **not looked up**): shell `SHELL_MATERIAL_FACTORS` (carbon steel 1.0,
+  stainless clad 1.7, stainless 3.1, nickel alloy 7.1, titanium 9.4, ...); trays
+  `TRAY_MATERIAL_FACTORS` (carbon steel 1.0, stainless 1.8, nickel alloy 5.6);
+  random packing `PACKING_MATERIAL_FACTORS` (polyethylene/plastic 1.0, ceramic
+  4.1, stainless/metal 7.1). The default keeps each correlation's own basis, so
+  **metal rings need `internals_material="metal"`** (about 7x the plastic
+  price). A number is accepted in place of a key.
 
 The Fair chart needs a surface tension: `difflow.liquid_properties.surface_tension(species, T)`
 (IAPWS for water, Brock-Bird for the rest, with a `SurfaceTensionWarning` for
@@ -6189,7 +6362,7 @@ print(f"Robbins/Kister-Gill flood: D = {float(D_r):.2f} m")
 def cost(ff):
     D, _ = packed_column_diameter(**air, packing=pk, fraction_flood=ff)
     sizing = size_column(10.0, 1.0, D, hetp=hetp("random", d_p=pk.d_p))
-    return column_hardware_cost(sizing, "packing_random")["total"]
+    return column_hardware_cost(sizing, "packing_random", internals_material="metal")["total"]
 print(float(cost(0.7)), float(jax.grad(cost)(0.7)))
 ```
 

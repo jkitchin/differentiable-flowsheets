@@ -759,6 +759,26 @@ class _TieCurves:
         return ((2 * t3_ - 3 * t2_ + 1) * y[i] + (t3_ - 2 * t2_ + t_) * d[i]
                 + (-2 * t3_ + 3 * t2_) * y[i + 1] + (t3_ - t2_) * d[i + 1])
 
+    def point_j(self, phase: int, sq, i: int) -> Array:
+        """jnp ``(c1, c2)`` at a scalar (possibly traced) ``sq`` on PCHIP interval ``i`` (fixed)."""
+        y, d = self.coef[phase]
+        i = min(max(int(i), 0), self.m - 2)
+        t = sq - i
+        t2, t3 = t * t, t * t * t
+        return ((2 * t3 - 3 * t2 + 1) * y[i] + (t3 - 2 * t2 + t) * d[i]
+                + (-2 * t3 + 3 * t2) * y[i + 1] + (t3 - t2) * d[i + 1])
+
+    def interval(self, sq: float) -> int:
+        import numpy as np
+        return int(np.clip(np.floor(sq), 0, self.m - 2))
+
+    def implicit_root(self, g, s0: float) -> Array:
+        """A root ``s0`` of ``g(s) = 0`` (found numerically) carried to first order in the
+        parameters ``g`` closes over: ``s = s0 - g(s0)/g'(s0)`` equals ``s0`` and has
+        ``ds = -dg/g'`` (implicit function theorem)."""
+        s0 = jnp.asarray(s0, dtype=float)
+        return s0 - g(s0) / jax.lax.stop_gradient(jax.grad(g)(s0))
+
     def roots(self, g_at) -> list:
         """Parameters ``s`` (ascending) where ``g_at(s)`` changes sign on the dense grid, refined by bisection."""
         import numpy as np
@@ -787,34 +807,58 @@ def _cross(a, b):
     return a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0]
 
 
-def tie_line_through(lle_data: dict, point, n_grid: int = 4001) -> dict:
+def _c3j(c12) -> Array:
+    return jnp.concatenate([1.0 - jnp.sum(c12, keepdims=True), c12])
+
+
+def _primal(x) -> "np.ndarray":
+    """Concrete value of ``x`` (also under eager ``jax.grad``), for the discrete construction."""
+    import numpy as np
+    try:
+        return np.asarray(jax.lax.stop_gradient(jnp.asarray(x, dtype=float)), dtype=float)
+    except jax.errors.TracerArrayConversionError:
+        raise TypeError("hunter_nash/tie_line_through step through a variable number of stages and "
+                        "cannot run under jax.jit; call them eagerly (jax.grad works)") from None
+
+
+def tie_line_through(lle_data: dict, point, n_grid: int = 4001, on_outside: str = "raise") -> dict:
     """The tie line through a point of the two-phase region, by interpolation.
 
     The tabulated tie lines of :func:`ternary_lle` are joined into a conjugate
     curve (the end points of one tie line share a parameter ``s``, interpolated by
     monotone cubics), and ``s`` is found where the segment between the two
-    interpolated ends passes through ``point``. A numeric, non-differentiated
-    companion of :func:`ternary_lle`; its accuracy is that of the interpolation, so
-    use enough tie lines (``n_tie``) for the accuracy you need.
+    interpolated ends passes through ``point``. Its accuracy is that of the
+    interpolation, so use enough tie lines (``n_tie``) for the accuracy you need.
+    The search is numeric, but the result is differentiable in ``point`` (the
+    root is carried by the implicit function theorem); call it eagerly, not
+    under ``jax.jit``. The tie-line data are treated as constants.
 
     Args:
-        lle_data: Result of :func:`ternary_lle`.
+        lle_data: Result of :func:`ternary_lle` or :func:`tabulated_lle`.
         point: Overall composition ``(3,)`` inside the two-phase region.
         n_grid: Grid points of the dense search along the conjugate curve.
+        on_outside: ``"raise"`` (default) raises for a point outside the
+            tabulated two-phase region; ``"flag"`` returns ``two_phase=False``,
+            NaN phase compositions and ``frac_I = 1`` (all of the amount in one
+            phase), which suits a sweep that crosses the binodal.
 
     Returns:
         dict with ``x_I`` and ``x_II`` (the two phase compositions, phase I being
         species-0 rich as in :func:`ternary_lle`), ``frac_I`` and ``frac_II``
-        (lever-rule fractions of the total amount in each phase), and ``s``
-        (the interpolation index).
+        (lever-rule fractions of the total amount in each phase), ``s``
+        (the interpolation index; NaN when flagged) and ``two_phase``.
 
     Raises:
         ValueError: If ``point`` is not on a tie line of the tabulated range (a
-            single-phase point, or closer to the plait point than the last tie line).
+            single-phase point, or closer to the plait point than the last tie
+            line) and ``on_outside="raise"``.
     """
     import numpy as np
+    if on_outside not in ("raise", "flag"):
+        raise ValueError(f"on_outside must be 'raise' or 'flag', got {on_outside!r}")
     curves = _TieCurves(lle_data, n_grid)
-    p = np.asarray(point, dtype=float)[1:]
+    pj = jnp.asarray(point, dtype=float)[1:]
+    p = _primal(point)[1:]
     # collinearity of (x_II(s) - x_I(s)) with (point - x_I(s)) along the conjugate curve
     def g_at(sq):
         a, b = curves.point(0, sq), curves.point(1, sq)
@@ -827,11 +871,23 @@ def tie_line_through(lle_data: dict, point, n_grid: int = 4001) -> dict:
         if -1e-9 <= t <= 1.0 + 1e-9:
             hits.append((s, a, b, t))
     if not hits:
+        if on_outside == "flag":
+            nan3 = jnp.full(3, jnp.nan)
+            return {"x_I": nan3, "x_II": nan3, "frac_I": jnp.asarray(1.0), "frac_II": jnp.asarray(0.0),
+                    "s": float("nan"), "two_phase": False}
         raise ValueError("point is not on a tabulated tie line: it is outside the two-phase region "
                          "or closer to the plait point than the last tie line")
-    s, a, b, t = hits[0]
-    return {"x_I": jnp.asarray(_c3(a)), "x_II": jnp.asarray(_c3(b)),
-            "frac_I": jnp.asarray(1.0 - t), "frac_II": jnp.asarray(t), "s": s}
+    s0 = hits[0][0]
+    i = curves.interval(s0)
+
+    def g(sq):
+        a, b = curves.point_j(0, sq, i), curves.point_j(1, sq, i)
+        return _cross(b - a, pj - a)
+    s = curves.implicit_root(g, s0)
+    a, b = curves.point_j(0, s, i), curves.point_j(1, s, i)
+    t = jnp.dot(pj - a, b - a) / jnp.dot(b - a, b - a)
+    return {"x_I": _c3j(a), "x_II": _c3j(b), "frac_I": 1.0 - t, "frac_II": t, "s": s0,
+            "two_phase": True}
 
 
 def difference_point(F, E1, S, R_N, F_amount: float = 1.0, E1_amount: float | None = None,
@@ -895,9 +951,16 @@ def hunter_nash(lle_data: dict, F, S, x_RN, S_over_F: float = 1.0, carrier: int 
     ``R_n``) with an operating line from ``Delta`` through ``R_n`` to ``E_{n+1}``
     until the raffinate reaches the specified ``R_N``. The operating lines are
     carried by the extensive balance ``E_{n+1} = R_n + E_1 - F``, so they remain
-    valid when ``Delta`` is at infinity. Not differentiated (like
-    :func:`ternary_lle`); the stage count is real, the last stage counted by the
-    fraction of the solute step needed to reach ``R_N``.
+    valid when ``Delta`` is at infinity. The stage count is real, the last stage
+    counted by the fraction of the solute step needed to reach ``R_N``.
+
+    Differentiable in ``F``, ``S``, ``x_RN`` and ``S_over_F``: the stepping
+    (how many stages, which branch) is done numerically on the primal values,
+    then every root is replayed in ``jnp`` with an implicit-function correction,
+    so ``jax.grad`` of ``n_stages`` (or of ``E1``, ``R``, ...) with respect to the
+    solvent ratio is exact for the interpolated tie-line curves (the curves
+    themselves are constants). Call it eagerly; a variable number of stages
+    cannot be traced by ``jax.jit``.
 
     Species 0 and 1 are the partially miscible pair and species 2 the solute,
     as in :func:`ternary_lle`; ``carrier`` is the feed diluent (its phase is
@@ -918,8 +981,8 @@ def hunter_nash(lle_data: dict, F, S, x_RN, S_over_F: float = 1.0, carrier: int 
     Returns:
         dict with ``M``, ``E1``, ``R_N``, ``delta`` (the :func:`difference_point`
         dict), ``E`` and ``R`` (``(n, 3)`` extract and raffinate leaving stages
-        ``1..n``), ``n_stages`` (real; ``inf`` at a pinch, NaN if stepping
-        fails), ``n_ideal`` (the integer ``ceil``), ``feasible``, ``F``, ``S``,
+        ``1..n``), ``n_stages`` (real, a jnp scalar; ``inf`` at a pinch, NaN if
+        stepping fails), ``n_ideal`` (the integer ``ceil``), ``feasible``, ``F``, ``S``,
         ``carrier`` and ``lle_data`` (for :func:`difflow.visualization.plot_hunter_nash`).
 
     Raises:
@@ -932,9 +995,12 @@ def hunter_nash(lle_data: dict, F, S, x_RN, S_over_F: float = 1.0, carrier: int 
         raise ValueError("carrier must be 0 or 1")
     raff, ext = (0, 1) if carrier == 0 else (1, 0)
     curves = _TieCurves(lle_data, n_grid)
-    F = np.asarray(F, dtype=float)
-    S = np.asarray(S, dtype=float)
+    F_j, S_j = jnp.asarray(F, dtype=float), jnp.asarray(S, dtype=float)
+    SF_j, xRN_j = jnp.asarray(S_over_F, dtype=float), jnp.asarray(x_RN, dtype=float)
+    F, S, S_over_F = _primal(F_j), _primal(S_j), float(_primal(SF_j))
+    x_RN = _primal(xRN_j)
     M = np.asarray(mix(np.stack([F, S]), np.array([1.0, S_over_F])))
+    s_RN = None
 
     # final raffinate
     if np.ndim(x_RN) == 0:
@@ -943,7 +1009,8 @@ def hunter_nash(lle_data: dict, F, S, x_RN, S_over_F: float = 1.0, carrier: int 
         if not r:
             raise ValueError("x_RN is not within the solute range of the raffinate branch "
                              "of the tabulated tie lines")
-        R_N = _c3(curves.point(raff, r[0]))
+        s_RN = r[0]
+        R_N = _c3(curves.point(raff, s_RN))
     else:
         R_N = np.asarray(x_RN, dtype=float)
     cRN = float(R_N[2])
@@ -975,7 +1042,9 @@ def hunter_nash(lle_data: dict, F, S, x_RN, S_over_F: float = 1.0, carrier: int 
     Es, Rs, c_prev = [], [], float(F[2])
     n_stages, feasible = np.nan, True
     s = s1
+    s_stages = []
     for n in range(1, max_stages + 1):
+        s_stages.append(s)
         E_n, R_n = _c3(curves.point(ext, s)), _c3(curves.point(raff, s))
         Es.append(E_n)
         Rs.append(R_n)
@@ -995,9 +1064,44 @@ def hunter_nash(lle_data: dict, F, S, x_RN, S_over_F: float = 1.0, carrier: int 
         s = nxt[0][0]
     else:
         feasible = False
-    return {"M": jnp.asarray(M), "E1": jnp.asarray(E1), "R_N": jnp.asarray(R_N), "delta": dp,
-            "E": jnp.asarray(np.array(Es)), "R": jnp.asarray(np.array(Rs)),
-            "n_stages": float(n_stages),
+
+    # Replay the construction in jnp with each root carried implicitly, so the
+    # results are differentiable in F, S, x_RN and S_over_F.
+    M_j = mix(jnp.stack([F_j, S_j]), jnp.stack([jnp.ones(()), SF_j]))
+    if s_RN is not None:
+        i = curves.interval(s_RN)
+        R_N_j = _c3j(curves.point_j(raff, curves.implicit_root(
+            lambda sq: curves.point_j(raff, sq, i)[1] - xRN_j, s_RN), i))
+    else:
+        R_N_j = xRN_j
+
+    def ext_root(p0, u, s0):
+        i = curves.interval(s0)
+        s_ = curves.implicit_root(lambda sq: _cross(curves.point_j(ext, sq, i) - p0, u), s0)
+        return s_, i
+
+    s1_j, i1 = ext_root(R_N_j[1:], (M_j - R_N_j)[1:], s1)
+    E1_j = _c3j(curves.point_j(ext, s1_j, i1))
+    dp = difference_point(F_j, E1_j, S_j, R_N_j, 1.0, None, SF_j)
+    w_j, t_w_j = -dp["vector"], -dp["amount"]
+    E_j, R_j = [], []
+    s_j = s1_j
+    for k, s0 in enumerate(s_stages):
+        if k > 0:
+            s_j, _ = ext_root(R_j[-1][1:], (w_j - t_w_j * R_j[-1])[1:], s0)
+        i = curves.interval(s0)
+        E_j.append(_c3j(curves.point_j(ext, s_j, i)))
+        R_j.append(_c3j(curves.point_j(raff, s_j, i)))
+    if np.isfinite(n_stages):
+        n = len(R_j)
+        c_prev_j = F_j[2] if n == 1 else R_j[-2][2]
+        n_stages_j = (n - 1) + (c_prev_j - R_N_j[2]) / (c_prev_j - R_j[-1][2])
+    else:
+        n_stages_j = jnp.asarray(n_stages)
+    return {"M": M_j, "E1": E1_j, "R_N": R_N_j, "delta": dp,
+            "E": jnp.stack(E_j) if E_j else jnp.zeros((0, 3)),
+            "R": jnp.stack(R_j) if R_j else jnp.zeros((0, 3)),
+            "n_stages": n_stages_j,
             "n_ideal": int(np.ceil(n_stages - 1e-9)) if np.isfinite(n_stages) else None,
             "feasible": bool(feasible), "F": jnp.asarray(F), "S": jnp.asarray(S), "carrier": carrier,
             "lle_data": lle_data}

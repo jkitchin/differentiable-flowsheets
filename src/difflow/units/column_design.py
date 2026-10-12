@@ -21,15 +21,17 @@ differentiable in every numeric argument.
    crest against Dutta, *Principles of Mass Transfer and Separation
    Processes* (2007), Example 5.1; the Eckert flood line against Dutta
    Example 5.2; the Robbins pressure drop against Perry's 8e Example 13
-   (Sec. 14). The weep constant ``K2`` and :func:`fractional_entrainment`
-   remain unverified.
+   (Sec. 14). The weep constant ``K2`` (a chart reading; pass your own as a
+   callable) and :func:`fractional_entrainment` (a placeholder, not Fair's
+   chart; it warns) remain unverified, and there is no structured-packing
+   capacity model (see :func:`packed_column_diameter`).
 
 Contents
 --------
 * Trays: :func:`flow_parameter`, :func:`fair_capacity_factor`,
   :func:`flooding_velocity`, :func:`tray_column_diameter`,
   :func:`tray_percent_flood`, :func:`weir_crest`, :func:`tray_pressure_drop`,
-  :func:`weep_point`, :func:`fractional_entrainment`,
+  :func:`weep_point`, :func:`downcomer_backup`, :func:`fractional_entrainment`,
   :func:`oconnell_efficiency`.
 * Packing: :func:`gpdc_flood`, :func:`gpdc_pressure_drop`,
   :func:`kister_gill_flood_dp`, :func:`packed_column_diameter`, :func:`hetp`
@@ -45,6 +47,8 @@ constraints.
 
 from __future__ import annotations
 
+import warnings
+
 import jax
 import jax.numpy as jnp
 
@@ -57,11 +61,12 @@ G_ACC = 9.80665  # m/s^2
 __all__ = [
     "flow_parameter", "fair_capacity_factor", "flooding_velocity",
     "tray_column_diameter", "tray_percent_flood", "weir_crest",
-    "tray_pressure_drop", "weep_point", "fractional_entrainment",
-    "oconnell_efficiency", "gpdc_flood", "gpdc_pressure_drop",
+    "tray_pressure_drop", "weep_point", "downcomer_backup", "fractional_entrainment",
+    "EntrainmentPlaceholderWarning", "oconnell_efficiency", "gpdc_flood", "gpdc_pressure_drop",
     "kister_gill_flood_dp", "robbins_pressure_drop", "robbins_flood",
-    "DRY_PACKING_FACTORS", "packed_column_diameter", "hetp", "size_column",
-    "column_hardware_cost", "flash_drum_size", "PackingData", "PACKINGS",
+    "DRY_PACKING_FACTORS", "PackingCapacityWarning", "packed_column_diameter", "hetp", "size_column",
+    "column_hardware_cost", "SHELL_MATERIAL_FACTORS", "TRAY_MATERIAL_FACTORS",
+    "PACKING_MATERIAL_FACTORS", "HARDWARE_COST_BASIS", "flash_drum_size", "PackingData", "PACKINGS",
 ]
 
 
@@ -328,33 +333,154 @@ def weep_point(
     Towler, ``u_min = (K2 - 0.90 (25.4 - d_h)) / sqrt(rho_V)`` with ``d_h`` in
     mm, ``u_min`` in m/s, ``rho_V`` in kg/m^3.
 
-    **From memory, unverified.** In the source ``K2`` is read from a chart
-    against ``h_w + h_ow`` (a slowly rising value, roughly 28-32 over 10-100 mm
-    of liquid, recalled imprecisely); here it is a constant argument, default
-    30. With 5 mm holes ``u_min`` is then about ``11.6/sqrt(rho_V)``, so a
-    +-1.5 error in ``K2`` is about +-13 % in ``u_min``. Treat the sign change as
-    good to roughly 15 %. The margin is continuous and never raises.
+    **``K2`` is a chart reading, and the chart is not reproduced here.** In
+    the source (Coulson & Richardson Vol. 6 / Sinnott, Fig. 11.30, after
+    Eduljee, Brit. Chem. Eng. 3, 14 (1958)) ``K2`` is read against the clear
+    liquid depth ``h_w + h_ow`` in mm (a slowly rising curve, roughly 28-32
+    over 10-100 mm of liquid, recalled imprecisely). No published closed-form
+    fit of that curve could be verified, so none is built in. ``K2`` is
+    therefore either
+
+    * a number (default 30, **from memory, unverified**; the old behaviour),
+      or
+    * a callable ``K2(h_mm) -> K2`` of the clear liquid depth
+      ``h_w + h_ow`` in **mm**, evaluated here with the Francis crest of
+      :func:`weir_crest`. Pass your own chart reading (for instance a
+      ``jnp.interp`` over points read off Fig. 11.30) to make the weep point
+      depend on the liquid load as in the source; a JAX-traceable callable
+      keeps the margin differentiable.
+
+    With 5 mm holes and ``K2 = 30``, ``u_min`` is about ``11.6/sqrt(rho_V)``,
+    so a +-1.5 error in ``K2`` is about +-13 % in ``u_min``. Treat the sign
+    change as good to roughly 15 %. The margin is continuous and never raises.
 
     Args:
         V_vol: Vapor volumetric flow (m^3/s) at the *turndown* condition of
             interest.
-        L_vol: Liquid volumetric flow (m^3/s) (sets only the crest, unused if
-            ``K2`` is held fixed; kept so the signature matches
-            :func:`tray_pressure_drop`).
+        L_vol: Liquid volumetric flow (m^3/s); sets the crest ``h_ow`` (used
+            by a callable ``K2`` and reported as ``h_liquid``).
         rho_V: Vapor density (kg/m^3).
         diameter: Column diameter (m).
         hole_diameter: Hole diameter (m).
-        K2: Eduljee constant (see above).
+        downcomer_fraction: ``A_d / A_c``.
+        hole_area_fraction: Hole area / active area.
+        weir_height: Outlet weir height (m).
+        weir_length_fraction: ``l_w / D``.
+        K2: Eduljee constant, a number or a callable of ``h_w + h_ow`` (mm).
 
     Returns:
-        ``(margin, info)`` with ``u_hole``, ``u_min`` (m/s) and ``h_liquid``
-        (``h_w + h_ow``, m).
+        ``(margin, info)`` with ``u_hole``, ``u_min`` (m/s), ``h_liquid``
+        (``h_w + h_ow``, m) and ``K2`` (the value used).
+
+    Example:
+        >>> import jax.numpy as jnp
+        >>> chart = lambda h_mm: jnp.interp(h_mm, jnp.array([0.0, 100.0]),
+        ...                                 jnp.array([29.0, 31.0]))  # your reading
+        >>> margin, info = weep_point(1.0, 0.005, 2.9, 1.5, K2=chart)
     """
     u_h = _hole_velocity(V_vol, diameter, downcomer_fraction, hole_area_fraction)
     d_mm = 1000.0 * _f(hole_diameter)
-    u_min = (_f(K2) - 0.90 * (25.4 - d_mm)) / jnp.sqrt(_f(rho_V))
     h_liq = _f(weir_height) + weir_crest(L_vol, _f(weir_length_fraction) * _f(diameter))
-    return u_h / u_min - 1.0, {"u_hole": u_h, "u_min": u_min, "h_liquid": h_liq}
+    K2v = _f(K2(1000.0 * h_liq)) if callable(K2) else _f(K2)
+    u_min = (K2v - 0.90 * (25.4 - d_mm)) / jnp.sqrt(_f(rho_V))
+    return u_h / u_min - 1.0, {"u_hole": u_h, "u_min": u_min, "h_liquid": h_liq, "K2": K2v}
+
+
+def downcomer_backup(
+    V_vol, L_vol, rho_V, rho_L, diameter, tray_spacing=0.6,
+    downcomer_fraction=0.1, hole_area_fraction=0.1, weir_height=0.05,
+    weir_length_fraction=0.7, orifice_coefficient=0.8, apron_clearance=None,
+    dP_tray=None, min_residence_time=3.0,
+) -> tuple[Array, dict[str, Array]]:
+    """Downcomer liquid back-up of a sieve tray and its flooding margin.
+
+    Coulson & Richardson Vol. 6 (Sinnott), Sec. 11.13 (also Towler & Sinnott,
+    Sec. 17.13): the clear-liquid back-up in the downcomer is
+
+    ``h_b = (h_w + h_ow) + h_t + h_dc``
+
+    with ``h_t`` the total pressure drop of the tray as liquid head and
+    ``h_dc`` the head loss of the liquid flowing under the downcomer apron,
+
+    ``h_dc = 166 (L_wd / (rho_L A_m))^2`` (mm, ``L_wd`` in kg/s, ``A_m`` in m^2),
+
+    i.e. ``h_dc = 0.166 u_ap^2`` m with ``u_ap = Q_L / A_m`` the liquid
+    velocity under the apron. ``A_m`` is the smaller of the downcomer area
+    ``A_d`` and the clearance area ``A_ap = h_ap l_w``; the apron clearance
+    ``h_ap`` is usually set 5-10 mm below the weir height (default here
+    ``h_w - 10 mm``). To avoid downcomer flooding the source asks for
+    ``h_b < 0.5 (l_t + h_w)`` (the 0.5 allows for the aerated liquid in the
+    downcomer), and for a downcomer residence time
+    ``t_r = A_d h_b rho_L / L_wd`` of at least 3 s so vapor can disengage.
+
+    The heads use this module's pieces: ``h_ow`` is the Francis crest of
+    :func:`weir_crest` (Sinnott's own constant gives a crest about 13 % higher)
+    and ``h_t`` is :func:`tray_pressure_drop` (dry + ``h_w + h_ow`` + residual)
+    unless ``dP_tray`` is given. Margins are continuous (``A_m`` uses
+    ``jnp.minimum``, which has a kink where ``A_ap = A_d``) and never raise.
+
+    Args:
+        V_vol: Vapor volumetric flow (m^3/s).
+        L_vol: Liquid volumetric flow (m^3/s).
+        rho_V: Vapor density (kg/m^3).
+        rho_L: Liquid density (kg/m^3).
+        diameter: Column diameter (m).
+        tray_spacing: Tray spacing ``l_t`` (m).
+        downcomer_fraction: ``A_d / A_c``.
+        hole_area_fraction: Hole area / active area (for ``h_t``).
+        weir_height: Outlet weir height ``h_w`` (m).
+        weir_length_fraction: ``l_w / D``.
+        orifice_coefficient: ``C_0`` of the dry-plate drop (for ``h_t``).
+        apron_clearance: ``h_ap`` (m); default ``weir_height - 0.010``.
+        dP_tray: Total tray pressure drop (Pa); default
+            :func:`tray_pressure_drop` with the same geometry.
+        min_residence_time: Minimum downcomer residence time (s), default 3.
+
+    Returns:
+        ``(margin, info)`` with ``margin = 0.5 (l_t + h_w) / h_b - 1``
+        (> 0: no downcomer flooding) and ``info`` keys ``h_backup``,
+        ``h_crest``, ``h_tray``, ``h_apron`` (m of clear liquid),
+        ``h_backup_max`` (m), ``A_apron``, ``A_m`` (m^2), ``u_apron`` (m/s),
+        ``residence_time`` (s) and ``residence_margin``
+        (``t_r / min_residence_time - 1``).
+
+    Example:
+        >>> margin, info = downcomer_backup(2.76, 0.0086, 2.9, 790.0, 1.67)
+        >>> bool(margin > 0)
+        True
+    """
+    rho_L = _f(rho_L)
+    D = _f(diameter)
+    A_c = jnp.pi * D ** 2 / 4.0
+    A_d = _f(downcomer_fraction) * A_c
+    l_w = _f(weir_length_fraction) * D
+    h_w = _f(weir_height)
+    h_ap = h_w - 0.010 if apron_clearance is None else _f(apron_clearance)
+    h_ow = weir_crest(L_vol, l_w)
+    if dP_tray is None:
+        dP_tray, _ = tray_pressure_drop(
+            V_vol, L_vol, rho_V, rho_L, diameter, downcomer_fraction,
+            hole_area_fraction, weir_height, weir_length_fraction, orifice_coefficient)
+    h_t = _f(dP_tray) / (rho_L * G_ACC)
+    A_ap = h_ap * l_w
+    A_m = jnp.minimum(A_d, A_ap)
+    Q_L = _f(L_vol)
+    u_ap = Q_L / A_m
+    h_dc = 0.166 * u_ap ** 2
+    h_b = h_w + h_ow + h_t + h_dc
+    h_max = 0.5 * (_f(tray_spacing) + h_w)
+    t_r = A_d * h_b / Q_L
+    info = {
+        "h_backup": h_b, "h_crest": h_ow, "h_tray": h_t, "h_apron": h_dc,
+        "h_backup_max": h_max, "A_apron": A_ap, "A_m": A_m, "u_apron": u_ap,
+        "residence_time": t_r,
+        "residence_margin": t_r / _f(min_residence_time) - 1.0,
+    }
+    return h_max / h_b - 1.0, info
+
+
+class EntrainmentPlaceholderWarning(UserWarning):
+    """:func:`fractional_entrainment` is an assumed shape, not Fair's chart."""
 
 
 def fractional_entrainment(F_LV, percent_flood, psi_ref=0.01, exponent_flood=4.0,
@@ -363,18 +489,27 @@ def fractional_entrainment(F_LV, percent_flood, psi_ref=0.01, exponent_flood=4.0
 
     ``psi = psi_ref (percent_flood/80)^exponent_flood (F_LV/0.1)^exponent_F``.
 
-    **This is not a published fit.** Fair's entrainment chart (``psi`` against
-    ``F_LV`` with lines of percent flood) was not available and no fit of it
-    could be recalled with confidence, so the default ``psi_ref = 0.01`` (the
-    order of magnitude read from the chart at 80 % flood, ``F_LV = 0.1``) and
-    the two exponents are **assumed, unverified shapes** that reproduce only
-    the qualitative behavior (entrainment rises steeply with percent flood and
-    with the liquid load). Expect a factor of 2-3 error. Replace the three
-    constants with a fit from Kister, Seader or Fair's own chart before using
-    it for a design; the function is built so that they are arguments. The
-    limit conventionally applied is ``psi < 0.1`` (Sinnott/Towler: a
-    significant efficiency penalty above); see the margin ``0.1 - psi``.
+    **This is not Fair's correlation and not any published fit.** Fair's
+    entrainment chart (Fair, Petro/Chem Eng. 33(10), 45 (1961); ``psi``
+    against ``F_LV`` with lines of percent flood, reproduced by Kister,
+    Sinnott/Towler and Seader) was not available, and no closed-form fit of it
+    could be recalled or found with confidence, so none is invented here. The
+    default ``psi_ref = 0.01`` (an order of magnitude for 80 % flood at
+    ``F_LV = 0.1``) and the two exponents are **assumed shapes** that
+    reproduce only the qualitative trends (entrainment rises steeply with
+    percent flood and with the liquid load). Expect a factor of 2-3 or worse;
+    do not use the number for a design. Replace the three constants with a fit
+    of the chart you are designing from (they are arguments). The limit
+    conventionally applied is ``psi < 0.1`` (Sinnott/Towler: a significant
+    efficiency penalty above); see the margin ``0.1 - psi``.
+
+    Every call raises :class:`EntrainmentPlaceholderWarning` (once per call
+    site under the default warning filters; at trace time under ``jit``).
     """
+    warnings.warn(
+        "fractional_entrainment is a placeholder with assumed constants, not a "
+        "fit of Fair's entrainment chart; expect a factor of 2-3 error",
+        EntrainmentPlaceholderWarning, stacklevel=2)
     return (_f(psi_ref) * (_f(percent_flood) / 80.0) ** _f(exponent_flood)
             * (_f(F_LV) / 0.1) ** _f(exponent_F))
 
@@ -479,6 +614,10 @@ def kister_gill_flood_dp(F_p) -> Array:
     return 0.115 * F_ft ** 0.7 * _INH2O_FT_TO_PA_M
 
 
+class PackingCapacityWarning(UserWarning):
+    """A packed-column capacity model is used outside what it was built for."""
+
+
 #: Robbins dry packing factors ``F_pd`` (1/m) for the :data:`PACKINGS` keys,
 #: from Perry's 8e Tables 14-13 and 14-14 (Robbins, Chem. Eng. Prog., May 1991).
 #: Packings without a printed value (plastic Pall rings, Mellapak 250Y,
@@ -566,8 +705,10 @@ def robbins_flood(L_over_G, rho_V, rho_L, mu_L, F_p, F_pd=None, pressure_correct
     ``G`` at a fixed liquid-to-gas mass ratio (a bisection on ``ln G``; the
     gradient comes from the implicit-function theorem through one Newton step,
     so it is exact and the solve is ``jit``/``grad`` safe). This is the flood
-    model for modern, low-``F_p`` packings, where the Eckert line
-    (:func:`gpdc_flood`) is not recommended.
+    model for modern, low-``F_p`` random packings, where the Eckert line
+    (:func:`gpdc_flood`) is not recommended. It is **not** a structured-packing
+    capacity model: Robbins' correlation is for random packings, and with
+    ``F_pd = F_p`` for a structured packing the result is a rough screen only.
 
     Args:
         L_over_G: Liquid-to-gas mass flow ratio (-).
@@ -668,6 +809,18 @@ def packed_column_diameter(
     0.08 m^3/m/h, a commonly quoted minimum for random packing; **from memory,
     unverified**).
 
+    **Structured packing: no capacity model.** Neither flood model is a
+    structured-packing correlation. The Eckert line is for high-``F_p``
+    random packings, and Robbins' pressure drop is a random-packing
+    correlation used here with ``F_pd = F_p`` when no dry factor is known
+    (Mellapak 250Y has none in :data:`DRY_PACKING_FACTORS`; a
+    :class:`PackingCapacityWarning` says so). Only the flood pressure drop
+    (:func:`kister_gill_flood_dp`) is believed to have been stated for
+    structured packings as well. Treat a structured-packing diameter from
+    this function as a rough screening number and size from the vendor's
+    capacity chart (or a Kister-Gill / Billet-Schultes / SRP model, not
+    implemented here).
+
     Args:
         V_molar, MW_V, rho_V: Vapor (mol/s, g/mol, kg/m^3).
         L_molar, MW_L, rho_L: Liquid (mol/s, g/mol, kg/m^3).
@@ -696,6 +849,12 @@ def packed_column_diameter(
             raise ValueError("give `packing` or a_p (needed for the wetting rate)")
         a_p = packing.a_p
     if F_pd is None:
+        if packing is not None and packing.name not in DRY_PACKING_FACTORS:
+            warnings.warn(
+                f"no Robbins dry packing factor for {packing.name!r}; using F_pd = F_p. "
+                "Robbins is a random-packing correlation and there is no "
+                "structured-packing capacity model here (see packed_column_diameter)",
+                PackingCapacityWarning, stacklevel=2)
         F_pd = DRY_PACKING_FACTORS.get(packing.name, F_p) if packing is not None else F_p
     rho_L, rho_V = _f(rho_L), _f(rho_V)
     V_mass = _f(V_molar) * _f(MW_V) / 1000.0
@@ -762,15 +921,27 @@ def hetp(method: str = "random", *, d_p=None, a_p=None, H_OG=None, lam=None, C_X
 
 def size_column(
     n_theoretical, efficiency, diameter, tray_spacing=None, hetp=None, extra_height=3.0,
+    *, packed_height=None,
 ) -> dict[str, Array]:
     """Turn stages, efficiency, diameter and spacing into hardware sizes.
 
-    Trays: ``n_trays = n_theoretical / efficiency`` (kept continuous so the
-    result is differentiable; round up for a drawing) and
-    ``height = n_trays tray_spacing + extra_height``. Packing: pass ``hetp``
-    instead of ``tray_spacing``: ``height = n_theoretical hetp + extra_height``
-    (and ``n_trays = 0``). ``extra_height`` (default 3 m) covers the vapor
-    disengagement space above the top tray and the sump below the bottom one.
+    Give exactly one of ``tray_spacing``, ``hetp`` or ``packed_height``:
+
+    * Trays (``tray_spacing``): ``n_trays = n_theoretical / efficiency`` (kept
+      continuous so the result is differentiable; round up for a drawing) and
+      ``height = n_trays tray_spacing + extra_height``.
+    * Packing from an HETP (``hetp``):
+      ``packed_height = n_theoretical hetp`` and
+      ``height = packed_height + extra_height``.
+    * Packing of a known depth (``packed_height``, e.g. ``N_OG H_OG`` from a
+      rate-based absorber design, or the installed bed of an existing column):
+      ``height = packed_height + extra_height``; ``n_theoretical`` and
+      ``efficiency`` are not used.
+
+    Packed columns have ``n_trays = 0``. ``extra_height`` (default 3 m)
+    covers the vapor disengagement space above the top tray or bed and the
+    sump below the bottom one (add distributor and support space to it for a
+    multi-bed packed column).
 
     Args:
         n_theoretical: Number of theoretical stages.
@@ -780,14 +951,22 @@ def size_column(
         tray_spacing: Tray spacing (m), for a trayed column.
         hetp: HETP (m), for a packed column.
         extra_height: Disengagement plus sump height (m).
+        packed_height: Total packed depth (m), for a packed column sized by
+            height rather than by stages (keyword only).
 
     Returns:
         Dict with ``n_trays``, ``height`` (m), ``volume`` (shell, m^3),
         ``tray_area`` (m^2 per tray, the ``column_cost(..., "sieve_tray")``
-        size) and ``packed_height`` (m).
+        size; the cross-section for a packed column) and ``packed_height`` (m).
+
+    Example:
+        >>> s = size_column(None, None, 1.2, packed_height=6.0, extra_height=2.0)
+        >>> float(s["height"])
+        8.0
     """
-    if (tray_spacing is None) == (hetp is None):
-        raise ValueError("give exactly one of tray_spacing (trays) or hetp (packing)")
+    if sum(x is not None for x in (tray_spacing, hetp, packed_height)) != 1:
+        raise ValueError("give exactly one of tray_spacing (trays), hetp or "
+                         "packed_height (packing)")
     D = _f(diameter)
     area = jnp.pi * D ** 2 / 4.0
     if tray_spacing is not None:
@@ -796,35 +975,173 @@ def size_column(
         height = n_trays * _f(tray_spacing) + _f(extra_height)
     else:
         n_trays = _f(0.0)
-        packed = _f(n_theoretical) * _f(hetp)
+        packed = _f(packed_height) if packed_height is not None else _f(n_theoretical) * _f(hetp)
         height = packed + _f(extra_height)
     return {"n_trays": n_trays, "height": height, "volume": area * height,
             "tray_area": area, "packed_height": packed}
 
 
-def column_hardware_cost(sizing: dict[str, Array], kind: str = "sieve_tray") -> dict[str, Array]:
-    """Purchased cost ($) of a sized column via :func:`~difflow.economics.capital.column_cost`.
+#: Purchased-cost material factors ``F_M`` for the column shell, relative to
+#: carbon steel: Turton et al. 5e, Table A.3 / Fig. A.18, "process vessels,
+#: including towers" (**recalled, not looked up; check before relying**).
+SHELL_MATERIAL_FACTORS: dict[str, float] = {
+    "carbon_steel": 1.0,
+    "stainless_clad": 1.7,
+    "stainless": 3.1,
+    "nickel_alloy_clad": 3.6,
+    "nickel_alloy": 7.1,
+    "titanium_clad": 4.7,
+    "titanium": 9.4,
+}
+
+#: Material factors for trays, relative to carbon steel: Turton et al. 5e,
+#: Table A.6, sieve trays (the tray ``F_BM``, which multiplies the purchased
+#: tray cost directly); applied to valve trays too (**recalled, not looked up**).
+TRAY_MATERIAL_FACTORS: dict[str, float] = {
+    "carbon_steel": 1.0,
+    "stainless": 1.8,
+    "nickel_alloy": 5.6,
+}
+
+#: Material factors for random (loose) packing, relative to Turton's
+#: ``packing_random`` line, which is the polyethylene basis: Turton et al. 5e,
+#: Table A.6, tower packing (``F_BM`` polyethylene 1.0, ceramic 4.1, 304 SS
+#: 7.1; **recalled, not looked up**). ``"plastic"`` is an alias of
+#: polyethylene and ``"metal"`` of 304 stainless.
+PACKING_MATERIAL_FACTORS: dict[str, float] = {
+    "polyethylene": 1.0,
+    "plastic": 1.0,
+    "ceramic": 4.1,
+    "stainless": 7.1,
+    "metal": 7.1,
+}
+
+#: Dollar basis of each ``column_hardware_cost`` piece (before escalation).
+HARDWARE_COST_BASIS: dict[str, str] = {
+    "shell": "Turton 5e Table A.1 tower (2001 $, purchased, carbon steel, ~ambient P)",
+    "sieve_tray": "Turton 5e Table A.1 sieve trays (2001 $, purchased, carbon steel, per tray)",
+    "valve_tray": "Turton 5e Table A.1 valve trays (2001 $, purchased, carbon steel, per tray)",
+    "packing_random": "Turton 5e Table A.1 loose packing (2001 $, purchased, polyethylene basis)",
+    "packing_structured": ("Seider 4e Sec. 16.5 corrugated-sheet stainless, $285/ft^3 "
+                           "(2013 $, INSTALLED, very approximate)"),
+}
+
+
+def _material_factor(material, table: dict[str, float], what: str) -> Array:
+    if isinstance(material, str):
+        if material not in table:
+            raise ValueError(f"unknown {what} material {material!r}; one of "
+                             f"{sorted(table)} or a numeric factor")
+        return _f(table[material])
+    return _f(material)
+
+
+def column_hardware_cost(
+    sizing: dict[str, Array], kind: str = "sieve_tray", *,
+    material="carbon_steel", internals_material=None,
+    target_year: int | None = None, structured_installation_factor=None,
+) -> dict[str, Array]:
+    """Cost ($) of a sized column via :func:`~difflow.economics.capital.column_cost`.
 
     ``kind``: ``"sieve_tray"`` or ``"valve_tray"`` (shell as
     ``tray_column_shell`` plus ``n_trays`` times the per-tray cost at
     ``tray_area``), or ``"packing_random"`` / ``"packing_structured"`` (shell as
     ``packed_column_shell`` plus the packing at its volume
     ``tray_area * packed_height``). The correlations' validity ranges are those
-    of ``column_cost``.
+    of ``column_cost`` (a ``CostRangeWarning`` outside them).
+
+    **Cost basis.** All pieces are escalated by CEPCI from their base year to
+    ``target_year`` (default ``difflow.economics.indices.DEFAULT_CURRENT_YEAR``,
+    returned as ``cost_year``):
+
+    * shell, sieve and valve trays, random packing: Turton et al. 5e Table A.1,
+      **2001 dollars, purchased cost** (free on board, not installed);
+      carbon steel at near-ambient pressure; Turton's loose-packing line is
+      the **polyethylene** basis;
+    * structured packing: Seider et al. 4e Sec. 16.5, stainless corrugated
+      sheet at $285/ft^3, **2013 dollars, an INSTALLED cost** ("very
+      approximate"). It is the only installed number here and is not
+      comparable with the purchased costs above. No source for the
+      installation factor folded into it was available, so it is not
+      converted by default: ``internals_installed`` is 1 in the result. Pass
+      ``structured_installation_factor`` (installed / purchased, your own
+      value) to divide it out; ``internals_installed`` is then 0. A pressure
+      factor is not applied to anything (see
+      :func:`~difflow.economics.capital.bare_module_cost`).
+
+    **Materials** multiply the purchased cost (``F_M``; recalled from Turton
+    5e Tables A.3 and A.6, not looked up: check before relying):
+
+    * ``material`` (shell): a key of :data:`SHELL_MATERIAL_FACTORS`
+      (carbon steel 1.0, stainless clad 1.7, stainless 3.1, ...), or a number.
+    * ``internals_material``: for trays a key of
+      :data:`TRAY_MATERIAL_FACTORS` (carbon steel 1.0, stainless 1.8,
+      nickel alloy 5.6); for random packing a key of
+      :data:`PACKING_MATERIAL_FACTORS` (polyethylene/plastic 1.0, ceramic
+      4.1, stainless/metal 7.1). ``None`` (default) keeps the correlation's
+      own basis: carbon-steel trays, **polyethylene** random packing (so
+      metal rings must be asked for with ``"metal"``: about 7x),
+      stainless structured packing. For structured packing only
+      ``None``/``"stainless"`` or a numeric factor is accepted (Seider's price
+      is for stainless; no other material ratio is tabulated here).
+
+    Args:
+        sizing: Output of :func:`size_column`.
+        kind: ``"sieve_tray"``, ``"valve_tray"``, ``"packing_random"`` or
+            ``"packing_structured"``.
+        material: Shell material key or numeric ``F_M``.
+        internals_material: Tray/packing material key or numeric factor.
+        target_year: Dollar year of the result.
+        structured_installation_factor: Installed/purchased ratio to convert
+            Seider's installed structured-packing price to purchased.
 
     Returns:
-        Dict with ``shell``, ``internals`` and ``total`` ($).
+        Dict of arrays: ``shell``, ``internals``, ``total`` ($ of
+        ``cost_year``), ``cost_year``, ``shell_material_factor``,
+        ``internals_material_factor`` and ``internals_installed`` (1.0 when
+        ``internals`` is an installed cost, else 0.0). The text basis of each
+        piece is in :data:`HARDWARE_COST_BASIS`.
+
+    Example:
+        >>> s = size_column(20, 0.6, 1.5, tray_spacing=0.6)
+        >>> c = column_hardware_cost(s, material="stainless", internals_material="stainless")
+        >>> float(c["internals_material_factor"])
+        1.8
     """
     from difflow.economics.capital import column_cost
+    from difflow.economics.indices import DEFAULT_CURRENT_YEAR
+    year = DEFAULT_CURRENT_YEAR if target_year is None else int(target_year)
+    F_shell = _material_factor(material, SHELL_MATERIAL_FACTORS, "shell")
+    installed = 0.0
     if kind in ("sieve_tray", "valve_tray"):
-        shell = column_cost(sizing["volume"], "tray_column_shell")
-        internals = sizing["n_trays"] * column_cost(sizing["tray_area"], kind)
-    elif kind in ("packing_random", "packing_structured"):
-        shell = column_cost(sizing["volume"], "packed_column_shell")
-        internals = column_cost(sizing["tray_area"] * sizing["packed_height"], kind)
+        F_int = _material_factor(
+            "carbon_steel" if internals_material is None else internals_material,
+            TRAY_MATERIAL_FACTORS, "tray")
+        shell = column_cost(sizing["volume"], "tray_column_shell", year)
+        internals = sizing["n_trays"] * column_cost(sizing["tray_area"], kind, year)
+    elif kind == "packing_random":
+        F_int = _material_factor(
+            "polyethylene" if internals_material is None else internals_material,
+            PACKING_MATERIAL_FACTORS, "packing")
+        shell = column_cost(sizing["volume"], "packed_column_shell", year)
+        internals = column_cost(sizing["tray_area"] * sizing["packed_height"], kind, year)
+    elif kind == "packing_structured":
+        F_int = _material_factor(
+            "stainless" if internals_material is None else internals_material,
+            {"stainless": 1.0}, "structured packing")
+        shell = column_cost(sizing["volume"], "packed_column_shell", year)
+        internals = column_cost(sizing["tray_area"] * sizing["packed_height"], kind, year)
+        if structured_installation_factor is None:
+            installed = 1.0
+        else:
+            internals = internals / _f(structured_installation_factor)
     else:
         raise ValueError("kind must be sieve_tray, valve_tray, packing_random or packing_structured")
-    return {"shell": shell, "internals": internals, "total": shell + internals}
+    shell = F_shell * shell
+    internals = F_int * internals
+    return {"shell": shell, "internals": internals, "total": shell + internals,
+            "cost_year": _f(year), "shell_material_factor": F_shell,
+            "internals_material_factor": F_int, "internals_installed": _f(installed)}
 
 
 # =============================================================================

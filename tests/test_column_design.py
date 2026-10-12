@@ -139,9 +139,82 @@ class TestTrayHydraulics:
         assert 2.76 / V_turn > 1.5
 
     def test_entrainment_placeholder_trends(self):
-        assert float(fractional_entrainment(0.1, 80.0)) == pytest.approx(0.01)
-        assert float(fractional_entrainment(0.1, 90.0)) > float(fractional_entrainment(0.1, 80.0))
-        assert float(fractional_entrainment(0.3, 80.0)) > float(fractional_entrainment(0.1, 80.0))
+        with pytest.warns(cd.EntrainmentPlaceholderWarning):
+            assert float(fractional_entrainment(0.1, 80.0)) == pytest.approx(0.01)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", cd.EntrainmentPlaceholderWarning)
+            assert float(fractional_entrainment(0.1, 90.0)) > float(fractional_entrainment(0.1, 80.0))
+            assert float(fractional_entrainment(0.3, 80.0)) > float(fractional_entrainment(0.1, 80.0))
+
+    def test_weep_K2_callable(self):
+        kw = dict(L_vol=0.0086, rho_V=2.9, diameter=1.67)
+        # a constant callable reproduces the number
+        m0, i0 = weep_point(2.0, **kw)
+        m1, i1 = weep_point(2.0, **kw, K2=lambda h: 30.0 + 0.0 * h)
+        assert float(m1) == pytest.approx(float(m0), rel=1e-12)
+        assert float(i0["K2"]) == 30.0
+        # the callable sees h_w + h_ow in mm
+        seen = {}
+
+        def k2(h_mm):
+            seen["h"] = float(h_mm)
+            return 29.0 + 0.02 * h_mm
+        _, i = weep_point(2.0, **kw, K2=k2)
+        h_mm = 1000.0 * (0.05 + (0.0086 / (1.84 * 0.7 * 1.67)) ** (2 / 3))
+        assert seen["h"] == pytest.approx(h_mm, rel=1e-9)
+        assert float(i["K2"]) == pytest.approx(29.0 + 0.02 * h_mm, rel=1e-12)
+        assert float(i["u_min"]) == pytest.approx(
+            (29.0 + 0.02 * h_mm - 0.9 * 20.4) / math.sqrt(2.9), rel=1e-12)
+        # more liquid -> larger K2 -> higher u_min -> smaller margin
+        assert float(weep_point(2.0, 0.02, 2.9, 1.67, K2=k2)[0]) < float(weep_point(2.0, **kw, K2=k2)[0])
+        # differentiable in L through the chart callable
+        chart = lambda h: jnp.interp(h, jnp.array([0.0, 100.0]), jnp.array([29.0, 31.0]))
+        check_grads(lambda Ls: weep_point(2.0, 1e-3 * Ls, 2.9, 1.67, K2=chart)[0], (8.6,),  # L in L/s
+                    order=1, modes=["rev"], rtol=1e-5, atol=1e-6)
+
+
+class TestDowncomerBackup:
+    kw = dict(V_vol=2.76, L_vol=0.0086, rho_V=2.9, rho_L=790.0, diameter=1.67)
+
+    def test_hand_calculation(self):
+        # Sinnott Sec. 11.13 by hand, with h_t from the module's tray drop.
+        dP, _ = tray_pressure_drop(**self.kw)
+        D, lw = 1.67, 0.7 * 1.67
+        Ac = math.pi * D ** 2 / 4
+        Ad = 0.1 * Ac
+        h_ow = (0.0086 / (1.84 * lw)) ** (2 / 3)
+        h_t = float(dP) / (790.0 * 9.80665)
+        Aap = 0.040 * lw                      # h_ap = h_w - 10 mm
+        Am = min(Ad, Aap)
+        L_wd = 0.0086 * 790.0                 # kg/s
+        h_dc = 166.0 * (L_wd / (790.0 * Am)) ** 2 / 1000.0   # mm -> m
+        h_b = 0.05 + h_ow + h_t + h_dc
+        margin, i = cd.downcomer_backup(**self.kw, tray_spacing=0.6)
+        assert float(i["A_m"]) == pytest.approx(Aap, rel=1e-12) and Aap < Ad
+        assert float(i["h_apron"]) == pytest.approx(h_dc, rel=1e-12)
+        assert float(i["h_backup"]) == pytest.approx(h_b, rel=1e-12)
+        assert float(i["h_backup_max"]) == pytest.approx(0.5 * (0.6 + 0.05), rel=1e-12)
+        assert float(margin) == pytest.approx(0.325 / h_b - 1.0, rel=1e-12)
+        assert float(i["residence_time"]) == pytest.approx(Ad * h_b * 790.0 / L_wd, rel=1e-12)
+        assert float(i["residence_margin"]) == pytest.approx(Ad * h_b / 0.0086 / 3.0 - 1.0, rel=1e-12)
+
+    def test_explicit_inputs_and_area_switch(self):
+        # a 0.2 m apron gap: the downcomer area governs
+        _, i = cd.downcomer_backup(**self.kw, apron_clearance=0.2, dP_tray=1000.0)
+        Ad = 0.1 * math.pi * 1.67 ** 2 / 4
+        assert float(i["A_m"]) == pytest.approx(Ad, rel=1e-12)
+        assert float(i["h_tray"]) == pytest.approx(1000.0 / (790.0 * 9.80665), rel=1e-12)
+
+    def test_floods_at_high_liquid_load_and_short_spacing(self):
+        m_ok, _ = cd.downcomer_backup(**self.kw, tray_spacing=0.6)
+        m_bad, _ = cd.downcomer_backup(**dict(self.kw, L_vol=0.08), tray_spacing=0.3)
+        assert float(m_ok) > 0 > float(m_bad)
+
+    def test_grads(self):
+        check_grads(lambda V, Ls, t: cd.downcomer_backup(V, 1e-3 * Ls, 2.9, 790.0, 1.67,
+                                                         tray_spacing=t)[0],
+                    (2.76, 8.6, 0.6),  # L in L/s
+                    order=1, modes=["fwd", "rev"], rtol=1e-5, atol=1e-6)
 
 
 class TestOConnell:
@@ -264,6 +337,15 @@ class TestPacked:
             assert p.F_p and p.F_p > 0 and 0 < p.eps < 1 and p.a_p > 0
             assert "unverified" in p.source
 
+    def test_structured_packing_warns_no_capacity_model(self):
+        a = dict(V_molar=100.0, MW_V=29.0, rho_V=1.2, L_molar=500.0, MW_L=18.0, rho_L=1000.0, mu_L=1e-3)
+        with pytest.warns(cd.PackingCapacityWarning):
+            packed_column_diameter(**a, packing=PACKINGS["mellapak_250y"], flood="robbins")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", cd.PackingCapacityWarning)
+            packed_column_diameter(**a, packing=PACKINGS["pall_metal_50"])
+            packed_column_diameter(**a, packing=PACKINGS["mellapak_250y"], F_pd=66.0)
+
     def test_hetp(self):
         assert float(hetp("random", d_p=0.025)) == pytest.approx(0.45)
         assert float(hetp("structured", a_p=250.0)) == pytest.approx(0.5)
@@ -329,6 +411,64 @@ class TestSizeColumn:
             size_column(10, 1.0, 1.5)
         with pytest.raises(ValueError):
             size_column(10, 1.0, 1.5, tray_spacing=0.6, hetp=0.5)
+
+    def test_packed_height_keyword(self):
+        p = size_column(None, None, 1.5, packed_height=6.0, extra_height=2.0)
+        area = math.pi * 1.5 ** 2 / 4
+        assert float(p["packed_height"]) == 6.0 and float(p["height"]) == pytest.approx(8.0)
+        assert float(p["n_trays"]) == 0.0 and float(p["volume"]) == pytest.approx(8.0 * area)
+        # same as the HETP route with n * HETP = 6
+        q = size_column(12, 1.0, 1.5, hetp=0.5, extra_height=2.0)
+        for k in p:
+            assert float(p[k]) == pytest.approx(float(q[k]), rel=1e-12)
+        for bad in (dict(hetp=0.5, packed_height=6.0), dict(tray_spacing=0.6, packed_height=6.0)):
+            with pytest.raises(ValueError):
+                size_column(10, 1.0, 1.5, **bad)
+        g = jax.grad(lambda Z: size_column(None, None, 1.5, packed_height=Z)["volume"])(6.0)
+        assert float(g) == pytest.approx(area, rel=1e-12)
+
+    def test_cost_materials_and_basis(self):
+        from difflow.economics.capital import column_cost
+        s = size_column(20, 0.5, 1.5, tray_spacing=0.6)
+        base = column_hardware_cost(s)
+        assert float(base["cost_year"]) == 2026.0
+        assert float(base["shell_material_factor"]) == 1.0 and float(base["internals_installed"]) == 0.0
+        ss = column_hardware_cost(s, material="stainless", internals_material="stainless")
+        assert float(ss["shell"]) == pytest.approx(3.1 * float(base["shell"]), rel=1e-12)
+        assert float(ss["internals"]) == pytest.approx(1.8 * float(base["internals"]), rel=1e-12)
+        num = column_hardware_cost(s, material=2.0, internals_material=1.5)
+        assert float(num["total"]) == pytest.approx(
+            2.0 * float(base["shell"]) + 1.5 * float(base["internals"]), rel=1e-12)
+        old = column_hardware_cost(s, target_year=2001)
+        assert float(old["cost_year"]) == 2001.0
+        assert float(old["shell"]) == pytest.approx(float(column_cost(s["volume"], "tray_column_shell", 2001)), rel=1e-12)
+        with pytest.raises(ValueError):
+            column_hardware_cost(s, material="unobtainium")
+        with pytest.raises(ValueError):
+            column_hardware_cost(s, internals_material="ceramic")   # not a tray material
+
+        p = size_column(None, None, 1.5, packed_height=5.0)
+        pe = column_hardware_cost(p, "packing_random")
+        for name, f in (("plastic", 1.0), ("ceramic", 4.1), ("metal", 7.1), ("stainless", 7.1)):
+            c = column_hardware_cost(p, "packing_random", internals_material=name)
+            assert float(c["internals"]) == pytest.approx(f * float(pe["internals"]), rel=1e-12)
+            assert float(c["shell"]) == pytest.approx(float(pe["shell"]), rel=1e-12)
+
+        st = column_hardware_cost(p, "packing_structured")
+        assert float(st["internals_installed"]) == 1.0
+        assert "INSTALLED" in cd.HARDWARE_COST_BASIS["packing_structured"]
+        bought = column_hardware_cost(p, "packing_structured", structured_installation_factor=2.0)
+        assert float(bought["internals_installed"]) == 0.0
+        assert float(bought["internals"]) == pytest.approx(0.5 * float(st["internals"]), rel=1e-12)
+        with pytest.raises(ValueError):
+            column_hardware_cost(p, "packing_structured", internals_material="plastic")
+
+    def test_cost_with_material_is_differentiable(self):
+        def f(D, Z):
+            s = size_column(None, None, D, packed_height=Z)
+            return column_hardware_cost(s, "packing_random", material="stainless",
+                                        internals_material="metal")["total"] / 1e5
+        check_grads(f, (1.5, 6.0), order=1, modes=["rev"], rtol=1e-5, atol=1e-5)
 
     def test_cost_matches_column_cost(self):
         from difflow.economics.capital import column_cost
