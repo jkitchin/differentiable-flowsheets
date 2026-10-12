@@ -60,6 +60,8 @@ _MEMBRANE_UNITS = {
     "feed_pressure": "Pa",
     "permeate_pressure": "Pa",
     "stage_cut_target": "-",
+    "flow_pattern": "-",
+    "n_steps": "-",
 }
 
 
@@ -80,6 +82,13 @@ class MembraneParams(ParamsMixin):
         feed_pressure: Feed-side pressure (Pa); None (default) uses the
             feed stream pressure
         permeate_pressure: Permeate pressure (Pa), calculated if None
+        stage_cut_target: Target stage cut in (0, 1); when set, the area
+            is solved for (``info['area_used']``)
+        flow_pattern: ``"complete_mixing"`` (default), ``"cross_flow"``,
+            ``"cocurrent"`` or ``"countercurrent"``; solved by
+            :func:`difflow.units.membranes.permeation_stage`
+        n_steps: Integration steps along the membrane for the plug-flow
+            patterns
 
     Notes:
         For polymeric membranes, typical thicknesses are 0.1-1 μm
@@ -101,6 +110,8 @@ class MembraneParams(ParamsMixin):
 
     # Stage cut control
     stage_cut_target: float | Array | None = None  # If set, adjusts area
+    flow_pattern: str = "complete_mixing"
+    n_steps: int = 100
 
     def __post_init__(self):
         """Reject pressure ratios and stage cuts that cannot operate.
@@ -111,6 +122,10 @@ class MembraneParams(ParamsMixin):
             ratio = float(self.pressure_ratio)
         except Exception:
             ratio = None
+        if self.flow_pattern not in FLOW_PATTERNS:
+            raise ValueError(
+                f"flow_pattern must be one of {FLOW_PATTERNS}, got {self.flow_pattern!r}"
+            )
         if ratio is not None and ratio <= 1.0:
             # Audit C5: ratios <= 1 were accepted and still "separated".
             raise ValueError(
@@ -128,105 +143,22 @@ class MembraneParams(ParamsMixin):
 
 
 # =============================================================================
-# Complete-mixing solver
+# Solvers (shared with the core ``difflow.units.membranes`` module)
 # =============================================================================
-
-def _permeate_composition(t, F_i, Q, area, P_h, P_l):
-    """Permeate mole fractions of a complete-mixing stage.
-
-    With retentate fraction ``t = D/F`` (so stage cut ``1 - t``), the
-    species balance ``(1-t) F y_i = A Q_i (x_i P_h - y_i P_l)`` with
-    ``x_i = (F_i - (1-t) F y_i) / (t F)`` solves to
-
-        y_i = A Q_i z_i P_h / (F t (1-t) + A Q_i ((1-t) P_h + t P_l)),
-
-    where ``z_i`` is the feed mole fraction. The physical ``t`` is the one
-    where the ``y_i`` sum to one.
-
-    Args:
-        t: Retentate fraction in [0, 1].
-        F_i: Feed flows (n,).
-        Q: Permeances (n,), mol/(m2 s Pa).
-        area: Membrane area (m2).
-        P_h: Feed-side pressure (Pa).
-        P_l: Permeate-side pressure (Pa).
-
-    Returns:
-        Permeate mole fractions (n,).
-    """
-    F = jnp.sum(F_i)
-    z = F_i / F
-    aq = area * Q
-    denom = F * t * (1.0 - t) + aq * ((1.0 - t) * P_h + t * P_l)
-    return aq * z * P_h / jnp.maximum(denom, 1e-300)
+# The complete-mixing solver that used to live here is the core one; the
+# private names are kept as aliases for code that imported them.
+from difflow.units.membranes import (  # noqa: E402
+    _bisect_increasing,
+    _implicit_step,
+    _cm_permeate as _permeate_composition,
+    _cm_retentate_fraction as _solve_retentate_fraction,
+    _cm_area_for_cut as _solve_area_for_cut,
+    FLOW_PATTERNS,
+    permeation_stage,
+    area_for_stage_cut,
+)
 
 
-def _bisect_increasing(fn, lo, hi, n_iter=100):
-    """Root of a function negative left / positive right of it, by bisection.
-
-    Args:
-        fn: Scalar function.
-        lo, hi: Bracket.
-        n_iter: Number of halvings.
-
-    Returns:
-        Converged abscissa (no gradient; see ``_implicit_step``).
-    """
-    def body(_, b):
-        a, c = b
-        m = 0.5 * (a + c)
-        neg = fn(m) < 0.0
-        return jnp.where(neg, m, a), jnp.where(neg, c, m)
-
-    a, c = jax.lax.fori_loop(0, n_iter, body,
-                             (jnp.asarray(lo, float), jnp.asarray(hi, float)))
-    return jax.lax.stop_gradient(0.5 * (a + c))
-
-
-def _implicit_step(fn, u0):
-    """Value-neutral Newton step from a stop-gradient root ``u0``.
-
-    Gives the exact implicit-function first derivative of the root with
-    respect to whatever ``fn`` closes over.
-    """
-    d = jax.lax.stop_gradient(jax.grad(fn)(u0))
-    d = jnp.where(jnp.abs(d) > 1e-300, d, 1.0)
-    r = fn(u0)
-    return u0 - (r - jax.lax.stop_gradient(r)) / d
-
-
-def _solve_retentate_fraction(F_i, Q, area, P_h, P_l):
-    """Retentate fraction ``t`` of a complete-mixing stage of given area.
-
-    ``g(t) = sum_i y_i(t) - 1`` is convex with ``g(0) = 0`` and
-    ``g(1) = (P_h/P_l) * (permeable feed fraction) - 1``, so it has at most
-    one root in (0, 1): ``g < 0`` left of it, ``> 0`` right. If ``g >= 0``
-    throughout, the area is large enough to permeate everything (t -> 0);
-    if ``g < 0`` throughout, nothing can permeate (t = 1).
-    """
-    def g(t):
-        return jnp.sum(_permeate_composition(t, F_i, Q, area, P_h, P_l)) - 1.0
-
-    t0 = _bisect_increasing(g, 0.0, 1.0)
-    return jnp.clip(_implicit_step(g, t0), 0.0, 1.0)
-
-
-def _solve_area_for_cut(F_i, Q, P_h, P_l, t):
-    """Area at which a complete-mixing stage has retentate fraction ``t``.
-
-    At fixed ``t`` in (0, 1), ``sum_i y_i`` rises monotonically with area
-    from 0 to ``1 / ((1-t) + t P_l/P_h) * (permeable fraction)``, so the
-    root in ``s = ln(A / A_ref)`` is bracketed whenever the cut is reachable.
-    """
-    F = jnp.sum(F_i)
-    A_ref = F / (jnp.max(Q) * P_h)  # area of ~one transfer unit
-
-    def h(s):
-        A = A_ref * jnp.exp(s)
-        return jnp.sum(_permeate_composition(t, F_i, Q, A, P_h, P_l)) - 1.0
-
-    s0 = _bisect_increasing(h, -60.0, 60.0)
-    return A_ref * jnp.exp(_implicit_step(h, s0))
 # =============================================================================
 # Membrane Separator
 # =============================================================================
@@ -258,8 +190,12 @@ class MembraneSeparator:
     - Permeate is CO2-enriched
     - Retentate is treated gas
 
-    This model assumes perfect mixing on both sides (simplification).
-    For counter-current or cross-flow, see extensibility hooks.
+    The default flow pattern is complete mixing on both sides (the worst
+    separation); ``flow_pattern`` selects cross flow, cocurrent or
+    countercurrent plug flow, solved by the core
+    :mod:`difflow.units.membranes` (which also has a unit,
+    :class:`~difflow.units.membranes.GasPermeator`, that takes permeances
+    directly instead of a membrane material).
 
     References:
         Baker RW (2012). Membrane Technology and Applications.
@@ -407,17 +343,27 @@ class MembraneSeparator:
         #     F_perm,i = A Q_i (x_i P_feed - y_i P_permeate),
         # with x the retentate and y the permeate composition, which keeps
         # every driving force non-negative and every retentate flow >= 0.
-        if p.stage_cut_target is not None:
-            # Documented behaviour: the area is adjusted to hit the cut.
-            t = 1.0 - jnp.asarray(p.stage_cut_target)
-            area = _solve_area_for_cut(F_i, Q, P_feed, P_permeate, t)
-        else:
-            area = jnp.asarray(p.area)
-            t = _solve_retentate_fraction(F_i, Q, area, P_feed, P_permeate)
+        if p.flow_pattern == "complete_mixing":
+            if p.stage_cut_target is not None:
+                # Documented behaviour: the area is adjusted to hit the cut.
+                t = 1.0 - jnp.asarray(p.stage_cut_target)
+                area = _solve_area_for_cut(F_i, Q, P_feed, P_permeate, t)
+            else:
+                area = jnp.asarray(p.area)
+                t = _solve_retentate_fraction(F_i, Q, area, P_feed, P_permeate)
 
-        y = _permeate_composition(t, F_i, Q, area, P_feed, P_permeate)
-        F_perm_i = (1.0 - t) * F_total * y
-        F_perm_i = jnp.minimum(F_perm_i, F_i)  # round-off only
+            y = _permeate_composition(t, F_i, Q, area, P_feed, P_permeate)
+            F_perm_i = (1.0 - t) * F_total * y
+            F_perm_i = jnp.minimum(F_perm_i, F_i)  # round-off only
+        else:
+            # Plug-flow patterns (core difflow.units.membranes).
+            if p.stage_cut_target is not None:
+                area = area_for_stage_cut(F_i, Q, P_feed, P_permeate,
+                                          p.stage_cut_target, p.flow_pattern, p.n_steps)
+            else:
+                area = jnp.asarray(p.area)
+            _, F_perm_i, _ = permeation_stage(F_i, Q, area, P_feed, P_permeate,
+                                              p.flow_pattern, p.n_steps)
         F_ret_i = F_i - F_perm_i
 
         permeate_flows = {s: F_perm_i[k] for k, s in enumerate(species)}

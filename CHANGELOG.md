@@ -8,6 +8,16 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Core membrane separations (unit-ops book Ch. 22).** New `difflow.units.membranes`: `GasPermeator` (any
+  number of species; complete mixing, cross flow, cocurrent or countercurrent; given area or stage cut;
+  implicit-function gradients), `ReverseOsmosis` (plug-flow RO with solution-diffusion fluxes, film-theory
+  polarization, van't Hoff osmotic pressure and the recovery limit), and library functions: the binary
+  complete-mixing closed forms (Geankoplis 5e §13.4), `permeation_stage`, `area_for_stage_cut`,
+  `osmotic_pressure`, `ro_local_flux`, `polarization_modulus`, `gel_polarization_flux`, `uf_flux`,
+  `batch_concentration_time`, `BARRER`, `GPU`. The carbon-capture `MembraneSeparator`/`MultistageMembrane`
+  use the core solver and gain `flow_pattern=` and `n_steps=`; bio `gel_layer_flux` uses the core gel model.
+  The plug-flow models are tested against hand integrations in the feed-side mole fraction.
+
 - **Unit-ops book Ch. 10-13 gaps (#444).** (1) `DistillationColumn.solve_specs(feed, specs)` solves for `R` and
   `D` from any two of `x_D`/`x_B` purities, `recovery_D`/`recovery_B`, `R`, `D`, `B` (damped Newton, implicit
   derivative; an infeasible pair ends with `spec_converged` False). (2) `underwood_class2`: Underwood's general
@@ -936,6 +946,11 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Fixed
+
+- **Bio `concentration_polarization` swapped R and 1-R (unit-ops book Ch. 22).** It returned
+  `C_b exp(J/k)/(1-R+R exp(J/k))`, which gives `C_w = C_b` for a fully retained solute (R = 1), the case that
+  polarizes most. It now returns `C_b exp(J/k)/(R+(1-R) exp(J/k))` (film theory; `C_b exp(J/k)` at R = 1) via
+  the core `polarization_modulus`.
 
 - **Flash derivatives and near-boundary values (#444).** (1) `flash_TP_eos` second derivatives were wrong (the
   Hessian of a two-flash PR train had the wrong sign): derivatives came from unrolling 50 damped substitution steps.

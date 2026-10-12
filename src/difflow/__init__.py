@@ -240,6 +240,12 @@ from difflow.units.crystallizer import (
     nucleation_rate,
     msmpr_steady_state,
 )
+from difflow.units.membranes import (
+    GasPermeator,
+    GasPermeationParams,
+    ReverseOsmosis,
+    ReverseOsmosisParams,
+)
 from difflow.units.mechanical import (
     Settler,
     SettlerParams,
@@ -732,6 +738,11 @@ __all__ = [
     "maximum_L_over_G",
     "merkel_number",
     # Mechanical separations
+    # Membrane separations
+    "GasPermeator",
+    "GasPermeationParams",
+    "ReverseOsmosis",
+    "ReverseOsmosisParams",
     "Settler",
     "SettlerParams",
     "CakeFilter",
