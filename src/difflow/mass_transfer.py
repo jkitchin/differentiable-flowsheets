@@ -10,13 +10,17 @@ Contents
 --------
 * Diffusivities: :func:`fuller_diffusivity`, :func:`wilke_chang_diffusivity`,
   :func:`stokes_einstein_diffusivity`, tables :data:`FULLER_VOLUMES`,
-  :data:`FULLER_ATOMIC_VOLUMES`, :data:`LE_BAS_INCREMENTS`,
+  :data:`FULLER_ATOMIC_VOLUMES` (1969) and :data:`FULLER_VOLUMES_1966`,
+  :data:`FULLER_ATOMIC_VOLUMES_1966`, :data:`LE_BAS_INCREMENTS`,
   :data:`ASSOCIATION_FACTORS`, helpers :func:`diffusion_volume`,
   :func:`molar_volume_nbp`
 * Film theory: :func:`log_mean`, :func:`equimolar_flux`,
   :func:`stagnant_film_flux`, :func:`mass_transfer_coefficient_conversions`,
   :func:`k_x_from_k_L`, :func:`k_L_from_k_x`, :func:`schmidt`,
   :func:`sherwood`, :func:`film_coefficient`
+* Penetration and surface renewal: :func:`penetration_coefficient`,
+  :func:`surface_renewal_coefficient`, :func:`falling_film_thickness`,
+  :func:`falling_film_liquid_coefficient` (wetted-wall column)
 * Sherwood correlations: :func:`ranz_marshall`, :func:`frossling`,
   :func:`linton_sherwood`, :func:`gilliland_sherwood`,
   :func:`pipe_sherwood`, :func:`flat_plate_sherwood`,
@@ -45,10 +49,14 @@ Correlations are implemented from the formulas as published (Fuller,
 Schettler & Giddings 1966; Wilke & Chang 1955; Onda, Takeuchi & Okumoto
 1968; Colburn 1939), written from memory of the sources, not copied from a
 scan. What was and was not checked is stated in ``tests/test_mass_transfer.py``
-and in the docs; in short: the water vapour-air diffusivity at 25 C agrees
-with the data value (about 2.5e-5 m^2/s) and the Colburn NTU with its own
-quadrature, but **no published worked example is reproduced** (no textbook is
-available to verify numbers against). The tables (:data:`FULLER_VOLUMES`,
+and in the docs. Published worked examples reproduced (book Ch. 14; the
+reference numbers are recalled, see the test module): Fuller against Poling,
+Prausnitz & O'Connell 5e Example 11-3 (allyl chloride-air, 0.096 cm^2/s) and
+Geankoplis Example 6.2-5 (n-butanol-air with the 1966 volumes, 7.7e-6 m^2/s);
+Wilke-Chang with Le Bas against Geankoplis Example 6.3-2 (acetone-water,
+1.277e-9 m^2/s at 25 C). The Onda functions are checked against an
+independent transcription of the published equations only; no published
+Onda worked example is reproduced. The tables (:data:`FULLER_VOLUMES`,
 :data:`LE_BAS_INCREMENTS`, :data:`ASSOCIATION_FACTORS`, :data:`PACKINGS`) are
 transcribed from memory and flagged as unverified where it matters.
 
@@ -185,23 +193,78 @@ FULLER_VOLUMES: dict[str, float] = {
     "SO2": 41.8,
 }
 
+#: Atomic diffusion volumes of the *original* Fuller, Schettler & Giddings
+#: (1966) correlation (dimensionless), as tabulated in Geankoplis
+#: (*Transport Processes and Separation Process Principles*, Table 6.2-2),
+#: Treybal and Welty et al. Use these to reproduce those books' examples
+#: (e.g. Geankoplis Example 6.2-5, n-butanol in air); the 1969 values in
+#: :data:`FULLER_ATOMIC_VOLUMES` are the refit recommended by Poling et al.
+#: The two sets give diffusivities within about 1-3% of each other for most
+#: organics. Transcribed from memory, checked against Geankoplis Example
+#: 6.2-5 (n-butanol ``4(16.5) + 10(1.98) + 5.48 = 91.28``).
+FULLER_ATOMIC_VOLUMES_1966: dict[str, float] = {
+    "C": 16.5,
+    "H": 1.98,
+    "O": 5.48,
+    "N": 5.69,
+    "Cl": 19.5,
+    "S": 17.0,
+    "ring": -20.2,
+}
+
+#: Diffusion volumes of simple molecules in the 1966 Fuller table (same source
+#: and caveat as :data:`FULLER_ATOMIC_VOLUMES_1966`).
+FULLER_VOLUMES_1966: dict[str, float] = {
+    "He": 2.88,
+    "Ne": 5.59,
+    "Ar": 16.1,
+    "Kr": 22.8,
+    "Xe": 37.9,
+    "H2": 7.07,
+    "D2": 6.70,
+    "N2": 17.9,
+    "O2": 16.6,
+    "air": 20.1,
+    "CO": 18.9,
+    "CO2": 26.9,
+    "N2O": 35.9,
+    "NH3": 14.9,
+    "H2O": 12.7,
+    "CCl2F2": 114.8,
+    "SF6": 69.7,
+    "Cl2": 37.7,
+    "Br2": 67.2,
+    "SO2": 41.1,
+}
+
 #: Le Bas atomic increments to the molar volume at the normal boiling point
 #: (cm^3/mol). Source believed to be Le Bas (1915) as tabulated in Reid,
-#: Prausnitz & Poling and Treybal; **from memory, unverified**. ``O`` is the
-#: value for alcohols, aldehydes and ketones; other oxygen environments
-#: differ (``O_ether`` 9.1, ``O_acid`` 12.0). ``N_prim`` / ``N_sec`` are
-#: nitrogen in primary / secondary amines.
+#: Prausnitz & Poling, Treybal and Geankoplis (Table 6.3-2); from memory.
+#: ``O`` (7.4) is oxygen not otherwise listed (alcohols, aldehydes, ketones);
+#: ``O_methyl_ester`` 9.1, ``O_methyl_ether`` 9.9, ``O_ester_ether`` 11.0
+#: (higher esters and ethers), ``O_acid`` 12.0, ``O_SPN`` 8.3 (joined to S,
+#: P or N). ``O_ether`` is kept as an alias of ``O_methyl_ether`` (it was
+#: 9.1, the methyl-ester value, before the book Ch. 14 check). ``N`` (15.6) is
+#: double-bonded nitrogen, ``N_prim`` / ``N_sec`` nitrogen in primary /
+#: secondary amines; ``Cl`` (21.6) is terminal chlorine, ``Cl_medial`` 24.6.
+#: Checked: acetone ``3(14.8) + 6(3.7) + 7.4 = 74.0`` reproduces Geankoplis
+#: Example 6.3-2 (Wilke-Chang ``D = 1.277e-9`` m^2/s at 25 C).
 LE_BAS_INCREMENTS: dict[str, float] = {
     "C": 14.8,
     "H": 3.7,
     "O": 7.4,
-    "O_ether": 9.1,
+    "O_methyl_ester": 9.1,
+    "O_methyl_ether": 9.9,
+    "O_ether": 9.9,
+    "O_ester_ether": 11.0,
     "O_acid": 12.0,
+    "O_SPN": 8.3,
     "N": 15.6,
     "N_prim": 10.5,
     "N_sec": 12.0,
     "F": 8.7,
     "Cl": 21.6,
+    "Cl_medial": 24.6,
     "Br": 27.0,
     "I": 37.0,
     "S": 25.6,
@@ -241,7 +304,7 @@ ASSOCIATION_FACTORS: dict[str, float] = {
 }
 
 
-def diffusion_volume(species_or_atoms: str | Mapping[str, float]) -> float:
+def diffusion_volume(species_or_atoms: str | Mapping[str, float], table: str = "1969") -> float:
     """Fuller diffusion volume of a molecule.
 
     Args:
@@ -250,20 +313,33 @@ def diffusion_volume(species_or_atoms: str | Mapping[str, float]) -> float:
             ``{"C": 4, "H": 10, "O": 1}``, summed with
             :data:`FULLER_ATOMIC_VOLUMES` (use ``"ring": 1`` for each aromatic
             or heterocyclic ring).
+        table: ``"1969"`` (default; Fuller, Ensley & Giddings, as in Poling
+            et al.) or ``"1966"`` (the original Fuller, Schettler & Giddings
+            values used by Geankoplis, Treybal and Welty;
+            :data:`FULLER_VOLUMES_1966`).
 
     Returns:
         The diffusion volume (dimensionless).
 
     Raises:
         KeyError: Unknown species or atom.
+        ValueError: Unknown ``table``.
 
     Example:
         >>> round(diffusion_volume({"C": 2, "H": 6, "O": 1}), 2)   # ethanol
         51.77
+        >>> round(diffusion_volume({"C": 4, "H": 10, "O": 1}, table="1966"), 2)  # n-butanol
+        91.28
     """
+    if table == "1969":
+        molecules, atoms = FULLER_VOLUMES, FULLER_ATOMIC_VOLUMES
+    elif table == "1966":
+        molecules, atoms = FULLER_VOLUMES_1966, FULLER_ATOMIC_VOLUMES_1966
+    else:
+        raise ValueError("table must be '1969' or '1966'")
     if isinstance(species_or_atoms, str):
-        return FULLER_VOLUMES[species_or_atoms]
-    return float(sum(FULLER_ATOMIC_VOLUMES[a] * n for a, n in species_or_atoms.items()))
+        return molecules[species_or_atoms]
+    return float(sum(atoms[a] * n for a, n in species_or_atoms.items()))
 
 
 def molar_volume_nbp(increments: Mapping[str, float]) -> float:
@@ -517,6 +593,99 @@ def k_x_from_k_L(k_L: Array | float, c_total: Array | float) -> Array:
 def k_L_from_k_x(k_x: Array | float, c_total: Array | float) -> Array:
     """Liquid-phase ``k_L = k_x/c`` (m/s)."""
     return _f64(k_x) / _f64(c_total)
+
+
+def penetration_coefficient(D: Array | float, t_c: Array | float) -> Array:
+    """Higbie (1935) penetration theory: ``k_L = 2 (D/(pi t_c))^(1/2)``.
+
+    The mean coefficient over an exposure (contact) time ``t_c`` of a liquid
+    element at the interface, from unsteady diffusion into a semi-infinite
+    liquid. ``k_L`` scales as ``D^(1/2)``, not ``D^1`` as in film theory.
+
+    Args:
+        D: Diffusivity in the liquid (m^2/s).
+        t_c: Contact time (s).
+
+    Returns:
+        ``k_L`` (m/s).
+
+    Example:
+        >>> round(float(penetration_coefficient(2.0e-9, 0.1)) * 1e4, 3)
+        1.596
+    """
+    return 2.0 * jnp.sqrt(_f64(D) / (math.pi * _f64(t_c)))
+
+
+def surface_renewal_coefficient(D: Array | float, s: Array | float) -> Array:
+    """Danckwerts (1951) surface-renewal theory: ``k_L = (D s)^(1/2)``.
+
+    ``s`` is the fractional rate of surface renewal (1/s); random renewal with
+    an exponential age distribution. Like penetration theory, ``k_L ~ D^(1/2)``.
+
+    Args:
+        D: Diffusivity (m^2/s).
+        s: Surface-renewal rate (1/s).
+
+    Returns:
+        ``k_L`` (m/s).
+    """
+    return jnp.sqrt(_f64(D) * _f64(s))
+
+
+def falling_film_thickness(Gamma: Array | float, rho: Array | float, mu: Array | float) -> Array:
+    """Nusselt thickness of a laminar film on a vertical wall: ``(3 mu Gamma/(rho^2 g))^(1/3)``.
+
+    Args:
+        Gamma: Liquid mass rate per unit wetted perimeter (kg/m/s); for a
+            wetted-wall tube of diameter ``d``, ``Gamma = m_dot/(pi d)``.
+        rho: Liquid density (kg/m^3).
+        mu: Liquid viscosity (Pa s).
+
+    Returns:
+        Film thickness ``delta`` (m). Laminar, wave-free films only
+        (film Reynolds number ``4 Gamma/mu`` below about 20-30; ripples
+        above that raise the real ``k_L``).
+    """
+    return (3.0 * _f64(mu) * _f64(Gamma) / (_f64(rho) ** 2 * GRAVITY)) ** (1.0 / 3.0)
+
+
+def falling_film_liquid_coefficient(
+    D: Array | float, Gamma: Array | float, rho: Array | float, mu: Array | float, L: Array | float
+) -> Array:
+    """Mean liquid-side ``k_L`` of a laminar falling film, short-contact (penetration) limit.
+
+    The solute penetrates only a thin layer near the free surface, where the
+    liquid moves at the surface velocity ``v_max = 1.5 Gamma/(rho delta)``;
+    each element is exposed for ``t_c = L/v_max``, so (Bird, Stewart &
+    Lightfoot 2e, Sec. 20.1)
+
+        ``k_L = (4 D v_max/(pi L))^(1/2) = penetration_coefficient(D, L/v_max)``
+
+    with ``delta`` from :func:`falling_film_thickness`. Valid while the
+    penetration depth is small compared with the film,
+    ``D L/(v_max delta^2) < ~0.01``; for long films ``k_L`` falls to the
+    fully developed value ``3.41 D/delta``, which this function does not model.
+
+    Args:
+        D: Solute diffusivity in the liquid (m^2/s).
+        Gamma: Liquid mass rate per unit wetted perimeter (kg/m/s).
+        rho: Liquid density (kg/m^3).
+        mu: Liquid viscosity (Pa s).
+        L: Wetted length in the flow direction (m).
+
+    Returns:
+        ``k_L`` (m/s).
+
+    Example:
+        Water at 0.02 kg/m/s down a 1 m wetted wall, D = 2e-9 m^2/s:
+
+        >>> k = falling_film_liquid_coefficient(2.0e-9, 0.02, 998.0, 1.0e-3, 1.0)
+        >>> 1e-5 < float(k) < 1e-4
+        True
+    """
+    delta = falling_film_thickness(Gamma, rho, mu)
+    v_max = 1.5 * _f64(Gamma) / (_f64(rho) * delta)
+    return penetration_coefficient(D, _f64(L) / v_max)
 
 
 # =============================================================================

@@ -12,10 +12,15 @@ film against ``ln((1-y2)/(1-y1))``; Colburn's NTU against scipy quadrature
 and the Gauss-Legendre integral; Onda against an independent NumPy
 transcription of the published equations.
 
-NOT verified: no textbook worked example (Geankoplis, Treybal, Seader,
-Welty) is reproduced -- no copy was available and the issue's example
-numbers are explicitly "from recollection". The packing and Le Bas / Fuller
-tables are from memory. The Onda regression fixes the order of magnitude of
+Published worked examples (added for book Ch. 14, ``TestPublishedExamples``):
+Poling et al. 5e Example 11-3 (Fuller, allyl chloride-air), Geankoplis Example
+6.2-5 (Fuller with the 1966 volumes, n-butanol-air) and Example 6.3-2
+(Wilke-Chang with Le Bas, acetone-water). The reference answers are recalled
+from the printed books, not copied from a scan.
+
+NOT verified: no published Onda worked example is reproduced. The packing
+and Le Bas / Fuller tables are from memory (the entries used by the three
+examples above are consistent with them). The Onda regression fixes the order of magnitude of
 k_L (1e-4 m/s, a well-known property of packed-column liquid films) and of
 k_G; it is not a published-example match.
 """
@@ -97,6 +102,76 @@ class TestDiffusivities:
         check_grads(f, (300.0, 1.2e5), order=1, modes=["rev"], rtol=1e-5)
         g = lambda T, mu: mt.wilke_chang_diffusivity(T, mu, 18.015, 59.2, 2.6)  # noqa: E731
         check_grads(g, (300.0, 0.8e-3), order=1, modes=["rev"], rtol=1e-5)
+
+
+class TestPublishedExamples:
+    """Textbook worked examples (book Ch. 14). The reference numbers are recalled
+    from the printed books, not copied from a scan; see plan/gaps-ch14.md."""
+
+    def test_poling_example_11_3_allyl_chloride_air(self):
+        # Poling, Prausnitz & O'Connell 5e Ex. 11-3: allyl chloride in air, 298 K, 1 bar.
+        # Sum v = 3(15.9) + 5(2.31) + 21.0 = 80.25; Fuller gives 0.096 cm^2/s (exp. 0.098).
+        V = mt.diffusion_volume({"C": 3, "H": 5, "Cl": 1})
+        assert V == pytest.approx(80.25)
+        D = mt.fuller_diffusivity(298.0, 1.0e5, 76.53, 28.97, V, mt.FULLER_VOLUMES["air"])
+        assert float(D) * 1e4 == pytest.approx(0.096, abs=0.0006)
+
+    def test_geankoplis_example_6_2_5_butanol_air_1966_volumes(self):
+        # Geankoplis Ex. 6.2-5: n-butanol in air, 1966 Fuller volumes (91.28, 20.1);
+        # about 7.7e-6 m^2/s at 0 C, 1 atm, half that at 2 atm; ~9.0e-6 at 25.9 C.
+        V = mt.diffusion_volume({"C": 4, "H": 10, "O": 1}, table="1966")
+        assert V == pytest.approx(91.28)
+        assert mt.diffusion_volume("air", table="1966") == 20.1
+        D0 = mt.fuller_diffusivity(273.0, 101325.0, 74.1, 29.0, V, 20.1)
+        assert float(D0) == pytest.approx(7.7e-6, rel=0.01)
+        assert float(mt.fuller_diffusivity(273.0, 2 * 101325.0, 74.1, 29.0, V, 20.1)) == pytest.approx(float(D0) / 2)
+        assert float(mt.fuller_diffusivity(299.1, 101325.0, 74.1, 29.0, V, 20.1)) == pytest.approx(9.05e-6, rel=0.01)
+
+    def test_geankoplis_example_6_3_2_acetone_water(self):
+        # Geankoplis Ex. 6.3-2: acetone in water, Wilke-Chang with Le Bas V_A = 0.0740 m^3/kmol:
+        # 1.277e-9 m^2/s at 25 C (exp. 1.28e-9) and 2.251e-9 at 50 C.
+        V = mt.molar_volume_nbp({"C": 3, "H": 6, "O": 1})
+        assert V == pytest.approx(74.0)
+        D25 = mt.wilke_chang_diffusivity(298.15, 0.8937e-3, 18.02, V, 2.6)
+        D50 = mt.wilke_chang_diffusivity(323.15, 0.5494e-3, 18.02, V, 2.6)
+        assert float(D25) == pytest.approx(1.277e-9, rel=0.002)
+        assert float(D50) == pytest.approx(2.251e-9, rel=0.002)
+
+    def test_unknown_table(self):
+        with pytest.raises(ValueError):
+            mt.diffusion_volume("air", table="1999")
+
+    def test_le_bas_oxygen_environments(self):
+        # Le Bas: methyl ester 9.1, methyl ether 9.9, higher ester/ether 11.0, acid 12.0.
+        inc = mt.LE_BAS_INCREMENTS
+        assert (inc["O_methyl_ester"], inc["O_methyl_ether"], inc["O_ester_ether"], inc["O_acid"]) == (
+            9.1, 9.9, 11.0, 12.0)
+        assert inc["O_ether"] == inc["O_methyl_ether"]
+
+
+class TestPenetration:
+    def test_penetration_and_renewal(self):
+        D, t = 2.0e-9, 0.5
+        assert float(mt.penetration_coefficient(D, t)) == pytest.approx(2 * math.sqrt(D / (math.pi * t)))
+        # Danckwerts with s = 4/(pi t_c) matches Higbie
+        assert float(mt.surface_renewal_coefficient(D, 4 / (math.pi * t))) == pytest.approx(
+            float(mt.penetration_coefficient(D, t)))
+
+    def test_falling_film(self):
+        G, rho, mu, D, L = 0.02, 998.0, 1.0e-3, 2.0e-9, 1.0
+        delta = (3 * mu * G / (rho**2 * mt.GRAVITY)) ** (1 / 3)
+        assert float(mt.falling_film_thickness(G, rho, mu)) == pytest.approx(delta)
+        vmax = 1.5 * G / (rho * delta)
+        k = mt.falling_film_liquid_coefficient(D, G, rho, mu, L)
+        assert float(k) == pytest.approx(math.sqrt(4 * D * vmax / (math.pi * L)))
+        assert float(k) == pytest.approx(float(mt.penetration_coefficient(D, L / vmax)))
+        # k_L ~ Gamma^(1/3): doubling the rate raises k_L by 2^(1/3)
+        assert float(mt.falling_film_liquid_coefficient(D, 2 * G, rho, mu, L) / k) == pytest.approx(2 ** (1 / 3))
+
+    def test_grads(self):
+        # D scaled to O(1) so the finite-difference step in check_grads is sensible
+        f = lambda d, G: 1e5 * mt.falling_film_liquid_coefficient(d * 1e-9, G, 998.0, 1.0e-3, 1.0)  # noqa: E731
+        check_grads(f, (2.0, 0.02), order=1, modes=["rev"], rtol=1e-4)
 
 
 # ----------------------------------------------------------------------------

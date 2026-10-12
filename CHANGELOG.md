@@ -30,6 +30,13 @@ All notable changes to difflow are recorded here. The format follows
   authoritative for duties; Watson `Hvap` is the anchor); Antoine/Cp/Hvap for 16 critical-only species; Wagner
   vapour pressure for 12 light gases (opt-in: `get_species_data(name, vapor_pressure="wagner")`);
   `saturation_temperature` / `saturation_pressure` (ideal or EOS, differentiable).
+- **Mass-transfer additions for the unit-ops book Ch. 14.** `difflow.mass_transfer` gains the original 1966
+  Fuller diffusion volumes (`FULLER_VOLUMES_1966`, `FULLER_ATOMIC_VOLUMES_1966`, `diffusion_volume(...,
+  table="1966")`) so Geankoplis/Treybal/Welty examples reproduce; Higbie and Danckwerts coefficients
+  (`penetration_coefficient`, `surface_renewal_coefficient`); and the laminar falling film of a wetted-wall column
+  (`falling_film_thickness`, `falling_film_liquid_coefficient`). Fuller and Wilke-Chang are now tested against
+  published worked examples (Poling et al. 5e Ex. 11-3; Geankoplis Ex. 6.2-5 and 6.3-2) in
+  `tests/test_mass_transfer.py::TestPublishedExamples`.
 
 - **`ActivityThermo` and an equilibrium reboiler in the McCabe-Thiele stepper (book Ch. 12 gaps).**
   (1) `difflow.ActivityThermo(ideal, activity_model)` gives modified-Raoult K-values
@@ -882,6 +889,10 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Fixed
+
+- **Le Bas oxygen increment for ethers (book Ch. 14).** `LE_BAS_INCREMENTS["O_ether"]` was 9.1, which is the
+  methyl-ester value; it is now 9.9 (methyl ethers), and the table gains `O_methyl_ester` (9.1), `O_methyl_ether`
+  (9.9), `O_ester_ether` (11.0, higher esters and ethers), `O_SPN` (8.3) and `Cl_medial` (24.6).
 
 - **`MechanicalVaporRecompression` compressor work was 6 % low.** The
   isentropic work used `Cp_vapor` (1880 J/kg/K) with the exponent of
