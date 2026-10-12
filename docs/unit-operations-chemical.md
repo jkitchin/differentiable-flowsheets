@@ -6438,7 +6438,7 @@ as a library and the `Dryer` unit that applies them to the humid-air streams of
 **Functions**: `dry_basis`, `wet_basis`, `free_moisture`, `solids_moisture`,
 `equilibrium_moisture`, `water_activity`, `constant_drying_rate`,
 `heat_transfer_coefficient_tray`, `drying_rate_curve`, `drying_periods`,
-`drying_time`
+`drying_time`, `rotary_dryer_ua`, `heat_transfer_units`
 
 Moisture is on the **dry basis**, $X$ kg water per kg bone-dry solid
 (`dry_basis(w)` and `wet_basis(X)` convert); the *equilibrium moisture* $X^*$ is
@@ -6462,7 +6462,10 @@ $$t = \frac{L_s}{A\,R_c}\left[(X_1 - X_c) + (X_c - X^*)\ln\frac{X_c - X^*}{X_2 -
 
 (`drying_time`; `falling="integral"` replaces the logarithm by
 $(L_s/A)\int dX/R$ over a tabulated rate curve, and `drying_periods` returns the
-two periods separately). The Fick-diffusion series for a slab is not implemented.
+two periods separately). Between the table's points the rate is interpolated
+linearly in $R$ by default; `interpolate="inverse"` interpolates $1/R$ instead,
+which makes the integral exactly the trapezoid rule on a $1/R$ versus $X$ plot,
+the graphical method of Geankoplis Example 9.7-1. The Fick-diffusion series for a slab is not implemented.
 
 **The smooth switch.** Which terms apply depends on where $X_c$ falls relative
 to $X_1$ and $X_2$: $X_1 > X_c > X_2$, falling only ($X_1 < X_c$) and constant
@@ -6501,11 +6504,16 @@ X = equilibrium_moisture(0.5, 300.0, "gab", gab)
 print(f"X_eq(a_w = 0.5) = {float(X):.4f}, back to a_w = {float(water_activity(X, 300.0, 'gab', gab)):.3f}")
 ```
 
-The numbers are an invented illustration, not a published example: the
-Geankoplis (Ch. 9) and McCabe, Smith & Harriott (Ch. 24) drying examples were
-not reproduced (their inputs could not be recalled with confidence), so the
-tests check the closed forms against a numerical $\int dX/R$ of the same
-piecewise rate curve instead. The tray correlations in
+The numbers are an invented illustration. The tests (`TestGeankoplis`) reproduce
+Geankoplis (5e, Ch. 9) Examples 9.6-1 (constant rate from the tray correlation:
+wet bulb 28.9 C and $R_c$ = 3.39 kg/h/m$^2$ as in the book; the time for the
+constant-rate drop, 2.08 h), 9.7-1 (graphical falling-rate integral, 4.06 h
+with `interpolate="inverse"`), 9.7-2 (straight-line falling rate, 4.40 h against
+4.39 h) and 9.10-1 (a countercurrent dryer balance with the product temperature
+specified: 1170 against 1171 kg dry air/h, exit humidity 0.0247). Those inputs and
+answers were **typed from memory** for the unit-operations book and should be
+checked against the printed book; the McCabe, Smith & Harriott (Ch. 24) examples
+are not reproduced. The tray correlations in
 `heat_transfer_coefficient_tray`, $h = 0.0204\,G^{0.8}$ (parallel flow) and
 $h = 1.17\,G^{0.37}$ (perpendicular), with $G$ in kg/m$^2$/h and $h$ in W/m$^2$/K,
 are typed from memory and **unverified**; check them against the book.
@@ -6641,6 +6649,43 @@ print(f"inlet {T - K:.1f} C with {float(air_flow(T)):.1f} kg/s of air: product {
       f"(limit {T_max - K:.1f} C), {float(info['energy_per_kg']) / 1e6:.2f} MJ/kg water")
 ```
 
+#### Rotary-dryer sizing
+
+A direct-heat rotary dryer is sized by heat transfer (McCabe, Smith & Harriott
+7e, Ch. 24). The air cools from $T_{in}$ to $T_{out}$ against solids that sit at
+the wet bulb $T_{wb}$ through most of the shell; the number of heat-transfer units
+$N_t = \ln[(T_{in} - T_{wb})/(T_{out} - T_{wb})]$ (`heat_transfer_units`, in
+`info["N_t"]` of a continuous dryer) is usually 1.5-2.5. With `diameter`
+set, a continuous `Dryer` (either flow) splits the shell into three zones:
+I heats the wet feed to $T_{wb}$, $q_I = m_s(c_{ps} + X_{in}c_{pw})(T_{wb} - T_{s,in})$;
+II evaporates the water at $T_{wb}$, $q_{II} = m_s(X_{in} - X_{out})\lambda(T_{wb})$;
+III heats the dry product to $T_{s,out}$, $q_{III} = m_s(c_{ps} + X_{out}c_{pw})(T_{s,out} - T_{wb})$.
+In a cocurrent dryer the zones run in the same order along the
+shell but the hot air meets zone I. The air temperatures between the zones
+(`zone_air_T`, at the I/II and II/III boundaries) follow from the humid heat, and each zone
+length is $L_i = q_i/(U_a S\,\Delta T_{lm,i})$ with
+$U_a = 237\,G^{0.67}/D$ W/m$^3$/K (`rotary_dryer_ua`; $G$ the air mass velocity
+in kg/m$^2$/s over the cross-section $S$). This is the SI form of MSH's
+$0.5\,G^{0.67}/D$ in US units, **recalled from memory**. `info` gains
+`zone_duties`, `zone_lengths`, `zone_dT_lm`, `zone_air_T`, `Ua`, `length`,
+`volume` and `L_over_D` (typically 4-10). `T_solids_out` fixes the product
+temperature when it is known, as in Geankoplis Example 9.10-1, instead of
+estimating it from the falling rate.
+
+```python
+from difflow import Dryer, DryerParams
+from difflow.psychrometrics import air_stream_from_state, state, MW_WATER
+
+K = 273.15
+wet = {"F_solid": 0.126, "F_H2O": 0.126 * 0.04 / MW_WATER, "T": 26.7 + K, "P": 101325.0}
+air = air_stream_from_state(state(T=93.3 + K, W=0.010), 0.325)      # kg/s dry air
+dryer = Dryer(DryerParams(mode="continuous", X_c=0.03, X_eq=0.0, product_moisture=0.002, h=50.0,
+                          T_solids_out=62.8 + K, solids_cp=1465.0, diameter=1.0))
+_, _, info = dryer(wet, air)
+print(f"N_t = {float(info['N_t']):.2f}, zones {[round(float(L), 2) for L in info['zone_lengths']]} m, "
+      f"L = {float(info['length']):.2f} m (L/D = {float(info['L_over_D']):.1f})")
+```
+
 #### Parameters
 
 <!-- doc-test: skip: field listing (a class sketch), not an executable example -->
@@ -6676,6 +6721,10 @@ class DryerParams:
     T_ambient: float = 293.15          # K, reference of the energy per kg and efficiency
     entrainment: float = 0.0           # fraction of the dry solids carried out as fines (continuous)
     lewis: float = 1.0
+    rate_interpolation: str = "rate"   # | "inverse" (1/R linear between rate_curve points)
+    T_solids_out: float = None         # K, product temperature specified instead of estimated
+    diameter: float = None             # m, three-zone rotary sizing (continuous, either flow)
+    ua_coefficient: float = 237.0      # SI prefactor of Ua = c G^0.67 / D
 ```
 
 #### Equations and Assumptions
@@ -6689,15 +6738,17 @@ class DryerParams:
 - Continuous: the product-temperature estimate above; no heat of wetting; constant
   solid and liquid-water specific heats; air out must stay above its dew point
   (reported, not enforced).
-- Not implemented: the three-zone (preheat, constant-rate, falling-rate) rotary-dryer
-  sizing of McCabe, the Fick-diffusion series, deep-bed humidity profiles, spray
+- Rotary sizing: `Ua` from the recalled MSH correlation (unverified), solids at the
+  wet bulb through zone II, constant heat capacities, no heat loss in the zone split.
+- Not implemented: the Fick-diffusion series, deep-bed humidity profiles, spray
   drying, fluid-bed hydrodynamics.
 - `psychrometrics.wet_bulb_temperature` now starts its Newton solve below the boiling
   point, so it works for the 100-200 C air of a dryer (it returned NaN before).
 
 **Gradients.** Drying time, energy per kg, the exhaust and product temperatures are
 differentiable with respect to the air temperature, humidity and flow, the air
-velocity (through $h$), $X_c$ and the load.
+velocity (through $h$), $X_c$ and the load, and the rotary length with respect to
+the air flow and the diameter.
 
 ---
 
