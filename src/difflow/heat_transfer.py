@@ -16,7 +16,9 @@ Contents
   :func:`grashof`, :func:`rayleigh`
 * Conduction: :func:`slab_resistance`, :func:`cylinder_resistance`,
   :func:`sphere_resistance`, :func:`composite_wall`,
-  :func:`critical_insulation_radius`, :func:`fin_efficiency_straight`
+  :func:`critical_insulation_radius`, :func:`insulated_pipe_heat_loss`,
+  :func:`fin_efficiency_straight` (insulation cost and the economic
+  thickness: :mod:`difflow.economics.insulation`)
 * Internal forced convection: :data:`NU_LAMINAR_TW`, :data:`NU_LAMINAR_QS`,
   :func:`sieder_tate_laminar`, :func:`dittus_boelter`, :func:`sieder_tate`,
   :func:`gnielinski`, :func:`internal_nusselt`, :func:`internal_h`
@@ -36,6 +38,9 @@ Contents
 * Lumped-capacitance transients: :func:`biot_number`,
   :func:`lumped_time_constant`, :func:`lumped_temperature`,
   :func:`lumped_heating_time`
+* Agitated vessels: :data:`AGITATED_VESSEL_CONSTANTS`, :func:`agitator_reynolds`,
+  :func:`agitated_vessel_nusselt`, :func:`jacketed_vessel_h` (jacketed wall),
+  :func:`agitated_coil_h` (immersed coil)
 
 Gas properties for the dimensionless groups are in :mod:`difflow.gas_properties`
 (air, N2, O2, CO2, CH4, H2, steam, ...) and liquid ones in
@@ -43,8 +48,7 @@ Gas properties for the dimensionless groups are in :mod:`difflow.gas_properties`
 
 Not included (out of scope or optional, see ``docs``): annular fins, tube banks
 (Zukauskas), the Bell-Delaware shell-side method (Kern is in :mod:`difflow.shell_and_tube`),
-multi-dimensional transient conduction (Heisler charts), agitated-vessel
-(jacket) coefficients.
+multi-dimensional transient conduction (Heisler charts).
 
 Example:
     >>> from difflow.heat_transfer import internal_h, overall_U
@@ -278,6 +282,48 @@ def critical_insulation_radius(k_ins: Array | float, h_out: Array | float, geome
     if geometry == "sphere":
         return 2.0 * _f64(k_ins) / _f64(h_out)
     raise ValueError(f"geometry must be 'cylinder' or 'sphere', got {geometry!r}")
+
+
+def insulated_pipe_heat_loss(
+    D_o: Array | float,
+    thickness: Array | float,
+    k_ins: Array | float,
+    h_out: Array | float,
+    T_pipe: Array | float,
+    T_amb: Array | float,
+) -> Array:
+    r"""Heat loss per metre (W/m) of a pipe with a layer of insulation.
+
+    .. math:: q' = \frac{T_{pipe} - T_{amb}}{\dfrac{\ln[(D_o+2t)/D_o]}{2\pi k_{ins}}
+              + \dfrac{1}{h_{out}\,\pi (D_o + 2t)}}
+
+    The pipe's outer surface is taken at ``T_pipe`` (the inside film and the
+    steel wall are small next to the insulation); ``h_out`` is the combined
+    convective and radiative coefficient of the outer surface (cladding).
+    ``thickness = 0`` is the bare pipe. Below the critical radius
+    (:func:`critical_insulation_radius`) adding insulation increases the loss.
+
+    Args:
+        D_o: Pipe outside diameter (m).
+        thickness: Insulation thickness (m).
+        k_ins: Insulation conductivity (W/m/K).
+        h_out: Outer surface coefficient (W/m^2/K).
+        T_pipe: Pipe outer-surface temperature (K).
+        T_amb: Ambient temperature (K).
+
+    Returns:
+        q' (W per metre of pipe).
+
+    Example:
+        >>> from difflow.heat_transfer import insulated_pipe_heat_loss
+        >>> round(float(insulated_pipe_heat_loss(0.1143, 0.05, 0.04, 10.0, 450.0, 293.15)), 1)
+        59.2
+    """
+    D_o, t = _f64(D_o), _f64(thickness)
+    r_in = D_o / 2.0
+    r_out = r_in + t
+    R = cylinder_resistance(r_in, r_out, k_ins, 1.0) + 1.0 / (_f64(h_out) * 2.0 * jnp.pi * r_out)
+    return (_f64(T_pipe) - _f64(T_amb)) / R
 
 
 def fin_efficiency_straight(h: Array | float, k: Array | float, t: Array | float, L: Array | float) -> Array:
@@ -914,10 +960,12 @@ def overall_U(
 #:   ends. (Its "steam, oil-free" row prints 0.0025; the coefficient,
 #:   4000-10000 W/m^2/K, makes it 0.00025.)
 #:
-#: Not included: crude oil by temperature and velocity, and lube oil. These
-#: are TEMA RGP-T-2.4 entries, and no copy of that table could be checked.
-#: ``heavy_hydrocarbons`` (0.0005) is the nearest Sinnott entry. Use your own
-#: standard for design.
+#: Crude oil by temperature and velocity, lube oils, cooling waters by
+#: temperature and velocity and the other TEMA RGP-T-2.4 entries are in
+#: :mod:`difflow.fouling` (:data:`difflow.fouling.TEMA_FOULING`,
+#: :func:`difflow.fouling.tema_crude_oil_fouling`,
+#: :func:`difflow.fouling.tema_water_fouling`), with their own provenance
+#: note. Use your own standard for design.
 FOULING_RESISTANCES: dict[str, float] = {
     # Incropera & DeWitt Table 11.1
     "seawater_below_50C": 0.0001,
@@ -1170,6 +1218,209 @@ def two_surface_radiation(
 
 
 # ----------------------------------------------------------------------
+# Agitated vessels: jacket (vessel wall) and immersed-coil coefficients
+# ----------------------------------------------------------------------
+#: Constants of the vessel-side (process-side) coefficient at the wall of a
+#: jacketed, agitated vessel,
+#: ``Nu = h D_T / k = a Re^b Pr^(1/3) (mu/mu_w)^m`` with
+#: ``Re = rho N D_a^2 / mu`` (``N`` in rev/s, ``D_a`` the impeller diameter,
+#: ``D_T`` the tank diameter). Each entry: ``(a, b, m, (Re_lo, Re_hi), source)``.
+#:
+#: * ``paddle`` is Chilton, Drew & Jebens (1944), as given by Kern (1950,
+#:   Ch. 20); the constants (0.36, 2/3, 0.14) were not re-checked against
+#:   the paper, but are the form reproduced throughout the textbooks.
+#: * ``flat_blade_turbine`` (baffled) and the two ``anchor`` rows are Uhl's
+#:   (1955) constants as tabulated in Uhl & Gray, *Mixing* Vol. I (1966) and
+#:   reproduced in Perry's handbook; **recalled from those secondary
+#:   tabulations and not checked against a printed copy**. Geometry
+#:   corrections (``D_a/D_T``, blade width, clearance) of the fuller
+#:   correlations are not included.
+#:
+#: Pass ``a``, ``b``, ``m`` to :func:`agitated_vessel_nusselt` to use any
+#: other published set.
+AGITATED_VESSEL_CONSTANTS: dict[str, tuple[float, float, float, tuple[float, float], str]] = {
+    "paddle": (0.36, 2.0 / 3.0, 0.14, (300.0, 3.0e5),
+               "Chilton, Drew & Jebens, Ind. Eng. Chem. 36, 510 (1944); Kern (1950) Ch. 20"),
+    "flat_blade_turbine": (0.74, 0.67, 0.14, (200.0, 1.0e5),
+                           "Uhl (1955), baffled vessel, via Uhl & Gray (1966) / Perry's (recalled)"),
+    "anchor": (0.36, 2.0 / 3.0, 0.18, (300.0, 4.0e4),
+               "Uhl (1955), via Uhl & Gray (1966) / Perry's (recalled)"),
+    "anchor_low_re": (1.0, 0.5, 0.18, (30.0, 300.0),
+                      "Uhl (1955), via Uhl & Gray (1966) / Perry's (recalled)"),
+}
+
+#: Methods of :func:`agitated_coil_h`.
+AGITATED_COIL_METHODS = ("chilton_drew_jebens", "oldshue_gretton")
+
+
+def agitator_reynolds(rho: Array | float, N: Array | float, D_a: Array | float, mu: Array | float) -> Array:
+    """Impeller Reynolds number ``Re = rho N D_a^2 / mu`` (-).
+
+    Args:
+        rho: Liquid density (kg/m^3).
+        N: Impeller speed (rev/s, **not** rad/s).
+        D_a: Impeller diameter (m).
+        mu: Bulk liquid viscosity (Pa s).
+
+    Returns:
+        Re (-).
+    """
+    return _f64(rho) * _f64(N) * _f64(D_a) ** 2 / _f64(mu)
+
+
+def agitated_vessel_nusselt(
+    Re: Array | float,
+    Pr: Array | float,
+    mu_ratio: Array | float = 1.0,
+    impeller: str = "paddle",
+    a: float | None = None,
+    b: float | None = None,
+    m: float | None = None,
+) -> Array:
+    r"""Vessel-side Nusselt number at the jacketed wall of an agitated vessel.
+
+    .. math:: \mathrm{Nu} = \frac{h D_T}{k}
+              = a\,\mathrm{Re}^b\,\mathrm{Pr}^{1/3}\,(\mu/\mu_w)^m,
+              \qquad \mathrm{Re} = \frac{\rho N D_a^2}{\mu}
+
+    with the constants of :data:`AGITATED_VESSEL_CONSTANTS` for ``impeller``
+    (Chilton-Drew-Jebens paddle: 0.36, 2/3, 0.14). ``Nu`` is based on the
+    **tank** diameter and ``Re`` on the **impeller** diameter. The fit's
+    Reynolds range is in the table; nothing is clipped outside it.
+
+    Args:
+        Re: Impeller Reynolds number (see :func:`agitator_reynolds`).
+        Pr: Prandtl number of the bulk liquid.
+        mu_ratio: ``mu_bulk / mu_wall`` (-).
+        impeller: Key of :data:`AGITATED_VESSEL_CONSTANTS`.
+        a, b, m: Override the tabulated constants (each optional).
+
+    Returns:
+        Nu (-), on the tank diameter.
+
+    Raises:
+        KeyError: Unknown impeller.
+
+    Example:
+        >>> from difflow.heat_transfer import agitated_vessel_nusselt
+        >>> round(float(agitated_vessel_nusselt(1.0e5, 5.0)), 1)   # 0.36 * 1e5^(2/3) * 5^(1/3)
+        1326.3
+    """
+    try:
+        a0, b0, m0, _, _ = AGITATED_VESSEL_CONSTANTS[impeller]
+    except KeyError:
+        raise KeyError(f"Unknown impeller {impeller!r}; use one of {sorted(AGITATED_VESSEL_CONSTANTS)}") from None
+    a = a0 if a is None else a
+    b = b0 if b is None else b
+    m = m0 if m is None else m
+    return a * _f64(Re) ** b * _f64(Pr) ** (1.0 / 3.0) * _f64(mu_ratio) ** m
+
+
+def jacketed_vessel_h(
+    rho: Array | float,
+    N: Array | float,
+    D_a: Array | float,
+    D_T: Array | float,
+    mu: Array | float,
+    Cp: Array | float,
+    k: Array | float,
+    mu_wall: Array | float | None = None,
+    impeller: str = "paddle",
+) -> Array:
+    """Vessel-side film coefficient (W/m^2/K) at the jacketed wall of an agitated vessel.
+
+    ``h = Nu k / D_T`` with :func:`agitated_vessel_nusselt`. Combine with the
+    jacket-side coefficient, the wall and fouling in :func:`overall_U`.
+
+    Args:
+        rho: Liquid density (kg/m^3).
+        N: Impeller speed (rev/s).
+        D_a: Impeller diameter (m).
+        D_T: Tank diameter (m).
+        mu: Bulk viscosity (Pa s).
+        Cp: Heat capacity (J/kg/K).
+        k: Thermal conductivity (W/m/K).
+        mu_wall: Viscosity at the wall temperature (Pa s); None for ``mu/mu_w = 1``.
+        impeller: Key of :data:`AGITATED_VESSEL_CONSTANTS`.
+
+    Returns:
+        h (W/m^2/K).
+
+    Example:
+        >>> from difflow.heat_transfer import jacketed_vessel_h
+        >>> # water-like liquid, 1.5 m tank, 0.5 m paddle at 2 rev/s
+        >>> round(float(jacketed_vessel_h(1000.0, 2.0, 0.5, 1.5, 1.0e-3, 4180.0, 0.6)))
+        1733
+    """
+    Re = agitator_reynolds(rho, N, D_a, mu)
+    Pr = prandtl(Cp, mu, k)
+    ratio = 1.0 if mu_wall is None else _f64(mu) / _f64(mu_wall)
+    return agitated_vessel_nusselt(Re, Pr, ratio, impeller) * _f64(k) / _f64(D_T)
+
+
+def agitated_coil_h(
+    Re: Array | float,
+    Pr: Array | float,
+    k: Array | float,
+    D_T: Array | float,
+    mu_ratio: Array | float = 1.0,
+    method: str = "chilton_drew_jebens",
+    D_a: Array | float | None = None,
+    d_o: Array | float | None = None,
+) -> Array:
+    r"""Vessel-side coefficient (W/m^2/K) on the outside of an immersed helical coil.
+
+    * ``"chilton_drew_jebens"`` (paddle agitator; Chilton, Drew & Jebens,
+      1944, as given by Kern, 1950, Ch. 20), on the tank diameter:
+
+      .. math:: \frac{h D_T}{k} = 0.87\,\mathrm{Re}^{0.62}\mathrm{Pr}^{1/3}(\mu/\mu_w)^{0.14}
+
+    * ``"oldshue_gretton"`` (flat-blade turbine, baffled vessel; Oldshue &
+      Gretton, Chem. Eng. Prog. 50, 615, 1954), on the coil-tube outside
+      diameter :math:`d_o`:
+
+      .. math:: \frac{h d_o}{k} = 0.17\,\mathrm{Re}^{0.67}\mathrm{Pr}^{0.37}
+                (D_a/D_T)^{0.1}(d_o/D_T)^{0.5}
+
+      (no viscosity-ratio term; ``mu_ratio`` is ignored).
+
+    ``Re = rho N D_a^2 / mu`` in both (:func:`agitator_reynolds`).
+
+    Args:
+        Re: Impeller Reynolds number (-).
+        Pr: Prandtl number (-).
+        k: Liquid conductivity (W/m/K).
+        D_T: Tank diameter (m).
+        mu_ratio: ``mu_bulk / mu_wall`` (Chilton-Drew-Jebens only).
+        method: One of :data:`AGITATED_COIL_METHODS`.
+        D_a: Impeller diameter (m), Oldshue-Gretton only.
+        d_o: Coil tube outside diameter (m), Oldshue-Gretton only.
+
+    Returns:
+        h (W/m^2/K) on the coil's outside surface.
+
+    Raises:
+        ValueError: Unknown method, or ``D_a``/``d_o`` missing for Oldshue-Gretton.
+
+    Example:
+        >>> from difflow.heat_transfer import agitated_coil_h
+        >>> round(float(agitated_coil_h(1.0e5, 5.0, 0.6, 1.5)))   # 0.87 Re^0.62 Pr^(1/3) k/D_T
+        749
+    """
+    if method == "chilton_drew_jebens":
+        Nu = 0.87 * _f64(Re) ** 0.62 * _f64(Pr) ** (1.0 / 3.0) * _f64(mu_ratio) ** 0.14
+        return Nu * _f64(k) / _f64(D_T)
+    if method == "oldshue_gretton":
+        if D_a is None or d_o is None:
+            raise ValueError("oldshue_gretton needs the impeller diameter D_a and the coil tube d_o")
+        D_T = _f64(D_T)
+        Nu = (0.17 * _f64(Re) ** 0.67 * _f64(Pr) ** 0.37
+              * (_f64(D_a) / D_T) ** 0.1 * (_f64(d_o) / D_T) ** 0.5)
+        return Nu * _f64(k) / _f64(d_o)
+    raise ValueError(f"unknown method {method!r}; choose from {AGITATED_COIL_METHODS}")
+
+
+# ----------------------------------------------------------------------
 # Lumped capacitance (transient)
 # ----------------------------------------------------------------------
 def biot_number(h: Array | float, L_c: Array | float, k: Array | float) -> Array:
@@ -1311,4 +1562,11 @@ __all__ = [
     "lumped_time_constant",
     "lumped_temperature",
     "lumped_heating_time",
+    "insulated_pipe_heat_loss",
+    "AGITATED_VESSEL_CONSTANTS",
+    "AGITATED_COIL_METHODS",
+    "agitator_reynolds",
+    "agitated_vessel_nusselt",
+    "jacketed_vessel_h",
+    "agitated_coil_h",
 ]

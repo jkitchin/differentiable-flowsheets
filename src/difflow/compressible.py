@@ -866,6 +866,76 @@ def optimal_stage_ratios(P_in: Array | float, P_out: Array | float, n_stages: in
     return jnp.full((n,), r)
 
 
+def stage_pressures(
+    P_in: Array | float,
+    P_out: Array | float,
+    n_stages: int,
+    intercooler_dP: Array | float = 0.0,
+) -> tuple[Array, Array]:
+    """Stage suction and discharge pressures of an intercooled train with interstage losses.
+
+    Every stage gets the same pressure ratio ``r`` and each of the ``N - 1``
+    intercoolers loses ``dP``::
+
+        Pd_1 = r P_in,   Ps_{k+1} = Pd_k - dP,   Pd_{k+1} = r Ps_{k+1},   Pd_N = P_out
+
+    With ``dP = 0`` this is :func:`optimal_stage_ratios` (the minimum-work
+    split for an ideal gas cooled back to the suction temperature). With a
+    loss it is the usual design rule -- equal ratios, the loss made up by a
+    slightly higher ``r`` -- and close to, not exactly, the minimum-work split;
+    optimize the discharge pressures of :class:`~difflow.units.eos_units.MultistageCompressor`
+    directly when the last fraction of a percent matters. ``r`` is found by
+    bisection on ``ln r`` with an implicit-function gradient.
+
+    Args:
+        P_in: First-stage suction pressure (Pa).
+        P_out: Last-stage discharge pressure (Pa).
+        n_stages: Number of stages ``N`` (a Python int).
+        intercooler_dP: Pressure drop of each intercooler (Pa).
+
+    Returns:
+        ``(suction, discharge)``: arrays of ``N`` pressures (Pa).
+
+    Example:
+        >>> Ps, Pd = stage_pressures(1e5, 30e5, 3, intercooler_dP=0.2e5)
+        >>> round(float(Pd[-1]) / 1e5, 6), bool(Pd[0] / Ps[0] > 30 ** (1 / 3))
+        (30.0, True)
+    """
+    n = int(n_stages)
+    if n < 1:
+        raise ValueError(f"n_stages must be >= 1, got {n_stages}")
+    P_in = jnp.asarray(P_in, dtype=jnp.float64)
+    P_out = jnp.asarray(P_out, dtype=jnp.float64)
+    dP = jnp.asarray(intercooler_dP, dtype=jnp.float64)
+
+    def chain(r):
+        Ps, Pd = [P_in], []
+        for k in range(n):
+            Pd.append(r * Ps[-1])
+            if k < n - 1:
+                Ps.append(Pd[-1] - dP)
+        return jnp.stack(Ps), jnp.stack(Pd)
+
+    def F(ln_r):
+        return jnp.log(chain(jnp.exp(ln_r))[1][-1] / P_out)
+
+    r0 = (P_out / P_in) ** (1.0 / n)
+    # F rises with r; [ln r0, ln r0 + ln(P_out/P_in)] brackets the root for any
+    # loss that leaves every suction pressure positive.
+    lo = jax.lax.stop_gradient(jnp.log(r0))
+    hi = lo + jax.lax.stop_gradient(jnp.log(P_out / P_in))
+
+    def body(_, ab):
+        a, b = ab
+        m = 0.5 * (a + b)
+        neg = F(m) < 0.0
+        return jnp.where(neg, m, a), jnp.where(neg, b, m)
+
+    a, b = jax.lax.fori_loop(0, 80, body, (lo, hi))
+    ln_r = _implicit(F, 0.5 * (a + b))
+    return chain(jnp.exp(ln_r))
+
+
 __all__ = [
     "R_GAS",
     "speed_of_sound",
@@ -894,4 +964,5 @@ __all__ = [
     "isentropic_efficiency_from_polytropic",
     "polytropic_efficiency_from_isentropic",
     "optimal_stage_ratios",
+    "stage_pressures",
 ]

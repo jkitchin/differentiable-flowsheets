@@ -23,11 +23,16 @@ committed tables:
   0.707. Table A.4's densities (hence nu and alpha) are at 1 bar, not
   1 atm; pass ``P=1e5`` to compare them (the 1 atm default is 1.3 % denser).
 
-The fits are for the dilute gas, with no dense-gas correction and no mixture
-rule. Viscosity and conductivity hardly change with pressure up to about
-10 bar, except near saturation or the critical point; above that they rise
-(methane at 15 C: 10.75 uPa s dilute, about 12.0 at 50 bar). Heat capacity is
-the 1 atm value. Each fit is valid over the data range
+The fits are for the dilute gas. Viscosity and conductivity hardly change
+with pressure up to about 10 bar, except near saturation or the critical
+point; above that they rise (methane at 15 C: 10.75 uPa s dilute, about 12.0
+at 50 bar). :func:`dense_gas_viscosity` (Jossi-Stiel-Thodos) and
+:func:`dense_gas_conductivity` (Stiel-Thodos) add the residual, a function of
+the reduced density from Peng-Robinson; :func:`mixture_viscosity` (Wilke or
+Herning-Zipperer) and :func:`mixture_conductivity` (Wassiljewa with the
+Mason-Saxena coefficients) mix the dilute values, and
+:func:`gas_mixture_transport` does both for a mixture at pressure. Heat
+capacity is the 1 atm value. Each fit is valid over the data range
 (``gas_property_range``); a concrete temperature outside it raises
 :class:`GasRangeWarning`, and the value is extrapolated, never clipped.
 
@@ -66,6 +71,12 @@ __all__ = [
     "list_gas_species",
     "sutherland_viscosity",
     "sutherland_conductivity",
+    "GAS_CRITICAL",
+    "mixture_viscosity",
+    "mixture_conductivity",
+    "dense_gas_viscosity",
+    "dense_gas_conductivity",
+    "gas_mixture_transport",
 ]
 
 R_GAS = 8.314462618
@@ -376,3 +387,269 @@ def sutherland_conductivity(T: Array | float, gas: str | None = None, *, k0: flo
     if k0 is None or S is None:
         raise ValueError("give gas= or both k0= and S=")
     return _sutherland(T, k0, T0, S)
+
+
+# =============================================================================
+# Mixtures and dense gas
+# =============================================================================
+
+# Critical constants for the dense-gas residuals: Tc (K), Pc (bar),
+# Vc (cm^3/mol), Zc, omega. Poling, Prausnitz & O'Connell, *The Properties
+# of Gases and Liquids*, 5e, Appendix A. Air is the Kay's-rule pseudo-critical
+# of N2/O2/Ar 78.12/20.96/0.92 mol %.
+GAS_CRITICAL = {
+    "nitrogen": {"Tc": 126.20, "Pc": 33.98, "Vc": 90.10, "Zc": 0.289, "omega": 0.037},
+    "oxygen": {"Tc": 154.58, "Pc": 50.43, "Vc": 73.37, "Zc": 0.288, "omega": 0.022},
+    "argon": {"Tc": 150.86, "Pc": 48.98, "Vc": 74.57, "Zc": 0.291, "omega": -0.002},
+    "carbon_dioxide": {"Tc": 304.12, "Pc": 73.74, "Vc": 94.07, "Zc": 0.274, "omega": 0.225},
+    "carbon_monoxide": {"Tc": 132.85, "Pc": 34.94, "Vc": 93.10, "Zc": 0.292, "omega": 0.045},
+    "methane": {"Tc": 190.56, "Pc": 45.99, "Vc": 98.60, "Zc": 0.286, "omega": 0.011},
+    "hydrogen": {"Tc": 33.19, "Pc": 13.13, "Vc": 64.14, "Zc": 0.305, "omega": -0.216},
+    "helium": {"Tc": 5.19, "Pc": 2.27, "Vc": 57.30, "Zc": 0.302, "omega": -0.390},
+    "water": {"Tc": 647.14, "Pc": 220.64, "Vc": 55.95, "Zc": 0.229, "omega": 0.344},
+}
+_AIR_Y = {"nitrogen": 0.7812, "oxygen": 0.2096, "argon": 0.0092}
+GAS_CRITICAL["air"] = {
+    k: sum(y * GAS_CRITICAL[g][k] for g, y in _AIR_Y.items())
+    for k in ("Tc", "Vc", "Zc", "omega")
+}
+GAS_CRITICAL["air"]["Pc"] = (GAS_CRITICAL["air"]["Zc"] * 83.14462618
+                             * GAS_CRITICAL["air"]["Tc"] / GAS_CRITICAL["air"]["Vc"])
+
+
+def _names_y(names, y):
+    if isinstance(names, str):
+        names = [names]
+    names = [_name(n) for n in names]
+    if y is None:
+        if len(names) != 1:
+            raise ValueError("give mole fractions y for a mixture")
+        y = [1.0]
+    y = jnp.asarray(y, dtype=jnp.float64)
+    return names, y / jnp.sum(y)
+
+
+def _phi_wilke(mu, M):
+    """Wilke's interaction matrix Phi_ij (also Mason-Saxena's for k with A = 1)."""
+    ratio_mu = mu[:, None] / mu[None, :]
+    ratio_M = M[None, :] / M[:, None]
+    return (1.0 + jnp.sqrt(ratio_mu) * ratio_M ** 0.25) ** 2 / jnp.sqrt(8.0 * (1.0 + 1.0 / ratio_M))
+
+
+def mixture_viscosity(names, y, T: Array | float, method: str = "wilke") -> Array:
+    """Low-pressure viscosity of a gas mixture (Pa s).
+
+    - ``"wilke"`` (Wilke 1950; Poling et al. 5e, Eq. 9-5.13)::
+
+          mu = sum_i y_i mu_i / sum_j y_j Phi_ij,
+          Phi_ij = [1 + (mu_i/mu_j)^(1/2) (M_j/M_i)^(1/4)]^2 / [8 (1 + M_i/M_j)]^(1/2)
+
+    - ``"herning_zipperer"`` (Herning & Zipperer 1936)::
+
+          mu = sum_i y_i mu_i M_i^(1/2) / sum_i y_i M_i^(1/2)
+
+      the usual natural-gas rule (ISO 6976 practice); within about 2% of
+      Wilke for hydrocarbon/inert mixtures, worse with hydrogen.
+
+    Args:
+        names: Gas names (``list_gas_species()``).
+        y: Mole fractions (normalised here).
+        T: Temperature (K), scalar.
+        method: ``"wilke"`` or ``"herning_zipperer"``.
+
+    Returns:
+        Mixture viscosity (Pa s).
+
+    Example:
+        >>> mu = mixture_viscosity(["nitrogen", "oxygen", "argon"],
+        ...                        [0.7812, 0.2096, 0.0092], 300.0)
+        >>> round(float(mu) * 1e6, 1)   # air fit: 18.5
+        18.5
+    """
+    names, y = _names_y(names, y)
+    mu = jnp.stack([gas_viscosity(n, T) for n in names])
+    M = jnp.asarray([_GAS_FITS[n]["MW"] for n in names])
+    if method == "wilke":
+        phi = _phi_wilke(mu, M)
+        return jnp.sum(y * mu / (phi @ y))
+    if method == "herning_zipperer":
+        w = y * jnp.sqrt(M)
+        return jnp.sum(w * mu) / jnp.sum(w)
+    raise ValueError(f"method must be 'wilke' or 'herning_zipperer', got {method!r}")
+
+
+def mixture_conductivity(names, y, T: Array | float) -> Array:
+    """Low-pressure thermal conductivity of a gas mixture (W/m/K).
+
+    Wassiljewa's equation with the Mason-Saxena coefficients (Poling et al.
+    5e, Eqs. 10-6.1 and 10-6.2, ``A_ij = Phi_ij`` of Wilke's viscosity rule
+    with epsilon = 1)::
+
+        k = sum_i y_i k_i / sum_j y_j A_ij
+
+    Args:
+        names: Gas names.
+        y: Mole fractions.
+        T: Temperature (K), scalar.
+
+    Returns:
+        Mixture conductivity (W/m/K).
+
+    Example:
+        >>> k = mixture_conductivity(["nitrogen", "oxygen", "argon"],
+        ...                          [0.7812, 0.2096, 0.0092], 300.0)
+        >>> round(float(k) * 1e3, 1)   # air fit 26.4; Mason-Saxena ~1-2% low
+        26.0
+    """
+    names, y = _names_y(names, y)
+    mu = jnp.stack([gas_viscosity(n, T) for n in names])
+    k = jnp.stack([gas_thermal_conductivity(n, T) for n in names])
+    M = jnp.asarray([_GAS_FITS[n]["MW"] for n in names])
+    return jnp.sum(y * k / (_phi_wilke(mu, M) @ y))
+
+
+def _pseudo_critical(names, y):
+    """Kay's-rule pseudo-critical constants (Poling et al. 5e, Sec. 9-7)."""
+    c = {k: jnp.asarray([GAS_CRITICAL[n][k] for n in names]) for k in
+         ("Tc", "Pc", "Vc", "Zc", "omega")}
+    Tc, Vc, Zc = (jnp.sum(y * c[k]) for k in ("Tc", "Vc", "Zc"))
+    # Prausnitz-Gunn Pc for a mixture; a pure gas keeps its tabulated Pc.
+    Pc = c["Pc"][0] if len(names) == 1 else Zc * 83.14462618 * Tc / Vc  # bar
+    M = jnp.sum(y * jnp.asarray([_GAS_FITS[n]["MW"] for n in names]))
+    return Tc, Pc, Vc, Zc, M, c
+
+
+def _molar_density(names, y, T, P, c):
+    """Molar density (mol/cm^3) from Peng-Robinson, vapour root."""
+    from difflow.eos import CriticalProperties, PengRobinson
+    eos = PengRobinson({n: CriticalProperties(n, GAS_CRITICAL[n]["Tc"],
+                                              GAS_CRITICAL[n]["Pc"] * 1e5,
+                                              GAS_CRITICAL[n]["omega"])
+                        for n in names})
+    T = jnp.asarray(T, dtype=jnp.float64)
+    P = jnp.asarray(P, dtype=jnp.float64)
+    Z = eos.solve_Z(T, P, y, "vapor")
+    return P / (Z * R_GAS * T) * 1e-6
+
+
+def _reduced_density(names, y, T, P, rho, Vc, M):
+    if rho is None:
+        return _molar_density(names, y, T, P, None) * Vc
+    return jnp.asarray(rho) / (M * 1e-3) * 1e-6 * Vc  # kg/m^3 -> mol/cm^3
+
+
+def dense_gas_viscosity(names, T: Array | float, P: Array | float, y=None,
+                        rho: Array | float | None = None,
+                        method: str = "wilke") -> Array:
+    """Viscosity of a gas (or gas mixture) at pressure (Pa s).
+
+    The dilute value (the fits, mixed by :func:`mixture_viscosity`) plus the
+    Jossi-Stiel-Thodos residual (Jossi, Stiel & Thodos, AIChE J. 8 (1962) 59;
+    Reid, Prausnitz & Poling 4e, Eq. 9-10.4)::
+
+        [(mu - mu0) xi + 1e-4]^(1/4) = 0.1023 + 0.023364 rho_r + 0.058533 rho_r^2
+                                       - 0.040758 rho_r^3 + 0.0093324 rho_r^4
+        xi = Tc^(1/6) M^(-1/2) Pc^(-2/3)     (Tc K, Pc atm, mu cP)
+
+    with ``rho_r = rho / rho_c = rho Vc``. The correlation is used as
+    published: at zero density it leaves ``(0.1023^4 - 1e-4)/xi`` (0.2 uPa s
+    for methane, 2%), part of the fit. Below about 10 bar use
+    :func:`gas_viscosity`. Valid for ``0.1 < rho_r < 3``
+    (within about 5% for nonpolar gases; not for H2, He or polar gases
+    such as water near saturation). Mixtures use Kay's-rule pseudo-critical
+    constants (``Pc = Zc R Tc / Vc``). The density is Peng-Robinson's
+    vapour root unless ``rho`` is given.
+
+    Args:
+        names: Gas name, or names of a mixture.
+        T: Temperature (K).
+        P: Pressure (Pa).
+        y: Mole fractions (required for a mixture).
+        rho: Mass density (kg/m^3) to use instead of Peng-Robinson.
+        method: Dilute mixing rule (see :func:`mixture_viscosity`).
+
+    Returns:
+        Viscosity (Pa s).
+
+    Example:
+        >>> mu = dense_gas_viscosity("methane", 288.15, 50e5)
+        >>> round(float(mu) * 1e6, 1)   # dilute 10.75; NIST about 12.0
+        11.8
+    """
+    names, y = _names_y(names, y)
+    mu0 = mixture_viscosity(names, y, T, method)
+    Tc, Pc, Vc, Zc, M, _ = _pseudo_critical(names, y)
+    rr = _reduced_density(names, y, T, P, rho, Vc, M)
+    xi = Tc ** (1.0 / 6.0) * M ** -0.5 * (Pc / 1.01325) ** (-2.0 / 3.0)  # 1/cP
+    rhs = (0.1023 + 0.023364 * rr + 0.058533 * rr**2 - 0.040758 * rr**3
+           + 0.0093324 * rr**4)
+    dmu_cP = (rhs**4 - 1e-4) / xi
+    return mu0 + dmu_cP * 1e-3
+
+
+def dense_gas_conductivity(names, T: Array | float, P: Array | float, y=None,
+                           rho: Array | float | None = None) -> Array:
+    """Thermal conductivity of a gas (or gas mixture) at pressure (W/m/K).
+
+    The dilute value (:func:`mixture_conductivity`) plus the Stiel-Thodos
+    residual (Stiel & Thodos, AIChE J. 10 (1964) 26; Poling et al. 5e,
+    Eqs. 10-5.1 to 10-5.3)::
+
+        (k - k0) Gamma Zc^5 = 1.22e-2 [exp(0.535 rho_r) - 1]     rho_r < 0.5
+                            = 1.14e-2 [exp(0.67 rho_r) - 1.069]  0.5 < rho_r < 2
+                            = 2.60e-3 [exp(1.155 rho_r) + 2.016] 2 < rho_r < 2.8
+        Gamma = 210 (Tc M^3 / Pc^4)^(1/6)           (Tc K, Pc bar, k W/m/K)
+
+    Nonpolar gases, within about 10-20%. Mixtures use Kay's rule, as
+    :func:`dense_gas_viscosity`.
+
+    Args:
+        names: Gas name, or names of a mixture.
+        T: Temperature (K).
+        P: Pressure (Pa).
+        y: Mole fractions (required for a mixture).
+        rho: Mass density (kg/m^3) to use instead of Peng-Robinson.
+
+    Returns:
+        Thermal conductivity (W/m/K).
+    """
+    names, y = _names_y(names, y)
+    k0 = mixture_conductivity(names, y, T)
+    Tc, Pc, Vc, Zc, M, _ = _pseudo_critical(names, y)
+    rr = _reduced_density(names, y, T, P, rho, Vc, M)
+    gamma = 210.0 * (Tc * M**3 / Pc**4) ** (1.0 / 6.0)
+    res = jnp.where(
+        rr < 0.5, 1.22e-2 * (jnp.exp(0.535 * rr) - 1.0),
+        jnp.where(rr < 2.0, 1.14e-2 * (jnp.exp(0.67 * rr) - 1.069),
+                  2.60e-3 * (jnp.exp(1.155 * rr) + 2.016)))
+    return k0 + res / (gamma * Zc**5)
+
+
+def gas_mixture_transport(names, y, T: Array | float, P: Array | float = 101325.0,
+                          dense: bool = True) -> dict:
+    """Mixture viscosity, conductivity, density and molar mass at (T, P).
+
+    Args:
+        names: Gas names.
+        y: Mole fractions.
+        T: Temperature (K).
+        P: Pressure (Pa).
+        dense: Add the dense-gas residuals (default); False gives the
+            low-pressure mixing rules alone.
+
+    Returns:
+        ``{'mu', 'k', 'rho', 'MW', 'Z'}`` (SI; ``MW`` in g/mol, ``rho`` from
+        Peng-Robinson).
+    """
+    names, y = _names_y(names, y)
+    Tc, Pc, Vc, Zc, M, _ = _pseudo_critical(names, y)
+    c_mol = _molar_density(names, y, T, P, None) * 1e6  # mol/m^3
+    rho = c_mol * M * 1e-3
+    if dense:
+        mu = dense_gas_viscosity(names, T, P, y, rho)
+        k = dense_gas_conductivity(names, T, P, y, rho)
+    else:
+        mu = mixture_viscosity(names, y, T)
+        k = mixture_conductivity(names, y, T)
+    return {"mu": mu, "k": k, "rho": rho, "MW": M,
+            "Z": jnp.asarray(P) / (c_mol * R_GAS * jnp.asarray(T))}

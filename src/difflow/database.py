@@ -1112,6 +1112,320 @@ for _name in _HDS_IDEAL:
 del _name
 
 
+# Ideal-thermo records for species that had critical constants only (issue
+# #442, Ch. 2). Obtained as the refinery species above were: every number
+# was read from the data tables shipped with the `chemicals` package
+# (C. Bell et al., v1.5.2), which transcribe the sources named per entry,
+# and accepted only after an independent check (NIST WebBook could not be
+# reached): each Antoine set's implied normal boiling point against the
+# reference-EOS value (CoolProp 8.0, the same reference equations of state
+# the NIST WebBook fluid tables use) or the CRC Handbook Tb; each ideal-gas
+# Cp at 298.15 K against a separately tabulated value (CRC, JANAF or PPO's
+# own Cp(298 K) column); each Hvap against the reference EOS where there is
+# one. tests/test_database_ch2_species.py pins all of them.
+#
+# Conventions as for the table above: "Cp_ig" is a cubic least-squares fit
+# by this project to the cited ideal-gas correlation over the stated range;
+# "Cp" (liquid, constant) is given only for species that are liquid at
+# 298 K and 1 atm; Antoine is log10(P/Pa), T in K; "Hvap" is the measured
+# value at "Hvap_T" with Watson n = 0.38 and Tc from _CRITICAL_DATA; Hf is
+# the ideal-gas standard enthalpy of formation at 298.15 K.
+#
+# Not added: helium (Antoine 1.85-5.34 K only; the PPO set misses Tb by
+# 0.08 K, 2%, and there is nothing to vaporize at process conditions) and
+# acetylene (no normal boiling point: it sublimes at 1 atm, and no
+# triple-point latent heat could be cross-checked).
+_PPO = "Poling, Prausnitz & O'Connell 5e (2001) App. A"
+_CH2_IDEAL = {
+    "carbon_monoxide": {
+        "MW": 28.01,
+        # Ideal-gas Cp: cubic fit (250-800 K, max error 0.19%) to the PPO 5e
+        # App. A Cp/R quartic; 29.05 at 298 K (CRC 29.1).
+        "Cp_ig": (30.0245, -0.0106935, 3.02675e-05, -1.81671e-08),
+        "Hvap": (6040.0, 0.38, 132.9),  # CRC, at Tb 81.65 K (ref. EOS 6013)
+        "Hvap_T": 81.65,
+        "antoine": (8.81912, 291.743, -5.154),
+        "T_antoine_min": 69.73,
+        "T_antoine_max": 88.08,
+        "Hf": -110500.0,  # CRC
+    },
+    "chloromethane": {
+        "MW": 50.49,
+        # Cp_ig: cubic fit (250-800 K, max error 0.39%) to PPO 5e App. A.
+        "Cp_ig": (22.9095, 0.0451626, 6.94007e-05, -6.29571e-08),
+        "Hvap": (21400.0, 0.38, 416.3),  # CRC, at Tb (ref. EOS 21 613)
+        "Hvap_T": 249.06,
+        "antoine": (9.16533, 920.86, -27.57),
+        "T_antoine_min": 184.6,
+        "T_antoine_max": 265.87,
+        "Hf": -81900.0,  # CRC
+    },
+    "dichloromethane": {
+        "MW": 84.93,
+        # Cp_ig: cubic fit (250-800 K, max error 0.15%) to PPO 5e App. A.
+        "Cp_ig": (19.3164, 0.124199, -6.0483e-05, 1.67952e-09),
+        "Cp": (100.0, 0.0, 0.0, 0.0),  # liquid, 298 K, PPO 5e App. A
+        "Hvap": (28060.0, 0.38, 510.0),  # CRC, at Tb
+        "Hvap_T": 313.15,
+        "antoine": (9.07622, 1070.07, -49.91),
+        "T_antoine_min": 235.2,
+        "T_antoine_max": 333.36,
+        "Hf": -95400.0,  # CRC
+    },
+    "heavy_water": {
+        "MW": 20.03,
+        # Cp_ig: cubic fit (250-800 K, max error 0.18%) to PPO 5e App. A;
+        # 34.23 at 298 K (JANAF 34.26).
+        "Cp_ig": (32.7768, -0.00472089, 3.93985e-05, -2.40454e-08),
+        "Cp": (84.35, 0.0, 0.0, 0.0),  # liquid, 298 K, PPO 5e App. A
+        # At Tb, from the IAPWS reference EOS for D2O (Herrig, Thol, Harvey &
+        # Lemmon, J. Phys. Chem. Ref. Data 47, 043102 (2018)) via CoolProp.
+        "Hvap": (41500.0, 0.38, 643.9),
+        "Hvap_T": 374.55,
+        "antoine": (10.04327, 1616.76, -53.61),
+        "T_antoine_min": 335.17,
+        "T_antoine_max": 394.54,
+        "Hf": -249200.0,  # gas, JANAF (Chase 1998)
+    },
+    "m_xylene": {
+        "MW": 106.17,
+        # Cp_ig: cubic fit (250-800 K, max error 0.59%) to PPO 5e App. A.
+        "Cp_ig": (4.08942, 0.400608, 8.71022e-05, -2.01227e-07),
+        "Cp": (188.44, 0.0, 0.0, 0.0),  # liquid, 298 K, PPO 5e App. A
+        "Hvap": (35660.0, 0.38, 617.0),  # CRC, at Tb (ref. EOS 36 112)
+        "Hvap_T": 412.22,
+        "antoine": (9.14051, 1468.703, -57.03),
+        "T_antoine_min": 308.54,
+        "T_antoine_max": 439.56,
+        "Hf": 17300.0,  # CRC
+    },
+    "o_xylene": {
+        "MW": 106.17,
+        # Cp_ig: cubic fit (250-800 K, max error 0.31%) to PPO 5e App. A.
+        "Cp_ig": (11.1313, 0.425453, -2.59983e-05, -1.10183e-07),
+        "Cp": (188.07, 0.0, 0.0, 0.0),  # liquid, 298 K, PPO 5e App. A
+        "Hvap": (36240.0, 0.38, 630.3),  # CRC, at Tb (ref. EOS 36 384)
+        "Hvap_T": 417.65,
+        "antoine": (9.09789, 1458.706, -61.109),
+        "T_antoine_min": 312.75,
+        "T_antoine_max": 445.3,
+        "Hf": 19100.0,  # CRC
+    },
+    "p_xylene": {
+        "MW": 106.17,
+        # Cp_ig: cubic fit (250-800 K, max error 0.66%) to PPO 5e App. A.
+        "Cp_ig": (1.47592, 0.409632, 9.2401e-05, -2.1438e-07),
+        "Cp": (181.66, 0.0, 0.0, 0.0),  # liquid, 298 K, PPO 5e App. A
+        "Hvap": (35670.0, 0.38, 616.2),  # CRC, at Tb (ref. EOS 35 709)
+        "Hvap_T": 411.38,
+        "antoine": (9.10494, 1446.832, -58.523),
+        "T_antoine_min": 307.81,
+        "T_antoine_max": 438.88,
+        "Hf": 18000.0,  # CRC
+    },
+    "methyl_acetate": {
+        "MW": 74.08,
+        # Cp_ig: cubic fit (298-800 K, the quartic's own lower limit; max
+        # error 0.16%) to PPO 5e App. A.
+        "Cp_ig": (23.2684, 0.21628, -4.05057e-06, -5.73302e-08),
+        "Cp": (143.9, 0.0, 0.0, 0.0),  # liquid, 298 K, PPO 5e App. A
+        "Hvap": (30320.0, 0.38, 506.6),  # CRC, at Tb
+        "Hvap_T": 330.02,
+        "antoine": (9.18621, 1156.43, -53.46),
+        "T_antoine_min": 249.9,
+        "T_antoine_max": 351.11,
+        "Hf": -413300.0,  # CRC
+    },
+    "methyl_ethyl_ketone": {
+        "MW": 72.11,
+        # Cp_ig: cubic fit (250-800 K, max error 0.28%) to PPO 5e App. A.
+        "Cp_ig": (40.7949, 0.196684, 7.72855e-05, -1.08013e-07),
+        "Cp": (158.9, 0.0, 0.0, 0.0),  # liquid, 298 K, PPO 5e App. A
+        "Hvap": (31300.0, 0.38, 535.5),  # CRC, at Tb
+        "Hvap_T": 352.74,
+        "antoine": (9.1386, 1232.63, -54.46),
+        "T_antoine_min": 265.62,
+        "T_antoine_max": 375.66,
+        "Hf": -238500.0,  # CRC
+    },
+    "n_nonane": {
+        "MW": 128.26,
+        # Cp_ig: cubic fit (250-800 K, max error 0.60%) to PPO 5e App. A.
+        "Cp_ig": (50.2015, 0.481856, 0.000315503, -3.99136e-07),
+        "Cp": (284.45, 0.0, 0.0, 0.0),  # liquid, 298 K, PPO 5e App. A
+        "Hvap": (37180.0, 0.38, 594.6),  # CRC, at Tb (ref. EOS 37 012)
+        "Hvap_T": 423.97,
+        "antoine": (9.07356, 1438.03, -70.456),
+        "T_antoine_min": 319.57,
+        "T_antoine_max": 451.64,
+        "Hf": -228200.0,  # CRC
+    },
+    "n_decane": {
+        "MW": 142.28,
+        # Cp_ig: cubic fit (250-800 K, max error 0.62%) to PPO 5e App. A.
+        "Cp_ig": (53.8242, 0.542058, 0.000342162, -4.43992e-07),
+        "Cp": (314.54, 0.0, 0.0, 0.0),  # liquid, 298 K, PPO 5e App. A
+        "Hvap": (39580.0, 0.38, 617.7),  # CRC, at Tb (ref. EOS 39 326)
+        "Hvap_T": 447.3,
+        "antoine": (9.06853, 1495.17, -79.292),
+        "T_antoine_min": 338.53,
+        "T_antoine_max": 476.15,
+        "Hf": -249500.0,  # CRC
+    },
+    "neopentane": {
+        "MW": 72.15,
+        # Cp_ig: cubic fit (250-800 K, max error 1.8%) to PPO 5e App. A.
+        "Cp_ig": (-8.52149, 0.542216, -0.000424207, 2.27351e-07),
+        "Hvap": (22740.0, 0.38, 433.8),  # CRC, at Tb (ref. EOS 22 776)
+        "Hvap_T": 282.63,
+        "antoine": (8.83916, 938.234, -37.901),
+        "T_antoine_min": 259.33,
+        "T_antoine_max": 303.08,
+        "Hf": -168000.0,  # CRC
+    },
+    "sulfur_dioxide": {
+        "MW": 64.06,
+        # Cp_ig: cubic fit (298-800 K, max error 0.08%) to the NIST WebBook
+        # Shomate equation (Chase 1998, JANAF), 39.87 at 298 K. NOT the PPO
+        # quartic, which as transcribed gives 42.2 J/mol/K at 298 K, 6% above
+        # its own tabulated Cp(298) of 40.05.
+        "Cp_ig": (25.1646, 0.0596707, -3.6835e-05, 6.08612e-09),
+        "Hvap": (24940.0, 0.38, 430.8),  # CRC, at Tb (ref. EOS 24 956)
+        "Hvap_T": 263.1,
+        "antoine": (9.4072, 999.9, -35.96),
+        "T_antoine_min": 199.71,
+        "T_antoine_max": 279.47,
+        "Hf": -296800.0,  # CRC
+    },
+    "tetrahydrofuran": {
+        "MW": 72.11,
+        # Cp_ig: cubic fit (250-800 K, max error 1.3%) to PPO 5e App. A.
+        "Cp_ig": (4.13249, 0.177445, 0.000312103, -3.00984e-07),
+        "Cp": (124.1, 0.0, 0.0, 0.0),  # liquid, 298 K, PPO 5e App. A
+        "Hvap": (29810.0, 0.38, 540.2),  # CRC, at the CRC Tb
+        "Hvap_T": 338.15,
+        # Implied Tb 339.12 K; Perry's 8e Table 2-8 (DIPPR) agrees (339.12),
+        # CRC lists 338.15 K.
+        "antoine": (9.12142, 1203.11, -46.795),
+        "T_antoine_min": 253.5,
+        "T_antoine_max": 361.71,
+        "Hf": -184100.0,  # CRC
+    },
+    "formaldehyde": {
+        "MW": 30.03,
+        # Cp_ig: cubic fit (250-800 K, max error 0.57%) to the TRC ideal-gas
+        # correlation (TRC Thermodynamics of Organic Compounds in the Gas
+        # State, Frenkel et al. 1994); 35.4 at 298 K (CRC 35.4).
+        "Cp_ig": (30.8655, -0.0095431, 0.000102662, -6.46618e-08),
+        # Perry's 8e Table 2-150 (DIPPR 106) at Tb; CRC has no entry.
+        "Hvap": (23060.0, 0.38, 408.0),
+        "Hvap_T": 254.05,
+        "antoine": (9.281, 957.24, -30.15),
+        "T_antoine_min": 190.0,
+        "T_antoine_max": 271.0,
+        "Hf": -108600.0,  # CRC
+    },
+    "acetaldehyde": {
+        "MW": 44.05,
+        # Cp_ig: cubic fit (250-800 K, max error 0.63%) to the TRC ideal-gas
+        # correlation; 55.4 at 298 K (CRC 55.3).
+        "Cp_ig": (25.6535, 0.0870445, 6.30589e-05, -6.76787e-08),
+        "Cp": (89.0, 0.0, 0.0, 0.0),  # liquid, 298 K, CRC
+        "Hvap": (25760.0, 0.38, 466.0),  # CRC, at Tb
+        "Hvap_T": 293.25,
+        "antoine": (9.1814, 1070.6, -37.15),
+        "T_antoine_min": 219.0,
+        "T_antoine_max": 313.0,
+        "Hf": -166200.0,  # CRC
+    },
+}
+_CH2_SOURCE = (
+    "Antoine (log10 P/Pa): " + _PPO + " (Landolt-Bornstein IV/20 for "
+    "formaldehyde and acetaldehyde); ideal-gas Cp: cubic fitted by this "
+    "project to the " + _PPO + " Cp/R quartic (TRC correlation for the "
+    "aldehydes, NIST/JANAF Shomate for SO2); liquid Cp(298 K): " + _PPO + " "
+    "(CRC for acetaldehyde); Hvap at Tb: CRC Handbook (IAPWS D2O reference "
+    "EOS for heavy water; Perry's 8e Table 2-150 for formaldehyde); Hf(g): "
+    "CRC Handbook (JANAF for D2O). All as tabulated in the chemicals package "
+    "v1.5.2; cross-checks and per-value notes in database.py."
+)
+_IDEAL_THERMO_DATA.update(_CH2_IDEAL)
+for _name in _CH2_IDEAL:
+    SOURCE_CITATIONS[_name] = _CH2_SOURCE
+del _name
+
+
+# Wagner vapor-pressure sets for the light gases (issue #442, Ch. 2). A
+# three-constant Antoine set cannot follow a light gas from its triple point
+# to Tc: methane's Prydz-Goodwin set is 2.4% high mid-range. The Wagner
+# equation, ln(P/Pc) = (a tau + b tau^1.5 + c tau^e3 + d tau^e4)/Tr with
+# tau = 1 - Tr, can. Two forms are used, whichever reproduces the reference
+# EOS better over its range:
+#
+# - "2.5-5": Poling, Prausnitz & O'Connell 5e (2001) App. A, Table A
+#   (Wagner 2.5-5 constants), as tabulated in chemicals v1.5.2.
+# - "3-6": the original Wagner form as fitted by McGarry, Ind. Eng. Chem.
+#   Process Des. Dev. 22, 313 (1983), as tabulated in chemicals v1.5.2.
+#
+# Format: name -> (form, (a, b, c, d, Tc [K], Pc [Pa]), T_min [K]). Tc and
+# Pc are the set's own, not _CRITICAL_DATA's. Every set was checked against
+# the reference-EOS saturation curve (CoolProp 8.0; the equations the NIST
+# WebBook fluid tables use) from the triple point (or T_min) to Tc,
+# wherever P > 1 kPa; the worst deviation is in the comment. tests/
+# test_wagner.py pins the normal boiling points and spot pressures.
+#
+# These are used only when asked for -- get_species_data(name,
+# vapor_pressure="wagner") -- so that existing Antoine-based results do not
+# move; see get_species_data.
+WAGNER_COEFFS: dict[str, tuple[str, tuple, float]] = {
+    # PPO 2.5-5; max 0.12% (Antoine/Prydz-Goodwin: 2.35%)
+    "methane": ("2.5-5", (-6.02242, 1.26652, -0.5707, -1.366,
+                          190.551, 4.5992e6), 90.694),
+    # PPO 2.5-5; max 0.63%
+    "ethane": ("2.5-5", (-6.475, 1.41071, -1.144, -1.859,
+                         305.33, 4.871e6), 90.352),
+    # McGarry 3-6; max 0.30% (the PPO set: 1.6%)
+    "propane": ("3-6", (-6.67833, 1.15437, -1.64984, -2.70017,
+                        369.82, 4.25576e6), 145.0),
+    # PPO 2.5-5; max 0.31%
+    "n_butane": ("2.5-5", (-7.01763, 1.6777, -1.9739, -2.172,
+                           425.25, 3.792e6), 134.86),
+    # McGarry 3-6; max 0.97%
+    "isobutane": ("3-6", (-6.95579, 1.5009, -2.52717, -1.49776,
+                          408.14, 3.65801e6), 165.0),
+    # PPO 2.5-5; max 0.11%
+    "nitrogen": ("2.5-5", (-6.11102, 1.2189, -0.69366, -1.89893,
+                           126.2, 3.4e6), 63.149),
+    # McGarry 3-6; max 0.72%
+    "oxygen": ("3-6", (-6.28275, 1.73619, -1.81349, -0.0253645,
+                       154.7, 5.08987e6), 54.0),
+    # McGarry 3-6; max 0.11% (triple point 216.6 K to Tc)
+    "carbon_dioxide": ("3-6", (-6.95626, 1.19695, -3.12614, 2.99448,
+                               304.15, 7.37499e6), 217.0),
+    # PPO 2.5-5; max 0.13%
+    "ammonia": ("2.5-5", (-7.28322, 1.5716, -1.85672, -2.39312,
+                          405.5, 11.353e6), 195.41),
+    # McGarry 3-6; max 0.42%
+    "ethylene": ("3-6", (-6.32055, 1.16819, -1.55935, -1.83552,
+                         282.55, 5.05088e6), 105.0),
+    # McGarry 3-6; max 0.66%
+    "propylene": ("3-6", (-6.64231, 1.21857, -1.81005, -2.48212,
+                          364.85, 4.60523e6), 140.0),
+    # McGarry 3-6; max 0.30%
+    "carbon_monoxide": ("3-6", (-6.20798, 1.27885, -1.34533, -2.56842,
+                                132.91, 3.50115e6), 71.0),
+}
+WAGNER_SOURCES: dict[str, str] = {
+    name: ("Poling, Prausnitz & O'Connell, The Properties of Gases and "
+           "Liquids, 5th ed. (2001), App. A, Wagner 2.5-5 constants"
+           if form == "2.5-5" else
+           "McGarry, Ind. Eng. Chem. Process Des. Dev. 22, 313 (1983), "
+           "original Wagner (3-6) form")
+    + " (as tabulated in chemicals v1.5.2)"
+    for name, (form, _c, _t) in WAGNER_COEFFS.items()
+}
+
+
 # Antoine provenance, one entry per species in _IDEAL_THERMO_DATA. How the
 # sets were chosen (2026-10): every entry's
 # implied normal boiling point, B / (A - log10 101325) - C, was compared with
@@ -1334,25 +1648,58 @@ ANTOINE_SOURCES: dict[str, str] = {
         "Poling, Prausnitz & O'Connell 5e App. A (as tabulated in chemicals "
         "v1.5.2); range 267.2-381.16 K"),
 }
+# The issue #442 additions: PPO 5e App. A (log10(P/Pa), as tabulated in
+# chemicals v1.5.2) over the source's range, except the two aldehydes.
+ANTOINE_SOURCES.update({
+    _name: (f"Poling, Prausnitz & O'Connell 5e App. A (as tabulated in "
+            f"chemicals v1.5.2); range {_d['T_antoine_min']:g}-"
+            f"{_d['T_antoine_max']:g} K")
+    for _name, _d in _CH2_IDEAL.items()
+    if _name not in ("formaldehyde", "acetaldehyde")
+})
+for _name in ("formaldehyde", "acetaldehyde"):
+    _d = _CH2_IDEAL[_name]
+    ANTOINE_SOURCES[_name] = (
+        "Landolt-Bornstein New Series IV/20 (Dykyj, Svoboda, Wilhoit, Frenkel "
+        "& Hall, Vapor Pressure of Chemicals), ln(P/Pa) form divided by ln 10 "
+        f"here; as tabulated in chemicals v1.5.2; range "
+        f"{_d['T_antoine_min']:g}-{_d['T_antoine_max']:g} K")
+del _name, _d
 
 
-def get_species_data(name: str) -> SpeciesData:
+def get_species_data(name: str, vapor_pressure: str = "antoine") -> SpeciesData:
     """Get SpeciesData for ideal thermodynamics by name.
 
     Args:
         name: Species name (case-insensitive, underscores for spaces)
+        vapor_pressure: ``"antoine"`` (default): the record as it has always
+            been, Psat from the Antoine equation. ``"wagner"``: also attach
+            the species' Wagner set from :data:`WAGNER_COEFFS`, which
+            :meth:`~difflow.thermo.IdealThermo.Psat` then uses (the light
+            gases; methane, for one, goes from 2.4% to 0.12% worst-case
+            error against the reference EOS); a species without one raises
+            ``KeyError``. ``"best"``: Wagner where there is a set, else
+            Antoine. The default stays Antoine so that existing results do
+            not move.
 
     Returns:
         SpeciesData namedtuple
 
     Raises:
-        KeyError: If species not found in database
+        KeyError: If species not found in database (or, with
+            ``vapor_pressure="wagner"``, has no Wagner set).
+        ValueError: For an unknown ``vapor_pressure``.
 
     Example:
         >>> data = get_species_data("methanol")
         >>> data.MW
         32.04
+        >>> get_species_data("methane", vapor_pressure="wagner").wagner_form
+        '2.5-5'
     """
+    if vapor_pressure not in ("antoine", "wagner", "best"):
+        raise ValueError("vapor_pressure must be 'antoine', 'wagner' or "
+                         f"'best', not {vapor_pressure!r}")
     key = name.lower().replace(" ", "_").replace("-", "_").replace(",", "_")
     if key not in _IDEAL_THERMO_DATA:
         available = ", ".join(sorted(_IDEAL_THERMO_DATA.keys()))
@@ -1361,8 +1708,20 @@ def get_species_data(name: str) -> SpeciesData:
             f"Available: {available}"
         )
 
+    wagner = {}
+    if vapor_pressure != "antoine":
+        if key in WAGNER_COEFFS:
+            form, coeffs, T_min = WAGNER_COEFFS[key]
+            wagner = {"wagner_coeffs": tuple(coeffs), "wagner_form": form,
+                      "T_wagner_min": T_min}
+        elif vapor_pressure == "wagner":
+            raise KeyError(
+                f"Species '{name}' has no Wagner vapor-pressure set. "
+                f"Available: {', '.join(sorted(WAGNER_COEFFS))}")
+
     d = _IDEAL_THERMO_DATA[key]
     return SpeciesData(
+        **wagner,
         name=key,
         MW=d["MW"],
         # "Cp" is the liquid heat capacity where one is known; a species with
@@ -1653,7 +2012,15 @@ def get_critical_props(name: str) -> CriticalProperties:
     return _original_get_critical_props(resolve_alias(name))
 
 
-def get_species_data(name: str) -> SpeciesData:
-    """Get SpeciesData for ideal thermodynamics by name (with alias support)."""
+def get_species_data(name: str, vapor_pressure: str = "antoine") -> SpeciesData:
+    """Get SpeciesData for ideal thermodynamics by name (with alias support).
+
+    See the alias-free original (``_original_get_species_data``) for
+    ``vapor_pressure``: ``"antoine"`` (default), ``"wagner"`` or ``"best"``.
+
+    Example:
+        >>> get_species_data("CO2", vapor_pressure="best").wagner_form
+        '3-6'
+    """
     _record_access(name, "ideal")
-    return _original_get_species_data(resolve_alias(name))
+    return _original_get_species_data(resolve_alias(name), vapor_pressure)

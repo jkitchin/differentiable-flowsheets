@@ -9,7 +9,7 @@ the root CLAUDE.md, which keeps only what every session needs).
 - Decomposition: `decompose` computes the spanning tree, tear set and balance schedule from the topology
 - Units: `GasPipe`, `BackPipe`, `PipePressure`, `PressureDrivenPipe`, `Compressor`, `CompressorBoost`, `OpenValve`, `PressureEqual`, `ControlValveDrop`, `SourceHead`, `AffineFlow`, `Junction`, splits
 - Flowsheets: `GasNetworkFlowsheet` (signed-flow Anderson + damped differentiable tear solve), `build_network_flowsheet`
-- Physics: `isothermal_pipe_beta` (alias `weymouth_beta`; jnp, friction="nikuradse"|"colebrook"|"weymouth"; no 2 ln(p1/p2) term), `resistor_xi`, `compressor_power`, `smoothed_power_w`, GasLib unit conversions
+- Physics: `isothermal_pipe_beta` (alias `weymouth_beta`; jnp, friction="nikuradse"|"colebrook"|"weymouth"|"panhandle_a"|"panhandle_b"|"aga"; no 2 ln(p1/p2) term), `resistor_xi`, `compressor_power`, `smoothed_power_w`, GasLib unit conversions
 - Verification: full equation-oriented residual checks (`difflow_gas.verify`)
 - Equations: `difflow_gas.residuals.network_residuals` is the single JAX-traceable definition of the equation set; `verify` is the reporting layer over it
 - Plotting: `dg.draw_network(net, pos=..., pressures=..., flows=..., highlight=...)` draws a network schematic

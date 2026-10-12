@@ -8,7 +8,9 @@ This document provides comprehensive documentation for the technoeconomic analys
 2. [Capital Costs](#capital-costs)
    - [Equipment Cost Correlations](#equipment-cost-correlations)
    - [Installation Factors](#installation-factors)
+   - [Piping Cost per Metre](#piping-cost-per-metre)
    - [Total Capital Investment](#total-capital-investment)
+   - [Pipe Insulation](#pipe-insulation)
 3. [Utility Costs](#utility-costs)
    - [Steam](#steam)
    - [Cooling Water](#cooling-water)
@@ -41,7 +43,8 @@ difflow/economics/
 ├── utilities.py     # Utility cost models
 ├── opex.py          # Operating cost calculations
 ├── profitability.py # Financial metrics (NPV, IRR, MSP)
-└── indices.py       # Cost index escalation (CEPCI)
+├── indices.py       # Cost index escalation (CEPCI)
+└── insulation.py    # Pipe insulation cost and economic thickness
 ```
 
 **Key Features**:
@@ -253,6 +256,58 @@ detailed = installed_cost_detailed(
 )
 ```
 
+### Piping Cost per Metre
+
+For the economic-pipe-diameter problem (pipe capital against pumping energy),
+`pipe_cost_per_length(D, C_ref, D_ref, base_year, target_year)` scales an
+installed carbon-steel pipe cost per metre with the inside diameter as a
+piecewise power law,
+
+$$
+C(D) = C_\mathrm{ref}\,\frac{g(D)}{g(D_\mathrm{ref})}\,
+\frac{\mathrm{CEPCI}_\mathrm{target}}{\mathrm{CEPCI}_\mathrm{base}},\qquad
+g(D) = (D/1\,\mathrm{in})^{n},\quad n = 1.0\ (D<1\,\mathrm{in}),\ 1.5\ (D>1\,\mathrm{in})
+$$
+
+the exponents behind the classical optimum-diameter formulas (Genereaux, 1937,
+*Ind. Eng. Chem.* 29, 385; Peters, Timmerhaus and West, *Plant Design and
+Economics for Chemical Engineers*, 5e, Ch. 12, whose turbulent optimum
+$D_\mathrm{opt}\propto q^{0.45}\rho^{0.13}$ follows from $n = 1.5$;
+`PIPE_COST_EXPONENTS`). `pipe_cost_nps(nps, schedule, C_ref=..., nps_ref=...,
+base_year=...)` does the same for ASME B36.10M sizes and adds the schedule
+by **metal mass**: the cost of a heavier wall at the same NPS is the reference
+schedule's cost times `pipe_weight_per_length(nps, schedule) /
+pipe_weight_per_length(nps, schedule_ref)` (B36.10M plain-end weight,
+$W = 0.0246615\,(OD-t)\,t$ kg/m with OD and t in mm). That treats all of the
+installed cost as proportional to the steel; erection labour grows more slowly
+with wall thickness, so heavy schedules come out somewhat high.
+
+**The absolute cost level is an input.** `C_ref` is the installed $/m of one
+reference size in `base_year` dollars, from a quote, a company database or a
+textbook table; difflow does not ship a $/m figure because none could be
+checked against its source. Only the size scaling and the CEPCI escalation
+come from the library.
+
+```python
+import jax, math
+import difflow.economics as econ
+from difflow import Pipe, PipeParams
+
+def annual_cost(D, Q=0.02, L=1000.0):
+    capital = 0.20 * L * econ.pipe_cost_per_length(D, C_ref=150.0, D_ref=0.0525,
+                                                   base_year=2019)   # your quote
+    pipe = Pipe(PipeParams(L=L, D=D, rho=998.2, mu=1.002e-3))
+    dP = pipe.hydraulics_at_flow(Q)["dP"]
+    return capital + dP * Q / 0.7 / 1000.0 * 8000.0 * 0.10           # $0.10/kWh, 8000 h
+
+jax.grad(annual_cost)(0.15)        # d(annual cost)/dD: zero at the economic diameter
+econ.pipe_cost_nps(4, "80", C_ref=150.0, nps_ref=2, base_year=2019, length=120.0)
+```
+
+`tests/test_pipe_cost.py` checks the weights against B36.10M (2-in Sch 40
+5.44 kg/m, 4-in Sch 80 22.32 kg/m), the exponents, the escalation, and that the
+optimum of this cost scales as $Q^{0.40\text{-}0.48}$.
+
 ### Total Capital Investment
 
 Total Capital Investment (TCI) includes all costs to build a functioning plant.
@@ -315,6 +370,20 @@ print(f"Fixed capital: ${result.fixed_capital_investment:,.0f}")
 print(f"Working capital: ${result.working_capital:,.0f}")
 print(f"Total capital: ${result.total_capital_investment:,.0f}")
 ```
+
+### Pipe Insulation
+
+**Location**: `difflow/economics/insulation.py`
+
+`insulation_installed_cost(D_o, thickness, cost_per_m3, cost_per_m2=0,
+cost_per_m=0, base_year=None, target_year=None)` is the installed cost per metre
+of pipe, linear in the insulated volume $\pi t(D_o+t)$ with optional cladding-area
+and per-metre terms, escalated by CEPCI when both years are given.
+`economic_insulation_thickness(...)` minimises the annualised insulation cost
+(capital recovery factor) plus the cost of the heat lost
+(`heat_transfer.insulated_pipe_heat_loss`), and is differentiable in every input.
+The unit cost is a **required input with no default**: no published coefficient
+could be checked (see [Economic insulation thickness](unit-operations-chemical.md#heat-transfer-insulation)).
 
 ---
 

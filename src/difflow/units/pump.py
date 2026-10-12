@@ -458,7 +458,7 @@ class SystemCurve:
         """System head (m) at flow ``Q`` (m^3/s)."""
         H = jnp.asarray(self.static_head, dtype=jnp.float64) + self.losses(Q)
         for pipe in self.pipes:
-            H = H + jnp.asarray(pipe.params.dz, dtype=jnp.float64)
+            H = H + pipe.elevation_gain()
         if self.delta_P is not None:
             H = H + jnp.asarray(self.delta_P) / (evaluate_property(self.rho, self.inlet) * GRAVITY)
         return H
@@ -474,7 +474,8 @@ def system_curve(
     """System curve ``H_sys(Q)`` for a pump discharging through pipes.
 
     ``H_sys = static_head + delta_P/(rho g) + sum_i (head_loss_i(Q) + dz_i)``.
-    The ``dz`` of each :class:`~difflow.units.pipe.Pipe` is counted, so give
+    The ``dz`` (or the elevation ``profile``) of each
+    :class:`~difflow.units.pipe.Pipe` is counted, so give
     elevation either there or in ``static_head``, not both.
 
     Args:
