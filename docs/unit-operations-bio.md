@@ -385,7 +385,7 @@ The particle and fluid properties are call arguments, not parameters:
 | `info['separation_efficiency']` | float | - | Sigma-theory capture efficiency |
 | `info['stokes_velocity']` | float | m/s | Settling velocity of the mean particle |
 | `info['critical_diameter']` | float | m | Particle size captured at 50% efficiency at this throughput |
-| `info['Q_critical']` | float | m³/s | Sigma-theory critical throughput, $2 v_s \Sigma$ |
+| `info['Q_critical']` | float | m³/s | Flow at which particles of this size are captured at 50%, $2 v_s \Sigma$ |
 | `info['concentration_factor']` | float | - | Cell concentration, concentrate over feed |
 | `info['lysis_fraction']`, `info['lysate_released']` | float | - | Shear lysis (zero unless `lysis_threshold_g` is set) |
 
@@ -410,19 +410,22 @@ $$a_c = \omega^2 r$$
 
 **Sigma Factor** (equivalent settling area):
 
-The Sigma factor allows scale-up between different centrifuge types:
+$\Sigma$ is the area of the ideal gravity settler that does the same job
+(Ambler 1959; Geankoplis 5e Sec. 14.4C). A particle of Stokes velocity $v_s$ is
+captured completely when $Q \le v_s\Sigma$ and in the proportion $v_s\Sigma/Q$ above
+that, so
 
-$$\Sigma = \frac{Q}{2 v_s}$$
+$$\eta = e\,\min\left(1, \frac{v_s \Sigma}{Q}\right), \qquad Q_{50} = 2 v_s \Sigma$$
 
-For a given separation: $Q_1/\Sigma_1 = Q_2/\Sigma_2$
+where $e$ is `efficiency` (non-ideal flow) and $Q_{50}$ (`info['Q_critical']`) the flow at
+which these particles are captured at 50%. For a given separation $Q_1/\Sigma_1 = Q_2/\Sigma_2$.
+Tubular bowl (`tubular_bowl_sigma`): $\Sigma = 2\pi\omega^2 L r^2/g$ for a thin liquid layer,
+or $\Sigma = \omega^2\pi L(r_2^2 - r_1^2)/(2g\ln[2r_2/(r_1 + r_2)])$ with the liquid surface at
+$r_1$ (`r_inner`).
 
-**Critical Particle Diameter** (100% capture):
+**Cut size** (`critical_particle_diameter`, captured at 50% at the flow $Q$):
 
-$$d_{crit} = \sqrt{\frac{18 \mu Q}{(\rho_p - \rho_f) \omega^2 \Sigma}}$$
-
-**Separation Efficiency** (particle size distribution):
-
-$$E = 1 - \exp\left(-\frac{d^2}{d_{crit}^2}\right)$$
+$$d_{50} = \sqrt{\frac{9 \mu Q}{(\rho_p - \rho_f)\, g\, \Sigma}}$$
 
 **G-Force**:
 

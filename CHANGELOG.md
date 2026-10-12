@@ -8,6 +8,10 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Published-example tests for cake filtration (book Ch. 21).** `TestGeankoplisFiltration` reproduces
+  Geankoplis 5e Examples 14.2-1 (alpha and R_m from the CaCO3 t-V data with `fit_ruth`), 14.2-2 (the 20-frame
+  press, 269.7 s) and 14.2-3 (wash at a quarter of the final rate, 194 s), also through the `CakeFilter` unit.
+
 - **Unit-ops book Parts I-II gaps (issue 442).**
   *Fixes.* `phase_identification_parameter` uses closed-form derivatives of the cubic (cheaper to compile inside
   every TP flash); `eos_pressure_TV` gives the cubic's P(T, v). `eos_bubble_*`/`eos_dew_*` fall back to continuation (from 0.75 T or P/4) when no Wilson start converges
@@ -908,6 +912,19 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Fixed
+
+- **Sigma theory in the bio centrifuges was off by factors of 2 and sqrt(pi) (book Ch. 21).** `Centrifuge`
+  captured `min(1, 2 v_s Sigma/Q)`, twice the ideal-settler value, so a disc stack (whose Sigma is the standard
+  Ambler form) over-predicted the recovery by up to 2x below complete capture. It now captures
+  `efficiency * min(1, v_s Sigma/Q)`: complete at `Q = v_s Sigma`, half at `Q_critical = 2 v_s Sigma`
+  (Geankoplis 5e Sec. 14.4C). `critical_particle_diameter` had a spurious pi in the denominator (cut size 1.77x
+  too small): `d50 = sqrt(9 mu Q/(Delta rho g Sigma))`. `tubular_bowl_sigma` returned half the thin-layer value
+  (`pi` for `2 pi omega^2 L r^2/g`); it is now the thin-layer value and takes `r_inner=` for the thick-layer
+  form `omega^2 pi L (r2^2 - r1^2)/(2 g ln(2 r2/(r1 + r2)))`. The `equations` entry (a tanh that the code never
+  used) and the bio docs now match the code. Tests: `TestSigmaTheory` (Hazen capture, cut size, the
+  Stokes-trajectory oracle for a thick layer, a gradient in rpm).
+- **Lapple cyclone outlet-duct length.** `CYCLONE_GEOMETRIES["lapple"]` had `S = D/8`; Lapple's standard is
+  `S = 5D/8` (Cooper & Alley Table 4.1, recalled). `S` enters no calculation, so no result changes.
 
 - **Le Bas oxygen increment for ethers (book Ch. 14).** `LE_BAS_INCREMENTS["O_ether"]` was 9.1, which is the
   methyl-ester value; it is now 9.9 (methyl ethers), and the table gains `O_methyl_ester` (9.1), `O_methyl_ether`

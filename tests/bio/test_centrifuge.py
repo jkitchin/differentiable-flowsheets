@@ -13,6 +13,7 @@ from difflow_bio import (
     critical_particle_diameter,
     disc_stack_sigma,
     g_force,
+    tubular_bowl_sigma,
 )
 from difflow import make_stream, get_flows
 
@@ -271,3 +272,53 @@ class TestCentrifugeCellLysis:
         _, clar, info = dsc(self._feed(), Q=0.001)
         assert float(info["lysis_fraction"]) > 0.0
         assert "lysate" in get_flows(clar)
+
+
+class TestSigmaTheory:
+    """Sigma theory as an equivalent gravity settler (Ambler 1959; Geankoplis 5e Sec. 14.4C)."""
+
+    def test_capture_is_hazen_in_the_equivalent_settler(self):
+        """Complete capture at Q = v_s Sigma, half at Q = 2 v_s Sigma (the cut flow)."""
+        sigma, d, rp, rf, mu = 2000.0, 4e-6, 1080.0, 1000.0, 1e-3
+        v = float(stokes_velocity(d, rp, rf, mu))
+        cf = Centrifuge(CentrifugeParams(sigma=sigma, efficiency=1.0))
+        feed = make_stream({"cells": 1.0, "water": 50.0}, T=298.15, P=101325.0)
+        for Q, eta in [(v * sigma, 1.0), (2 * v * sigma, 0.5), (4 * v * sigma, 0.25), (0.5 * v * sigma, 1.0)]:
+            _, _, info = cf(feed, Q, d, rp, rf, mu)
+            assert float(info["cell_recovery"]) == pytest.approx(eta, rel=1e-12)
+        _, _, info = cf(feed, 2 * v * sigma, d, rp, rf, mu)
+        assert float(info["Q_critical"]) == pytest.approx(2 * v * sigma, rel=1e-12)
+
+    def test_cut_size_is_the_particle_at_half_capture(self):
+        sigma, Q, rp, rf, mu = 1500.0, 2e-3, 1100.0, 1000.0, 1.2e-3
+        d50 = critical_particle_diameter(Q, sigma, rp, rf, mu)
+        assert float(2 * stokes_velocity(d50, rp, rf, mu) * sigma) == pytest.approx(Q, rel=1e-12)
+
+    def test_tubular_bowl_thin_layer_limit(self):
+        r, L, rpm = 0.05, 0.7, 15000.0
+        omega = rpm * 2 * jnp.pi / 60
+        thin = float(tubular_bowl_sigma(r, L, rpm))
+        assert thin == pytest.approx(float(2 * jnp.pi * omega**2 * L * r**2 / 9.81), rel=1e-12)
+        assert float(tubular_bowl_sigma(r, L, rpm, r_inner=r * (1 - 1e-5))) == pytest.approx(thin, rel=1e-4)
+
+    def test_tubular_bowl_trajectory(self):
+        """Thick layer: the 50% particle starts midway through the layer and just reaches the wall."""
+        r2, r1, L, rpm, rp, rf, mu = 0.0285, 0.02225, 0.197, 23000.0, 1461.0, 801.0, 0.1
+        Q = 0.002832 / 3600.0
+        sigma = tubular_bowl_sigma(r2, L, rpm, r_inner=r1)
+        d = critical_particle_diameter(Q, sigma, rp, rf, mu)
+        omega = rpm * 2 * jnp.pi / 60
+        V = jnp.pi * L * (r2**2 - r1**2)
+        # Stokes radial velocity omega^2 r dRho d^2/(18 mu): ln(r2/r_mid) = omega^2 dRho d^2 t/(18 mu), t = V/Q
+        lhs = jnp.log(r2 / (0.5 * (r1 + r2)))
+        rhs = omega**2 * (rp - rf) * d**2 / (18 * mu) * V / Q
+        assert float(lhs) == pytest.approx(float(rhs), rel=1e-10)
+
+    def test_disc_stack_gradient_of_recovery_in_rpm(self):
+        def rec(rpm):
+            dsc = DiscStackCentrifuge(DiscStackParams(n_discs=80, r_outer=0.12, r_inner=0.04, rpm=rpm,
+                                                      efficiency=1.0))
+            feed = make_stream({"cells": 1.0, "water": 50.0}, T=298.15, P=101325.0)
+            return dsc(feed, 3e-3, 2e-6, 1080.0, 1000.0, 1e-3)[2]["cell_recovery"]
+        assert float(rec(4000.0)) < 1.0
+        assert float(jax.grad(rec)(4000.0)) > 0.0

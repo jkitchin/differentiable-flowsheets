@@ -75,7 +75,7 @@ Lapple (1951): the cut size ``d50 = [9 mu W / (2 pi N_e v_i (rho_p - rho_g))]^(1
 grade efficiency ``eta(d) = 1/(1 + (d50/d)^2)`` and the Shepherd-Lapple pressure
 drop ``dP = K (H W / D_e^2) rho v_i^2 / 2``. **Unverified, typed from memory:**
 the constant ``K = 16``, the Lapple standard proportions (``H = D/2``,
-``W = D/4``, ``D_e = D/2``, ``S = D/8``, ``L_b = 2 D``, ``L_c = 2 D``,
+``W = D/4``, ``D_e = D/2``, ``S = 5D/8``, ``L_b = 2 D``, ``L_c = 2 D``,
 ``J = D/4``) and the Stairmand high-efficiency set (``0.5, 0.2, 0.5, 0.5,
 1.5, 2.5, 0.375`` times ``D``). Cyclone mass-loading effects, re-entrainment
 and the Barth / Muschelknautz models are not included.
@@ -592,7 +592,7 @@ def filter_area_for_cycle(V, t_on, mu, alpha, c_s, dP, R_m=0.0, c2=1.0, c1=1.0) 
 #: geometry ratios ``[H, W, D_e, S, L_b, L_c, J] / D`` of the Lapple and Stairmand high-efficiency
 #: cyclones. UNVERIFIED: typed from memory (Lapple 1951; Coulson & Richardson Vol. 2 / Towler & Sinnott).
 CYCLONE_GEOMETRIES = {
-    "lapple": [0.5, 0.25, 0.5, 0.125, 2.0, 2.0, 0.25],
+    "lapple": [0.5, 0.25, 0.5, 0.625, 2.0, 2.0, 0.25],
     "stairmand_he": [0.5, 0.2, 0.5, 0.5, 1.5, 2.5, 0.375],
 }
 _GEOM_KEYS = ("H", "W", "D_e", "S", "L_b", "L_c", "J")

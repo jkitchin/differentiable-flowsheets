@@ -5364,12 +5364,15 @@ connect without a conversion. Every non-solid species is a liquid-phase (or gas-
 species and rides with the fluid. A particle size distribution is **a unit parameter** (fixed size bins),
 not a stream property.
 
-**What is and is not verified.** No published worked example (Geankoplis Ch. 14, McCabe, Smith & Harriott
-Ch. 29-30, Coulson & Richardson Vol. 2, Cooper & Alley Ch. 4) was reproduced: the issue calls those numbers
-"unverified, from recollection" and none could be recalled with confidence. All data below are synthetic
-and labelled illustrative. The tests check the closed forms against independent oracles (a NumPy grid
-maximum, an analytic Coe-Clevenger area, a batch curve generated *from* a known settling law,
-`scipy` quadrature and scalar optimization, hand calculations) and `check_grads`. The Lapple/Shepherd-Lapple
+**What is and is not verified.** The Ruth functions reproduce Geankoplis 5e Examples 14.2-1 to 14.2-3:
+`fit_ruth` on the CaCO3 test data gives $\alpha = 1.855\times10^{11}$ m/kg and $R_m = 10.64\times10^{10}$ m$^{-1}$
+(book: $1.863\times10^{11}$ and $10.63\times10^{10}$), the 20-frame press collects 3.37 m$^3$ in 269.6 s (book 269.7 s)
+and the wash at a quarter of the final rate takes 194 s (`TestGeankoplisFiltration`; the data and answers were
+typed from memory, check them against the printed book). No published thickener or cyclone example
+(McCabe, Smith & Harriott Ch. 29-30, Coulson & Richardson Vol. 2, Cooper & Alley Ch. 4) was reproduced; those
+data below are synthetic and labelled illustrative. The tests check the closed forms against independent
+oracles (a NumPy grid maximum, an analytic Coe-Clevenger area, a batch curve generated *from* a known settling
+law, `scipy` quadrature and scalar optimization, hand calculations) and `check_grads`. The Lapple/Shepherd-Lapple
 constants (K = 16, the standard proportions, the Stairmand set) are typed from memory and flagged
 **unverified** in the code.
 
@@ -5635,7 +5638,7 @@ $$d_{50} = \left[\frac{9\mu W}{2\pi N_e v_i(\rho_p - \rho_g)}\right]^{1/2},\qqua
 The overall efficiency is $\sum_i w_i\,\eta(d_i)$ over the bins, differentiable in $D$, the gas flow and
 $\rho_p$. $d_{50}\propto v_i^{-1/2}$, so efficiency rises with flow at fixed $D$ (the pressure drop rises as
 $v_i^2$). **Unverified, typed from memory:** $K = 16$ (`K_pressure`), the Lapple proportions
-$H = D/2$, $W = D/4$, $D_e = D/2$, $S = D/8$, $L_b = L_c = 2D$, $J = D/4$ and the Stairmand
+$H = D/2$, $W = D/4$, $D_e = D/2$, $S = 5D/8$, $L_b = L_c = 2D$, $J = D/4$ and the Stairmand
 high-efficiency set (`CYCLONE_GEOMETRIES`); `geometry="custom"` with `ratios` takes your own, and
 `delta_P_velocity_heads` replaces the Shepherd-Lapple form by a number of inlet velocity heads. Mass-loading
 effects and re-entrainment are not modelled.
