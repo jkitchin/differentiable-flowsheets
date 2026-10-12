@@ -16,6 +16,12 @@ All notable changes to difflow are recorded here. The format follows
   `drying_time` (and `DryerParams.rate_interpolation`) interpolates `1/R` linearly, so the falling-rate integral is the
   trapezoid rule on the graphical `1/R` plot. Tests reproduce Geankoplis Examples 9.6-1, 9.7-1, 9.7-2 and 9.10-1
   (inputs recalled from memory).
+- **Unit-ops book Ch 20 (crystallization) gaps.** `Crystallizer(mode="adiabatic")`, a vacuum
+  crystallizer: the evaporation is solved from the heat balance (feed sensible heat plus heat of
+  crystallization, `duty=` for any jacket heat) in closed form, differentiable.
+  `sieve_population_density` converts a screen analysis into the MSMPR population density for
+  `fit_msmpr`. `TestPublishedExamples` reproduces Geankoplis Example 12.11-1 (Na2CO3.10H2O
+  yield, with and without evaporation).
 
 - **Unit-ops book Parts I-II gaps (issue 442).**
   *Fixes.* `phase_identification_parameter` uses closed-form derivatives of the cubic (cheaper to compile inside
@@ -924,6 +930,17 @@ All notable changes to difflow are recorded here. The format follows
   to the condensate (`info["fog"]`); the duty is unchanged. `adiabatic_humidify` gains `RH_out=` and `mu_out=`
   (degree of saturation) targets; Geankoplis Ex. 9.3-1 to 9.3-3 and the cooling tower of Ex. 10.5-1 (z = 6.0 m
   against about 6.1 m printed) are now tests.
+- **`Crystallizer` residence time from `volume`** now divides by the product slurry flow
+  `(m_F - E)/rho_L` (the MSMPR definition), not the feed flow; an evaporative crystallizer that
+  boils off half its feed water had half the true `tau`.
+- **`Crystallizer` kinetic mode under `jax.jit`** raised `ConcretizationTypeError` (the
+  `j <= 1` check called `float()` on `jnp.asarray(j)`, a tracer under jit); it now checks the raw
+  value. Regression test `test_kinetic_mode_under_jit`. `CrystallizerParams` made the same
+  check, so differentiating with respect to the kinetic constants (or passing them as a jnp
+  array inside `jit`) failed; it now skips the check for traced values. Regression test
+  `test_gradient_with_respect_to_kinetics` (checks the `j = 1` closed form
+  `d ln L50/d ln k_b = -g/(b+3g)`).
+
 - **Le Bas oxygen increment for ethers (book Ch. 14).** `LE_BAS_INCREMENTS["O_ether"]` was 9.1, which is the
   methyl-ester value; it is now 9.9 (methyl ethers), and the table gains `O_methyl_ester` (9.1), `O_methyl_ether`
   (9.9), `O_ester_ether` (11.0, higher esters and ethers), `O_SPN` (8.3) and `Cl_medial` (24.6).
