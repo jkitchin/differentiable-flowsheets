@@ -921,7 +921,11 @@ All notable changes to difflow are recorded here. The format follows
   boils off half its feed water had half the true `tau`.
 - **`Crystallizer` kinetic mode under `jax.jit`** raised `ConcretizationTypeError` (the
   `j <= 1` check called `float()` on `jnp.asarray(j)`, a tracer under jit); it now checks the raw
-  value. Regression test `test_kinetic_mode_under_jit`.
+  value. Regression test `test_kinetic_mode_under_jit`. `CrystallizerParams` made the same
+  check, so differentiating with respect to the kinetic constants (or passing them as a jnp
+  array inside `jit`) failed; it now skips the check for traced values. Regression test
+  `test_gradient_with_respect_to_kinetics` (checks the `j = 1` closed form
+  `d ln L50/d ln k_b = -g/(b+3g)`).
 
 - **Le Bas oxygen increment for ethers (book Ch. 14).** `LE_BAS_INCREMENTS["O_ether"]` was 9.1, which is the
   methyl-ester value; it is now 9.9 (methyl ethers), and the table gains `O_methyl_ester` (9.1), `O_methyl_ether`

@@ -666,7 +666,11 @@ class CrystallizerParams(ParamsMixin):
         if self.kinetics is not None:
             if len(self.kinetics) != 5:
                 raise ValueError("kinetics is [k_g, g, k_b, b, j]")
-            if float(self.kinetics[4]) > 1.0:
+            try:  # concrete only: under jit/grad even indexing a constant array is traced
+                too_big = float(self.kinetics[4]) > 1.0
+            except (jax.errors.TracerArrayConversionError, jax.errors.ConcretizationTypeError):
+                too_big = False
+            if too_big:
                 raise ValueError("kinetics j must be <= 1")
             if self.residence_time is None and self.volume is None:
                 raise ValueError("kinetic mode needs residence_time or volume")

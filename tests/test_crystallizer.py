@@ -544,6 +544,21 @@ class TestCrystallizerUnit:
         assert float(jax.jit(L50)(900.0)) == pytest.approx(float(L50(900.0)), rel=1e-12)
         assert float(jax.jit(jax.grad(L50))(900.0)) == pytest.approx(float(jax.grad(L50)(900.0)), rel=1e-10)
 
+    def test_gradient_with_respect_to_kinetics(self):
+        """Regression: CrystallizerParams validated j with float(), failing for traced kinetics."""
+        def lnL50(logk):   # log of (k_g, g, k_b, b); j = 1 held exactly
+            p = params(kinetics=jnp.append(jnp.exp(logk), 1.0), residence_time=900.0, crystal_density=RHO_C,
+                       liquor_density=RHO_L)
+            return jnp.log(Crystallizer(p)(feed_stream())[2]["L_50"])
+
+        k_g, gg, k_b, b, _ = KIN
+        logk = jnp.log(jnp.array([k_g, gg, k_b, b]))   # j = 1: M_T cancels from the closure
+        g = jax.jit(jax.grad(lnL50))(logk)
+        # Delta C^(b+3g) ~ 1/(k_b k_g^3 tau^4) and L50 = 3.672 k_g Delta C^g tau
+        assert float(g[0]) == pytest.approx(b / (b + 3 * gg), rel=1e-6)
+        assert float(g[2]) == pytest.approx(-gg / (b + 3 * gg), rel=1e-6)
+        check_grads(lnL50, (logk,), order=1, modes=["rev"], atol=1e-4, rtol=1e-4)
+
     def test_jit(self):
         f = jax.jit(lambda feed: Crystallizer(params())(feed)[2]["yield_kg_s"])
         assert float(f(feed_stream())) == pytest.approx(
