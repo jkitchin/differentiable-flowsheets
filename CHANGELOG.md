@@ -964,6 +964,14 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- Reverse-mode gradients through a single-phase cubic-EOS flash were NaN (since the issue #444
+  Newton polish): at the trivial K = 1 point the polish Jacobian is singular, and a zero
+  cotangent pulled through `solve` gave 0 * inf. The polish now decides acceptance on
+  stopped-gradient values and never differentiates a rejected solve. This broke, for example,
+  `jax.grad` of a `JTValve` outlet temperature for a supercritical natural gas.
+- The EOS-unit convergence warning formatted traced values with `float()` and raised
+  `ConcretizationTypeError` under `jax.grad`; it now prints them only when concrete.
+
 - `tests/test_docs_examples.py` (release) honours `<!-- doc-test: skip -->` like
   `test_doc_examples.py`, and the `underwood_class2` docs example imports `jnp`: the nightly
   Distillation docs examples ran a call fragment and a block without its import.

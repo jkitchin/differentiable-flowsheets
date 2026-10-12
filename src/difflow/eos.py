@@ -1541,21 +1541,29 @@ def _polish_flash(eos, z, T, P, k_ij, K0, V0, n_steps: int = 2):
     u0 = lax.stop_gradient(jnp.concatenate(
         [safe_log(jnp.maximum(K0, EPS_DIVISION)), jnp.atleast_1d(V0)]))
     J0 = lax.stop_gradient(jax.jacfwd(resid)(u0))
-    u = u0
+
+    # Decide acceptance on stopped-gradient values first. A single-phase feed
+    # sits at the trivial point K = 1, where J0 is singular: selecting the
+    # substitution point afterwards hides the NaN in the value, but reverse
+    # mode still pulls a zero cotangent back through solve(J0, .) and
+    # 0 * inf = NaN poisons every gradient through the flash. So a rejected
+    # polish never reaches the differentiated solve at all.
+    u_t = u0
     step_max = jnp.array(0.0)
     for _ in range(n_steps):
-        du = jnp.linalg.solve(J0, resid(u))
-        step_max = jnp.maximum(step_max, lax.stop_gradient(jnp.max(jnp.abs(du))))
-        u = u - du
-
-    V1 = lax.stop_gradient(u[n])
-    ok = (jnp.all(jnp.isfinite(lax.stop_gradient(u))) & (V1 >= 0.0)
+        du = jnp.linalg.solve(J0, lax.stop_gradient(resid(u_t)))
+        step_max = jnp.maximum(step_max, jnp.max(jnp.abs(du)))
+        u_t = u_t - du
+    V1 = u_t[n]
+    ok = (jnp.all(jnp.isfinite(u_t)) & (V1 >= 0.0)
           & (V1 <= 1.0) & (step_max < 0.1))
-    # NaN-safe select: a NaN in the rejected branch would poison the
-    # derivative of the kept one.
-    u_safe = jnp.where(ok, u, u0)
-    K = jnp.where(ok, jnp.exp(u_safe[:n]), K0)
-    V = jnp.where(ok, u_safe[n], _solve_rachford_rice(z, K0))
+
+    J_use = jnp.where(ok, J0, jnp.eye(n + 1))
+    u = u0
+    for _ in range(n_steps):
+        u = u - jnp.where(ok, jnp.linalg.solve(J_use, resid(u)), 0.0)
+    K = jnp.where(ok, jnp.exp(u[:n]), K0)
+    V = jnp.where(ok, u[n], _solve_rachford_rice(z, K0))
     return K, V
 
 
