@@ -1344,6 +1344,22 @@ parameters — give exactly one of `D_spec` or `B_spec`:
 distillate, bottoms, info = column(feed, R=2.0, B_spec=40.0)
 ```
 
+To design to product specifications instead, `column.solve_specs(feed,
+specs)` solves for `R` and `D` from any two of `("x_D", species, value)`,
+`("x_B", species, value)`, `("recovery_D", species, value)`,
+`("recovery_B", species, value)`, `("R", value)`, `("D", value)` and
+`("B", value)`. It runs a damped Newton iteration and attaches the
+implicit-function derivative, so `jax.grad` of, say, `info["R"]` with respect to
+a purity specification is the design sensitivity. `info["spec_converged"]`
+is False for an infeasible pair:
+
+<!-- doc-test: skip: call fragment; the column is built in the examples below -->
+```python
+distillate, bottoms, info = column.solve_specs(
+    feed, [("x_D", "benzene", 0.95), ("x_B", "toluene", 0.95)])
+R, D = info["R"], info["D"]
+```
+
 #### Governing Equations (MESH)
 
 For each stage j:

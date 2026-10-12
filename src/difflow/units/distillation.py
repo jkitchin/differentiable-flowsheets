@@ -2403,6 +2403,179 @@ class DistillationColumn(ValueKeyed):
         return self._solve(feed, R, D_spec, B_spec, use_mesh=use_mesh,
                            mesh_iter=mesh_iter, cmo_iter=cmo_iter)
 
+    _SPEC_KINDS = ("x_D", "x_B", "recovery_D", "recovery_B", "R", "D", "B")
+
+    def solve_specs(
+        self,
+        feed: Stream,
+        specs: list[tuple],
+        R_guess: float = 2.0,
+        D_guess: float | None = None,
+        use_mesh: bool = True,
+        mesh_iter: int = 20,
+        cmo_iter: int = 30,
+        max_steps: int = 40,
+        rtol: float = 1e-8,
+    ) -> tuple[Stream, Stream, dict[str, Array]]:
+        """Solve the column for two specifications instead of ``R`` and ``D``.
+
+        The unknowns are the reflux ratio and the distillate rate, written as
+        ``R = exp(u_0)`` and ``D = F sigmoid(u_1)`` so that every Newton
+        iterate is a column that can run. A damped Newton iteration (Python
+        loop on concrete values) drives the two specification residuals to
+        zero, and the derivative is attached by the implicit function
+        theorem, so ``jax.grad`` of anything in the result with respect to
+        the feed or the specification values is the derivative of the
+        specified design (issue #444). Not traceable under ``jax.jit`` (the
+        loop reads concrete values); differentiate it, don't jit it.
+
+        Args:
+            feed: Feed stream.
+            specs: Exactly two specifications, each a tuple:
+                ``("x_D", species, value)`` / ``("x_B", species, value)``:
+                mole fraction of ``species`` in the distillate / bottoms;
+                ``("recovery_D", species, value)`` /
+                ``("recovery_B", species, value)``: fraction of the feed's
+                ``species`` recovered in the distillate / bottoms;
+                ``("R", value)``, ``("D", value)``, ``("B", value)`` (mol/s).
+            R_guess: Initial reflux ratio.
+            D_guess: Initial distillate rate (mol/s); default half the feed,
+                or the ``D``/``B`` specification when one is given.
+            use_mesh, mesh_iter, cmo_iter: As for :meth:`__call__`.
+            max_steps: Newton step limit.
+            rtol: Tolerance on the largest specification residual (mole
+                fractions and recoveries as they are; ``R`` on its log;
+                ``D``/``B`` divided by the feed rate).
+
+        Returns:
+            ``(distillate, bottoms, info)`` as :meth:`__call__`, with ``info``
+            also holding ``R``, ``spec_residuals`` (one per specification, in
+            its own units), ``spec_converged`` and ``spec_steps``. An
+            infeasible specification (e.g. a recovery the distillate rate
+            cannot hold) ends with ``spec_converged`` False.
+
+        Raises:
+            ValueError: Not exactly two specifications, an unknown kind, or
+                an unknown species.
+
+        Example:
+            >>> d, b, info = column.solve_specs(feed, [("x_D", "benzene", 0.95),
+            ...                                        ("x_B", "toluene", 0.95)])
+        """
+        p = self.params
+        if len(specs) != 2:
+            raise ValueError(f"solve_specs needs exactly two specifications, got {len(specs)}")
+        for sp in specs:
+            if sp[0] not in self._SPEC_KINDS:
+                raise ValueError(f"unknown specification {sp[0]!r}; use one of {self._SPEC_KINDS}")
+            if sp[0] in ("R", "D", "B"):
+                if len(sp) != 2:
+                    raise ValueError(f"specification {sp[0]!r} is (kind, value)")
+            elif len(sp) != 3 or sp[1] not in p.species_order:
+                raise ValueError(f"specification {sp!r} needs (kind, species, value) "
+                                 f"with species in {p.species_order}")
+        flows_in = get_flows(feed)
+        F = sum(flows_in[s] for s in p.species_order)
+
+        def run(u):
+            R = jnp.exp(u[0])
+            D = F * jax.nn.sigmoid(u[1])
+            return self(feed, R, D_spec=D, use_mesh=use_mesh, mesh_iter=mesh_iter,
+                        cmo_iter=cmo_iter), R, D
+
+        def residuals(u, args):
+            (dist, bot, info), R, D = run(u)
+            fd, fb = get_flows(dist), get_flows(bot)
+            Dt = sum(fd[s] for s in p.species_order)
+            Bt = sum(fb[s] for s in p.species_order)
+            out = []
+            for sp in specs:
+                kind, val = sp[0], sp[-1]
+                if kind == "x_D":
+                    out.append(fd[sp[1]] / Dt - val)
+                elif kind == "x_B":
+                    out.append(fb[sp[1]] / Bt - val)
+                elif kind == "recovery_D":
+                    out.append(fd[sp[1]] / flows_in[sp[1]] - val)
+                elif kind == "recovery_B":
+                    out.append(fb[sp[1]] / flows_in[sp[1]] - val)
+                elif kind == "R":
+                    out.append(safe_log(R) - jnp.log(val))
+                elif kind == "D":
+                    out.append((D - val) / F)
+                else:
+                    out.append((F - D - val) / F)
+            return jnp.stack(out)
+
+        D0 = 0.5 * F if D_guess is None else jnp.asarray(D_guess, float)
+        R0 = jnp.asarray(R_guess, float)
+        for sp in specs:
+            if sp[0] == "D":
+                D0 = jnp.asarray(sp[1], float)
+            elif sp[0] == "B":
+                D0 = F - sp[1]
+            elif sp[0] == "R":
+                R0 = jnp.asarray(sp[1], float)
+        frac = jnp.clip(D0 / F, 1e-6, 1.0 - 1e-6)
+        u0 = jnp.stack([jnp.log(R0), jnp.log(frac / (1.0 - frac))])
+        # Damped Newton on stopped values: a step is capped at 2 in (log R,
+        # logit D/F), halved up to 6 times until the residual falls, and
+        # refused if every trial is non-finite (an infeasible specification
+        # then ends unconverged instead of raising).
+        sg = lax.stop_gradient
+
+        def res(u):
+            return residuals(u, None)
+
+        def res_c(u):
+            return sg(res(u))
+
+        def jac(u):
+            return sg(jax.jacfwd(res)(sg(u)))
+
+        def norm(r):
+            return jnp.where(jnp.all(jnp.isfinite(r)), jnp.max(jnp.abs(r)), jnp.inf)
+
+        u = sg(u0)
+        r = res_c(u)
+        steps = 0
+        for steps in range(1, max_steps + 1):
+            if not float(norm(r)) > rtol:
+                steps -= 1
+                break
+            J = jac(u)
+            du = jnp.linalg.solve(J, r) if bool(jnp.all(jnp.isfinite(J))) else jnp.full(2, jnp.nan)
+            if not bool(jnp.all(jnp.isfinite(du))):
+                break
+            du = du / max(1.0, float(jnp.max(jnp.abs(du))) / 2.0)
+            lam, moved = 1.0, False
+            for _ in range(7):
+                u_try = u - lam * du
+                r_try = res_c(u_try)
+                if float(norm(r_try)) < float(norm(r)):
+                    u, r, moved = u_try, r_try, True
+                    break
+                lam *= 0.5
+            if not moved:
+                break
+
+        # Implicit-function derivative: one Newton step from the stopped
+        # solution carries du/dp = -J^-1 dr/dp without moving the value.
+        J = jac(u)
+        ok_J = (bool(jnp.all(jnp.isfinite(J))) and bool(jnp.all(jnp.isfinite(r)))
+                and abs(float(jnp.linalg.det(J))) > 0.0)
+        if ok_J:
+            r_live = res(u)
+            u = u - jnp.linalg.solve(J, r_live - sg(r_live))
+        (dist, bot, info), R, D = run(u)
+        r = residuals(u, None)
+        info = dict(info)
+        info["R"] = R
+        info["spec_residuals"] = r
+        info["spec_converged"] = jnp.asarray(ok_J and float(norm(sg(r))) < 1e-6)
+        info["spec_steps"] = steps
+        return dist, bot, info
+
     @partial(jax.jit, static_argnums=(0,),
              static_argnames=("use_mesh", "mesh_iter", "cmo_iter"))
     def _solve(

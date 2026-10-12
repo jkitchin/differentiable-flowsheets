@@ -2236,3 +2236,72 @@ class TestUnderwoodClass2:
         from difflow.units.distillation import underwood_class2
         with pytest.raises(ValueError, match="distributing"):
             underwood_class2(self.alpha, self.f, 22.5, 2.0, 0, 2, distributing=[])
+
+
+@pytest.fixture(scope="module")
+def db_thermo():
+    """Benzene-toluene from the species database."""
+    from difflow.database import get_species_data
+    return IdealThermo({s: get_species_data(s) for s in ("benzene", "toluene")})
+
+
+class TestSolveSpecs:
+    """``DistillationColumn.solve_specs``: two specifications in place of R
+    and D (issue #444)."""
+
+    def _column(self, thermo):
+        return DistillationColumn(DistillationColumnParams(
+            species_order=["benzene", "toluene"], n_stages=15, feed_stage=7,
+            P=101325.0), thermo)
+
+    def _feed(self):
+        return make_stream({"benzene": 50.0, "toluene": 50.0}, T=370.0, P=101325.0)
+
+    def test_purities(self, db_thermo):
+        col = self._column(db_thermo)
+        d, b, info = col.solve_specs(self._feed(), [("x_D", "benzene", 0.95),
+                                                    ("x_B", "toluene", 0.95)],
+                                     use_mesh=False)
+        assert bool(info["spec_converged"])
+        fd, fb = get_flows(d), get_flows(b)
+        assert float(fd["benzene"] / info["D"]) == pytest.approx(0.95, abs=1e-8)
+        assert float(fb["toluene"] / info["B"]) == pytest.approx(0.95, abs=1e-8)
+        # the same column run forward at the solved (R, D) gives the same answer
+        d2, _, _ = col(self._feed(), info["R"], D_spec=info["D"], use_mesh=False)
+        assert float(get_flows(d2)["benzene"]) == pytest.approx(float(fd["benzene"]), rel=1e-10)
+
+    def test_recovery_and_flow_specs(self, db_thermo):
+        col = self._column(db_thermo)
+        d, _, info = col.solve_specs(self._feed(), [("recovery_D", "benzene", 0.95),
+                                                    ("B", 52.0)], use_mesh=False)
+        assert bool(info["spec_converged"])
+        assert float(info["B"]) == pytest.approx(52.0, rel=1e-10)
+        assert float(get_flows(d)["benzene"]) / 50.0 == pytest.approx(0.95, abs=1e-8)
+
+    def test_infeasible_spec_reports_unconverged(self, db_thermo):
+        # 97 % of 50 mol/s benzene is 48.5 mol/s, more than D = 48 can hold
+        col = self._column(db_thermo)
+        _, _, info = col.solve_specs(self._feed(), [("recovery_D", "benzene", 0.97),
+                                                    ("B", 52.0)], use_mesh=False)
+        assert not bool(info["spec_converged"])
+
+    @pytest.mark.slow
+    def test_gradient_of_reflux_wrt_purity(self, db_thermo):
+        col = self._column(db_thermo)
+
+        def R_of(xd):
+            return col.solve_specs(self._feed(), [("x_D", "benzene", xd), ("D", 50.0)],
+                                   use_mesh=False)[2]["R"]
+
+        g = float(jax.grad(R_of)(0.95))
+        fd = (float(R_of(0.951)) - float(R_of(0.949))) / 0.002
+        assert g > 0.0 and g == pytest.approx(fd, rel=1e-3)
+
+    def test_bad_specs(self, db_thermo):
+        col = self._column(db_thermo)
+        with pytest.raises(ValueError, match="exactly two"):
+            col.solve_specs(self._feed(), [("R", 2.0)])
+        with pytest.raises(ValueError, match="unknown specification"):
+            col.solve_specs(self._feed(), [("R", 2.0), ("purity", "benzene", 0.9)])
+        with pytest.raises(ValueError, match="species"):
+            col.solve_specs(self._feed(), [("R", 2.0), ("x_D", "xylene", 0.9)])
