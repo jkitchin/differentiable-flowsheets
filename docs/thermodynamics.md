@@ -187,6 +187,32 @@ $\Delta H_{vap}(T)$ at the stream's own $T$, as difflow did before, makes the
 vapor enthalpy fall towards $T_c$, where $\Delta H_{vap} \to 0$: ethane's
 dropped from 9.5 kJ/mol at 200 K to 1.9 kJ/mol at 305 K.
 
+(latent-heat-authority)=
+**Which latent heat is authoritative.** Unit energy balances integrate this
+path, so the latent heat a duty actually contains at $T$ is the path-consistent
+
+$$\Delta H^{path}(T) = H^V(T) - H^L(T) = \Delta H_{vap}(T_v)
+  + \int_{T_v}^{T} \left(C_p^{ig} - C_p^{L}\right) dT$$
+
+returned by `thermo.latent_heat(species, T)`, not the Watson
+`thermo.Hvap(species, T)`. The two agree at $T_v$ and drift apart away from
+it: $C_p^L$, $C_p^{ig}$ and the Watson constants are separate fits, and
+Kirchhoff's relation $d\Delta H_{vap}/dT = C_p^{ig} - C_p^L$ is not imposed on
+the Watson curve. Toluene at 374.64 K: `latent_heat` 34 783 J/mol, Watson
+33 728 (+3.1%); benzene at 368.3 K, +2.3%. The enthalpies are left as they
+are (reference data depend on them); read `latent_heat` when a number must be
+consistent with the duties, and `Hvap` as the correlation the path is
+anchored to.
+
+```python
+from difflow import IdealThermo
+from difflow.database import get_species_data
+
+tol = IdealThermo({"toluene": get_species_data("toluene")})
+print(float(tol.latent_heat("toluene", 374.64)))   # 34783 J/mol, in the duties
+print(float(tol.Hvap("toluene", 374.64)))          # 33728 J/mol, Watson
+```
+
 #### Saturation Pressure
 
 ```python
@@ -214,6 +240,60 @@ concrete temperature outside the range raises an `AntoineRangeWarning`, once per
 species and side. Under `jit`/`grad` the check is skipped, as for difflow's
 other diagnostics. `validate_antoine` and `Psat_with_info` report the range
 without warning; `Psat_with_info` also works on traced input.
+
+(wagner-vapor-pressure)=
+**Wagner equation for the light gases.** A three-constant Antoine set cannot
+follow a light gas from its triple point to $T_c$ (methane's Prydz-Goodwin set
+is 2.4% high mid-range). `SpeciesData` takes an optional Wagner set,
+`wagner_coeffs = (a, b, c, d, Tc, Pc)` with `wagner_form` and `T_wagner_min`:
+
+$$\ln\frac{P^{sat}}{P_c} = \frac{a\tau + b\tau^{1.5} + c\tau^{e_3} + d\tau^{e_4}}{T_r},
+\qquad \tau = 1 - T_r$$
+
+with $(e_3, e_4) = (2.5, 5)$ (`"2.5-5"`, Poling, Prausnitz & O'Connell 5e
+App. A) or $(3, 6)$ (`"3-6"`, McGarry 1983). When it is set, `Psat` uses it
+instead of Antoine (the Antoine constants still fix the enthalpy path's
+$T_v$). Above $T_c$ the equation is continued by its leading term,
+$a(T_c/T - 1)$, which matches its value and slope at $T_c$, so a supercritical
+Raoult K-value stays smooth. `difflow.database.WAGNER_COEFFS` holds sets for
+methane, ethane, propane, n-butane, isobutane, N2, O2, CO2, NH3, ethylene,
+propylene and CO, each within 1% of the reference equation of state from the
+triple point to $T_c$ (methane: 0.12%) and reproducing $T_b$ to 0.1 K
+(`tests/test_wagner.py`). They are opt-in, so existing Antoine-based results do
+not move:
+
+```python
+from difflow import IdealThermo
+from difflow.database import get_species_data
+
+ch4 = IdealThermo({"methane": get_species_data("methane", vapor_pressure="wagner")})
+print(float(ch4.Psat("methane", 111.667)))    # ~101.3 kPa (normal boiling point)
+# vapor_pressure="best": Wagner where a set exists, Antoine otherwise
+```
+
+(saturation-temperature)=
+#### Saturation Temperature
+
+`saturation_temperature(species, P, model="ideal" | "eos")` returns the boiling
+temperature of a pure species at `P`, and `saturation_pressure(species, T, ...)`
+its inverse. `"ideal"` inverts the thermo's vapor-pressure correlation
+(`IdealThermo.saturation_T`: closed form for Antoine, Newton for Wagner);
+`"eos"` is the cubic EOS's own saturation curve, `eos_bubble_T`/`eos_bubble_P`
+at a one-hot liquid (Peng-Robinson from the database unless `eos=` is given).
+Both are differentiable: `jax.grad` of $T_{sat}$ in $P$ is the
+Clausius-Clapeyron slope ($> 0$). `IdealThermo.vaporization_T` is something
+else: the fixed temperature at which the enthalpy path vaporizes
+($\min(T_{ref}, T_b)$), not a saturation temperature at an arbitrary pressure.
+
+```python
+import jax
+from difflow import saturation_temperature, saturation_pressure
+
+print(float(saturation_temperature("water", 101325.0)))           # 373.0 K
+print(float(jax.grad(lambda P: saturation_temperature("water", P))(101325.0)))
+print(float(saturation_pressure("benzene", 353.2)))               # ~101 kPa
+# model="eos": Peng-Robinson's saturation curve (implicitly differentiated)
+```
 
 ```python
 import warnings
@@ -443,6 +523,8 @@ from difflow.eos import phase_identification_parameter
 pip = phase_identification_parameter(pr, T=250.0, P=2e6, y=jnp.array([0.5, 0.5]))
 ```
 
+`eos_pressure_TV(eos, T, v, z)` is the cubic's $P(T, v)$ at a molar volume.
+
 #### Fugacity Calculation
 
 $$\ln \phi_i = \frac{b_i}{b_{mix}}(Z - 1) - \ln(Z - B) - \frac{A}{2\sqrt{2}B}\left(\frac{2\sum_j y_j a_{ij}}{a_{mix}} - \frac{b_i}{b_{mix}}\right)\ln\left(\frac{Z + (1+\sqrt{2})B}{Z + (1-\sqrt{2})B}\right)$$
@@ -559,8 +641,16 @@ The solve has three stages:
 Near the critical region no single start serves every mixture, so without a
 guess the solve tries four starts (pressure at 0.25, 0.1, 0.5 and 1 times the
 Wilson estimate; temperature at 0.95, 0.9, 1 and 0.85 times it) and keeps the
-first converged, non-trivial root. Derivatives flow through that root only. A
-given `P_guess`/`T_guess` is a single start.
+first converged, non-trivial root. Close to the cricondenbar, for example a
+methane-rich CH4/C3H8 liquid at 200-215 K, none of these converges. The solve
+then falls back to continuation: it finds the point at 0.75 T (or a quarter
+of P, for a bubble or dew T), where the phases are far apart. From there it
+marches the specified variable to its value in 24 steps, starting each Newton
+solve from the previous root. All of these starts are gradient-free. One
+final Newton solve from the selected start carries the implicit derivatives.
+A given `P_guess`/`T_guess` is a single start. The solver is compiled once per
+EOS (the EOS is a static `jit` argument, hashed by value) and reused, so after
+the first call a bubble or dew point costs milliseconds.
 
 All four take `k_ij=None` and an optional `P_guess`/`T_guess`, and return a
 dict:
@@ -717,6 +807,45 @@ above were **regressed** to the 1 atm methanol-water Txy table (Perry's) and the
 test checks the model reproduces it to 0.3 K and 0.01 in $y$. No textbook worked
 example is reproduced to three figures.
 
+(binary-parameter-database)=
+### Binary-Parameter Database
+
+`difflow.binary_params` holds published NRTL and UNIQUAC parameters for common
+pairs, each with its source, and assembles the parameter objects for any list
+of species:
+
+```python
+import jax.numpy as jnp
+from difflow import get_nrtl_params, get_uniquac_params, binary_parameter_source
+
+nrtl = get_nrtl_params(["ethanol", "water"])            # NRTLParams
+print(nrtl.gamma(jnp.array([0.5, 0.5]), 350.0))
+print(binary_parameter_source("nrtl", "methanol", "water"))
+uq = get_uniquac_params(["2_propanol", "water"])         # UNIQUACParams
+```
+
+Conventions are those of the parameter classes: NRTL $\tau_{ij} = a_{ij} +
+b_{ij}/T$ with $a_{ij}=0$ and $b_{ij} = A_{ij}/R$, where $A_{ij} = g_{ij}-g_{jj}$
+is the DECHEMA value in cal/mol; UNIQUAC $\tau_{ij} = \exp(-b_{ij}/T)$ with $b$
+in K, $z = 10$, and the Abrams-Prausnitz $r$, $q$.
+
+| Model | Pairs | Source |
+|-------|-------|--------|
+| NRTL | ethanol-water, methanol-water, benzene-toluene, ethyl acetate-ethanol, water-1-butanol, acetone-chloroform, acetone-methanol, ethyl acetate-water, ethanol-benzene, methanol-benzene, ethanol-cyclohexane, acetone-benzene, methanol-ethanol, methanol-1-butanol, ethanol-2-propanol | DECHEMA Chemistry Data Series Vol. I (part and page per pair), via the ChemSep transcription |
+| UNIQUAC | water with ethanol, methanol, 2-propanol, 1-propanol, acetone; methanol and ethanol with benzene, toluene, chloroform; methanol-acetone, benzene-toluene, acetone-benzene, ethanol-n-hexane, methanol-ethanol | ChemSep UNIQUAC set (DECHEMA-regressed) |
+
+Every set is listed only because, with the database's own Antoine constants, it
+reproduces a fact independent of it (`tests/test_binary_params.py`): the 1-atm
+azeotrope composition and temperature from the CRC azeotrope tables (ethanol-water
+0.880 / 351.2 K against 0.894 / 351.3 K; isopropanol-water 0.69 / 353.4 K against
+0.68 / 353.4 K), no azeotrope where there is none, acetone-chloroform boiling above
+both pure components, the water-1-butanol miscibility gap, near-unit $\gamma$ for
+benzene-toluene. Two candidate sets failed and were left out (NRTL
+acetone-water, which predicts a spurious azeotrope; UNIQUAC acetic acid-water).
+A pair that is not in the database raises `KeyError` by default; with
+`missing="ideal"` it is given zero interaction and a
+`MissingBinaryParametersWarning` names it.
+
 **References**: Wilson, J. Am. Chem. Soc. 86, 127 (1964); van Laar, Z. Phys. Chem.
 72, 723 (1910); Margules, Sitzungsber. Akad. Wiss. Wien 104, 1243 (1895); Prausnitz,
 Lichtenthaler, de Azevedo, *Molecular Thermodynamics of Fluid-Phase Equilibria*,
@@ -792,7 +921,13 @@ ax = plot_txy(d)
 (available-species)=
 ### Available Species
 
-The database contains ~100+ species with complete thermodynamic data:
+The database contains ~100+ species with complete thermodynamic data. Every
+species with critical constants also has an ideal-thermo record (Antoine, Cp,
+Hvap, Hf) except helium and acetylene, which have critical constants only
+(`list_species("critical")` vs `list_species()`); the records added for issue
+#442 (CO, SO2, the xylenes, n-nonane, n-decane, neopentane, chloromethane,
+dichloromethane, methyl acetate, MEK, THF, formaldehyde, acetaldehyde, heavy
+water) cite their sources in `SOURCE_CITATIONS`:
 
 #### Light Gases
 - Hydrogen (H2), Helium (He), Nitrogen (N2), Oxygen (O2)
@@ -920,6 +1055,24 @@ simple rules:
 
 All three neglect interactions. For aqueous and hydrogen-bonding mixtures,
 treat them as estimates.
+
+**Surface tension** (N/m) is not tabulated; `surface_tension(species, T)` in
+`difflow.liquid_properties` uses the IAPWS R1-76 equation for water and the
+Brock-Bird corresponding-states method (Poling, Prausnitz & O'Connell 5e,
+Eq. 12-3.3) from `Tc`, `Pc` and the Antoine normal boiling point for every
+other species. Brock-Bird is within about 5 % for hydrocarbons and weakly polar
+liquids (benzene 28.0 vs 28.9 mN/m measured at 20 C) but overpredicts
+hydrogen-bonding liquids badly (ethanol by about 80 %), so alcohols, acids and
+ammonia raise `SurfaceTensionWarning`. `mixture_surface_tension` is the
+mole-fraction average, fine for similar nonpolar liquids and far too high for
+water with a dissolved organic.
+
+```python
+from difflow.liquid_properties import surface_tension, mixture_surface_tension
+
+surface_tension("water", 293.15)                                # 0.0727 N/m
+mixture_surface_tension({"benzene": 0.4, "toluene": 0.6}, 365.0)
+```
 
 **Sources.** The coefficients are generated by
 `scripts/generate_liquid_properties.py` into `_liquid_property_data.py`.

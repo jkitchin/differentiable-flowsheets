@@ -8,7 +8,11 @@ Building blocks for adsorbers, catalytic beds, settlers, cyclones and filters:
   :func:`ergun_alpha` (the lumped coefficient ``GasPFR`` uses);
 - fluidization: :func:`minimum_fluidization_velocity`, :func:`bed_expansion`,
   :func:`fluidization_window`, :func:`minimum_bubbling_velocity`,
-  :func:`geldart_group` (not differentiable).
+  :func:`geldart_group` (not differentiable);
+- bubbling beds: :func:`mori_wen_bubble_diameter` (with
+  :func:`mori_wen_max_bubble_diameter`, :func:`mori_wen_initial_bubble_diameter`),
+  :func:`darton_bubble_diameter`, :func:`bubble_rise_velocity`,
+  :func:`bubble_velocity`, :func:`bubbling_bed_expansion`.
 
 These are plain functions, not unit operations: they are not registered in
 the GUI palette. The units that apply them are in
@@ -35,6 +39,12 @@ Sources
   minimum bubbling velocity and the A/B boundary.
 - Mehta, D. and Hawley, M. C., Ind. Eng. Chem. Process Des. Dev., 8, 280-282
   (1969): wall correction to the Ergun equation.
+- Mori, S. and Wen, C. Y., AIChE J., 21, 109-115 (1975): bubble diameter
+  (cgs correlation; converted here).
+- Darton, R. C., LaNauze, R. D., Davidson, J. F. and Harrison, D., Trans.
+  Inst. Chem. Eng., 55, 274-280 (1977): bubble growth.
+- Davidson, J. F. and Harrison, D., Fluidised Particles, Cambridge (1963):
+  bubble rise velocity.
 """
 
 from __future__ import annotations
@@ -567,6 +577,14 @@ def minimum_bubbling_velocity(
     return 2.07 * jnp.exp(0.716 * jnp.asarray(fines_fraction)) * d_p * jnp.asarray(rho_f) ** 0.06 / jnp.asarray(mu) ** 0.347
 
 
+#: Methods of :func:`geldart_group`.
+GELDART_METHODS = ("umb_umf", "geldart1973")
+#: Geldart (1973) A/B boundary, ``(rho_p - rho_f) d_p`` in (g/cm^3)(micron).
+GELDART_1973_AB = 225.0
+#: Geldart (1973) B/D boundary, ``(rho_p - rho_f) d_p^2`` in (g/cm^3)(micron^2).
+GELDART_1973_BD = 1.0e6
+
+
 def _baeyens_geldart_umf(d_p, drho, rho_f, mu, g=G_STD):
     """Baeyens-Geldart (1974) u_mf, the correlation the A/B criterion was built with."""
     return (drho * g) ** 0.934 * d_p**1.8 / (1111.0 * mu**0.87 * rho_f**0.066)
@@ -578,6 +596,7 @@ def geldart_group(
     rho_f: float,
     mu: float = 1.8e-5,
     fines_fraction: float = 0.0,
+    method: str = "umb_umf",
 ) -> str:
     """Geldart (1973) powder group: ``"A"``, ``"B"``, ``"C"`` or ``"D"``.
 
@@ -605,27 +624,333 @@ def geldart_group(
     sizes, where group A meets group D with no B between. Treat an "A" for a
     coarse or very light powder as an extrapolation.
 
+    ``method="geldart1973"`` uses instead the two simplified boundaries
+    Geldart (1973) gives with his chart, in his units (density difference in
+    g/cm^3, mean diameter in micron):
+
+    * **A/B**: ``(rho_p - rho_f) d_p <= 225`` is group A
+      (:data:`GELDART_1973_AB`): 150 micron at 1.5 g/cm^3, about 87 micron
+      for sand (2.6 g/cm^3). This line is fixed: it does not depend on the gas
+      or the fines (``mu`` and ``fines_fraction`` are ignored).
+    * **B/D**: ``(rho_p - rho_f) d_p^2 >= 1e6`` is group D
+      (:data:`GELDART_1973_BD`): about 620 micron for sand, smaller than the
+      ``Ar = 1.45e5`` line of the default.
+    * **C/A**: 20 micron, as in the default.
+
+    The two methods agree in the middle of each group and differ near the
+    boundaries: the default A/B line moves with the gas and the fines, and
+    extrapolates outside the 20-72 micron powders it was fitted to; the 1973
+    line is the one drawn on the published chart (for air at ambient
+    conditions) and does not extrapolate in the same way. The default is
+    unchanged. The 225 and 1e6 constants are as commonly quoted from Geldart
+    (1973); they were not re-checked against the paper.
+
     Args:
         d_p: Mean particle diameter (m).
         rho_p: Particle density (kg/m^3).
         rho_f: Fluid density (kg/m^3).
         mu: Gas viscosity (Pa s); default air at ambient conditions.
         fines_fraction: Mass fraction finer than 45 micron (-).
+        method: ``"umb_umf"`` (default; ``u_mb/u_mf`` A/B line and Grace's B/D
+            line) or ``"geldart1973"`` (Geldart's simplified 1973 lines).
 
     Returns:
         One of ``"A"``, ``"B"``, ``"C"``, ``"D"``.
+
+    Raises:
+        ValueError: Unknown ``method``.
+
+    Example:
+        >>> from difflow.particles import geldart_group
+        >>> geldart_group(60e-6, 1500.0, 1.2), geldart_group(60e-6, 1500.0, 1.2, method="geldart1973")
+        ('A', 'A')
     """
+    if method not in GELDART_METHODS:
+        raise ValueError(f"unknown method {method!r}; choose from {GELDART_METHODS}")
     d_p, rho_f, mu = float(d_p), float(rho_f), float(mu)
     d_um = d_p * 1e6
     drho = float(rho_p) - rho_f
     if d_um < 20.0:
         return "C"
+    if method == "geldart1973":
+        # (rho_p - rho_f) in g/cm^3, d_p in micron: Geldart (1973) simplified lines.
+        drho_cgs = drho * 1e-3
+        if drho_cgs * d_um**2 >= GELDART_1973_BD:
+            return "D"
+        return "A" if drho_cgs * d_um <= GELDART_1973_AB else "B"
     if d_p**3 * rho_f * drho * G_STD / mu**2 > 1.45e5:
         return "D"
     ratio = float(minimum_bubbling_velocity(d_p, rho_f, mu, fines_fraction)) / _baeyens_geldart_umf(
         d_p, drho, rho_f, mu
     )
     return "A" if ratio > 1.0 else "B"
+
+
+# ----------------------------------------------------------------------
+# Bubbling fluidized beds: bubble size, rise velocity, bed expansion
+# ----------------------------------------------------------------------
+#: Distributor types of :func:`mori_wen_initial_bubble_diameter`.
+DISTRIBUTORS = ("porous", "perforated")
+
+# Mori & Wen (1975) is a dimensional correlation in cgs units (cm, cm/s,
+# cm^2). The functions below convert the SI inputs to cgs, evaluate the
+# published equation as printed and convert the diameter back to metres, so
+# the constants stay exactly the published ones.
+_M_TO_CM = 100.0
+
+
+def mori_wen_max_bubble_diameter(
+    u0: Array | float,
+    u_mf: Array | float,
+    D_t: Array | float,
+) -> Array:
+    r"""Limiting (maximum) bubble diameter of Mori & Wen (1975), :math:`d_{bm}`.
+
+    Original form, in **cgs** units (``d_bm`` in cm, ``A_t`` in cm^2, velocities
+    in cm/s):
+
+    .. math:: d_{bm} = 0.652\,[A_t (u_0 - u_{mf})]^{0.4},
+              \qquad A_t = \pi D_t^2 / 4.
+
+    The inputs here are SI and are converted; in SI the equation reads
+    :math:`d_{bm}\,[\mathrm m] = 1.638\,[A_t (u_0-u_{mf})]^{0.4}` (``A_t`` in
+    m^2, velocities in m/s; :math:`0.01 \cdot 0.652 \cdot (10^4 \cdot
+    10^2)^{0.4} = 1.638`). It is the size bubbles reach by coalescence in a
+    tall bed. Mori & Wen's range: ``D_t <= 1.3 m``, ``0.005 <= u_mf <= 0.2
+    m/s``, ``60 <= d_p <= 450`` micron, ``u0 - u_mf <= 0.48 m/s``.
+
+    Args:
+        u0: Superficial gas velocity (m/s).
+        u_mf: Minimum fluidization velocity (m/s).
+        D_t: Bed (column) diameter (m).
+
+    Returns:
+        ``d_bm`` (m).
+
+    Example:
+        >>> from difflow.particles import mori_wen_max_bubble_diameter
+        >>> round(float(mori_wen_max_bubble_diameter(0.30, 0.10, 1.0)), 4)
+        0.7811
+    """
+    A_cm2 = jnp.pi / 4.0 * (jnp.asarray(D_t, dtype=float) * _M_TO_CM) ** 2
+    du_cm = (jnp.asarray(u0, dtype=float) - u_mf) * _M_TO_CM
+    return 0.652 * (A_cm2 * du_cm) ** 0.4 / _M_TO_CM
+
+
+def mori_wen_initial_bubble_diameter(
+    u0: Array | float,
+    u_mf: Array | float,
+    distributor: str = "porous",
+    N_or: Array | float | None = None,
+) -> Array:
+    r"""Initial bubble diameter at the distributor, :math:`d_{b0}`, of Mori & Wen (1975).
+
+    Original forms, in **cgs** units (cm, cm/s, cm^2):
+
+    * porous plate: :math:`d_{b0} = 0.00376\,(u_0 - u_{mf})^2`;
+    * perforated plate: :math:`d_{b0} = 0.347\,[A_t(u_0-u_{mf})/n_d]^{0.4}`
+      with :math:`n_d` the number of orifices, so that :math:`A_t/n_d =
+      1/N_{or}` is the plate area per orifice.
+
+    (0.347 is :math:`1.38/g^{0.2}` with ``g = 981 cm/s^2``. Kunii & Levenspiel,
+    2nd ed., print the Davidson-Harrison forms :math:`2.78(u_0-u_{mf})^2/g`
+    and :math:`1.30[(u_0-u_{mf})/N_{or}]^{0.4}/g^{0.2}` instead, about 25 %
+    and 6 % smaller; those are not what this function returns.)
+
+    Args:
+        u0: Superficial gas velocity (m/s).
+        u_mf: Minimum fluidization velocity (m/s).
+        distributor: ``"porous"`` or ``"perforated"`` (a Python string).
+        N_or: Orifice density, orifices per m^2 of plate (1/m^2); required for
+            ``"perforated"``.
+
+    Returns:
+        ``d_b0`` (m).
+
+    Raises:
+        ValueError: Unknown distributor, or ``N_or`` missing for a perforated plate.
+
+    Example:
+        >>> from difflow.particles import mori_wen_initial_bubble_diameter
+        >>> round(float(mori_wen_initial_bubble_diameter(0.30, 0.10)), 5)   # 0.00376 * 20^2 cm
+        0.01504
+    """
+    du_cm = (jnp.asarray(u0, dtype=float) - u_mf) * _M_TO_CM
+    if distributor == "porous":
+        return 0.00376 * du_cm**2 / _M_TO_CM
+    if distributor == "perforated":
+        if N_or is None:
+            raise ValueError("a perforated plate needs N_or (orifices per m^2)")
+        area_per_orifice_cm2 = 1.0e4 / jnp.asarray(N_or, dtype=float)
+        return 0.347 * (area_per_orifice_cm2 * du_cm) ** 0.4 / _M_TO_CM
+    raise ValueError(f"unknown distributor {distributor!r}; choose from {DISTRIBUTORS}")
+
+
+def mori_wen_bubble_diameter(
+    h: Array | float,
+    u0: Array | float,
+    u_mf: Array | float,
+    D_t: Array | float,
+    distributor: str = "porous",
+    N_or: Array | float | None = None,
+    d_b0: Array | float | None = None,
+) -> Array:
+    r"""Bubble diameter at height ``h`` above the distributor, Mori & Wen (1975).
+
+    .. math:: \frac{d_{bm} - d_b}{d_{bm} - d_{b0}} = \exp(-0.3\,h/D_t)
+
+    with :math:`d_{bm}` from :func:`mori_wen_max_bubble_diameter` and
+    :math:`d_{b0}` from :func:`mori_wen_initial_bubble_diameter` (or given).
+    ``h/D_t`` is dimensionless, so this step needs no unit conversion. ``d_b``
+    grows from ``d_b0`` at the plate towards ``d_bm``. Nothing caps ``d_b``
+    at the column diameter: a bed whose bubbles approach ``D_t`` slugs, which
+    the correlation does not describe.
+
+    Args:
+        h: Height above the distributor (m).
+        u0: Superficial gas velocity (m/s).
+        u_mf: Minimum fluidization velocity (m/s).
+        D_t: Bed diameter (m).
+        distributor: ``"porous"`` or ``"perforated"``.
+        N_or: Orifice density (1/m^2), for ``"perforated"``.
+        d_b0: Initial bubble diameter (m); overrides the Mori-Wen estimate.
+
+    Returns:
+        ``d_b`` (m).
+
+    Example:
+        >>> from difflow.particles import mori_wen_bubble_diameter, mori_wen_max_bubble_diameter
+        >>> d = [float(mori_wen_bubble_diameter(h, 0.30, 0.10, 1.0)) for h in (0.0, 1.0, 50.0)]
+        >>> d[0] < d[1] < d[2] <= float(mori_wen_max_bubble_diameter(0.30, 0.10, 1.0))
+        True
+    """
+    d_bm = mori_wen_max_bubble_diameter(u0, u_mf, D_t)
+    if d_b0 is None:
+        d_b0 = mori_wen_initial_bubble_diameter(u0, u_mf, distributor, N_or)
+    return d_bm - (d_bm - d_b0) * jnp.exp(-0.3 * jnp.asarray(h, dtype=float) / D_t)
+
+
+def darton_bubble_diameter(
+    h: Array | float,
+    u0: Array | float,
+    u_mf: Array | float,
+    A0: Array | float,
+    g: float = G_STD,
+) -> Array:
+    r"""Bubble diameter at height ``h``, Darton, LaNauze, Davidson & Harrison (1977).
+
+    .. math:: d_b = 0.54\,(u_0 - u_{mf})^{0.4}\,(h + 4\sqrt{A_0})^{0.8}\,g^{-0.2}
+
+    The equation is dimensionally consistent and holds as written in SI.
+    ``A0`` is the plate area per orifice (``1/N_or`` for a perforated plate);
+    ``4 sqrt(A0)`` places the virtual origin of the bubbles above the plate.
+    Derived for Group B powders from coalescence along preferred bubble paths;
+    there is no column-size limit in it.
+
+    Args:
+        h: Height above the distributor (m).
+        u0: Superficial gas velocity (m/s).
+        u_mf: Minimum fluidization velocity (m/s).
+        A0: Distributor area per orifice (m^2).
+        g: Gravitational acceleration (m/s^2).
+
+    Returns:
+        ``d_b`` (m).
+
+    Example:
+        >>> from difflow.particles import darton_bubble_diameter
+        >>> round(float(darton_bubble_diameter(0.5, 0.30, 0.10, 1e-4)), 4)
+        0.1098
+    """
+    du = jnp.asarray(u0, dtype=float) - u_mf
+    return 0.54 * du**0.4 * (jnp.asarray(h, dtype=float) + 4.0 * jnp.sqrt(A0)) ** 0.8 * g**-0.2
+
+
+def bubble_rise_velocity(d_b: Array | float, g: float = G_STD) -> Array:
+    r"""Rise velocity of a single bubble in a fluidized bed, :math:`u_{br} = 0.711\sqrt{g d_b}`.
+
+    Davidson & Harrison (1963); the constant is that of a spherical-cap
+    bubble in a liquid (Davies & Taylor), which a bubble in a fluidized bed
+    follows while ``d_b / D_t`` is small (Kunii & Levenspiel quote
+    ``d_b / D_t < 0.125``).
+
+    Args:
+        d_b: Bubble diameter (m).
+        g: Gravitational acceleration (m/s^2).
+
+    Returns:
+        ``u_br`` (m/s).
+    """
+    return 0.711 * jnp.sqrt(g * jnp.asarray(d_b, dtype=float))
+
+
+def bubble_velocity(
+    u0: Array | float,
+    u_mf: Array | float,
+    d_b: Array | float,
+    g: float = G_STD,
+) -> Array:
+    r"""Rise velocity of bubbles in a bubbling bed, :math:`u_b = u_0 - u_{mf} + 0.711\sqrt{g d_b}`.
+
+    Davidson & Harrison (1963): the single-bubble rise velocity
+    (:func:`bubble_rise_velocity`) plus the excess gas flow.
+
+    Args:
+        u0: Superficial gas velocity (m/s).
+        u_mf: Minimum fluidization velocity (m/s).
+        d_b: Bubble diameter (m).
+        g: Gravitational acceleration (m/s^2).
+
+    Returns:
+        ``u_b`` (m/s).
+    """
+    return jnp.asarray(u0, dtype=float) - u_mf + bubble_rise_velocity(d_b, g)
+
+
+def bubbling_bed_expansion(
+    u0: Array | float,
+    u_mf: Array | float,
+    d_b: Array | float,
+    H_mf: Array | float,
+    g: float = G_STD,
+) -> dict[str, Array]:
+    r"""Bubble fraction and expanded height of a bubbling (two-phase) bed.
+
+    Two-phase theory with fast bubbles (:math:`u_b \gg u_{mf}`; Kunii &
+    Levenspiel, 2nd ed., Ch. 6): the gas in excess of :math:`u_{mf}` crosses
+    the bed as bubbles, so the bubble volume fraction is
+
+    .. math:: \delta = \frac{u_0 - u_{mf}}{u_b},\qquad
+              u_b = u_0 - u_{mf} + 0.711\sqrt{g d_b},
+
+    and, with the emulsion at minimum-fluidization conditions,
+    :math:`H = H_{mf}/(1-\delta)`. ``d_b`` is a representative bubble size,
+    commonly :func:`mori_wen_bubble_diameter` at mid-bed. This is the
+    expansion of a *bubbling* gas bed; :func:`bed_expansion` is the
+    homogeneous (particulate) one.
+
+    Args:
+        u0: Superficial gas velocity (m/s), above ``u_mf``.
+        u_mf: Minimum fluidization velocity (m/s).
+        d_b: Bubble diameter (m).
+        H_mf: Bed height at minimum fluidization (m).
+        g: Gravitational acceleration (m/s^2).
+
+    Returns:
+        Dict with ``delta`` (bubble fraction, -), ``u_b`` and ``u_br`` (m/s)
+        and ``H`` (expanded bed height, m).
+
+    Example:
+        >>> from difflow.particles import bubbling_bed_expansion
+        >>> out = bubbling_bed_expansion(0.30, 0.10, 0.10, 1.0)
+        >>> round(float(out["delta"]), 3), round(float(out["H"]), 3)
+        (0.221, 1.284)
+    """
+    du = jnp.asarray(u0, dtype=float) - u_mf
+    u_br = bubble_rise_velocity(d_b, g)
+    u_b = du + u_br
+    delta = du / u_b
+    return {"delta": delta, "u_b": u_b, "u_br": u_br, "H": H_mf / (1.0 - delta)}
 
 
 __all__ = [
@@ -644,4 +969,15 @@ __all__ = [
     "fluidization_window",
     "minimum_bubbling_velocity",
     "geldart_group",
+    "GELDART_METHODS",
+    "GELDART_1973_AB",
+    "GELDART_1973_BD",
+    "DISTRIBUTORS",
+    "mori_wen_max_bubble_diameter",
+    "mori_wen_initial_bubble_diameter",
+    "mori_wen_bubble_diameter",
+    "darton_bubble_diameter",
+    "bubble_rise_velocity",
+    "bubble_velocity",
+    "bubbling_bed_expansion",
 ]

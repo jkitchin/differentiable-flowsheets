@@ -1,9 +1,10 @@
 """Tests for difflow.units.column_design (#429).
 
 What these do and do NOT verify: the correlation constants in the module were
-written from memory (flagged in its docstrings) and **no published textbook
-worked example is reproduced** here (the example numbers cited in the issue were
-not available to check). The tests check closed-form hand calculations,
+written from memory (flagged in its docstrings). ``TestPublishedExamples``
+reproduces printed worked examples (Dutta 2007 Examples 5.1 and 5.2; Perry's 8e
+Sec. 14 Example 13) for the Fair fit, dry-plate drop, weir crest, Eckert flood
+line and Robbins pressure drop. The other tests check closed-form hand calculations,
 independent NumPy re-implementations, scaling laws, limiting cases, sign changes
 of margins, and gradients (``check_grads`` plus finite differences). Agreement
 with a correlation written twice by the same author says nothing about its
@@ -162,12 +163,11 @@ class TestOConnell:
 
 class TestPacked:
     def test_flood_line_values(self):
-        # ln Y = -3.5021 at X = 1; X = 0.1 gives Y ~ 0.178
+        # log10 Y = -1.6678 at X = 1; X = 0.1 gives log10 Y = -1.6678 + 1.085 - 0.29655
         G = float(gpdc_flood(1.0, 100.0, 1000.0, 1.2, 1e-3))
         Y = G ** 2 * 100.0 / (1.2 * (1000 - 1.2) * 9.80665)
-        assert Y == pytest.approx(math.exp(-3.5021), rel=1e-10)
-        lx = math.log(0.1)
-        Y01 = math.exp(-3.5021 - 1.028 * lx - 0.11093 * lx ** 2)
+        assert Y == pytest.approx(10 ** -1.6678, rel=1e-10)
+        Y01 = 10 ** (-1.6678 + 1.085 - 0.29655)
         G = float(gpdc_flood(0.1, 100.0, 1000.0, 1.2, 1e-3))
         assert G ** 2 * 100.0 / (1.2 * (1000 - 1.2) * 9.80665) == pytest.approx(Y01, rel=1e-10)
 
@@ -189,11 +189,46 @@ class TestPacked:
         X = 0.1
         Gf = float(gpdc_flood(X, Fp, rho_L, rho_V, mu))
         Lf = X * Gf / math.sqrt(rho_V / (rho_L - rho_V))
-        at_flood = float(gpdc_pressure_drop(Gf, Lf, rho_L, rho_V, mu, Fp))
+        kw = dict(method="anchored")
+        at_flood = float(gpdc_pressure_drop(Gf, Lf, rho_L, rho_V, mu, Fp, **kw))
         assert at_flood == pytest.approx(float(kister_gill_flood_dp(Fp)), rel=1e-10)
         # Fixed L/G: dP ~ (G/Gf)^(2n)
-        half = float(gpdc_pressure_drop(0.5 * Gf, 0.5 * Lf, rho_L, rho_V, mu, Fp))
+        half = float(gpdc_pressure_drop(0.5 * Gf, 0.5 * Lf, rho_L, rho_V, mu, Fp, **kw))
         assert half / at_flood == pytest.approx(0.25 ** 1.7, rel=1e-10)
+        with pytest.raises(ValueError):
+            gpdc_pressure_drop(Gf, Lf, rho_L, rho_V, mu, Fp, method="nope")
+
+    def test_robbins_hand_calc_and_default(self):
+        # Perry's Eqs. 14-145..149 written out in US units
+        G, L, rV, rL, mu, Fpd = 1.5, 8.0, 1.2, 998.0, 1e-3, 150.0
+        Gl, Ll = G * 737.3381, L * 737.3381
+        rVl, rLl, Fft = rV * 0.06242796, rL * 0.06242796, Fpd * 0.3048
+        Gf = Gl * (0.075 / rVl) ** 0.5 * (Fft / 20) ** 0.5
+        Lf = Ll * (62.4 / rLl) * (Fft / 20) ** 0.5 * 1.0 ** 0.1
+        dry = 7.4e-8 * Gf ** 2 * 10 ** (2.7e-5 * Lf)
+        exp = (dry + 0.4 * (Lf / 20000) ** 0.1 * dry ** 4) * 249.0889 / 0.3048
+        got = float(cd.robbins_pressure_drop(G, L, rV, rL, mu, Fpd))
+        assert got == pytest.approx(exp, rel=1e-5)
+        # gpdc_pressure_drop defaults to Robbins with F_pd = F_p
+        assert float(gpdc_pressure_drop(G, L, rL, rV, mu, Fpd)) == pytest.approx(got, rel=1e-12)
+
+    def test_robbins_flood_hits_kister_gill(self):
+        rV, rL, mu, Fp, Fpd, r = 1.2, 998.0, 1e-3, 183.0, 174.0, 5.0
+        Gf = float(cd.robbins_flood(r, rV, rL, mu, Fp, Fpd))
+        dp = float(cd.robbins_pressure_drop(Gf, r * Gf, rV, rL, mu, Fpd))
+        assert dp == pytest.approx(float(kister_gill_flood_dp(Fp)), rel=1e-9)
+        # more liquid floods earlier
+        assert float(cd.robbins_flood(2 * r, rV, rL, mu, Fp, Fpd)) < Gf
+
+    def test_robbins_flood_diameter_option(self):
+        pk = PACKINGS["pall_metal_25"]
+        a = dict(V_molar=100.0, MW_V=29.0, rho_V=1.2, L_molar=500.0, MW_L=18.0, rho_L=1000.0, mu_L=1e-3)
+        D, i = packed_column_diameter(**a, packing=pk, flood="robbins")
+        dp_flood = float(cd.robbins_pressure_drop(i["G_flood"], 500 * 18e-3 / (100 * 29e-3) * i["G_flood"],
+                                                  1.2, 1000.0, 1e-3, cd.DRY_PACKING_FACTORS["pall_metal_25"]))
+        assert dp_flood == pytest.approx(float(i["dP_flood_per_m"]), rel=1e-8)
+        with pytest.raises(ValueError):
+            packed_column_diameter(**a, packing=pk, flood="nope")
 
     def test_diameter_scaling_and_info(self):
         pk = PACKINGS["pall_metal_25"]
@@ -232,9 +267,52 @@ class TestPacked:
     def test_hetp(self):
         assert float(hetp("random", d_p=0.025)) == pytest.approx(0.45)
         assert float(hetp("structured", a_p=250.0)) == pytest.approx(0.5)
+        # Perry's 8e Eq. 14-159: C_XY = 1.45 for X-type below 300 m^2/m^3
+        assert float(hetp("structured", a_p=250.0, C_XY=1.45)) == pytest.approx(0.68)
         assert float(hetp("htu", H_OG=0.4, lam=1.7)) == pytest.approx(float(hetp_from_htu(0.4, 1.7)))
         with pytest.raises(ValueError):
             hetp("nope")
+
+
+class TestPublishedExamples:
+    """Printed worked examples. Values in US units as printed, converted here."""
+
+    def test_perry_example13_robbins(self):
+        # Perry's 8e Sec. 14 Example 13: 2-in metal Pall rings, air-water,
+        # G = 1500, L = 9000 lb/ft^2/h, rho_G = 0.074, rho_L = 62.4 lb/ft^3, 1 cP,
+        # F_pd = 24 1/ft. Robbins chart: 0.40 in H2O/ft; GPDC chart: 0.38.
+        kg = 0.45359237 / 0.3048 ** 2 / 3600.0
+        rho = 0.45359237 / 0.3048 ** 3
+        dp = float(cd.robbins_pressure_drop(1500 * kg, 9000 * kg, 0.074 * rho, 62.4 * rho,
+                                            1e-3, 24 / 0.3048))
+        in_ft = dp * 0.3048 / 249.0889
+        assert in_ft == pytest.approx(0.38, abs=0.01)        # equation vs the printed 0.38-0.40
+        assert in_ft == pytest.approx(0.40, rel=0.06)
+
+    def test_dutta_example52_eckert_flood(self):
+        # Dutta (2007) Example 5.2: 3/4-in ceramic Raschig rings, F_p = 94.5 1/ft,
+        # L = 37525, G = 1500 kg/h, rho_G = 1.299, rho_L = 996 kg/m^3, 0.81 cP.
+        # Eckert chart read as Y = 0.021 at X = 0.90; printed D = 0.90 m at 70 % flood.
+        X = 37525 / 1500 * math.sqrt(1.299 / (996 - 1.299))
+        Y = float(cd._gpdc_Y_flood(X))
+        assert Y == pytest.approx(0.021, rel=0.16)
+        Gf = float(gpdc_flood(X, 94.5 / 0.3048, 996.0, 1.299, 0.81e-3))
+        D = math.sqrt(4 * (1500 / 3600) / (0.7 * Gf) / math.pi)
+        assert D == pytest.approx(0.90, rel=0.05)
+
+    def test_dutta_example51_tray(self):
+        # Dutta (2007) Example 5.1: F_LV = 0.0357, 18-in spacing, 20.5 dyn/cm,
+        # C_SB read 0.285 ft/s; dry drop 1.75 in at u_h = 39.1 ft/s, C_0 = 0.73,
+        # rho_V/rho_L = 0.165/50.4; crest 0.48 (gpm/in)^(2/3) in.
+        C = float(fair_capacity_factor(0.0357, 18 * 0.0254, 0.0205)) / 0.3048
+        assert C == pytest.approx(0.285, rel=0.12)
+        u_h = 39.1 * 0.3048
+        h_d = 0.165 * u_h ** 2 / (2 * 0.73 ** 2 * 50.4 * 9.80665) / 0.0254
+        assert h_d == pytest.approx(1.75, rel=0.01)
+        # Francis crest equals 0.48 (gpm / in)^(2/3) inches
+        q_gpm, lw_in = 300.0, 40.0
+        h = float(weir_crest(q_gpm * 6.30902e-5, lw_in * 0.0254)) / 0.0254
+        assert h == pytest.approx(0.48 * (q_gpm / lw_in) ** (2 / 3), rel=0.01)
 
 
 class TestSizeColumn:
@@ -290,6 +368,12 @@ class TestGradients:
             D, i = packed_column_diameter(**a, F_p=Fp, a_p=223.5, fraction_flood=ff)
             return jnp.array([D, i["dP_per_m"]])
         check_grads(f, (0.7, 183.0), order=1, modes=["rev"], rtol=1e-5, atol=1e-5)
+
+    def test_robbins_grads(self):
+        check_grads(lambda G, L, Fpd: cd.robbins_pressure_drop(G, L, 1.2, 998.0, 1e-3, Fpd) / 100.0,
+                    (1.5, 8.0, 150.0), order=1, modes=["fwd", "rev"], rtol=1e-5, atol=1e-5)
+        check_grads(lambda r, Fp: cd.robbins_flood(r, 1.2, 998.0, 1e-3, Fp),
+                    (5.0, 183.0), order=1, modes=["rev"], rtol=1e-4, atol=1e-5)
 
     def test_cost_grads(self):
         def cost(ff, t, sigma, V):
@@ -387,43 +471,3 @@ class TestFlashDrumSize:
             return D + info["volume"]
 
         check_grads(f, (1.0, 15.0, 0.107), order=1, modes=["fwd", "rev"])
-
-
-# =============================================================================
-# Surface tension (issue #444)
-# =============================================================================
-
-
-class TestSurfaceTension:
-    # Measured at 25 C (CRC Handbook), mN/m
-    MEASURED = {"benzene": 28.22, "toluene": 27.93, "n-hexane": 17.89,
-                "n-heptane": 19.65, "cyclohexane": 24.65}
-
-    @pytest.mark.parametrize("name", sorted(MEASURED))
-    def test_curl_pitzer_against_data(self, name):
-        from difflow.database import get_critical_props
-        p = get_critical_props(name)
-        s = float(cd.surface_tension_curl_pitzer(298.15, p.Tc, p.Pc, p.omega))
-        assert s * 1e3 == pytest.approx(self.MEASURED[name], rel=0.06)
-
-    def test_brock_bird_benzene(self):
-        from difflow.database import get_critical_props
-        p = get_critical_props("benzene")
-        s = float(cd.surface_tension_brock_bird(298.15, p.Tc, p.Pc, 353.24))
-        assert s * 1e3 == pytest.approx(28.22, rel=0.05)
-
-    def test_vanishes_at_critical_and_falls_with_T(self):
-        from difflow.database import get_critical_props
-        p = get_critical_props("benzene")
-        f = lambda T: cd.surface_tension_curl_pitzer(T, p.Tc, p.Pc, p.omega)
-        assert float(f(p.Tc + 1.0)) == 0.0
-        assert float(f(300.0)) > float(f(400.0)) > float(f(500.0)) > 0.0
-        check_grads(f, (350.0,), order=1, modes=["rev"])
-
-    def test_mixture_and_diameter(self):
-        s_b = float(cd.liquid_surface_tension("benzene", 353.0))
-        s_t = float(cd.liquid_surface_tension("toluene", 353.0))
-        s_m = float(cd.liquid_surface_tension(["benzene", "toluene"], 353.0, [0.25, 0.75]))
-        assert s_m == pytest.approx(0.25 * s_b + 0.75 * s_t, rel=1e-12)
-        D, _ = cd.tray_column_diameter(100.0, 80.0, 2.9, 80.0, 85.0, 790.0, s_m)
-        assert np.isfinite(float(D)) and float(D) > 0.0

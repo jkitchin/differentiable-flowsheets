@@ -326,6 +326,13 @@ Instead of a lumped `alpha`, pass `d_p`, `voidage`, `mu`, `rho_gas`,
 Ergun equation; see [Particles and Beds](particles-ergun). Leave `u_s0=None` to
 take the superficial velocity from the inlet stream ($Q_0/A_c$); a given `u_s0`
 that differs from the stream's by more than 1 % raises `GasPFRBedWarning`.
+`rho_gas` works the same way: leave it `None` and it is the inlet stream's
+density, mass flow$/Q_0$ (with the default ideal-gas $Q_0$, $P_0\bar M/(RT_0)$),
+which needs the molar masses, from `MW=` (g/mol, a number or `{species: MW}`) or
+from the unit's `thermo`. A given `rho_gas` is checked against the stream when the
+molar masses are known and raises `GasPFRDensityWarning` (a subclass of
+`GasPFRBedWarning`) above 2 % (`RHO_GAS_RTOL`). With neither `rho_gas` nor a molar
+mass the call raises `ValueError`.
 
 #### Additional Equations
 
@@ -1887,8 +1894,9 @@ Three models, chosen by `params.model`:
 
 **`"kremser"`** (closed form per solute). With the effective absorption factor
 `A_i = L/(K_i V)` (the geometric mean of its top and bottom values, so the flow
-change along the column is carried, Edmister's idea; `variable_flow=False`
-uses the inlet flows) and the equivalent equilibrium stages
+change along the column is carried, the usual textbook simplification of
+Geankoplis 5e Sec. 10.6 and Wankat 4e Ch. 12, not Edmister's effective factor;
+`variable_flow=False` uses the inlet flows) and the equivalent equilibrium stages
 `N_eq = N ln(1+E(S-1))/ln S`, `S = 1/A`, for a Murphree vapor efficiency `E`:
 
 $$
@@ -1919,7 +1927,9 @@ viscosities, density and surface tension default to air and water at
 25 C) or you give `H_OG`. For straight lines the outlet follows Colburn's
 closed form; `ntu_method="integral"` evaluates `N_OG` by quadrature for the key
 solute (`concentrated=True` adds the `(1-y)_lm` correction). **Rating**: give
-`height`; **design**: give `recovery` and read `info["height"]`. Flooding and
+`height`; **design**: give `recovery` and read `info["height"]`. The info
+also carries the liquid-phase basis, `N_OL = N_OG/A` and `H_OL = A H_OG`
+(`N_OL H_OL = Z`), which is the natural one for a stripper. Flooding and
 pressure drop are not part of this unit: give the diameter.
 
 **Design instead of rating.** Setting `recovery` (the fraction of the
@@ -2738,7 +2748,9 @@ what the velocity and insulation-thickness optimizations use
 | Group | Functions |
 |---|---|
 | Dimensionless groups | `reynolds`, `prandtl`, `nusselt_to_h`, `grashof`, `rayleigh` |
-| Conduction | `slab_resistance`, `cylinder_resistance`, `sphere_resistance`, `composite_wall`, `critical_insulation_radius`, `fin_efficiency_straight` |
+| Conduction | `slab_resistance`, `cylinder_resistance`, `sphere_resistance`, `composite_wall`, `critical_insulation_radius`, `insulated_pipe_heat_loss`, `fin_efficiency_straight` |
+| Agitated vessels | `agitator_reynolds`, `agitated_vessel_nusselt`, `jacketed_vessel_h`, `agitated_coil_h`, `AGITATED_VESSEL_CONSTANTS` (see [Agitated vessels](#heat-transfer-agitated)) |
+| Insulation economics | `difflow.economics.insulation` (see [Economic insulation thickness](#heat-transfer-insulation)) |
 | Tube side | `sieder_tate_laminar`, `dittus_boelter`, `sieder_tate`, `gnielinski`, `internal_nusselt`, `internal_h` |
 | External flow | `churchill_bernstein` (cylinder), `flat_plate_nusselt` |
 | Natural convection | `churchill_chu_vertical_plate`, `churchill_chu_horizontal_cylinder` |
@@ -2932,9 +2944,9 @@ DeWitt Table 11.1, which cites TEMA; it was checked against the table while
 the unit-operations book was written. The second block is Sinnott, *Coulson &
 Richardson's Chemical Engineering* Vol. 6 (4th ed.), Table 12.2. That table
 gives coefficient ranges, and the float stored here is the conservative
-(larger-resistance) end. Crude oil by temperature and lube oil (TEMA
-RGP-T-2.4) are **not included** because no copy of the TEMA table could be
-checked. `heavy_hydrocarbons` is the nearest entry. Use your own standard for
+(larger-resistance) end. Crude oil by temperature and velocity, lube oils,
+cooling waters and the other TEMA RGP-T-2.4 entries are in `difflow.fouling`
+([TEMA design fouling resistances](#tema-fouling)). Use your own standard for
 design.
 
 | Service (Incropera Table 11.1) | $R_f$ |
@@ -2977,6 +2989,89 @@ sanity band for a computed `U`, not as a design value.
 | Alcohol condenser, water in tubes | 250-700 |
 | Finned tube, water in tubes, air in cross flow | 25-50 |
 
+(heat-transfer-agitated)=
+### Agitated and jacketed vessels
+
+The process-side coefficient at the wall of a jacketed, agitated vessel is
+correlated as
+
+$$\mathrm{Nu} = \frac{hD_T}{k} = a\,\mathrm{Re}^b\,\mathrm{Pr}^{1/3}\left(\frac{\mu}{\mu_w}\right)^m,
+\qquad \mathrm{Re} = \frac{\rho N D_a^2}{\mu},$$
+
+with $\mathrm{Nu}$ on the **tank** diameter $D_T$, $\mathrm{Re}$ on the **impeller**
+diameter $D_a$ and $N$ in rev/s. `agitated_vessel_nusselt(Re, Pr, mu_ratio,
+impeller)` takes the constants from `AGITATED_VESSEL_CONSTANTS` (or `a=`, `b=`, `m=`);
+`jacketed_vessel_h(rho, N, D_a, D_T, mu, Cp, k, mu_wall, impeller)` returns $h$.
+`agitated_coil_h(Re, Pr, k, D_T, mu_ratio, method, D_a, d_o)` is the coefficient on
+the outside of an immersed helical coil.
+
+| Key | $a$ | $b$ | $m$ | Re range | Source |
+|---|---|---|---|---|---|
+| `paddle` | 0.36 | 2/3 | 0.14 | 300-3×10⁵ | Chilton, Drew & Jebens (1944), as in Kern (1950) Ch. 20 |
+| `flat_blade_turbine` (baffled) | 0.74 | 0.67 | 0.14 | 200-10⁵ | Uhl (1955), via Uhl & Gray / Perry's (recalled) |
+| `anchor` | 0.36 | 2/3 | 0.18 | 300-4×10⁴ | Uhl (1955), via Uhl & Gray / Perry's (recalled) |
+| `anchor_low_re` | 1.0 | 1/2 | 0.18 | 30-300 | Uhl (1955), via Uhl & Gray / Perry's (recalled) |
+
+| Coil method | Correlation |
+|---|---|
+| `chilton_drew_jebens` (paddle) | $hD_T/k = 0.87\,\mathrm{Re}^{0.62}\mathrm{Pr}^{1/3}(\mu/\mu_w)^{0.14}$ |
+| `oldshue_gretton` (flat-blade turbine, baffled) | $hd_o/k = 0.17\,\mathrm{Re}^{0.67}\mathrm{Pr}^{0.37}(D_a/D_T)^{0.1}(d_o/D_T)^{0.5}$ |
+
+The paddle and coil constants are the textbook forms (Kern Ch. 20; Oldshue &
+Gretton, *Chem. Eng. Prog.* 50, 615, 1954). The turbine and anchor rows are
+recalled from secondary tabulations and were **not** checked against a printed
+copy; geometry corrections of fuller correlations (blade width, clearance,
+$D_a/D_T$) are not included. `tests/test_jacketed_vessel.py` checks the
+arithmetic and the gradients; no textbook worked example is reproduced.
+
+```python
+import jax
+from difflow import heat_transfer as ht
+
+# water in a 1.5 m tank, 0.5 m paddle; h on the vessel side, d h / d N
+h = ht.jacketed_vessel_h(1000.0, 2.0, 0.5, 1.5, 1.0e-3, 4180.0, 0.6, mu_wall=0.8e-3)
+dh_dN = jax.grad(lambda N: ht.jacketed_vessel_h(1000.0, N, 0.5, 1.5, 1.0e-3, 4180.0, 0.6))(2.0)
+U = ht.overall_U(h_i=h, h_o=5000.0, D_i=1.5, D_o=1.52, k_wall=16.0)   # steam jacket, thin wall
+print(float(h), float(dh_dN), float(U))
+```
+
+(heat-transfer-insulation)=
+### Economic insulation thickness
+
+`insulated_pipe_heat_loss(D_o, thickness, k_ins, h_out, T_pipe, T_amb)` is the heat
+loss per metre through the insulation and the outer film,
+$q' = \Delta T/[\ln((D_o+2t)/D_o)/(2\pi k) + 1/(h_{out}\pi(D_o+2t))]$.
+`difflow.economics.insulation` prices the insulation and finds the thickness that
+minimises the total annual cost per metre,
+$\mathrm{TAC}(t) = \mathrm{CRF}\,C_{inst}(t) + q'(t)\,\text{hours}\,c_{heat}$:
+
+| Function | Purpose |
+|---|---|
+| `insulation_volume_per_length(D_o, t)` | $\pi t(D_o+t)$, m³/m |
+| `insulation_installed_cost(D_o, t, cost_per_m3, cost_per_m2=0, cost_per_m=0, base_year, target_year)` | $c_V\pi t(D_o+t) + c_A\pi(D_o+2t) + c_L$ ($/m), CEPCI-escalated |
+| `insulation_annual_cost(t, D_o, k_ins, h_out, T_pipe, T_amb, cost_per_m3, heat_cost, ...)` | TAC and its parts ($/m/yr); `heat_cost` in $/GJ |
+| `economic_insulation_thickness(...)` | the optimum $t$ (bisection on $d\mathrm{TAC}/dt$; differentiable by implicit differentiation) |
+
+The cost is **linear in the insulated volume** (material and most labour), plus
+optional cladding-area and per-metre terms. There is **no default unit cost**:
+published installed-cost data (Turner & Malloy, *Thermal Insulation Handbook*;
+Peters, Timmerhaus & West) could not be checked, so `cost_per_m3` is a required
+input from your own estimate, with its `base_year` for CEPCI escalation. The
+prices in the example are **illustrative**.
+
+```python
+import jax
+from difflow.economics import economic_insulation_thickness
+
+# 4-in (0.1143 m OD) steam line at 450 K; ILLUSTRATIVE prices
+opt = lambda c_heat: economic_insulation_thickness(
+    0.1143, 0.05, 10.0, 450.0, 293.15, cost_per_m3=3000.0, heat_cost=c_heat)["thickness"]
+print(f"t_opt = {1000 * float(opt(10.0)):.0f} mm, dt/d(heat price) = {float(jax.grad(opt)(10.0)):.4f} m per $/GJ")
+```
+
+`tests/test_insulation_cost.py` checks the optimum against a dense grid minimum and
+the stationarity condition, and its gradients against finite differences.
+
 (gas-properties)=
 ### Gas Transport Properties
 
@@ -2994,6 +3089,11 @@ pure-JAX library, not a palette operation, and is differentiable in T.
 | `gas_transport_properties(name, T, P)` | dict: mu, k, cp, Pr, rho, nu, alpha |
 | `gas_property_range(name, prop)`, `list_gas_species()` | validity range, names |
 | `sutherland_viscosity(T, gas=None, *, mu0, T0, S)`, `sutherland_conductivity` | Sutherland's law (White's constants for air, Ar, N2, O2 in `SUTHERLAND`) |
+| `mixture_viscosity(names, y, T, method="wilke")` | low-pressure mixture μ: Wilke, or `"herning_zipperer"` |
+| `mixture_conductivity(names, y, T)` | low-pressure mixture k: Wassiljewa with Mason-Saxena coefficients |
+| `dense_gas_viscosity(names, T, P, y=None, rho=None)` | μ at pressure: dilute + Jossi-Stiel-Thodos residual |
+| `dense_gas_conductivity(names, T, P, y=None, rho=None)` | k at pressure: dilute + Stiel-Thodos residual |
+| `gas_mixture_transport(names, y, T, P, dense=True)` | dict: mu, k, rho, MW, Z (Peng-Robinson density) |
 
 Each property is a fit $\ln y=\sum a_i[\ln(T/300)]^i$: cubic for μ and k,
 quintic for $c_p$. The fits are made by `scripts/fit_gas_transport.py` to the
@@ -3004,8 +3104,14 @@ and air $c_p$ is the mass-weighted N2/O2/Ar NIST mixture. Outside a fit's
 range the value is extrapolated and a `GasRangeWarning` is raised (on
 concrete values only). Air at 300 K gives μ = 18.46 µPa s, k = 26.4 mW/m/K
 and Pr = 0.704, against Incropera Table A.4 values of 18.46, 26.3 and 0.707.
-These properties are for gases at low pressure only; there is no pressure
-correction for dense gases.
+The single-gas fits are for low pressure. Above about 10 bar use the
+dense-gas functions: they add the Jossi-Stiel-Thodos (μ) and Stiel-Thodos (k)
+residuals in the reduced density $\rho_r=\rho V_c$. The density comes from
+Peng-Robinson with the critical constants in `GAS_CRITICAL` (Poling et al. 5e,
+App. A), and a mixture uses Kay's-rule pseudo-critical constants. Methane at
+15 °C and 50 bar gives 11.8 µPa s against a NIST value of about 12.0 (dilute:
+10.75). The residuals suit nonpolar gases; they are not meant for H2, He or
+steam near saturation.
 
 ```python
 from difflow.gas_properties import gas_transport_properties
@@ -3287,6 +3393,47 @@ def rate(v, T_film=600.0):
 r = rate(1.0)                                  # m^2 K/W per s
 days = fouling.fouling_time(3.0e-4, r) / 86400.0
 drdv = jax.grad(rate)(1.0)                     # d(rate)/d(velocity): faster flow, less fouling
+```
+
+(tema-fouling)=
+### TEMA design fouling resistances
+
+`difflow.fouling` also holds the TEMA design values (Recommended Good Practice
+Table RGP-T-2.4, 7th ed., 1988), stored in TEMA's unit, h ft² °F/Btu, and returned
+in m² K/W (×`HFT2F_PER_BTU` = 0.17611):
+
+| Name | Content |
+|---|---|
+| `TEMA_FOULING` | `(low, high)` per service: fuel oils No. 2 / No. 6, transformer, engine lube, quench oil; manufactured gas, exhaust gas, steam (with and without oil), refrigerant vapours, compressed air, NH₃, CO₂, Cl₂ vapours, flue gases; refrigerant liquids, molten salts, hydraulic fluid, heat-transfer media, brines, alcohol and glycol solutions; acid gases, solvent vapours, MEA/DEA, DEG/TEG, caustic, vegetable oils; natural gas, lean/rich oil, LPG; gasoline, naphtha, kerosene, light/heavy gas oil, heavy fuel oil, residuum; the lube-oil processing streams and refined lube oil |
+| `tema_fouling_resistance(service, which="high")` | m² K/W; `"high"` (conservative end), `"low"` or `"mean"` |
+| `TEMA_CRUDE_OIL`, `tema_crude_oil_fouling(T, v)` | crude oil by temperature (0-199, 200-299, 300-499, ≥500 °F) and velocity (<2, 2-4, >4 ft/s); arguments in K and m/s |
+| `TEMA_WATER`, `tema_water_fouling(water, T_water, v)` | sea, brackish, cooling-tower (treated / untreated), city, river, muddy, hard, engine-jacket, condensate, boiler feedwater, blowdown; split at 125 °F water temperature and 3 ft/s |
+
+Crude oil (h ft² °F/Btu):
+
+| Temperature | < 2 ft/s | 2-4 ft/s | > 4 ft/s |
+|---|---|---|---|
+| 0-199 °F | 0.003 | 0.002 | 0.002 |
+| 200-299 °F | 0.003 | 0.002 | 0.002 |
+| 300-499 °F | 0.004 | 0.003 | 0.002 |
+| ≥ 500 °F | 0.005 | 0.004 | 0.003 |
+
+**Provenance.** No printed copy of TEMA was available. The values were recalled
+from the table as it is reproduced in the secondary literature (e.g. Serth,
+*Process Heat Transfer*, Ch. 3; Kakac & Liu, *Heat Exchangers*). Where Incropera &
+DeWitt Table 11.1 (which was checked, and itself cites TEMA) overlaps, the
+converted values agree after rounding to its 4 decimal places (sea water, boiler
+feedwater, fuel oil, refrigerant liquids, oil-free steam; `tests/test_tema_fouling.py`);
+the other entries are unchecked. Pre-1988 TEMA editions split crude oil into "dry"
+and "salt" columns with other values. The lookups are piecewise constant (zero
+derivative inside a bin) but jit-able and vectorised.
+
+```python
+from difflow import fouling
+
+R_crude = fouling.tema_crude_oil_fouling(530.0, 1.5)          # K, m/s -> m^2 K/W
+R_cw = fouling.tema_water_fouling("cooling_tower_treated", 310.0, 1.2)
+print(float(R_crude), float(R_cw), fouling.tema_fouling_resistance("kerosene"))
 ```
 
 ---
@@ -3614,7 +3761,7 @@ they can be empty above.
 
 **Class**: `MultistageCascade`
 
-**Description**: Counter-current multistage extraction cascade for liquid-liquid separation.
+**Description**: Multistage extraction cascade for liquid-liquid separation: counter-current (Kremser), crossflow, or co-current.
 
 #### Process Role
 
@@ -3632,7 +3779,7 @@ LLE is used for:
 class CascadeParams:
     n_stages: int | float        # Equilibrium stages (continuous, for optimization)
     equilibrium: LLEEquilibrium  # The equilibrium model (see above)
-    flow_config: str = 'counter_current'  # or 'co_current'
+    flow_config: str = 'counter_current'  # or 'crossflow', 'co_current'
     stage_efficiency: float = 0.8         # Murphree efficiency, co-current only
     model: str = 'immiscible'             # or 'rigorous' (partially miscible, see below)
 ```
@@ -3655,11 +3802,33 @@ $$R_{j-1} x_{i,j-1} + E_{j+1} y_{i,j+1} = R_j x_{i,j} + E_j y_{i,j}$$
 
 $$y_{i,j} = K_i(T) x_{i,j}$$
 
-**Kremser Equation** (for dilute systems):
+**Kremser Equation** (immiscible carriers, constant $K$). The immiscible model
+works on the solute-free (ratio) basis, $X$ = solute per aqueous carrier and
+$Y$ = solute per organic carrier, with $K = Y/X$ and the extraction factor
+$E = K S/F$ from the *carrier* flows $S$ and $F$. With solute $Y_{in}$ in the
+entering solvent, $X^* = Y_{in}/K$ and
 
-$$\frac{x_{in} - x_{out}}{x_{in} - x_{out}^*} = \frac{A^{N+1} - A}{A^{N+1} - 1}$$
+$$\frac{X_N - X^*}{X_0 - X^*} = \frac{E - 1}{E^{N+1} - 1}$$
 
-Where $A = KE/R$ is the extraction factor.
+(Wankat 4e Ch. 13; Geankoplis 5e Sec. 12.7). The extract carries everything
+that entered and did not leave in the raffinate, so solute in the solvent is
+conserved. The stage profile `info["profiles"]["x"]` is
+$X_n = X^* + (X_0 - X^*)\,(E^{N+1-n} - 1)/(E^{N+1} - 1)$, $n = 0..N$
+(stage 1 is the feed end), and `["y"]` is $Y_n = K X_n$, with entry 0 holding
+the solvent inlet $Y_{in}$.
+
+**Crossflow** (`flow_config="crossflow"`): the raffinate passes through $N$
+stages, each fed $S/N$ of fresh solvent, and the extracts are combined:
+
+$$\frac{X_N - X^*}{X_0 - X^*} = \left(1 + \frac{E}{N}\right)^{-N},$$
+
+smooth in $N$. It always leaves more solute than counter-current flow with the
+same total solvent and stages, and less than a single stage.
+
+A distribution coefficient tabulated on a concentration basis, $K_c$ (mol/L
+over mol/L), goes with volumetric flows: $E = K_c V_{org}/V_{aq}$. For a dilute
+solute the ratio-basis $K$ is $K_c\,\rho_{aq}/\rho_{org}$ (molar densities of
+the two carriers).
 
 #### Activity Coefficient Models
 
@@ -3814,17 +3983,45 @@ N = stages_for_recovery(K, 1.5 * S_min, recovery=0.95)
 
 #### Governing Equations
 
-**Height of Transfer Unit (HTU)**:
+Two models, chosen by `ContactorParams(mass_transfer_model=...)`:
 
-$$HTU = \frac{R}{K_{OC} a A}$$
+- `"equilibrium"`: the column is `length / HETP` Kremser stages (any
+  `flow_config` of `MultistageCascade`).
+- `"rate_based"`: plug flow of both phases with an overall volumetric
+  coefficient based on the raffinate phase. On the ratio basis of the cascade,
+  with $\alpha = K_L a\,c_{aq} A$ (`Kla`, `aqueous_molar_density`, `area`),
 
-**Number of Transfer Units (NTU)**:
+$$F_{aq}\frac{dX}{dz} = -\alpha\,(X - Y/K), \qquad
+F_{org}\frac{dY}{dz} = \mp\alpha\,(X - Y/K)$$
 
-$$NTU = \int_{x_{out}}^{x_{in}} \frac{dx}{x - x^*}$$
+(upper sign counter-current, the organic entering at $z = L$; lower sign
+co-current). With constant $K$ the system is linear and is solved exactly with
+a matrix exponential. `info` reports the height and number of raffinate-phase
+overall transfer units,
 
-**Column Height**:
+$$H_{OR} = \frac{F_{aq}}{K_L a\,c_{aq} A}, \qquad N_{OR} = \frac{L}{H_{OR}},$$
 
-$$H = HTU \times NTU$$
+and the counter-current result obeys the closed form (solute-free solvent)
+
+$$N_{OR} = \frac{\ln\left[\frac{X_0}{X_L}\left(1 - \frac{1}{E}\right) + \frac{1}{E}\right]}{1 - 1/E}$$
+
+(Treybal, *Mass Transfer Operations* 3e, Ch. 10), which `tests/test_lle.py`
+checks. Profiles `info["profiles"]["c_aq"]`, `["c_org"]` are $X(z)$ and $Y(z)$.
+
+```python
+from difflow import make_stream, DifferentialContactor, ContactorParams
+from difflow.units.lle import LLEEquilibrium, DistributionCoeffs
+
+eq = LLEEquilibrium(solutes=["A"], aqueous_carrier="water", organic_carrier="solvent",
+                    K_coeffs=DistributionCoeffs(species=("A",), K0=(2.0,)))
+feed = make_stream({"water": 100.0, "A": 1.0, "solvent": 0.0}, T=298.15, P=101325.0)
+solvent = make_stream({"water": 0.0, "A": 0.0, "solvent": 100.0}, T=298.15, P=101325.0)
+col = DifferentialContactor(ContactorParams(length=2.0, area=0.1, equilibrium=eq,
+                                            mass_transfer_model="rate_based", Kla=3e-3))
+raffinate, extract, info = col(feed, solvent)
+print(f"N_OR = {float(info['NTU_OR']['A']):.3f}")        # N_OR = 0.333
+print(f"A left = {float(raffinate['F_A']):.3f} mol/s")   # A left = 0.734 mol/s
+```
 
 ---
 
@@ -3855,8 +4052,9 @@ $E_{n+1} - R_n = -\Delta$ passes through it. Stages alternate a tie line
 
 `mix` and `lever_rule` are pure `jnp` and differentiable. `tie_line_through`,
 `hunter_nash` and `difference_point` take the tie lines tabulated by
-`ternary_lle` (like it, they are numeric and not differentiated through the
-equilibrium), joined into conjugate curves by monotone cubic interpolation, so
+`ternary_lle` or packed from measured tie lines by `tabulated_lle(tie_lines,
+binodal=None, plait=None, T=None)` (like `ternary_lle`, they are numeric and
+not differentiated through the equilibrium), joined into conjugate curves by monotone cubic interpolation, so
 their accuracy is the interpolation's: use enough tie lines (`n_tie`). The
 difference point and the operating lines are built from the extensive balance
 (amounts times compositions), so they stay valid when $\Delta$ is at infinity
@@ -4179,6 +4377,37 @@ comp = Compressor(CompressorParams(P_out=90e5, eta_isentropic=0.75), thermo)
 outlet, info = comp(feed)
 ```
 
+### MultistageCompressor
+
+An intercooled train of EOSCompressor stages. Each stage is the same
+isentropic-efficiency compression on the two-phase EOS enthalpy and entropy.
+After every stage but the last, an intercooler returns the gas to
+`T_intercool` and loses `intercooler_dP` (`aftercool=True` cools the last
+stage too). By default the stage pressures follow
+`difflow.compressible.stage_pressures`: every stage has the same ratio, and a
+slightly higher ratio makes up the intercooler losses. Without losses that is
+the classical minimum-work split. `discharge_pressures=(...)` sets them
+instead. The total work is differentiable in those pressures, so the real-gas
+optimum can be found by gradient descent from the equal split. An intercooler
+outlet with `intercooler_vapor_fraction < 1` condenses liquid. That liquid is
+not knocked out, and a concrete run warns about it.
+
+$$P_{d,k}=r\,P_{s,k},\qquad P_{s,k+1}=P_{d,k}-\Delta P_{ic},\qquad P_{d,N}=P_\text{out}$$
+
+```python
+from difflow import MultistageCompressor, MultistageCompressorParams
+train = MultistageCompressor(MultistageCompressorParams(
+    P_out=90e5, n_stages=3, eta_isentropic=0.78,
+    T_intercool=313.15, intercooler_dP=0.3e5), thermo)
+outlet, info = train(feed)
+# info: W, Q, stage_W, stage_T_out, suction_pressures, discharge_pressures,
+#       pressure_ratio, intercooler_Q, intercooler_vapor_fraction, converged
+```
+
+The carbon-capture plugin's `CompressionTrain` is a separate, CO2-specific
+model. It is not built on the EOS units, and it switches to a dense-phase pump
+above the critical point.
+
 ### JTValve (Joule-Thomson valve)
 
 Adiabatic, **isenthalpic** pressure letdown. Holds the two-phase EOS enthalpy
@@ -4222,8 +4451,10 @@ differential-pressure flow meters. The functions live in
 [`difflow.fluids`](#fluids-module) (JAX, SI, differentiable) and the unit
 operation is [`Pipe`](#op-pipe). Compressible gas flow (nozzles, isothermal
 and adiabatic lines) is in [`difflow.compressible`](#compressible-module), and
-gas networks are in `difflow_gas`. Two-phase flow, non-Newtonian fluids and
-transients are out of scope.
+gas networks are in `difflow_gas`. Liquid networks are solved by
+[`PipeNetwork`](#pipe-networks), power-law and Bingham fluids have their own
+[friction factors](#non-newtonian-friction), and a rotameter model sits with the
+flow meters. Two-phase flow and transients are out of scope.
 
 (op-pipe)=
 ### Pipe
@@ -4249,6 +4480,7 @@ Temperature and molar flows pass through unchanged.
 | `fittings` | – | `{name: count}` using the K table below, plus an optional `"K"` entry for a numeric extra K (a strainer, a meter); or a total K |
 | `flow_area` | m² | flow cross-section for a non-circular duct; then `D` is the hydraulic diameter 4A/P. Default `None`: πD²/4 |
 | `P_vap` | Pa | vapour pressure for the cavitation check. Default `None`: Raoult's law over the inlet species with data (IAPWS for water, the database Antoine otherwise) |
+| `profile` | m | optional elevation profile `[(distance, elevation), ...]` from inlet to outlet; the minimum pressure along the line is checked (default `None`: outlet only) |
 | `friction_method` | – | `"colebrook"` (default), `"churchill"`, `"haaland"`, `"swamee_jain"` |
 | `MW` | g/mol | molar mass (number or `{species: MW}`) to turn molar into mass flow; omit if a `thermo` is passed |
 
@@ -4292,9 +4524,22 @@ the pipe raises `PipeCavitationWarning`. Under `jit`/`grad` only the flag is
 set; the warning never fires on a tracer. Water at 20 °C pumped 40 m uphill
 through 100 m of 2-in pipe at 3 L/s from 4 bar gives P_out = -33 kPa against
 P_vap = 2339 Pa: flagged.
-Only the outlet is checked: a line that climbs over a high point and comes back
-down can fall below the vapour pressure at the crest with a healthy outlet
-pressure. Model such a line as two `Pipe` units, splitting it at the crest.
+Without a profile only the outlet is checked, and a line that climbs over a
+high point and comes back down can fall below the vapour pressure at the crest
+with a healthy outlet pressure. Give the route as
+`profile=[(0, 0), (100, 32), (200, 0)]` (distance from the inlet, elevation; m)
+and the pipe evaluates
+$P(s_i)=P_\mathrm{in}-\Delta P_m-\Delta P_f\,\frac{s_i-s_0}{s_N-s_0}-\rho g(z_i-z_0)$
+at every point (friction spread evenly, all fitting losses put at the inlet,
+which is conservative). `info` then also has `P_profile`, `P_min`, `s_P_min`,
+`z_P_min`, `P_min_below_vapour`, `cavitation_margin` ($P_\min-P_\mathrm{vap}$,
+Pa) and `cavitation_margin_head` (the same in m of liquid, an NPSH-type
+margin), and `PipeCavitationWarning` names the location. The elevation gain is
+$z_N - z_0$ (leave `dz` at 0, or give the same value); `Pipe.elevation_gain()`
+returns it and `Pipe.pressure_profile(inlet)` returns the arrays. With 3 L/s of
+water from 3 bar over a 32 m crest halfway along 200 m of 2-in Sch 40 pipe the
+outlet is at 2.18 bar, but the crest computes to -0.54 bar (absolute): flagged,
+where the outlet check alone would pass.
 
 **Flow from the available head.** `Pipe.flow_at_head(H, inlet=None, Q0=None)`
 returns the volumetric flow at which friction plus minor losses equal `H`
@@ -4365,6 +4610,57 @@ Also in the module: `reynolds_number`, `hydraulic_diameter` (4A/P),
 `darcy_pressure_drop`, `minor_loss`, `fully_rough_friction_factor` and the L/D
 helper `equivalent_length(K, D, f)` = K D / f.
 
+(non-newtonian-friction)=
+### Non-Newtonian Friction Factors
+
+All of these return the **Darcy** factor, like `friction_factor`, so
+`darcy_pressure_drop(f, L, D, rho, v)` applies unchanged; the source
+correlations are written for the Fanning factor $f_F = f/4$ and are quoted that
+way below. Smooth pipes only.
+
+**Power-law fluid** ($\tau = K\dot\gamma^{\,n}$).
+`metzner_reed_reynolds(rho, v, D, K, n)` is
+$\mathrm{Re}_{MR}=\rho v^{2-n}D^n/\left[K\,8^{n-1}\left(\frac{3n+1}{4n}\right)^n\right]$
+(Metzner and Reed, 1955), which makes the laminar factor exactly
+$f_F = 16/\mathrm{Re}_{MR}$ for every $n$.
+`power_law_friction_factor(Re_MR, n)` blends that with the turbulent
+Dodge-Metzner (1959) equation
+$1/\sqrt{f_F} = (4/n^{0.75})\log_{10}\!\left(\mathrm{Re}_{MR}\,f_F^{\,1-n/2}\right) - 0.4/n^{1.2}$,
+solved by Newton iteration with implicit-function gradients, using the same
+2100-4000 smootherstep as the Newtonian methods. The blend window is a
+convention: the true critical $\mathrm{Re}_{MR}$ rises somewhat as $n$ falls,
+and that is not modelled. Dodge and Metzner's data covered $0.36\le n\le 1$ and
+$\mathrm{Re}_{MR}$ up to about $10^5$. `power_law_pressure_drop(Q, L, D, rho, K, n)`
+is the Darcy-Weisbach drop; in laminar flow it is the Rabinowitsch-Mooney
+result $\Delta P = \frac{4KL}{D}\left(\frac{8v}{D}\right)^n\left(\frac{3n+1}{4n}\right)^n$
+exactly.
+
+**Bingham plastic** ($\tau = \tau_y + \mu_p\dot\gamma$).
+`hedstrom_number(rho, tau_y, D, mu_p)` is $\mathrm{He}=\rho\tau_y D^2/\mu_p^2$ and
+the Reynolds number is $\mathrm{Re}_B=\rho v D/\mu_p$.
+`bingham_friction_factor(Re_B, He, method="darby1992")`:
+
+| Regime | Fanning form | Source |
+|--------|--------------|--------|
+| laminar (`method="laminar"`) | $f_L=\frac{16}{\mathrm{Re}}\left[1+\frac{\mathrm{He}}{6\,\mathrm{Re}}-\frac{\mathrm{He}^4}{3 f_L^3\mathrm{Re}^7}\right]$ | Buckingham-Reiner, solved by Newton with implicit gradients |
+| turbulent | $f_T = 10^{a}\,\mathrm{Re}^{-0.193}$, $a=-1.47\left[1+0.146\,e^{-2.9\times10^{-5}\mathrm{He}}\right]$ | Darby, Mun and Boger (1992) |
+| all (`"darby1992"`, default) | $f=\left(f_L^{m}+f_T^{m}\right)^{1/m}$, $m = 1.7+40000/\mathrm{Re}$ | Darby, Mun and Boger (1992), evaluated in log space |
+
+The original Darby and Melson (1981) fit had $-1.378$ in place of $-1.47$.
+The 1992 constants were checked against secondary reprints, not the original
+article. The turbulent fit is for slurries and pastes and does not reduce to
+the Newtonian curve at He = 0 (it is about half of it at Re = 1e5); only the
+laminar branch has an exact Newtonian limit. `bingham_pressure_drop(Q, L, D,
+rho, tau_y, mu_p)` is the Darcy-Weisbach drop.
+
+What is tested (`tests/test_non_newtonian.py`): $n=1$ and $\tau_y=0$ give
+exactly 64/Re in laminar flow; Dodge-Metzner at $n=1$ (Prandtl's smooth-pipe
+law) is within 1 % of smooth Colebrook for Re 1e4-1e7; the laminar Bingham
+pressure drop reproduces the Buckingham flow equation
+$Q=\frac{\pi D^4\Delta P}{128\mu_p L}\left[1-\frac43\xi+\frac{\xi^4}{3}\right]$,
+$\xi=\tau_y/\tau_w$; the implicit solutions match an independent bracketing
+root; gradients pass `check_grads`.
+
 (nps-table)=
 ### Standard Pipe Sizes (NPS and Schedule)
 
@@ -4378,6 +4674,7 @@ B36.19M stainless "S" schedules are not included.
 | `pipe_wall_thickness(nps, schedule="40")` | wall, m |
 | `pipe_inside_diameter(nps, schedule="40")` (alias `pipe_id`) | ID = OD − 2t, m |
 | `standard_sizes(schedule="40")` | sorted list of `(NPS, ID_m)` |
+| `pipe_weight_per_length(nps, schedule="40")` | plain-end steel mass, kg/m (B36.10M: $0.0246615\,(OD-t)\,t$, mm) |
 | `snap_to_standard_size(D, schedule="40", direction="up")` | `(NPS, ID_m)`: the next standard size up (or `"down"`, `"nearest"`) |
 
 `nps` may be a number or a string (`2`, `1.5`, `"1-1/2"`, `'2"'`); the schedule
@@ -4475,35 +4772,85 @@ recovered.
   resampled from the `fluids` library's digitization of the standard's figure
   and reproduces its `dP_venturi_tube` example (1788.6 Pa) to 0.5 %.
 
-### Pipe Networks: Parallel Branches
+**Rotameter.** A float in a vertical tapered tube rises until the pressure
+difference across it carries its weight less its buoyancy,
+$\Delta P\,A_f = V_f(\rho_f-\rho)g$ (`rotameter_float_dp`), so the differential
+is fixed and the flow area changes. With the tube diameter
+$D_t = D_{t,0} + \text{taper}\cdot h$ (`D_tube_0` defaults to the float
+diameter, the float seated at $h=0$), the annulus $A_a = \frac{\pi}{4}(D_t^2-D_f^2)$
+passes
 
-A full network solver is out of scope (`difflow_gas` covers gas networks), but a
-parallel pair between two nodes is a one-unknown root find with the existing
-solvers: the fraction $x$ of the flow in branch A satisfies
-$\Delta P_A(xQ)=\Delta P_B((1-x)Q)$.
+$$
+Q = C_R\,\frac{A_a}{\sqrt{1-(A_a/A_t)^2}}\,\sqrt{\frac{2 g V_f(\rho_f-\rho)}{\rho A_f}}
+$$
+
+(McCabe, Smith and Harriott, *Unit Operations*, 7e, Ch. 8; Perry's Sec. 10).
+`rotameter_flow(h, D_float, V_float, rho_float, rho, C_R, taper, D_tube_0=None)`
+returns $Q$ and `rotameter_height(Q, ...)` inverts it (Newton in $\ln A_a$, one
+implicit-function step for the derivatives). $C_R$ depends on the float shape
+and Reynolds number and has no default: take it from the calibration. The mass
+flow at a given reading scales with $\sqrt{\rho(\rho_f-\rho)}$, the usual density
+correction. `tests/test_rotameter.py` checks the force-balance identity, the
+inverse, and the inverse-function derivative $\frac{dh}{dQ}\frac{dQ}{dh}=1$.
+
+### Pipe Networks
+
+`PipeNetwork` solves looped and branched liquid networks built from `Pipe`
+units (or `ResistanceBranch(r, n)`, $\Delta P = rQ|Q|^{n-1}$, for a textbook
+$kQ^2$ or Hazen-Williams $n=1.852$ element). A node has either a fixed
+pressure (reservoir, header, discharge) or an external demand (m³/s leaving
+the network; negative for an injection), and at least one node must be fixed.
+Flows are positive from a branch's `from` node to its `to` node; a `Pipe`'s
+`dz` (or `profile`) is the rise along that direction, so its static head is
+part of the branch $\Delta P$.
 
 ```python
-import jax.numpy as jnp, optimistix as optx
-from difflow import Pipe, PipeParams, make_stream
+from difflow import Pipe, PipeParams, PipeNetwork
 
-RHO, MU, MW = 998.2, 1.002e-3, 18.015          # water at 20 C
-def stream_with_flow(Q):                        # Q in m^3/s
-    return make_stream({"W": Q * RHO / (MW * 1e-3)}, 293.15, 3e5)
+w = dict(rho=998.2, mu=1.002e-3)
+net = PipeNetwork()
+net.add_node("S", pressure=4e5)                      # supply header, Pa
+for n, d in {"A": 0.004, "B": 0.006, "C": 0.012, "D": 0.003}.items():
+    net.add_node(n, demand=d)                        # m^3/s drawn off
+net.add_branch("SA", "S", "A", Pipe(PipeParams(L=300.0, D=0.1541, **w)))
+net.add_branch("AB", "A", "B", Pipe(PipeParams(L=400.0, D=0.1023, **w)))
+net.add_branch("AC", "A", "C", Pipe(PipeParams(L=500.0, D=0.0779, **w)))
+net.add_branch("BC", "B", "C", Pipe(PipeParams(L=250.0, D=0.0779, dz=5.0, **w)))
+net.add_branch("BD", "B", "D", Pipe(PipeParams(L=350.0, D=0.0525, **w)))
+net.add_branch("CD", "C", "D", Pipe(PipeParams(L=300.0, D=0.0525, dz=-5.0, **w)))
 
-pipe_a = Pipe(PipeParams(L=80.0, D=0.0525, rho=RHO, mu=MU, MW=MW))
-pipe_b = Pipe(PipeParams(L=150.0, D=0.0409, rho=RHO, mu=MU, MW=MW,
-                         fittings={"globe_valve": 1}))
-Q_total = 6e-3
-
-dP = lambda pipe, Q: pipe(stream_with_flow(Q))[1]["dP"]
-res = lambda x, _: dP(pipe_a, x * Q_total) - dP(pipe_b, (1 - x) * Q_total)
-x = optx.root_find(res, optx.Newton(rtol=1e-12, atol=1e-10), jnp.asarray(0.5)).value
-print(f"branch A carries {float(x):.1%} of the flow")
+res = net.solve()                       # method="newton" (default) or "hardy_cross"
+res.branch_flows, res.node_pressures    # dicts, m^3/s and Pa
+res.supply                              # {"S": 0.025}: flow delivered by each fixed node
+res.converged, res.mass_imbalance, res.energy_residual, res.iterations
+net.loops()                             # cycle basis: [{branch: +/-1, ...}, ...]
 ```
 
-Both branches then have equal ΔP, the flows sum to the total, and the split is
-differentiable by the implicit function theorem (`tests/test_pipe.py::
-TestParallelBranches`).
+`method="newton"` solves the branch momentum equations
+$\Delta P_k(Q_k) = P_\mathrm{from}-P_\mathrm{to}$ and the free-node continuity
+equations together (the global-gradient formulation of Todini and Pilati, 1988,
+used by EPANET), started from the network linearized at 1 m/s, with
+`optimistix.root_find`: derivatives of any output with respect to demands,
+fixed pressures or pipe parameters are implicit-function-theorem derivatives.
+`method="hardy_cross"` is the classical Hardy Cross (1936) loop correction,
+$\Delta Q = -\sum_k o_k\Delta P_k/\sum_k|\partial\Delta P_k/\partial Q_k|$, swept
+over a cycle basis for a fixed `iterations` count (default 200; unrolled for
+differentiation); fixed-pressure nodes are joined through a virtual datum node,
+which supplies the pseudo-loops between reservoirs. It converges linearly and is
+offered for teaching and cross-checks. $|Q|$ is smoothed at zero flow, so a
+branch can reverse and stay differentiable.
+
+`tests/test_pipe_network.py` checks a laminar parallel header against
+Hagen-Poiseuille ($Q_k \propto D_k^4/L_k$), turbulent parallel pipes between two
+headers against `Pipe.flow_at_dp`, a two-loop network and a three-reservoir
+junction whose answers are known by construction (resistances set from chosen
+flows and pressures, including a reversed branch), mass balance at every node,
+zero pressure loss around every loop, agreement of the two methods, `jit`, and
+gradients (`check_grads`, and Hardy Cross vs Newton).
+
+For a single parallel pair the same answer is also a one-unknown root find on
+the split fraction $x$, $\Delta P_A(xQ)=\Delta P_B((1-x)Q)$, as in
+`tests/test_pipe.py::TestParallelBranches`.
 
 (compressible-module)=
 ## Compressible Gas Flow
@@ -4537,6 +4884,7 @@ real gas at a representative state. JAX, SI and differentiable throughout.
 | `isentropic_efficiency_from_polytropic(r, eta_p, gamma, compression)` | $\eta_s=\dfrac{r^{(\gamma-1)/\gamma}-1}{r^{(\gamma-1)/(\gamma\eta_p)}-1}$ for compression |
 | `polytropic_efficiency_from_isentropic(r, eta_s, gamma, compression)` | the inverse |
 | `optimal_stage_ratios(P_in, P_out, n_stages)` | equal per-stage ratios $(P_\mathrm{out}/P_\mathrm{in})^{1/N}$ (minimum work with intercooling to the inlet temperature) |
+| `stage_pressures(P_in, P_out, n_stages, intercooler_dP=0)` | stage suction and discharge pressures, equal ratios with a pressure loss in each intercooler (used by [MultistageCompressor](#multistagecompressor)) |
 
 **Choking.** `nozzle_flow` reports `choked` (true when $P_\mathrm{back}/P_0$
 is at or below the critical ratio). `nozzle_mass_flow` holds $P_\mathrm{back}/P_0$ at no less than the
@@ -4917,7 +5265,10 @@ physical bed (`d_p`, `voidage`, `mu`, `rho_gas`, `bed_area`, optional `u_s0`,
 the Ergun equation at the inlet (`ergun_alpha`, `params.alpha_for(Q0)`, or
 `params.effective_alpha` when `u_s0` is given). With `u_s0=None` the velocity is
 $Q_0/A_c$ from the inlet stream; a given `u_s0` is checked against it
-(`GasPFRBedWarning` above 1 %). Supplying both `alpha` and the bed is an error.
+(`GasPFRBedWarning` above 1 %). Likewise `rho_gas=None` takes the inlet density
+(mass flow$/Q_0$, molar masses from `MW=` or the unit's `thermo`), and a given
+`rho_gas` is checked against it when the molar masses are known
+(`GasPFRDensityWarning` above 2 %). Supplying both `alpha` and the bed is an error.
 
 (particles-fluidization)=
 ### Fluidization
@@ -4948,12 +5299,60 @@ $u_{mb}/u_{mf} > 1$ (the bed expands before it bubbles), with $u_{mf}$ from the
 Baeyens & Geldart (1974) correlation. This is the sloping A/B boundary, so FCC
 catalyst (60 µm, 1500 kg/m³) is group A. It is **not differentiable** and not jit-able.
 
+The Abrahamsen-Geldart $u_{mb}$ behind that A/B line was fitted to 20-72 µm
+powders, so the line extrapolates away from them (about 180 µm at 1500 kg/m³, and
+millimetre sizes for very light solids). `method="geldart1973"` uses instead the
+simplified boundaries Geldart (1973) gives with his chart, in his units
+($\Delta\rho$ in g/cm³, $d_p$ in µm): group A for $\Delta\rho\,d_p \le 225$
+(`GELDART_1973_AB`), group D for $\Delta\rho\,d_p^2 \ge 10^6$ (`GELDART_1973_BD`),
+C below 20 µm as before. These lines do not move with the gas or the fines content.
+The two methods agree inside each group and differ near the boundaries (a 170 µm,
+1500 kg/m³ powder is A by default and B by the 1973 line; 1 mm sand is B by Grace's
+B/D line and D by Geldart's). The default is unchanged. The 225 and $10^6$ are the
+values commonly quoted from the paper; they were not re-checked against it.
+
 ```python
 from difflow.particles import fluidization_window, geldart_group
 
 u_mf, u_t = fluidization_window(300e-6, 2600.0, 1.2, 1.8e-5, 0.45, 0.8)
 print(f"u_mf = {float(u_mf):.3f} m/s, u_t = {float(u_t):.2f} m/s,",
-      geldart_group(300e-6, 2600.0, 1.2))
+      geldart_group(300e-6, 2600.0, 1.2),
+      geldart_group(300e-6, 2600.0, 1.2, method="geldart1973"))
+```
+
+(particles-bubbling)=
+### Bubbling beds: bubble size and bed expansion
+
+Above $u_{mf}$ (above $u_{mb}$ for group A) a gas bed bubbles. The bubble size
+sets the rise velocity, the bubble fraction and the bed height.
+
+| Function | Equation | Source and units |
+|---|---|---|
+| `mori_wen_max_bubble_diameter(u0, u_mf, D_t)` | $d_{bm} = 0.652[A_t(u_0-u_{mf})]^{0.4}$ | Mori & Wen (1975), **cgs** (cm, cm², cm/s); in SI $d_{bm} = 1.638[A_t(u_0-u_{mf})]^{0.4}$ |
+| `mori_wen_initial_bubble_diameter(u0, u_mf, distributor, N_or)` | porous: $d_{b0} = 0.00376(u_0-u_{mf})^2$; perforated: $0.347[A_t(u_0-u_{mf})/n_d]^{0.4}$ | Mori & Wen, cgs; `N_or` is orifices per m², $A_t/n_d = 1/N_{or}$ |
+| `mori_wen_bubble_diameter(h, u0, u_mf, D_t, ...)` | $d_b = d_{bm} - (d_{bm}-d_{b0})e^{-0.3h/D_t}$ | Mori & Wen; dimensionless |
+| `darton_bubble_diameter(h, u0, u_mf, A0)` | $d_b = 0.54(u_0-u_{mf})^{0.4}(h+4\sqrt{A_0})^{0.8}g^{-0.2}$ | Darton et al. (1977); dimensionally consistent, SI as written |
+| `bubble_rise_velocity(d_b)`, `bubble_velocity(u0, u_mf, d_b)` | $u_{br} = 0.711\sqrt{gd_b}$, $u_b = u_0-u_{mf}+u_{br}$ | Davidson & Harrison (1963) |
+| `bubbling_bed_expansion(u0, u_mf, d_b, H_mf)` | $\delta = (u_0-u_{mf})/u_b$, $H = H_{mf}/(1-\delta)$ | two-phase theory, fast bubbles (Kunii & Levenspiel Ch. 6) |
+
+The Mori-Wen functions take SI inputs, convert them to cgs, evaluate the published
+equation with its published constants and convert $d_b$ back to metres. Their range:
+$D_t \le 1.3$ m, $0.5 \le u_{mf} \le 20$ cm/s, $60 \le d_p \le 450$ µm,
+$u_0 - u_{mf} \le 48$ cm/s. Kunii & Levenspiel print a Davidson-Harrison $d_{b0}$
+($2.78(u_0-u_{mf})^2/g$, porous; $1.30[(u_0-u_{mf})/N_{or}]^{0.4}/g^{0.2}$,
+perforated) that is 25 % and 6 % smaller; pass `d_b0=` to use it. Nothing caps
+$d_b$ at the column diameter (a bed whose bubbles approach $D_t$ slugs). Everything
+here is differentiable.
+
+```python
+import jax
+from difflow.particles import mori_wen_bubble_diameter, bubbling_bed_expansion
+
+u0, u_mf, D_t, H_mf = 0.30, 0.05, 0.8, 1.2
+def bed_height(u0):
+    d_b = mori_wen_bubble_diameter(H_mf / 2, u0, u_mf, D_t)   # mid-bed bubble size
+    return bubbling_bed_expansion(u0, u_mf, d_b, H_mf)["H"]
+print(f"H = {float(bed_height(u0)):.3f} m, dH/du0 = {float(jax.grad(bed_height)(u0)):.2f} s")
 ```
 
 **What is verified** (`tests/test_particles.py`): the Stokes limit; the Ergun
@@ -4966,12 +5365,23 @@ is reproduced from memory; compare against Perry's or McCabe/Geankoplis tables
 before relying on a result to better than the correlation scatter (typically
 5-10 %). The Richardson-Zaki exponent is piecewise (jumps of at most about 2 %
 at $Re_t = 0.2, 1, 500$).
+`tests/test_particles_worked_examples.py` (marked `release`) sets up problems the
+way McCabe, Smith & Harriott Ch. 7, Kunii & Levenspiel Ch. 3 and Geankoplis §3.1
+do (Ergun $u_{mf}$ in cgs, Wen-Yu, Stokes and Newton settling, drag on a sphere,
+Ergun in US customary units with $g_c$) and computes each expected value **by
+hand in the test**, in the book's units. None of them is a printed answer: the
+printed numbers could not be recalled with confidence. They check the equations
+and the unit conversions, not the correlations against data.
+`tests/test_bubbling_bed.py` evaluates the Mori-Wen equations in cgs as printed and
+compares with the SI functions.
 
 **References**: Haider & Levenspiel, *Powder Technol.* 58, 63 (1989); Turton &
 Levenspiel, *Powder Technol.* 47, 83 (1986); Ergun, *Chem. Eng. Prog.* 48(2), 89
 (1952); Wen & Yu, *AIChE J.* 12, 610 (1966); Richardson & Zaki, *Trans. Inst.
 Chem. Eng.* 32, 35 (1954); Kunii & Levenspiel, *Fluidization Engineering*, 2nd
-ed. (1991); Geldart, *Powder Technol.* 7, 285 (1973).
+ed. (1991); Geldart, *Powder Technol.* 7, 285 (1973); Mori & Wen, *AIChE J.* 21,
+109 (1975); Darton, LaNauze, Davidson & Harrison, *Trans. Inst. Chem. Eng.* 55, 274
+(1977); Davidson & Harrison, *Fluidised Particles* (1963).
 
 ---
 
@@ -5341,9 +5751,11 @@ a diffusivity, a film coefficient or a transfer-unit height. Properties are
 *inputs*: core has no gas viscosity or surface-tension model, so the Onda
 functions take `mu_G` and `sigma` as required arguments (there is no hidden
 `sigma=0.072`). See the module docstring and `tests/test_mass_transfer.py` for
-exactly what was and was not verified; in short, **no textbook worked example
-is reproduced**, and the tables (diffusion volumes, Le Bas increments,
-packings) are transcribed from memory.
+exactly what was and was not verified. Fuller is checked against Poling et
+al. 5e Example 11-3 and Geankoplis Example 6.2-5, and Wilke-Chang (with Le Bas
+volumes) against Geankoplis Example 6.3-2; no published Onda worked example is
+reproduced, and the tables (diffusion volumes, Le Bas increments, packings)
+are transcribed from memory.
 
 (mass-transfer-diffusivities)=
 ### Diffusivity Correlations
@@ -5357,7 +5769,12 @@ solute molar volume at its normal boiling point `V_A` in cm$^3$/mol from
 water). `stokes_einstein_diffusivity(T, mu, r)` is for large solutes. Both
 published correlations are implemented in their native units (cm$^2$/s, atm,
 cP) and converted at the boundary. Diffusion volumes are in `FULLER_VOLUMES`
-and `FULLER_ATOMIC_VOLUMES`; `diffusion_volume` sums atoms.
+and `FULLER_ATOMIC_VOLUMES` (the 1969 refit recommended by Poling et al.);
+`diffusion_volume` sums atoms. `diffusion_volume(..., table="1966")` uses the
+original 1966 values (`FULLER_VOLUMES_1966`, `FULLER_ATOMIC_VOLUMES_1966`)
+that Geankoplis, Treybal and Welty tabulate, to reproduce their examples. The
+Le Bas table distinguishes oxygen environments (`O` 7.4, `O_methyl_ester`
+9.1, `O_methyl_ether` 9.9, `O_ester_ether` 11.0, `O_acid` 12.0, `O_SPN` 8.3).
 
 ```python
 from difflow.mass_transfer import (
@@ -5416,6 +5833,29 @@ print(float(ranz_marshall(0.0, 1.0)))
 for m in (0.01, 1e3):
     g, l = resistance_fractions(k_y=0.05, k_x=5.0, m=m)
     print(f"m = {m:g}: gas {float(g):.3f}, liquid {float(l):.3f}")
+```
+
+(mass-transfer-penetration)=
+### Penetration, Surface Renewal and Falling Films
+
+Film theory gives $k \propto D$; the unsteady theories give $k \propto
+D^{1/2}$. `penetration_coefficient(D, t_c)` is Higbie's $k_L =
+2\sqrt{D/(\pi t_c)}$ for an exposure time $t_c$, and
+`surface_renewal_coefficient(D, s)` is Danckwerts' $k_L = \sqrt{D s}$.
+For a wetted-wall column, `falling_film_thickness(Gamma, rho, mu)` is the
+Nusselt film $\delta = (3\mu\Gamma/\rho^2 g)^{1/3}$ ($\Gamma$ in kg/m/s of
+wetted perimeter), and `falling_film_liquid_coefficient(D, Gamma, rho, mu, L)`
+the short-contact mean $k_L = \sqrt{4 D v_{max}/(\pi L)}$ with the surface
+velocity $v_{max} = 1.5\Gamma/(\rho\delta)$ (Bird, Stewart & Lightfoot 2e,
+Sec. 20.1). It is valid for laminar, wave-free films while the penetration
+depth is small compared with $\delta$. The gas side of a wetted-wall column is
+`gilliland_sherwood`.
+
+```python
+from difflow.mass_transfer import falling_film_liquid_coefficient, penetration_coefficient
+
+k_L = falling_film_liquid_coefficient(2.0e-9, 0.02, 998.0, 1.0e-3, 1.0)
+print(f"k_L = {float(k_L):.2e} m/s")
 ```
 
 (mass-transfer-packed)=
@@ -5483,16 +5923,22 @@ tray spacing, packing factor, rates and surface tension. Properties are inputs:
 the surface tension, densities and viscosity are required arguments (there is no
 silent `sigma = 0.02`).
 
-**What was and was not verified.** The correlation constants were **written from
-memory with no book at hand and are unverified**; each is marked so in its
-docstring with the source it is believed to come from. They are fits of
-*charts*: expect 10-20 % on a diameter or a flooding velocity, and worse on a
-pressure drop. The tests check hand calculations, independent re-implementations,
-scaling laws ($D \propto f_{\rm flood}^{-1/2}$, $D \propto (V\,MW/\rho_V)^{1/2}$),
-sign changes of margins and gradients. **No published textbook worked example is
-reproduced** (the issue's example numbers could not be checked), and two pieces
-are placeholders rather than fits: the entrainment function and the GPDC
-pressure-drop shape (below).
+**What was and was not verified.** The correlation constants were first
+**written from memory**; each docstring says which are still unverified. They are
+fits of *charts*: expect 10-20 % on a diameter or a flooding velocity, and worse
+on a pressure drop. Printed worked examples are reproduced in
+`tests/test_column_design.py::TestPublishedExamples`:
+
+| Check | Source | Printed | difflow |
+|---|---|---|---|
+| Fair $C_{SB}$ ($F_{LV} = 0.036$, 18-in spacing, 20.5 mN/m) | Dutta (2007) Ex. 5.1 | 0.285 ft/s | 0.314 ft/s (+10 %) |
+| Dry-plate drop ($u_h = 39.1$ ft/s, $C_0 = 0.73$) | Dutta Ex. 5.1 | 1.75 in liquid | 1.75 in |
+| Weir crest | Dutta Ex. 5.1, $0.48\,(q/l_w)^{2/3}$ | same formula | same (Francis) |
+| Eckert flood line ($X = 0.90$) | Dutta Ex. 5.2 | $Y = 0.021$, $D = 0.90$ m | $Y = 0.024$, $D = 0.87$ m |
+| Packed $\Delta P$ (2-in metal Pall, air-water) | Perry's 8e Sec. 14 Ex. 13 | 0.38 (GPDC), 0.40 (Robbins chart) in H$_2$O/ft | 0.38 in H$_2$O/ft (Robbins) |
+
+The weep constant $K_2$ and the entrainment function are still unverified
+placeholders (below).
 
 (op-tray-flooding)=
 ### Tray Flooding and Column Diameter
@@ -5616,28 +6062,43 @@ softplus clip that stays differentiable. The number of actual trays is
 ### Packed-Column Flooding and Pressure Drop
 
 `gpdc_flood(F_LV, F_p, rho_L, rho_V, mu_L)` is the gas mass flux at flood on
-the Eckert / generalized pressure-drop chart: abscissa
-$X = (L/G)\sqrt{\rho_V/(\rho_L-\rho_V)}$, ordinate
+the Eckert chart: abscissa $X = (L/G)\sqrt{\rho_V/(\rho_L-\rho_V)}$, ordinate
 $Y = G^2 F_p \mu_L^{0.2}/(\rho_V(\rho_L-\rho_V)g)$ ($F_p$ in 1/m, $\mu_L$ in cP
 inside the power), and the flood line
-$\ln Y = -3.5021 - 1.028\ln X - 0.11093(\ln X)^2$ (a literature fit recalled
-without its source: **from memory, unverified**; chart-reading accuracy,
-**about 10-20 %** on $G$). `kister_gill_flood_dp(F_p)` is the pressure drop at
-flood, $0.115\,F_p^{0.7}$ in H$_2$O/ft with $F_p$ in 1/ft (Kister & Gill, 1991;
-**from memory, unverified**), in Pa/m. `gpdc_pressure_drop` is **not a fit of
-the GPDC lines** (they could not be recalled): it anchors the flood value,
-$\Delta P = \Delta P_{flood}(Y/Y_{flood})^{n}$ at fixed $L/G$, with an assumed
-$n = 1.7$ chosen so that 70 % of flood gives about 30 % of the flood drop (the
-common 0.25-0.5 in H$_2$O/ft design rule); expect $\pm 30$-50 % away from flood.
-`packed_column_diameter(..., packing=, fraction_flood=0.7)` returns `(D, info)`
-with the flooding and operating velocities, the pressure drop per metre and the
-wetting rate against a minimum (2.2e-5 m$^2$/s, about 0.08 m$^3$/m/h; **from
-memory, unverified**). `hetp` has the rules of thumb $18\,d_p$ (random packing)
-and $100/a_p + 0.1$ m (structured), both **from memory, unverified**, and
-`method="htu"` for `hetp_from_htu` of the mass-transfer section. `size_column`
-turns stages, efficiency (or HETP), diameter and spacing into height, shell
-volume, tray area and tray count; `column_hardware_cost` feeds them to
-`column_cost`.
+$\log_{10} Y = -1.6678 - 1.085\log_{10} X - 0.29655(\log_{10} X)^2$ (the
+Kessler-Wankat fit quoted by Wankat, recalled from memory; it reproduces Dutta's
+chart reading to 15 % in $Y$, 7 % in $G$; the earlier natural-log fit was 60 %
+high in $Y$ there). Perry's 8e restricts the Eckert flood line to
+$F_p > 60$ ft$^{-1}$ (about 200 m$^{-1}$).
+
+For modern packings the flood point comes from the pressure drop.
+`robbins_pressure_drop(G, L, rho_V, rho_L, mu_L, F_pd)` is the Robbins (1991)
+correlation, Perry's 8e Eqs. (14-145) to (14-151), with the dry packing factor
+$F_{pd}$ (`DRY_PACKING_FACTORS` has Perry's values for the listed packings).
+`kister_gill_flood_dp(F_p)` is the flood pressure drop $0.115\,F_p^{0.7}$
+in H$_2$O/ft with $F_p$ in 1/ft (Kister & Gill, 1991; Perry's Eq. 14-142 rounds
+it to 0.12), in Pa/m, and `robbins_flood(L_over_G, rho_V, rho_L, mu_L, F_p,
+F_pd)` solves for the gas flux at which Robbins reaches it, Robbins' own
+recommendation (a bisection with an implicit-function gradient, so it is
+differentiable). `gpdc_pressure_drop(..., method="robbins")` (the default)
+is Robbins; `method="anchored"` keeps the old flood-anchored power law, which
+gave a third of Perry's Example 13 answer.
+`packed_column_diameter(..., packing=, fraction_flood=0.7, flood="eckert")`
+returns `(D, info)` with the flooding and operating velocities, the Robbins
+pressure drop per metre and the wetting rate against a minimum (2.2e-5 m$^2$/s,
+about 0.08 m$^3$/m/h; **from memory, unverified**); `flood="robbins"` uses
+`robbins_flood` instead of the Eckert line. `hetp` has Perry's rules of thumb,
+$18\,d_p$ (random packing, Eq. 14-156a) and $100\,C_{XY}/a_p + 0.1$ m
+(structured, Eq. 14-159; `C_XY=1.45` for X-type packing below 300 m$^2$/m$^3$),
+both for organic systems below 25 mN/m, and `method="htu"` for
+`hetp_from_htu` of the mass-transfer section. `size_column` turns stages,
+efficiency (or HETP), diameter and spacing into height, shell volume, tray
+area and tray count; `column_hardware_cost` feeds them to `column_cost`.
+
+The Fair chart needs a surface tension: `difflow.liquid_properties.surface_tension(species, T)`
+(IAPWS for water, Brock-Bird for the rest, with a `SurfaceTensionWarning` for
+alcohols and acids, where it fails) and `mixture_surface_tension` (mole-fraction
+average) supply it.
 
 ```python
 import jax
@@ -5652,6 +6113,8 @@ air = dict(V_molar=100.0, MW_V=29.0, rho_V=1.2, L_molar=500.0, MW_L=18.0,
 D, info = packed_column_diameter(**air, packing=pk, fraction_flood=0.7)
 print(f"D = {float(D):.2f} m, dP = {float(info['dP_per_m']):.0f} Pa/m "
       f"(flood {float(info['dP_flood_per_m']):.0f}), wetting margin {float(info['wetting_margin']):+.2f}")
+D_r, _ = packed_column_diameter(**air, packing=pk, fraction_flood=0.7, flood="robbins")
+print(f"Robbins/Kister-Gill flood: D = {float(D_r):.2f} m")
 
 def cost(ff):
     D, _ = packed_column_diameter(**air, packing=pk, fraction_flood=ff)
@@ -5671,7 +6134,9 @@ rings in metal (25, 38, 50 mm) and plastic (25 mm), ceramic Intalox saddles (25,
 functions do not apply to it). **Every value is from memory and unverified**
 (`PackingData.source` says so): packing factors after Treybal / Perry, areas
 after Billet and Schultes. Build your own `PackingData` from a vendor data sheet
-for a real design.
+for a real design. `difflow.units.column_design.DRY_PACKING_FACTORS` holds
+the Robbins dry packing factors $F_{pd}$ from Perry's 8e Tables 14-13/14-14 for
+the metal Pall rings and the ceramic Raschig, Berl and Intalox packings.
 
 ---
 

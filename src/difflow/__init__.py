@@ -39,7 +39,9 @@ from difflow.streams import (
 from difflow.thermo import (
     IdealThermo, CubicThermo, ActivityThermo, SpeciesData,
     AntoineRangeWarning, BubbleDewConvergenceWarning,
+    psat_wagner,
 )
+from difflow.saturation import saturation_temperature, saturation_pressure
 from difflow.eos import (
     PengRobinson,
     SRK,
@@ -51,6 +53,7 @@ from difflow.eos import (
     eos_bubble_T,
     eos_dew_P,
     eos_dew_T,
+    eos_pressure_TV,
 )
 from difflow.database import (
     get_species_data,
@@ -76,6 +79,11 @@ from difflow.gas_properties import (
     gas_thermal_conductivity,
     gas_heat_capacity,
     gas_prandtl,
+    mixture_viscosity,
+    mixture_conductivity,
+    dense_gas_viscosity,
+    dense_gas_conductivity,
+    gas_mixture_transport,
 )
 from difflow.base_database import BaseDatabase
 from difflow.uncertainty import (
@@ -126,7 +134,7 @@ from difflow.units.base import (
     estimate_pfr_conversion,
 )
 from difflow.units.cstr import CSTR, CSTRParams, CSTRDensityWarning
-from difflow.units.pfr import GasPFRBedWarning
+from difflow.units.pfr import GasPFRBedWarning, GasPFRDensityWarning
 from difflow.units.pfr import PFR, PFRParams, GasPFR, GasPFRParams
 from difflow.units.fed_batch import (
     FedBatchReactor,
@@ -169,10 +177,18 @@ from difflow.phase_diagrams import (
     xy_curve,
     find_azeotrope,
     ternary_lle,
+    tabulated_lle,
     lever_rule,
     tie_line_through,
     difference_point,
     hunter_nash,
+)
+from difflow.binary_params import (
+    get_nrtl_params,
+    get_uniquac_params,
+    list_binary_pairs,
+    binary_parameter_source,
+    MissingBinaryParametersWarning,
 )
 from difflow.units.lle import (
     MultistageCascade,
@@ -337,6 +353,7 @@ from difflow.units.heat_exchanger import (
     size_heat_exchanger,
 )
 from difflow.units.pipe import Pipe, PipeCavitationWarning, PipeParams
+from difflow.pipe_network import PipeNetwork, PipeNetworkResult, ResistanceBranch
 from difflow.units.pump import (
     CentrifugalPump,
     CentrifugalPumpParams,
@@ -355,6 +372,8 @@ from difflow.units.eos_units import (
     TurboexpanderParams,
     Compressor,
     CompressorParams,
+    MultistageCompressor,
+    MultistageCompressorParams,
     JTValve,
     JTValveParams,
     ComponentSeparator,
@@ -564,6 +583,9 @@ __all__ = [
     "SpeciesData",
     "AntoineRangeWarning",
     "BubbleDewConvergenceWarning",
+    "psat_wagner",
+    "saturation_temperature",
+    "saturation_pressure",
     # Thermodynamics - Equations of State
     "PengRobinson",
     "SRK",
@@ -575,6 +597,7 @@ __all__ = [
     "eos_bubble_T",
     "eos_dew_P",
     "eos_dew_T",
+    "eos_pressure_TV",
     # Property Database
     "get_species_data",
     "get_critical_props",
@@ -597,6 +620,11 @@ __all__ = [
     "gas_thermal_conductivity",
     "gas_heat_capacity",
     "gas_prandtl",
+    "mixture_viscosity",
+    "mixture_conductivity",
+    "dense_gas_viscosity",
+    "dense_gas_conductivity",
+    "gas_mixture_transport",
     # Uncertainty Propagation
     "linear_propagation",
     "monte_carlo_propagation",
@@ -619,6 +647,7 @@ __all__ = [
     "CSTRParams",
     "CSTRDensityWarning",
     "GasPFRBedWarning",
+    "GasPFRDensityWarning",
     # Unit operations - PFR
     "PFR",
     "PFRParams",
@@ -666,10 +695,16 @@ __all__ = [
     "xy_curve",
     "find_azeotrope",
     "ternary_lle",
+    "tabulated_lle",
     "lever_rule",
     "tie_line_through",
     "difference_point",
     "hunter_nash",
+    "get_nrtl_params",
+    "get_uniquac_params",
+    "list_binary_pairs",
+    "binary_parameter_source",
+    "MissingBinaryParametersWarning",
     "uniquac_activity_coefficients",
     "get_K_values",
     "separation_factor",
@@ -814,10 +849,15 @@ __all__ = [
     "TurboexpanderParams",
     "Compressor",
     "CompressorParams",
+    "MultistageCompressor",
+    "MultistageCompressorParams",
     "JTValve",
     "Pipe",
     "PipeCavitationWarning",
     "PipeParams",
+    "PipeNetwork",
+    "PipeNetworkResult",
+    "ResistanceBranch",
     "CentrifugalPump",
     "CentrifugalPumpParams",
     "fit_pump_curve",

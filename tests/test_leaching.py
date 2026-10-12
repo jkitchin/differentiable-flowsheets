@@ -2,10 +2,10 @@
 
 What is and is not verified
 ---------------------------
-No published numerical example is reproduced. The issue cites McCabe-Smith-Harriott
-Ch. 23 and Geankoplis Ch. 12 examples "from recollection"; their inputs and printed answers
-could not be retrieved while writing this, so nothing is claimed to agree with them. The unit
-is instead checked against
+McCabe-Smith-Harriott 7e Example 23.1 (variable underflow) is reproduced in
+``TestMSHExample23_1`` from RECALLED problem data and answers (not yet checked against the
+printed book), together with an independent hand stepping. Beyond that, the unit is checked
+against
 
 - an independent NumPy assembly of the stage balances as a dense linear system (constant
   underflow, both bases, first stage separate, solute in the fresh solvent, ``r = 1``);
@@ -334,3 +334,35 @@ class TestGradients:
         g = lambda r: Leacher(prm(n_stages=3, underflow=1.5, recovery=r, design="solvent"))(  # noqa: E731
             self.feed, self.solv)[2]["solvent_rate"]
         check_grads(g, (0.8,), order=1, modes=["rev"], rtol=1e-4)
+
+
+class TestMSHExample23_1:
+    """McCabe-Smith-Harriott 7e Example 23.1 (oil from meal with benzene, variable underflow).
+
+    Problem data and printed answers are RECALLED, not checked against the printed
+    book (unit-ops book Ch. 17 audit): 1000 kg/h of oil-free meal carrying 400 kg
+    oil and 25 kg benzene; 655 kg benzene + 10 kg oil as fresh solvent; 60 kg oil
+    allowed in the spent solids; underflow solution s(y) kg/kg solid tabulated
+    below. Recalled answers: overflow 0.60 oil fraction, final underflow solution
+    0.118, about 507 kg underflow solution, 583 kg overflow, 4 ideal stages.
+    An independent hand stepping (net flow Delta = L_n - V_(n+1) constant) gives
+    y_a = 0.600, y_b = 0.1184 and stages at y = 0.600, 0.408, 0.246, 0.116.
+    """
+
+    ys = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+    ss = [0.5, 0.505, 0.515, 0.53, 0.55, 0.571, 0.595, 0.62]
+
+    def _run(self, N):
+        feed = make_stream({"meal": 1000.0, "oil": 400.0, "benzene": 25.0}, 300.0, 1e5)
+        solv = make_stream({"oil": 10.0, "benzene": 655.0}, 300.0, 1e5)
+        p = LeacherParams("meal", "oil", "benzene", n_stages=N, underflow_model="variable",
+                          underflow_y=self.ys, underflow_s=self.ss)
+        return Leacher(p)(feed, solv)
+
+    def test_four_stages_meet_the_spec_three_do_not(self):
+        u4, o4, i4 = self._run(4)
+        u3, _, _ = self._run(3)
+        assert bool(i4["converged"])
+        assert float(u4["F_oil"]) < 60.0 < float(u3["F_oil"])
+        assert float(i4["y_overflow"]) == pytest.approx(0.600, abs=0.002)
+        assert float(o4["F_oil"] + o4["F_benzene"]) == pytest.approx(583.0, rel=0.005)

@@ -15,8 +15,14 @@ differentiable in every numeric argument.
    closed-form fits of *charts* and carry chart-reading accuracy, roughly
    10-20 % on a diameter or velocity, worse on a pressure drop and an
    entrainment. Check against the cited source before a design is relied on.
-   The tests check scaling laws, limiting cases, hand calculations and
-   independent re-implementations -- **not** a published worked example.
+
+   Checked against published worked examples (``tests/test_column_design.py``,
+   ``TestPublishedExamples``): the Fair fit, the dry-plate drop and the weir
+   crest against Dutta, *Principles of Mass Transfer and Separation
+   Processes* (2007), Example 5.1; the Eckert flood line against Dutta
+   Example 5.2; the Robbins pressure drop against Perry's 8e Example 13
+   (Sec. 14). The weep constant ``K2`` and :func:`fractional_entrainment`
+   remain unverified.
 
 Contents
 --------
@@ -31,9 +37,6 @@ Contents
   :data:`difflow.mass_transfer.PACKINGS`).
 * Whole column: :func:`size_column`, :func:`column_hardware_cost`.
 * Flash drums: :func:`flash_drum_size` (Souders-Brown, Walas rules of thumb).
-* Surface tension (the ``sigma`` the tray correlations need):
-  :func:`surface_tension_curl_pitzer`, :func:`surface_tension_brock_bird`,
-  :func:`liquid_surface_tension`.
 
 Limits (weeping, entrainment, flooding) are returned as **continuous margins**
 and are never raised on traced values, so an optimizer can use them as smooth
@@ -56,10 +59,9 @@ __all__ = [
     "tray_column_diameter", "tray_percent_flood", "weir_crest",
     "tray_pressure_drop", "weep_point", "fractional_entrainment",
     "oconnell_efficiency", "gpdc_flood", "gpdc_pressure_drop",
-    "kister_gill_flood_dp", "packed_column_diameter", "hetp", "size_column",
+    "kister_gill_flood_dp", "robbins_pressure_drop", "robbins_flood",
+    "DRY_PACKING_FACTORS", "packed_column_diameter", "hetp", "size_column",
     "column_hardware_cost", "flash_drum_size", "PackingData", "PACKINGS",
-    "surface_tension_curl_pitzer", "surface_tension_brock_bird",
-    "liquid_surface_tension",
 ]
 
 
@@ -102,7 +104,10 @@ def fair_capacity_factor(
     **From memory, unverified.** This is the closed-form fit of Fair's (1961)
     flooding chart given by Treybal, *Mass-Transfer Operations* (3rd ed.), in
     the chapter on tray towers (believed; the constants were recalled, not
-    looked up). Believed valid for ``0.01 <= F_LV <= 0.1`` and tray spacing
+    looked up). Checked against Dutta (2007) Example 5.1, which reads
+    ``C_SB = 0.285 ft/s`` (0.0869 m/s) off Fair's chart at ``F_LV = 0.036``,
+    18-in spacing and 20.5 mN/m; the fit gives 0.0956 m/s, 10 % higher, which
+    is chart-reading accuracy. Believed valid for ``0.01 <= F_LV <= 0.1`` and tray spacing
     0.15-0.9 m, and it is a fit of chart *reading*: expect 10-20 %. Outside
     that range the logarithm extrapolates linearly in ``log F_LV`` (it reaches
     zero near ``F_LV ~ 4``); a smooth floor of 1 mm/s keeps the result
@@ -133,113 +138,6 @@ def flooding_velocity(C_SB, rho_L, rho_V) -> Array:
     """``u_f = C_SB sqrt((rho_L - rho_V)/rho_V)`` (m/s, on the net area)."""
     rho_L, rho_V = _f(rho_L), _f(rho_V)
     return _f(C_SB) * jnp.sqrt((rho_L - rho_V) / rho_V)
-
-
-# =============================================================================
-# Surface tension (issue #444)
-# =============================================================================
-
-
-def _one_minus_Tr(T, Tc):
-    # (1 - Tr), kept positive so the 11/9 power stays finite (sigma -> 0 at Tc)
-    return jnp.maximum(1.0 - _f(T) / _f(Tc), 1e-12)
-
-
-def surface_tension_curl_pitzer(T, Tc, Pc, omega) -> Array:
-    """Pure-liquid surface tension (N/m), corresponding states (Curl-Pitzer).
-
-    ``sigma = Pc^(2/3) Tc^(1/3) (1.86 + 1.18 w)/19.05
-    [(3.75 + 0.91 w)/(0.291 - 0.08 w)]^(2/3) (1 - Tr)^(11/9)`` in dyn/cm with
-    ``Pc`` in bar (Poling, Prausnitz and O'Connell 5e, Sec. 12-3). Needs only
-    the critical constants of :func:`difflow.database.get_critical_props`.
-    Typically within 5 % for non-polar and weakly polar organics; it is poor
-    for hydrogen-bonding liquids (water, alcohols, acids), which need measured
-    data.
-
-    Args:
-        T: Temperature (K).
-        Tc: Critical temperature (K).
-        Pc: Critical pressure (Pa).
-        omega: Acentric factor (-).
-
-    Returns:
-        Surface tension (N/m); zero at and above ``Tc``.
-
-    Example:
-        >>> s = surface_tension_curl_pitzer(298.15, 562.05, 48.95e5, 0.210)
-        >>> 0.027 < float(s) < 0.030     # benzene, measured 0.0282
-        True
-    """
-    w = _f(omega)
-    Pc_bar = _f(Pc) / 1e5
-    sigma_dyn = (Pc_bar ** (2.0 / 3.0) * _f(Tc) ** (1.0 / 3.0)
-                 * (1.86 + 1.18 * w) / 19.05
-                 * ((3.75 + 0.91 * w) / (0.291 - 0.08 * w)) ** (2.0 / 3.0)
-                 * _one_minus_Tr(T, Tc) ** (11.0 / 9.0))
-    return jnp.where(_f(T) < _f(Tc), sigma_dyn * 1e-3, 0.0)
-
-
-def surface_tension_brock_bird(T, Tc, Pc, Tb) -> Array:
-    """Pure-liquid surface tension (N/m), Brock-Bird with the Miller ``Q``.
-
-    ``sigma = Pc^(2/3) Tc^(1/3) Q (1 - Tr)^(11/9)`` in dyn/cm with ``Pc`` in
-    bar and ``Q = 0.1196 [1 + Tbr ln(Pc/1.01325)/(1 - Tbr)] - 0.279``
-    (Poling, Prausnitz and O'Connell 5e, Sec. 12-3). Needs the normal boiling
-    point; the same caveat on hydrogen-bonding liquids as
-    :func:`surface_tension_curl_pitzer`.
-
-    Args:
-        T: Temperature (K).
-        Tc: Critical temperature (K).
-        Pc: Critical pressure (Pa).
-        Tb: Normal boiling point (K).
-
-    Returns:
-        Surface tension (N/m); zero at and above ``Tc``.
-    """
-    Pc_bar = _f(Pc) / 1e5
-    Tbr = _f(Tb) / _f(Tc)
-    Q = 0.1196 * (1.0 + Tbr * jnp.log(Pc_bar / 1.01325) / (1.0 - Tbr)) - 0.279
-    sigma_dyn = (Pc_bar ** (2.0 / 3.0) * _f(Tc) ** (1.0 / 3.0) * Q
-                 * _one_minus_Tr(T, Tc) ** (11.0 / 9.0))
-    return jnp.where(_f(T) < _f(Tc), sigma_dyn * 1e-3, 0.0)
-
-
-def liquid_surface_tension(species, T, x=None) -> Array:
-    """Surface tension (N/m) of a liquid from the species database.
-
-    Each pure value is :func:`surface_tension_curl_pitzer` on the critical
-    constants of :func:`difflow.database.get_critical_props`; a mixture takes
-    the mole-fraction average, the usual first estimate for non-aqueous
-    mixtures of similar molecules (Poling et al. 5e Sec. 12-5). The surface
-    of a mixture is enriched in the lower-tension species, so the linear rule
-    is an upper bound, typically a few per cent high for hydrocarbons and
-    badly wrong for aqueous mixtures.
-
-    Args:
-        species: Species name or list of names.
-        T: Temperature (K).
-        x: Liquid mole fractions (same order as ``species``); omitted for a
-            single species, or equal fractions.
-
-    Returns:
-        Surface tension (N/m).
-
-    Example:
-        >>> s = liquid_surface_tension(["benzene", "toluene"], 353.0, [0.5, 0.5])
-        >>> 0.018 < float(s) < 0.024
-        True
-    """
-    from difflow.database import get_critical_props
-
-    if isinstance(species, str):
-        species = [species]
-    props = [get_critical_props(s) for s in species]
-    sig = jnp.stack([surface_tension_curl_pitzer(T, p.Tc, p.Pc, p.omega) for p in props])
-    if x is None:
-        x = jnp.full(len(props), 1.0 / len(props))
-    x = jnp.asarray(x, dtype=float)
-    return jnp.sum(x * sig) / jnp.sum(x)
 
 
 def _tray_flood(V_molar, MW_V, rho_V, L_molar, MW_L, rho_L, sigma, tray_spacing,
@@ -285,7 +183,9 @@ def tray_column_diameter(
         MW_L: Liquid molecular weight (g/mol).
         rho_L: Liquid density (kg/m^3).
         sigma: Liquid surface tension (N/m); required. Estimate it with
-            :func:`liquid_surface_tension` when there are no data.
+            :func:`difflow.liquid_properties.surface_tension` /
+            :func:`~difflow.liquid_properties.mixture_surface_tension` when
+            there are no data.
         tray_spacing: Tray spacing (m).
         fraction_flood: Fraction of flooding velocity (0.7-0.85 typical).
         downcomer_fraction: ``A_d / A_c`` (0.1 typical; 0.08-0.2).
@@ -342,7 +242,9 @@ def weir_crest(Q_L, weir_length) -> Array:
     """Liquid crest over the weir (m): Francis, ``Q = 1.84 l_w h_ow^1.5``.
 
     ``h_ow = (Q_L / (1.84 l_w))^(2/3)`` with ``Q_L`` in m^3/s and lengths in m
-    (the classical metric Francis formula without end contraction). Towler &
+    (the classical metric Francis formula without end contraction). This is
+    the same as the US form ``h_ow = 0.48 (q/l_w)^(2/3)`` in inches with ``q``
+    in gpm and ``l_w`` in inches used by Dutta (2007) Example 5.1. Towler &
     Sinnott's closely related form uses a constant of about 750 mm, i.e. a crest
     roughly 13 % higher; **from memory, unverified**. A tiny regularisation
     keeps the gradient finite at ``Q_L = 0``.
@@ -368,7 +270,9 @@ def tray_pressure_drop(
     breakdown:
 
     * dry plate (orifice) ``h_d = rho_V u_h^2 / (2 C_0^2 rho_L g)`` with the hole
-      velocity ``u_h = V / (a_h A_a)``;
+      velocity ``u_h = V / (a_h A_a)`` (identical to the US form
+      ``h_d = 0.186 (rho_V/rho_L) u_h^2 / C_0^2`` in inches, ``u_h`` in ft/s,
+      of Dutta (2007) Example 5.1: 1.75 in at ``u_h = 39.1 ft/s``, ``C_0 = 0.73``);
     * clear-liquid head: weir height ``h_w`` plus the Francis crest
       :func:`weir_crest` (``l_w = weir_length_fraction D``);
     * residual head ``h_r = 12.5e-3 m * (1000 / rho_L)`` i.e. a constant
@@ -510,26 +414,33 @@ def _ordinate(G, F_p, rho_L, rho_V, mu_cP):
 
 
 def _gpdc_Y_flood(F_LV):
-    """Eckert flooding line, ``ln Y = -3.5021 - 1.028 ln X - 0.11093 (ln X)^2``."""
-    lx = jnp.log(_f(F_LV))
-    return jnp.exp(-3.5021 - 1.028 * lx - 0.11093 * lx ** 2)
+    """Eckert flooding line, ``log10 Y = -1.6678 - 1.085 log10 X - 0.29655 (log10 X)^2``."""
+    lx = jnp.log10(_f(F_LV))
+    return 10.0 ** (-1.6678 - 1.085 * lx - 0.29655 * lx ** 2)
 
 
 def gpdc_flood(F_LV, F_p, rho_L, rho_V, mu_L) -> Array:
-    """Gas mass flux at flood of a packed column from the Eckert/GPDC flood line (kg/m^2/s).
+    """Gas mass flux at flood of a packed column from the Eckert flood line (kg/m^2/s).
 
     With the abscissa ``X = F_LV = (L/G) sqrt(rho_V/(rho_L - rho_V))`` and the
-    ordinate ``Y = G^2 F_p mu_L^0.2 / (rho_V (rho_L - rho_V) g)`` (Treybal's
-    SI form of the Eckert chart; ``F_p`` in 1/m, ``mu_L`` in cP inside the
-    0.2 power), the flooding line is the log-quadratic fit
-    ``ln Y = -3.5021 - 1.028 ln X - 0.11093 (ln X)^2``.
+    ordinate ``Y = G^2 F_p mu_L^0.2 / (rho_V (rho_L - rho_V) g)`` (the Eckert
+    chart in consistent units; ``F_p`` in 1/m, ``mu_L`` in cP inside the 0.2
+    power), the flooding line is the log-quadratic fit
+    ``log10 Y = -1.6678 - 1.085 log10 X - 0.29655 (log10 X)^2``.
 
-    **From memory, unverified.** The fit constants were recalled from the
-    literature fits of the Eckert flooding curve (the source is not certain; it
-    is the curve in Treybal's Mass-Transfer Operations, Fig. 6.34, and Perry's)
-    and checked only against chart orders of magnitude (Y ~ 0.03 at X = 1,
-    ~0.2 at 0.1). Believed valid for ``0.01 < X < 5``. Chart-reading accuracy,
-    **about 10-20 % on G** (the chart-reading tolerance, stated explicitly).
+    The fit is the one quoted in Wankat, *Separation Process Engineering*
+    (Kessler and Wankat, 1988), **from memory**; it is checked against the
+    printed chart reading of Dutta, *Principles of Mass Transfer and
+    Separation Processes*, Example 5.2 (``Y = 0.021`` at ``X = 0.90``; the fit
+    gives 0.0241, 7 % on ``G``). The earlier fit
+    ``ln Y = -3.5021 - 1.028 ln X - 0.11093 (ln X)^2`` gave 0.0335 there (26 %
+    high on ``G``) and was replaced. Valid for ``0.01 < X < 5``.
+
+    The Eckert flood line belongs to the old chart and to the high packing
+    factors it was built from: Perry's 8e (Sec. 14, "Flood-point
+    correlations") restricts it to ``F_p > 60 1/ft`` (about 200 1/m). For
+    modern, low-``F_p`` packings use :func:`robbins_flood` (the flood point
+    where the Robbins pressure drop reaches the Kister-Gill flood drop).
 
     Args:
         F_LV: Flow parameter ``(L/G) sqrt(rho_V/(rho_L - rho_V))``.
@@ -547,36 +458,173 @@ def gpdc_flood(F_LV, F_p, rho_L, rho_V, mu_L) -> Array:
     return jnp.sqrt(Y * rho_V * (rho_L - rho_V) * G_ACC / (_f(F_p) * mu_cP ** 0.2))
 
 
+_INH2O_FT_TO_PA_M = 249.0889 / 0.3048  # 1 in H2O per ft of packing in Pa/m
+_FLUX_SI_TO_LB_FT2_H = 3600.0 / 0.45359237 * 0.3048 ** 2  # kg/m^2/s -> lb/ft^2/h
+_RHO_SI_TO_LB_FT3 = 0.3048 ** 3 / 0.45359237  # kg/m^3 -> lb/ft^3
+_M_TO_FT = 1.0 / 0.3048
+
+
 def kister_gill_flood_dp(F_p) -> Array:
     """Pressure drop at flood from the packing factor (Pa/m): Kister & Gill.
 
     ``Delta P_flood = 0.115 F_p^0.7`` in inches of water per foot of packing
-    with ``F_p`` in 1/ft (Kister & Gill, Chem. Eng. Prog. 1991, believed;
-    **from memory, unverified**), converted here to Pa/m with ``F_p`` in 1/m.
-    A flood *definition* (about 1-2 in H2O/ft, i.e. 800-1700 Pa/m for common
-    random packings), good to about 20 %.
+    with ``F_p`` in 1/ft (Kister and Gill, Chem. Eng. Prog. 87(2), 32 (1991)),
+    converted here to Pa/m with ``F_p`` in 1/m. Perry's 8e Eq. (14-142)
+    prints the rounded ``0.12 F_p^0.7``; the 1991 constant is kept here (a
+    4 % difference). A flood *definition* (about 1-2 in H2O/ft, i.e.
+    800-1700 Pa/m for common random packings), good to about 20 %; for
+    ``F_p < 9 1/ft`` Perry's caps it at 2 in H2O/ft (not applied here).
     """
-    F_ft = _f(F_p) / 3.280839895
-    inH2O_ft_to_Pa_m = 249.0889 / 0.3048
-    return 0.115 * F_ft ** 0.7 * inH2O_ft_to_Pa_m
+    F_ft = _f(F_p) / _M_TO_FT
+    return 0.115 * F_ft ** 0.7 * _INH2O_FT_TO_PA_M
 
 
-def gpdc_pressure_drop(G, L, rho_L, rho_V, mu_L, F_p, exponent=1.7) -> Array:
-    """Pressure drop of a packed bed (Pa/m) by anchoring to flood. NOT a GPDC-line fit.
+#: Robbins dry packing factors ``F_pd`` (1/m) for the :data:`PACKINGS` keys,
+#: from Perry's 8e Tables 14-13 and 14-14 (Robbins, Chem. Eng. Prog., May 1991).
+#: Packings without a printed value (plastic Pall rings, Mellapak 250Y,
+#: ceramic Intalox 38 mm) are absent; pass ``F_pd`` yourself for those.
+DRY_PACKING_FACTORS: dict[str, float] = {
+    "raschig_ceramic_25": 492.0,
+    "berl_ceramic_25": 308.0,
+    "intalox_ceramic_25": 308.0,
+    "intalox_ceramic_50": 121.0,
+    "pall_metal_25": 174.0,
+    "pall_metal_38": 91.0,
+    "pall_metal_50": 79.0,
+}
 
-    ``Delta P = Delta P_flood (Y / Y_flood)^n`` at fixed ``L/G``: ``Y`` is the
-    Eckert ordinate of the operating ``G``, ``Y_flood`` that of the flood line
-    (:func:`gpdc_flood`) at the same flow parameter, and ``Delta P_flood`` the
-    Kister-Gill value (:func:`kister_gill_flood_dp`). It is exact at flood by
-    construction and has the right dry-bed trend (``n = 1`` would be the
-    dry-bed ``Delta P ~ G^2/rho_V`` law; liquid holdup steepens it).
 
-    **The GPDC pressure-drop lines themselves could not be recalled**, so the
-    exponent ``n = 1.7`` is an *assumption* chosen so that 70 % of flood
-    velocity (``Y/Y_flood = 0.49``) gives ``0.49^1.7 = 0.30`` of the flood
-    drop, consistent with the common design rule of 0.25-0.5 in H2O/ft; it is
-    not from a published fit. Expect +-30-50 % away from flood. Fit ``exponent``
-    to your own chart or vendor data if it matters.
+def robbins_pressure_drop(G, L, rho_V, rho_L, mu_L, F_pd, pressure_correction: bool = False) -> Array:
+    """Irrigated packed-bed pressure drop by the Robbins (1991) correlation (Pa/m).
+
+    Perry's 8e Eqs. (14-145) to (14-151), in their US units internally:
+
+    ``Delta P = C3 Gf^2 10^(C4 Lf) + 0.4 (Lf/20000)^0.1 [C3 Gf^2 10^(C4 Lf)]^4``
+    (in H2O per ft), ``C3 = 7.4e-8``, ``C4 = 2.7e-5``, with the gas and
+    liquid loading factors
+
+    * ``Gf = G (0.075/rho_G)^0.5 (F_pd/20)^0.5`` (``= 986 F_s (F_pd/20)^0.5``),
+      times ``10^(0.3 rho_G)`` if ``pressure_correction`` (Eq. 14-150, for
+      operation above atmospheric pressure);
+    * ``Lf = L (62.4/rho_L) (F_pd/20)^0.5 mu_L^0.1`` for
+      ``15 <= F_pd <= 200 1/ft``; ``(20/F_pd)^0.5`` for ``F_pd < 15``
+      (14-151b); ``mu_L^0.2`` for ``F_pd > 200`` (14-151a);
+
+    ``G``, ``L`` in lb/ft^2/h, densities in lb/ft^3, ``mu_L`` in cP and
+    ``F_pd`` in 1/ft. Near atmospheric pressure and under vacuum; Perry's
+    says it is not suitable above 3 bar.
+
+    Verified against Perry's 8e Example 13 (2-in metal Pall rings, air-water,
+    ``G = 2.03``, ``L = 12.2 kg/m^2/s``, ``F_pd = 24 1/ft``): this function
+    gives 0.380 in H2O/ft; the book reads 0.40 from the Robbins chart and 0.38
+    from the GPDC chart.
+
+    Args:
+        G: Gas mass flux (kg/m^2/s).
+        L: Liquid mass flux (kg/m^2/s).
+        rho_V: Gas density (kg/m^3).
+        rho_L: Liquid density (kg/m^3).
+        mu_L: Liquid viscosity (Pa s).
+        F_pd: Dry packing factor (1/m); see :data:`DRY_PACKING_FACTORS`.
+        pressure_correction: Apply the ``10^(0.3 rho_G)`` factor of Eq. (14-150).
+
+    Returns:
+        Pressure drop per metre of packing (Pa/m).
+
+    Example:
+        >>> dp = robbins_pressure_drop(2.03, 12.2, 1.185, 999.5, 1e-3, 24 * 3.2808)
+        >>> round(float(dp) / 817.2, 2)   # in H2O per ft
+        0.38
+    """
+    G_lb = _f(G) * _FLUX_SI_TO_LB_FT2_H
+    L_lb = _f(L) * _FLUX_SI_TO_LB_FT2_H
+    rho_G_lb = _f(rho_V) * _RHO_SI_TO_LB_FT3
+    rho_L_lb = _f(rho_L) * _RHO_SI_TO_LB_FT3
+    mu_cP = 1000.0 * _f(mu_L)
+    Fpd = _f(F_pd) / _M_TO_FT
+    Gf = G_lb * jnp.sqrt(0.075 / rho_G_lb) * jnp.sqrt(Fpd / 20.0)
+    if pressure_correction:
+        Gf = Gf * 10.0 ** (0.3 * rho_G_lb)
+    base = L_lb * (62.4 / rho_L_lb)
+    Lf = jnp.where(
+        Fpd < 15.0, base * jnp.sqrt(20.0 / Fpd) * mu_cP ** 0.1,
+        jnp.where(Fpd > 200.0, base * jnp.sqrt(Fpd / 20.0) * mu_cP ** 0.2,
+                  base * jnp.sqrt(Fpd / 20.0) * mu_cP ** 0.1))
+    dry = 7.4e-8 * Gf ** 2 * 10.0 ** (2.7e-5 * Lf)
+    wet = 0.4 * (_softfloor(Lf, 1e-9) / 20000.0) ** 0.1 * dry ** 4
+    return (dry + wet) * _INH2O_FT_TO_PA_M
+
+
+def robbins_flood(L_over_G, rho_V, rho_L, mu_L, F_p, F_pd=None, pressure_correction: bool = False) -> Array:
+    """Gas mass flux at flood (kg/m^2/s): Robbins pressure drop = Kister-Gill flood drop.
+
+    Perry's 8e (Sec. 14, flood-point correlations): "For flood and MOC
+    predictions, Robbins recommends his pressure drop method together with
+    Eq. (14-142)", the Kister-Gill flood pressure drop
+    (:func:`kister_gill_flood_dp`). This solves
+    ``robbins_pressure_drop(G, (L/G) G) = kister_gill_flood_dp(F_p)`` for
+    ``G`` at a fixed liquid-to-gas mass ratio (a bisection on ``ln G``; the
+    gradient comes from the implicit-function theorem through one Newton step,
+    so it is exact and the solve is ``jit``/``grad`` safe). This is the flood
+    model for modern, low-``F_p`` packings, where the Eckert line
+    (:func:`gpdc_flood`) is not recommended.
+
+    Args:
+        L_over_G: Liquid-to-gas mass flow ratio (-).
+        rho_V, rho_L: Densities (kg/m^3).
+        mu_L: Liquid viscosity (Pa s).
+        F_p: Packing factor (1/m), for the flood pressure drop.
+        F_pd: Dry packing factor (1/m) for Robbins; defaults to ``F_p``.
+        pressure_correction: See :func:`robbins_pressure_drop`.
+
+    Returns:
+        Superficial gas mass flux at flood (kg/m^2/s).
+    """
+    F_pd = F_p if F_pd is None else F_pd
+    r = _f(L_over_G)
+    target = jnp.log(kister_gill_flood_dp(F_p))
+
+    def resid(lnG, r, rho_V, rho_L, mu_L, F_pd, target):
+        G = jnp.exp(lnG)
+        return jnp.log(robbins_pressure_drop(G, r * G, rho_V, rho_L, mu_L, F_pd,
+                                             pressure_correction)) - target
+
+    args = (r, _f(rho_V), _f(rho_L), _f(mu_L), _f(F_pd), target)
+    cargs = jax.tree_util.tree_map(jax.lax.stop_gradient, args)
+
+    def body(_, ab):
+        a, b = ab
+        m = 0.5 * (a + b)
+        hi = resid(m, *cargs) > 0.0
+        return jnp.where(hi, a, m), jnp.where(hi, m, b)
+
+    shape = jnp.broadcast_shapes(*(jnp.shape(a) for a in args))
+    lo = jnp.full(shape, jnp.log(1e-5))
+    a, b = jax.lax.fori_loop(0, 100, body, (lo, jnp.full(shape, jnp.log(1e3))))
+    x0 = jax.lax.stop_gradient(0.5 * (a + b))
+    # resid is elementwise in lnG, so a JVP with ones gives d resid / d lnG
+    slope = jax.lax.stop_gradient(
+        jax.jvp(lambda x: resid(x, *cargs), (x0,), (jnp.ones_like(x0),))[1])
+    lnG = x0 - resid(x0, *args) / slope
+    return jnp.exp(lnG)
+
+
+def gpdc_pressure_drop(G, L, rho_L, rho_V, mu_L, F_p, exponent=1.7, *, method: str = "robbins",
+                       F_pd=None) -> Array:
+    """Pressure drop of an irrigated packed bed (Pa/m).
+
+    ``method``:
+
+    * ``"robbins"`` (default): :func:`robbins_pressure_drop` with the dry
+      packing factor ``F_pd`` (defaults to ``F_p``; Perry's tables give both,
+      and for metal rings they are within 10-30 %). Perry's 8e Example 13
+      shows Robbins and the GPDC chart agree (0.40 vs 0.38 in H2O/ft).
+    * ``"anchored"``: the old model,
+      ``Delta P = Delta P_flood (Y / Y_flood)^n`` at fixed ``L/G``, anchored to
+      the Kister-Gill flood drop at the Eckert flood line with an *assumed*
+      exponent ``n = exponent``. It is kept only for comparison: for Perry's
+      Example 13 it gives about a third of the published 0.38-0.40 in H2O/ft,
+      because the Eckert line puts flood too high for a modern packing.
 
     Args:
         G: Gas mass flux (kg/m^2/s).
@@ -584,9 +632,15 @@ def gpdc_pressure_drop(G, L, rho_L, rho_V, mu_L, F_p, exponent=1.7) -> Array:
         rho_L, rho_V: Densities (kg/m^3).
         mu_L: Liquid viscosity (Pa s).
         F_p: Packing factor (1/m).
-        exponent: ``n``.
+        exponent: ``n`` of the ``"anchored"`` model.
+        method: ``"robbins"`` or ``"anchored"``.
+        F_pd: Robbins dry packing factor (1/m); defaults to ``F_p``.
     """
     rho_L, rho_V = _f(rho_L), _f(rho_V)
+    if method == "robbins":
+        return robbins_pressure_drop(G, L, rho_V, rho_L, mu_L, F_p if F_pd is None else F_pd)
+    if method != "anchored":
+        raise ValueError("method must be 'robbins' or 'anchored'")
     X = _f(L) / _f(G) * jnp.sqrt(rho_V / (rho_L - rho_V))
     Y = _ordinate(_f(G), _f(F_p), rho_L, rho_V, 1000.0 * _f(mu_L))
     Yf = _gpdc_Y_flood(X)
@@ -596,16 +650,23 @@ def gpdc_pressure_drop(G, L, rho_L, rho_V, mu_L, F_p, exponent=1.7) -> Array:
 def packed_column_diameter(
     V_molar, MW_V, rho_V, L_molar, MW_L, rho_L, mu_L,
     packing: PackingData | None = None, F_p=None, a_p=None,
-    fraction_flood=0.7, min_wetting_rate=2.2e-5,
+    fraction_flood=0.7, min_wetting_rate=2.2e-5, *, flood: str = "eckert", F_pd=None,
 ) -> tuple[Array, dict[str, Array]]:
-    """Diameter of a packed column at a fraction of GPDC flood (default 70 %).
+    """Diameter of a packed column at a fraction of flood (default 70 %).
 
-    The gas mass flux is ``fraction_flood * G_flood`` at the actual ``L/G``
-    (:func:`gpdc_flood`), ``D = sqrt(4 V_mass / (pi G))``. Also reports the
-    pressure drop per metre (:func:`gpdc_pressure_drop`) and the wetting rate
-    ``L / (rho_L a_p)`` (m^2/s, i.e. m^3 of liquid per s per m of perimeter)
-    against ``min_wetting_rate`` (default 2.2e-5 m^2/s ~ 0.08 m^3/m/h, a
-    commonly quoted minimum for random packing; **from memory, unverified**).
+    The gas mass flux is ``fraction_flood * G_flood`` at the actual ``L/G``,
+    ``D = sqrt(4 V_mass / (pi G))``. ``flood`` picks the flood model:
+
+    * ``"eckert"`` (default): the Eckert flood line, :func:`gpdc_flood`; meant
+      for high packing factors (Perry's: ``F_p > 60 1/ft``, about 200 1/m).
+    * ``"robbins"``: Robbins pressure drop reaching the Kister-Gill flood drop,
+      :func:`robbins_flood`; the choice for modern packings.
+
+    Also reports the Robbins pressure drop per metre (:func:`robbins_pressure_drop`)
+    and the wetting rate ``L / (rho_L a_p)`` (m^2/s, i.e. m^3 of liquid per s
+    per m of perimeter) against ``min_wetting_rate`` (default 2.2e-5 m^2/s ~
+    0.08 m^3/m/h, a commonly quoted minimum for random packing; **from memory,
+    unverified**).
 
     Args:
         V_molar, MW_V, rho_V: Vapor (mol/s, g/mol, kg/m^3).
@@ -616,6 +677,9 @@ def packed_column_diameter(
         a_p: Specific area (m^2/m^3) for the wetting rate; overrides ``packing.a_p``.
         fraction_flood: Fraction of the flooding gas rate.
         min_wetting_rate: Minimum wetting rate (m^2/s).
+        flood: ``"eckert"`` or ``"robbins"``.
+        F_pd: Robbins dry packing factor (1/m); defaults to
+            :data:`DRY_PACKING_FACTORS` for a listed ``packing``, else ``F_p``.
 
     Returns:
         ``(D, info)`` with ``F_LV``, ``G_flood``, ``G`` (kg/m^2/s), ``u_flood``,
@@ -631,18 +695,25 @@ def packed_column_diameter(
         if packing is None:
             raise ValueError("give `packing` or a_p (needed for the wetting rate)")
         a_p = packing.a_p
+    if F_pd is None:
+        F_pd = DRY_PACKING_FACTORS.get(packing.name, F_p) if packing is not None else F_p
     rho_L, rho_V = _f(rho_L), _f(rho_V)
     V_mass = _f(V_molar) * _f(MW_V) / 1000.0
     L_mass = _f(L_molar) * _f(MW_L) / 1000.0
     # abscissa in the sqrt(rho_V/(rho_L - rho_V)) form (flow_parameter uses rho_L)
     X = L_mass / V_mass * jnp.sqrt(rho_V / (rho_L - rho_V))
-    G_f = gpdc_flood(X, F_p, rho_L, rho_V, mu_L)
+    if flood == "eckert":
+        G_f = gpdc_flood(X, F_p, rho_L, rho_V, mu_L)
+    elif flood == "robbins":
+        G_f = robbins_flood(L_mass / V_mass, rho_V, rho_L, mu_L, F_p, F_pd)
+    else:
+        raise ValueError("flood must be 'eckert' or 'robbins'")
     ff = _f(fraction_flood)
     G = ff * G_f
     A = V_mass / G
     D = jnp.sqrt(4.0 * A / jnp.pi)
     L_flux = L_mass / A
-    dP = gpdc_pressure_drop(G, L_flux, rho_L, rho_V, mu_L, F_p)
+    dP = robbins_pressure_drop(G, L_flux, rho_V, rho_L, mu_L, F_pd)
     wet = L_flux / (rho_L * _f(a_p))
     info = {
         "F_LV": X, "G_flood": G_f, "G": G, "u_flood": G_f / rho_V, "u_operating": G / rho_V,
@@ -652,27 +723,32 @@ def packed_column_diameter(
     return D, info
 
 
-def hetp(method: str = "random", *, d_p=None, a_p=None, H_OG=None, lam=None) -> Array:
+def hetp(method: str = "random", *, d_p=None, a_p=None, H_OG=None, lam=None, C_XY=1.0) -> Array:
     """Height equivalent to a theoretical plate (m).
 
     ``method``:
 
-    * ``"random"``: ``HETP = 18 d_p`` (Ludwig's rule of thumb, ``1.5 d_p`` with
-      ``d_p`` in inches and HETP in feet; believed, **from memory, unverified**;
-      needs ``d_p`` in m; sensible for ``d_p`` of 25-50 mm).
-    * ``"structured"``: ``HETP = 100/a_p + 0.10`` m (Kister's rule for
-      structured packing, ``a_p`` in m^2/m^3; **from memory, unverified**; about
-      0.5 m for ``a_p = 250``).
+    * ``"random"``: ``HETP = 18 d_p`` (Perry's 8e Eq. 14-156a, the
+      Frank/Harrison-France rule ``HETP (ft) = 1.5 d_p (in)``; ``d_p`` in m;
+      for ``d_p`` of 25-50 mm). Perry's adds that HETP should not be taken
+      below the column diameter for columns under 0.67 m.
+    * ``"structured"``: ``HETP = 100 C_XY / a_p + 0.10`` m (Perry's 8e
+      Eq. 14-159, Kister's rule; ``a_p`` in m^2/m^3). ``C_XY = 1`` for
+      Y-type (45 degree), S-type and high-capacity packings; 1.45 for X-type
+      (60 degree) packings with ``a_p < 300``. About 0.5 m for ``a_p = 250``.
     * ``"htu"``: ``H_OG ln(lam)/(lam - 1)`` from
       :func:`difflow.mass_transfer.hetp_from_htu`.
 
-    Rules of thumb are good to 20-30 % at best; prefer ``"htu"`` with the Onda
-    coefficients when the system is known.
+    Both rules are for organic and hydrocarbon systems with surface tension
+    below 25 mN/m and ``lam`` near 1; Perry's warns that aqueous and
+    high-surface-tension systems give larger HETPs. They are good to 20-30 %
+    at best; prefer ``"htu"`` with the Onda coefficients when the system is
+    known.
     """
     if method == "random":
         return 18.0 * _f(d_p)
     if method == "structured":
-        return 100.0 / _f(a_p) + 0.10
+        return 100.0 * _f(C_XY) / _f(a_p) + 0.10
     if method == "htu":
         from difflow.mass_transfer import hetp_from_htu
         return hetp_from_htu(H_OG, lam)

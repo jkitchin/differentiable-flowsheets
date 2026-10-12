@@ -305,3 +305,44 @@ class TestMixtures:
         rho_w, rho_m = (float(liquid_density(n, 300.0))
                         for n in ("water", "methanol"))
         assert rho_m < float(props["rho"]) < rho_w
+
+
+class TestSurfaceTension:
+    def test_water_iapws(self):
+        from difflow.liquid_properties import surface_tension
+        # IAPWS R1-76 table values: 75.65 mN/m at 0.01 C, 71.97 at 25 C, 58.91 at 100 C
+        assert float(surface_tension("water", 273.16)) == pytest.approx(75.65e-3, rel=2e-3)
+        assert float(surface_tension("water", 298.15)) == pytest.approx(71.97e-3, rel=2e-3)
+        assert float(surface_tension("water", 373.15)) == pytest.approx(58.91e-3, rel=2e-3)
+
+    def test_brock_bird_hand_calc_and_data(self):
+        import math
+        from difflow.database import get_critical_props, get_species_data
+        from difflow.liquid_properties import surface_tension
+        c = get_critical_props("toluene")
+        A, B, C = get_species_data("toluene").antoine_coeffs[:3]
+        Tb = B / (A - math.log10(101325)) - C
+        Pc, Tbr = c.Pc / 1e5, Tb / c.Tc
+        Q = 0.1196 * (1 + Tbr * math.log(Pc / 1.01325) / (1 - Tbr)) - 0.279
+        exp = 1e-3 * Pc ** (2 / 3) * c.Tc ** (1 / 3) * Q * (1 - 293.15 / c.Tc) ** (11 / 9)
+        assert float(surface_tension("toluene", 293.15)) == pytest.approx(exp, rel=1e-10)
+        # measured at 20 C (CRC Handbook, values from memory): within 5 %
+        for name, sig in (("benzene", 28.88e-3), ("toluene", 28.52e-3), ("n_hexane", 17.89e-3)):
+            assert float(surface_tension(name, 293.15)) == pytest.approx(sig, rel=0.05)
+
+    def test_alcohol_warns_and_mixture(self):
+        from difflow.liquid_properties import (
+            SurfaceTensionWarning, mixture_surface_tension, surface_tension)
+        with pytest.warns(SurfaceTensionWarning):
+            surface_tension("ethanol", 293.15)
+        s = mixture_surface_tension({"benzene": 0.4, "toluene": 0.6}, 360.0)
+        exp = 0.4 * surface_tension("benzene", 360.0) + 0.6 * surface_tension("toluene", 360.0)
+        assert float(s) == pytest.approx(float(exp), rel=1e-12)
+
+    def test_grads(self):
+        from difflow.liquid_properties import mixture_surface_tension, surface_tension
+        check_grads(lambda T: surface_tension("water", T) * 100, (330.0,), order=1,
+                    modes=["fwd", "rev"])
+        check_grads(lambda T, x: mixture_surface_tension({"benzene": x, "toluene": 1 - x}, T) * 100,
+                    (360.0, 0.4), order=1, modes=["rev"])
+        assert float(jax.grad(lambda T: surface_tension("benzene", T))(300.0)) < 0

@@ -963,3 +963,134 @@ def total_capital_investment_detailed(
         working_capital=working_capital,
         total_capital_investment=tci,
     )
+
+
+# =============================================================================
+# Installed piping cost per unit length (economic pipe diameter)
+# =============================================================================
+
+#: Diameter exponents of carbon-steel pipe cost per unit length:
+#: ``(n below 1 in, n above 1 in)``. Cost per length grows about as the first
+#: power of the diameter up to 1 in and as the 1.5 power above it -- the
+#: classical assumption behind the economic-pipe-diameter formulas of
+#: Genereaux (1937), Ind. Eng. Chem. 29, 385, and Peters, Timmerhaus and
+#: West, *Plant Design and Economics for Chemical Engineers*, 5e (2003),
+#: Ch. 12 (whose turbulent optimum ``D_opt ~ q^0.45 rho^0.13`` follows from
+#: ``n = 1.5``).
+PIPE_COST_EXPONENTS = (1.0, 1.5)
+
+#: The diameter (m) where the exponent changes, 1 in.
+PIPE_COST_BREAK_DIAMETER = 0.0254
+
+
+def _pipe_size_factor(D, n_small, n_large, D_break):
+    x = jnp.asarray(D, dtype=jnp.float64) / D_break
+    return jnp.where(x < 1.0, x**n_small, x**n_large)
+
+
+def pipe_cost_per_length(
+    D: Array | float,
+    C_ref: Array | float,
+    D_ref: Array | float,
+    base_year: int,
+    target_year: int = DEFAULT_CURRENT_YEAR,
+    exponents: tuple[float, float] = PIPE_COST_EXPONENTS,
+    D_break: float = PIPE_COST_BREAK_DIAMETER,
+) -> Array:
+    """Installed cost of carbon-steel pipe per metre as a function of diameter.
+
+    ``C(D) = C_ref g(D)/g(D_ref) x CEPCI(target)/CEPCI(base)`` with the
+    piecewise power law ``g(D) = (D/1 in)^n``, ``n = 1.0`` below 1 in and
+    ``1.5`` above (:data:`PIPE_COST_EXPONENTS`, Genereaux 1937; Peters,
+    Timmerhaus and West 5e Ch. 12). ``g`` is continuous at 1 in, and ``C`` is
+    differentiable in ``D`` (except at the 1-in break), so it can sit in an
+    economic-pipe-diameter objective next to the pumping cost.
+
+    **The cost level is an input.** ``C_ref`` is the installed cost per metre
+    (pipe, fittings share, supports, erection -- whatever your basis
+    includes) of one reference size in ``base_year`` dollars, from a vendor
+    quote, a company cost database or your textbook's table. difflow does
+    not bundle an absolute $/m figure because none could be verified against
+    its source; only the diameter scaling and the CEPCI escalation
+    (:func:`difflow.economics.escalate_cost`) are supplied here.
+
+    Args:
+        D: Inside diameter (m).
+        C_ref: Installed cost per metre ($/m, ``base_year`` dollars) at ``D_ref``.
+        D_ref: Reference inside diameter (m).
+        base_year: CEPCI year of ``C_ref``.
+        target_year: CEPCI year to escalate to.
+        exponents: ``(n below D_break, n above D_break)``.
+        D_break: Diameter where the exponent changes (m), default 1 in.
+
+    Returns:
+        Installed cost per metre ($/m, ``target_year`` dollars).
+
+    Example:
+        >>> # a quote of $150/m for 2-in pipe in 2019 -> 4-in pipe, same year
+        >>> c = pipe_cost_per_length(0.1023, 150.0, 0.0525, 2019, 2019)
+        >>> round(float(c / 150.0), 4)      # (102.3/52.5)^1.5
+        2.72
+    """
+    n_small, n_large = exponents
+    ratio = (_pipe_size_factor(D, n_small, n_large, D_break)
+             / _pipe_size_factor(D_ref, n_small, n_large, D_break))
+    return escalate_cost(jnp.asarray(C_ref, dtype=jnp.float64) * ratio, base_year, target_year)
+
+
+def pipe_cost_nps(
+    nps,
+    schedule="40",
+    *,
+    C_ref: float,
+    nps_ref,
+    base_year: int,
+    schedule_ref="40",
+    target_year: int = DEFAULT_CURRENT_YEAR,
+    length: Array | float = 1.0,
+    exponents: tuple[float, float] = PIPE_COST_EXPONENTS,
+) -> Array:
+    """Installed carbon-steel pipe cost for a nominal size and schedule.
+
+    The diameter dependence is :func:`pipe_cost_per_length` on the inside
+    diameters of ``nps`` and ``nps_ref`` in the reference schedule; the
+    schedule dependence is the ratio of metal mass per metre at the same
+    NPS, ``W(nps, schedule) / W(nps, schedule_ref)``
+    (:func:`difflow.fluids.pipe_weight_per_length`, the ASME B36.10M
+    plain-end weight). Scaling by metal mass is an approximation: it treats
+    the whole installed cost as proportional to the steel, while labour for
+    erection and welding grows more slowly with wall thickness, so a heavier
+    schedule is somewhat over-costed.
+
+    Args:
+        nps: Nominal pipe size (in), e.g. ``4`` or ``"1-1/2"``.
+        schedule: Schedule of the pipe being costed.
+        C_ref: Installed cost per metre ($/m, ``base_year`` dollars) of
+            ``nps_ref`` in ``schedule_ref``. User-supplied, see
+            :func:`pipe_cost_per_length`.
+        nps_ref: Nominal size of the reference cost.
+        base_year: CEPCI year of ``C_ref``.
+        schedule_ref: Schedule of the reference cost (default 40).
+        target_year: CEPCI year to escalate to.
+        length: Pipe length (m); the result is the cost of this length.
+        exponents: Diameter exponents (below, above 1 in).
+
+    Returns:
+        Installed cost ($, ``target_year`` dollars) of ``length`` metres.
+
+    Raises:
+        KeyError: A size/schedule pair not in ASME B36.10M (e.g. 22-in Sch 40).
+
+    Example:
+        >>> c40 = pipe_cost_nps(4, "40", C_ref=200.0, nps_ref=4, base_year=2019, target_year=2019)
+        >>> c80 = pipe_cost_nps(4, "80", C_ref=200.0, nps_ref=4, base_year=2019, target_year=2019)
+        >>> round(float(c40), 6), round(float(c80 / c40), 3)   # 4-in Sch 80 / Sch 40 steel mass
+        (200.0, 1.389)
+    """
+    from difflow.fluids import pipe_inside_diameter, pipe_weight_per_length
+
+    D = pipe_inside_diameter(nps, schedule_ref)
+    D_ref = pipe_inside_diameter(nps_ref, schedule_ref)
+    mass_ratio = pipe_weight_per_length(nps, schedule) / pipe_weight_per_length(nps, schedule_ref)
+    per_m = pipe_cost_per_length(D, C_ref, D_ref, base_year, target_year, exponents)
+    return per_m * mass_ratio * jnp.asarray(length, dtype=jnp.float64)

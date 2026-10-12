@@ -657,6 +657,58 @@ class GasPFRBedWarning(UserWarning):
     """``GasPFRParams.u_s0`` disagrees with the inlet stream's superficial velocity."""
 
 
+class GasPFRDensityWarning(GasPFRBedWarning):
+    """``GasPFRParams.rho_gas`` disagrees with the inlet stream's density.
+
+    A subclass of :class:`GasPFRBedWarning`, so a filter on the bed warning
+    also covers this one.
+    """
+
+
+#: Relative disagreement between a given ``rho_gas`` and the inlet stream's
+#: density above which :class:`GasPFRDensityWarning` is raised. Wider than the
+#: 1 % of ``u_s0``: the stream density is the ideal-gas one (or ``mass flow /
+#: volumetric_flow``), and a small compressibility correction in a user-given
+#: real-gas density should not warn. A larger one (Z far from 1) does, which
+#: is the cue to pass the matching ``volumetric_flow`` too.
+RHO_GAS_RTOL = 0.02
+
+
+def _stream_mass_flow(flows, p, thermo):
+    """Inlet mass flow (kg/s) from ``params.MW`` or ``thermo``; None if no molar mass is known."""
+    MW = p.MW
+    if MW is None:
+        species = getattr(thermo, "species", None)
+        if not species or any(s not in species for s in flows):
+            return None
+        MW = {s: species[s].MW for s in flows}
+    if isinstance(MW, dict):
+        if any(s not in MW for s in flows):
+            missing = sorted(s for s in flows if s not in MW)
+            raise ValueError(f"GasPFRParams.MW has no molar mass for {missing}")
+        return sum(flows[s] * MW[s] for s in flows) * 1e-3
+    return sum(flows.values()) * MW * 1e-3
+
+
+def _check_bed_density(p, rho_stream) -> None:
+    """Warn when a given ``rho_gas`` differs from the stream's by more than ``RHO_GAS_RTOL`` (concrete only)."""
+    if p.d_p is None or p.rho_gas is None or rho_stream is None:
+        return
+    try:
+        r_param = float(p.rho_gas)
+        r_stream = float(rho_stream)
+    except Exception:  # traced: no numeric check under jit/grad
+        return
+    if abs(r_param - r_stream) > RHO_GAS_RTOL * abs(r_stream):
+        warnings.warn(
+            f"GasPFRParams.rho_gas = {r_param:.4g} kg/m^3 but the inlet stream gives "
+            f"{r_stream:.4g} kg/m^3 (mass flow / Q0); the Ergun pressure drop uses rho_gas. "
+            "Leave rho_gas=None to take it from the stream.",
+            GasPFRDensityWarning,
+            stacklevel=3,
+        )
+
+
 def _check_bed_velocity(p, Q0) -> None:
     """Warn when a given ``u_s0`` differs from ``Q0 / bed_area`` by more than 1 % (concrete values only)."""
     if p.d_p is None or p.u_s0 is None:
@@ -703,7 +755,17 @@ class GasPFRParams(ParamsMixin):
              being supplied. Giving both alpha and d_p is an error.
         voidage: Bed void fraction (-).
         mu: Gas viscosity (Pa s).
-        rho_gas: Inlet gas density (kg/m^3).
+        rho_gas: Inlet gas density (kg/m^3). Optional: if None it is taken
+              from the inlet stream, ``mass flow / Q0`` (with the default
+              ideal-gas ``Q0`` this is ``P0 MW_mix / (R T0)``), which needs
+              the molar masses from ``MW`` or from the unit's ``thermo``. If
+              given and the molar masses are known, it is checked against the
+              stream and a ``GasPFRDensityWarning`` is raised when they differ
+              by more than 2 % (``RHO_GAS_RTOL``).
+        MW: Molar mass (g/mol): one number for every species, or
+            ``{species: MW}``. Optional; used only to derive or check
+            ``rho_gas``. If None, ``thermo.species[s].MW`` is used when the
+            unit has a thermo.
         u_s0: Inlet superficial velocity (m/s). Optional: if None it is
               taken from the inlet stream, ``Q0 / bed_area``. If given, it
               is checked against the stream and a ``GasPFRBedWarning`` is
@@ -731,16 +793,18 @@ class GasPFRParams(ParamsMixin):
     u_s0: float | Array | None = None
     bed_area: float | Array | None = None
     sphericity: float | Array = 1.0
+    MW: float | Array | dict | None = None
 
     def __post_init__(self):
         """Validate parameter consistency."""
-        bed = (self.d_p, self.voidage, self.mu, self.rho_gas, self.bed_area)
+        bed = (self.d_p, self.voidage, self.mu, self.bed_area)
         if self.d_p is not None:
             if self.alpha is not None:
                 raise ValueError("give either alpha or the physical bed parameters, not both")
             if any(b is None for b in bed):
                 raise ValueError(
-                    "physical bed path needs d_p, voidage, mu, rho_gas and bed_area"
+                    "physical bed path needs d_p, voidage, mu and bed_area "
+                    "(rho_gas too, unless it can come from the stream via MW or thermo)"
                 )
 
         n_species = len(self.species_order)
@@ -769,20 +833,35 @@ class GasPFRParams(ParamsMixin):
         """
         if self.d_p is not None and self.u_s0 is None:
             raise ValueError("u_s0 is None: the bed alpha depends on the inlet flow; use alpha_for(Q0)")
+        if self.d_p is not None and self.rho_gas is None:
+            raise ValueError(
+                "rho_gas is None: the bed alpha depends on the inlet density; use alpha_for(Q0, rho0)"
+            )
         return self.alpha_for(None)
 
-    def alpha_for(self, Q0):
+    def alpha_for(self, Q0, rho0=None):
         """Pressure-drop coefficient (Pa/m^3) for an inlet volumetric flow ``Q0`` (m^3/s).
 
         On the physical-bed path the superficial velocity is ``u_s0`` if given,
-        else ``Q0 / bed_area``. ``Q0`` is unused otherwise.
+        else ``Q0 / bed_area``, and the density is ``rho_gas`` if given, else
+        ``rho0`` (kg/m^3, the inlet stream's). ``Q0`` and ``rho0`` are unused
+        otherwise.
+
+        Raises:
+            ValueError: bed path with neither ``rho_gas`` nor ``rho0``.
         """
         if self.d_p is not None:
             from difflow.particles import ergun_alpha
 
             u_s = self.u_s0 if self.u_s0 is not None else Q0 / self.bed_area
+            rho = self.rho_gas if self.rho_gas is not None else rho0
+            if rho is None:
+                raise ValueError(
+                    "GasPFRParams.rho_gas is None and the inlet density is unknown: "
+                    "give rho_gas, MW, or a thermo with the species' molar masses"
+                )
             return ergun_alpha(
-                u_s, self.d_p, self.voidage, self.rho_gas, self.mu,
+                u_s, self.d_p, self.voidage, rho, self.mu,
                 self.bed_area, self.sphericity,
             )
         return self.alpha if self.alpha is not None else 0.0
@@ -837,6 +916,7 @@ class GasPFR:
         "u_s0": "m/s",
         "bed_area": "m^2",
         "sphericity": "-",
+        "MW": "g/mol",
         "rtol": "-",
         "atol": "-",
         "n_save_points": "-",
@@ -905,6 +985,12 @@ class GasPFR:
             volumetric_flow = F_total_0 * R * T0 / P0
         Q0 = jnp.asarray(volumetric_flow)
         _check_bed_velocity(p, Q0)
+        rho0 = None
+        if p.d_p is not None:
+            mass_flow = _stream_mass_flow(inlet_flows, p, self.thermo)
+            if mass_flow is not None:
+                rho0 = mass_flow / Q0
+            _check_bed_density(p, rho0)
 
         # Initial conditions
         F0 = jnp.array([inlet_flows[s] for s in p.species_order])
@@ -912,12 +998,12 @@ class GasPFR:
         if self.mode == "isothermal":
             T = jnp.asarray(T_spec) if T_spec is not None else T0
             F_out, P_out, profiles = self._integrate_isothermal_gas(
-                F0, T, P0, Q0, F_total_0
+                F0, T, P0, Q0, F_total_0, rho0
             )
             T_out = T
         else:
             F_out, T_out, P_out, profiles = self._integrate_adiabatic_gas(
-                F0, T0, P0, Q0, F_total_0
+                F0, T0, P0, Q0, F_total_0, rho0
             )
 
         # Build outlet stream
@@ -945,6 +1031,7 @@ class GasPFR:
         P0: Array,
         Q0: Array,
         F_total_0: Array,
+        rho0: Array | None = None,
     ) -> tuple[Array, Array, dict]:
         """Integrate material and momentum balances for isothermal gas-phase PFR.
 
@@ -965,7 +1052,7 @@ class GasPFR:
         species_order = p.species_order
         stoich = p.stoich
         rate_params = p.rate_params
-        alpha = p.alpha_for(Q0)
+        alpha = p.alpha_for(Q0, rho0)
         T0 = T  # For isothermal, T = T0
 
         def vector_field(V, state, args):
@@ -1044,6 +1131,7 @@ class GasPFR:
         P0: Array,
         Q0: Array,
         F_total_0: Array,
+        rho0: Array | None = None,
     ) -> tuple[Array, Array, Array, dict]:
         """Integrate material, energy, and momentum balances for adiabatic gas-phase PFR.
 
@@ -1066,7 +1154,7 @@ class GasPFR:
         stoich = p.stoich
         rate_params = p.rate_params
         dH_rxn = p.dH_rxn
-        alpha = p.alpha_for(Q0)
+        alpha = p.alpha_for(Q0, rho0)
         thermo = self.thermo
         n_species = len(species_order)
 

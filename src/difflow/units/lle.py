@@ -676,6 +676,14 @@ def _rigorous_cascade(model, F: Array, S: Array, T: Array, N: int, pair: tuple[i
     return R_out, E_out, {"converged": converged, "residual": res, "two_phase": two_phase}
 
 
+def _static_stage_count(n_stages) -> int:
+    """Integer number of stages for the profile tables (0 if ``n_stages`` is traced under jit)."""
+    try:
+        return int(n_stages)
+    except (jax.errors.ConcretizationTypeError, TypeError):
+        return 0
+
+
 @dataclass(repr=False)
 class CascadeParams(ParamsMixin):
     """Parameters for multi-stage cascade extractor.
@@ -683,7 +691,9 @@ class CascadeParams(ParamsMixin):
     Attributes:
         n_stages: Number of equilibrium stages (can be continuous for optimization)
         equilibrium: LLE equilibrium calculator
-        flow_config: 'counter_current' or 'co_current'
+        flow_config: ``'counter_current'`` (Kremser), ``'crossflow'`` (fresh
+            solvent split equally over the stages, ``(1 + E/N)^-N`` left) or
+            ``'co_current'``
         stage_efficiency: Murphree stage efficiency for co-current model (0-1).
                          Fraction of equilibrium achieved per stage. Default 0.8.
         model: ``"immiscible"`` (default; Kremser, immiscible solvents, constant phase
@@ -697,20 +707,27 @@ class CascadeParams(ParamsMixin):
     """
     n_stages: int | float | Array
     equilibrium: LLEEquilibrium
-    flow_config: Literal["counter_current", "co_current"] = "counter_current"
+    flow_config: Literal["counter_current", "crossflow", "co_current"] = "counter_current"
     stage_efficiency: float = 0.8
     model: Literal["immiscible", "rigorous"] = "immiscible"
 
     def __post_init__(self):
         if self.model not in ("immiscible", "rigorous"):
             raise ValueError(f"model must be 'immiscible' or 'rigorous', got {self.model!r}")
+        if self.flow_config not in ("counter_current", "crossflow", "co_current"):
+            raise ValueError("flow_config must be 'counter_current', 'crossflow' or 'co_current', "
+                             f"got {self.flow_config!r}")
 
 
 class MultistageCascade:
     """Multi-stage liquid-liquid extraction cascade.
 
     Models a series of mixer-settler stages or a tray column.
-    Supports both counter-current and co-current flow configurations.
+    Supports counter-current, crossflow (fresh solvent split equally over the
+    stages) and co-current flow configurations. The immiscible model works on
+    the solute-free (ratio) basis: ``K = Y/X`` with ``X`` = solute/aqueous
+    carrier and ``Y`` = solute/organic carrier, so ``E = K S/F`` uses carrier
+    flows; ``info["profiles"]`` holds ``X_n`` and ``Y_n`` on that basis.
 
     For optimization, n_stages can be treated as a continuous variable
     using stage efficiency interpolation.
@@ -718,7 +735,8 @@ class MultistageCascade:
 
     symbol = "LLE Cascade"
     equations = [
-        r"x_{i,n} = \frac{x_{i,0} - y_{i,N+1}/K_i}{1 + E\,S + \ldots} \qquad \text{(Kremser equation, analytical)}",
+        r"\frac{X_N - Y_{in}/K}{X_0 - Y_{in}/K} = \frac{E - 1}{E^{N+1} - 1},\ E = \frac{K S}{F} \qquad \text{(Kremser, counter-current)}",
+        r"\frac{X_N - Y_{in}/K}{X_0 - Y_{in}/K} = \left(1 + \frac{E}{N}\right)^{-N} \qquad \text{(crossflow, equal solvent split)}",
         r"\gamma_i^{R}x_i^{R}=\gamma_i^{E}x_i^{E},\ \ R_{n-1}+E_{n+1}=R_n+E_n \qquad \text{(rigorous model, every stage)}",
         r"E_i = \frac{y_i^\ast}{K_i\, x_i}\qquad \text{(extraction factor)}",
         r"\text{MB at stage } n:\ L x_{i,n-1} + S y_{i,n+1} = L x_{i,n} + S y_{i,n}",
@@ -737,7 +755,8 @@ class MultistageCascade:
     ]
     parameter_symbols = {"n_stages": "N", "stage_efficiency": r"\eta_M"}
     parameter_units = {"n_stages": "-", "stage_efficiency": "-"}
-    numerical_method = "Analytical Kremser for counter-current; stage-by-stage propagation for co-current."
+    numerical_method = ("Analytical Kremser for counter-current (solute in the entering solvent included); "
+                        "closed form (1 + E/N)^-N for crossflow; approach-to-equilibrium for co-current.")
 
     def __init__(self, params: CascadeParams):
         """Initialize cascade.
@@ -787,6 +806,10 @@ class MultistageCascade:
         # Solve stage-by-stage using Kremser equation (continuous n_stages)
         if p.flow_config == "counter_current":
             raffinate, extract, profiles = self._solve_counter_current(
+                feed_flows, solvent_flows, F_aq, F_org, T, n_stages
+            )
+        elif p.flow_config == "crossflow":
+            raffinate, extract, profiles = self._solve_crossflow(
                 feed_flows, solvent_flows, F_aq, F_org, T, n_stages
             )
         else:
@@ -904,32 +927,28 @@ class MultistageCascade:
         # Convert to arrays for vectorized computation
         K_arr = jnp.array([K_dict[s] for s in solutes])
 
-        # Extraction factors for all solutes
+        # Extraction factors for all solutes (ratio basis: K = Y/X with
+        # Y = solute/organic carrier, X = solute/aqueous carrier)
         E_arr = K_arr * F_org / F_aq
 
-        # Kremser equation with smooth handling of E ≈ 1 singularity
-        # For E != 1: fraction_remaining = (E - 1) / (E^(N+1) - 1)
-        # For E = 1: fraction_remaining = 1 / (N + 1)
-        #
-        # Use a fixed small offset to avoid the exact singularity.
-        # This introduces a tiny error (~1e-6) but gives smooth gradients everywhere.
-
-        # Add small fixed offset to ensure we're never exactly at E=1
+        # Kremser equation with solute in the entering solvent (Treybal;
+        # Wankat 4e Sec. 13.3; Geankoplis 5e Sec. 12.7):
+        #   (X_N - X*) / (X_0 - X*) = (E - 1) / (E^(N+1) - 1),  X* = Y_in / K
+        # The small fixed offset keeps the E = 1 limit, 1/(N+1), smooth.
         E_safe = E_arr + 1e-7
-
         E_Np1 = E_safe ** (n_stages + 1)
         delta_E = E_safe - 1.0
+        frac_remaining = jnp.clip(delta_E / (E_Np1 - 1.0), 0.0, 1.0)
 
-        # Now we can safely compute Kremser (no singularity)
-        frac_remaining = delta_E / (E_Np1 - 1.0)
+        X0 = safe_divide(F_in_arr, F_aq)
+        Y_in = safe_divide(F_solvent_arr, F_org)
+        X_star = Y_in / K_arr
+        X_N = X_star + (X0 - X_star) * frac_remaining
 
-        # Clamp to physical bounds [0, 1]
-        frac_remaining = jnp.clip(frac_remaining, 0.0, 1.0)
-
-        frac_extracted = 1.0 - frac_remaining
-
-        F_raffinate_arr = F_in_arr * frac_remaining
-        F_extracted_arr = F_in_arr * frac_extracted
+        F_raffinate_arr = X_N * F_aq
+        # Overall solute balance: what enters with feed AND solvent leaves
+        # in the raffinate or the extract.
+        F_extracted_arr = F_in_arr + F_solvent_arr - F_raffinate_arr
 
         # Convert back to dicts
         raffinate_flows = {eq.aqueous_carrier: F_aq}
@@ -957,32 +976,23 @@ class MultistageCascade:
                 'organic_to_aqueous': org_transferred,
             }
 
-        # Stage profiles: compute aqueous (x) and organic (y) mole fractions
-        # at each integer stage using the Kremser formula with n = 1, 2, ..., N_int.
-        # x_n = (F_in * frac_remaining_n) / F_aq  (aqueous concentration leaving stage n)
-        # y_n = K * x_n                             (equilibrium in organic leaving stage n)
-        # Feed-end mole fractions (stage 0, before any extraction):
-        x_feed_arr = safe_divide(F_in_arr, F_aq)
-        y_solvent_arr = safe_divide(
-            jnp.array([solvent_flows.get(s, 0.0) for s in solutes]), F_org
-        )
-
+        # Stage profiles on the solute-free (ratio) basis of the Kremser
+        # solution, at integer stages n = 0 .. N (stage 1 = feed end):
+        #   X_n = X* + (X_0 - X*) (E^(N+1-n) - 1) / (E^(N+1) - 1)
+        #   Y_n = K X_n  (extract leaving stage n, n >= 1)
+        # Entry 0 holds the inlets: x[0] = feed X_0, y[0] = solvent Y_in.
         profiles_x = {s: [] for s in solutes}
         profiles_y = {s: [] for s in solutes}
-
-        # Append the feed-end boundary (stage 0)
         for i, s in enumerate(solutes):
-            profiles_x[s].append(x_feed_arr[i])
-            profiles_y[s].append(y_solvent_arr[i])
+            profiles_x[s].append(X0[i])
+            profiles_y[s].append(Y_in[i])
 
-        # Append per-stage values for stages 1 .. N_int
-        N_int = int(n_stages)  # n_stages should be a static integer parameter
+        N_int = _static_stage_count(n_stages)
         for n in range(1, N_int + 1):
-            n_arr = jnp.asarray(float(n), dtype=jnp.float64)
-            E_n1 = E_safe ** (n_arr + 1.0)
-            frac_n = jnp.clip(delta_E / (E_n1 - 1.0), 0.0, 1.0)
-            x_n = safe_divide(F_in_arr * frac_n, F_aq)   # aqueous leaving stage n
-            y_n = K_arr * x_n                              # organic in equilibrium
+            num = E_safe ** (n_stages + 1.0 - n) - 1.0
+            frac_n = jnp.clip(num / (E_Np1 - 1.0), 0.0, 1.0)
+            x_n = X_star + (X0 - X_star) * frac_n
+            y_n = K_arr * x_n
             for i, s in enumerate(solutes):
                 profiles_x[s].append(x_n[i])
                 profiles_y[s].append(y_n[i])
@@ -994,6 +1004,85 @@ class MultistageCascade:
             "mutual_solubility_active": eq.mutual_solubility is not None,
         }
 
+        return raffinate_flows, extract_flows, profiles
+
+    def _solve_crossflow(
+        self,
+        feed_flows: dict,
+        solvent_flows: dict,
+        F_aq: Array,
+        F_org: Array,
+        T: Array,
+        n_stages: Array,
+    ) -> tuple[dict, dict, dict]:
+        """Crossflow (cross-current) cascade: fresh solvent split equally over N stages.
+
+        The raffinate passes through stages 1..N; each stage gets ``S/N`` of
+        fresh solvent and its own extract leaves. With immiscible carriers and
+        a constant ``K`` (ratio basis) each ideal stage gives
+        ``X_n - X* = (X_{n-1} - X*) / (1 + E/N)`` with ``E = K S / F`` and
+        ``X* = Y_in / K``, so
+
+            (X_N - X*) / (X_0 - X*) = (1 + E/N)^(-N),
+
+        smooth in ``N`` (Geankoplis 5e Sec. 12.7; Wankat 4e Sec. 13.2). The
+        extract stream returned is the combined extract of all stages.
+        """
+        eq = self.params.equilibrium
+        solutes = eq.solutes
+        F_in_arr = jnp.array([feed_flows.get(s, 0.0) for s in solutes])
+        F_solvent_arr = jnp.array([solvent_flows.get(s, 0.0) for s in solutes])
+        total_aq = F_aq + jnp.sum(F_in_arr)
+        total_org = F_org + jnp.sum(F_solvent_arr)
+        x_aq_est = {eq.aqueous_carrier: safe_divide(F_aq, total_aq)}
+        x_org_est = {eq.organic_carrier: safe_divide(F_org, total_org)}
+        for i, s in enumerate(solutes):
+            x_aq_est[s] = safe_divide(F_in_arr[i], total_aq)
+            x_org_est[s] = safe_divide(F_solvent_arr[i], total_org)
+        K_dict = eq.get_distribution_coefficients(x_aq_est, x_org_est, T)
+        K_arr = jnp.array([K_dict[s] for s in solutes])
+
+        E_arr = K_arr * F_org / F_aq
+        X0 = safe_divide(F_in_arr, F_aq)
+        Y_in = safe_divide(F_solvent_arr, F_org)
+        X_star = Y_in / K_arr
+        per_stage = 1.0 / (1.0 + E_arr / n_stages)
+        X_N = X_star + (X0 - X_star) * per_stage ** n_stages
+        F_raffinate_arr = X_N * F_aq
+        F_extracted_arr = F_in_arr + F_solvent_arr - F_raffinate_arr
+
+        raffinate_flows = {eq.aqueous_carrier: F_aq}
+        extract_flows = {eq.organic_carrier: F_org}
+        for i, s in enumerate(solutes):
+            raffinate_flows[s] = F_raffinate_arr[i]
+            extract_flows[s] = F_extracted_arr[i]
+        carrier_transfer = {}
+        if eq.mutual_solubility is not None:
+            ms = eq.mutual_solubility
+            aq_transferred = F_aq * ms.get('aqueous_in_organic', 0.0)
+            org_transferred = F_org * ms.get('organic_in_aqueous', 0.0)
+            raffinate_flows[eq.aqueous_carrier] = F_aq - aq_transferred
+            raffinate_flows[eq.organic_carrier] = org_transferred
+            extract_flows[eq.organic_carrier] = F_org - org_transferred
+            extract_flows[eq.aqueous_carrier] = aq_transferred
+            carrier_transfer = {'aqueous_to_organic': aq_transferred,
+                                'organic_to_aqueous': org_transferred}
+
+        # Profiles (ratio basis): x[n] raffinate leaving stage n, y[n] the
+        # extract leaving stage n (= K x[n]); entry 0 is the feed / fresh solvent.
+        profiles_x = {s: [X0[i]] for i, s in enumerate(solutes)}
+        profiles_y = {s: [Y_in[i]] for i, s in enumerate(solutes)}
+        for n in range(1, _static_stage_count(n_stages) + 1):
+            x_n = X_star + (X0 - X_star) * per_stage ** n
+            for i, s in enumerate(solutes):
+                profiles_x[s].append(x_n[i])
+                profiles_y[s].append(K_arr[i] * x_n[i])
+        profiles = {
+            "x": profiles_x,
+            "y": profiles_y,
+            "carrier_transfer": carrier_transfer,
+            "mutual_solubility_active": eq.mutual_solubility is not None,
+        }
         return raffinate_flows, extract_flows, profiles
 
     def _solve_co_current(
@@ -1097,7 +1186,7 @@ class MultistageCascade:
             profiles_x[s].append(x_feed_arr[i])
             profiles_y[s].append(y_solvent_arr[i])
 
-        N_int = int(n_stages)  # n_stages should be a static integer parameter
+        N_int = _static_stage_count(n_stages)
         for n in range(1, N_int + 1):
             n_arr = jnp.asarray(float(n), dtype=jnp.float64)
             eff_n = 1.0 - (1.0 - eff_per_stage) ** n_arr
@@ -1132,7 +1221,12 @@ class ContactorParams(ParamsMixin):
         n_segments: Number of discretization segments
         flow_config: 'counter_current' or 'co_current'
         mass_transfer_model: 'equilibrium' or 'rate_based'
-        Kla: Overall mass transfer coefficient * interfacial area (1/s)
+        Kla: Overall volumetric mass-transfer coefficient based on the
+             raffinate (aqueous) phase, K_x a / c (1/s); the rate per unit
+             volume is ``Kla * aqueous_molar_density * (X - Y/K)``.
+             Only used for rate_based model
+        aqueous_molar_density: Molar density of the aqueous phase (mol/m^3)
+             that turns ``Kla`` into a molar rate. Default 55500 (water).
              Only used for rate_based model
         HETP: Height equivalent to theoretical plate (m)
               Only used for equilibrium model
@@ -1145,6 +1239,7 @@ class ContactorParams(ParamsMixin):
     mass_transfer_model: Literal["equilibrium", "rate_based"] = "equilibrium"
     Kla: float | Array | dict[str, float] = 0.01  # 1/s, per solute or global
     HETP: float | Array = 0.5  # m
+    aqueous_molar_density: float | Array = 55500.0  # mol/m^3
 
 
 class DifferentialContactor:
@@ -1157,8 +1252,9 @@ class DifferentialContactor:
 
     symbol = "LLE Contactor"
     equations = [
-        r"\frac{dx_i}{dz} = -\frac{K_L a_i}{L/A}\,(x_i - x_i^\ast)\qquad \text{(rate-based)}",
-        r"\frac{dy_i}{dz} = +\frac{K_L a_i}{S/A}\,(x_i - x_i^\ast)",
+        r"F_{aq}\frac{dX_i}{dz} = -K_L a_i\,c_{aq} A\,(X_i - Y_i/K_i)\qquad \text{(rate-based)}",
+        r"F_{org}\frac{dY_i}{dz} = \mp K_L a_i\,c_{aq} A\,(X_i - Y_i/K_i)\quad\text{(counter / co-current)}",
+        r"H_{OR} = \frac{F_{aq}}{K_L a\,c_{aq} A},\qquad N_{OR} = \ell / H_{OR}",
         r"N_\mathrm{stages} = \frac{\ell}{\mathrm{HETP}}\qquad \text{(equilibrium model)}",
     ]
     assumptions = [
@@ -1182,8 +1278,11 @@ class DifferentialContactor:
         "n_segments": "-",
         "Kla": "1/s",
         "HETP": "m",
+        "aqueous_molar_density": "mol/m^3",
     }
-    numerical_method = "Axial discretization into n_segments with stage propagation."
+    numerical_method = ("Equilibrium model: length/HETP Kremser stages. Rate-based model: exact "
+                        "matrix-exponential solution of the linear transfer-unit ODEs, profiles "
+                        "sampled at n_segments + 1 points.")
 
     def __init__(self, params: ContactorParams):
         """Initialize contactor.
@@ -1264,43 +1363,74 @@ class DifferentialContactor:
         solvent: Stream,
         T: Array,
     ) -> tuple[Stream, Stream, dict]:
-        """Solve using rate-based mass transfer model.
+        """Solve the rate-based (transfer-unit) model exactly.
 
-        Uses discretized ODEs with mass transfer rate:
-        dF_i/dz = Kla * (c_i - c_i_eq) * A
+        On the solute-free (ratio) basis, ``X`` = solute / aqueous carrier and
+        ``Y`` = solute / organic carrier, the transfer rate per unit column
+        volume is ``Kla * c_aq * (X - Y/K)`` (``c_aq`` = ``aqueous_molar_density``),
+        so with ``alpha = Kla * c_aq * area`` (mol/(m s)):
+
+            F_aq  dX/dz = -alpha (X - Y/K)
+            F_org dY/dz = -alpha (X - Y/K)   (counter-current, organic flows -z)
+            F_org dY/dz = +alpha (X - Y/K)   (co-current)
+
+        With constant ``K`` the system is linear, so it is solved with a
+        matrix exponential (counter-current: the two-point boundary problem
+        ``X(0) = X_0``, ``Y(L) = Y_in``). The height of a raffinate-phase
+        overall transfer unit is ``H_OR = F_aq / alpha`` and ``N_OR = L / H_OR``
+        (Treybal, Mass Transfer Operations 3e, Ch. 10).
         """
         p = self.params
         eq = p.equilibrium
 
         feed_flows = get_flows(feed)
         solvent_flows = get_flows(solvent)
-
         F_aq = feed_flows[eq.aqueous_carrier]
         F_org = solvent_flows[eq.organic_carrier]
-
-        # Get K-values
         K_dict = eq.get_distribution_coefficients({}, {}, T)
-
         solutes = eq.solutes
-        n_solutes = len(solutes)
         n_seg = p.n_segments
-        dz = p.length / n_seg
 
-        # Initialize concentrations
-        # c_aq[z, s] = concentration in aqueous at position z
-        c_aq_init = {s: feed_flows.get(s, 0.0) / F_aq for s in solutes}
-        c_org_init = {s: solvent_flows.get(s, 0.0) / F_org for s in solutes}
-
-        if p.flow_config == "counter_current":
-            raffinate_flows, extract_flows, profiles = self._integrate_counter_current(
-                c_aq_init, c_org_init, F_aq, F_org, K_dict, T, dz, n_seg
-            )
+        X0 = jnp.array([feed_flows.get(s, 0.0) / F_aq for s in solutes])
+        Y_in = jnp.array([solvent_flows.get(s, 0.0) / F_org for s in solutes])
+        K_arr = jnp.array([K_dict[s] for s in solutes])
+        if isinstance(p.Kla, dict):
+            Kla_arr = jnp.array([p.Kla[s] for s in solutes])
         else:
-            raffinate_flows, extract_flows, profiles = self._integrate_co_current(
-                c_aq_init, c_org_init, F_aq, F_org, K_dict, T, dz, n_seg
-            )
+            Kla_arr = jnp.full(len(solutes), 1.0) * p.Kla
 
-        # Add carriers to output
+        alpha = Kla_arr * p.aqueous_molar_density * p.area
+        a = alpha / F_aq
+        b = alpha / F_org
+        counter = p.flow_config == "counter_current"
+        sgn = -1.0 if counter else 1.0
+        row0 = jnp.stack([-a, a / K_arr], axis=-1)
+        row1 = jnp.stack([sgn * b, -sgn * b / K_arr], axis=-1)
+        A_mats = jnp.stack([row0, row1], axis=1)  # (n_solutes, 2, 2)
+
+        from jax.scipy.linalg import expm
+
+        L = p.length
+        M = jax.vmap(lambda A: expm(A * L))(A_mats)
+        if counter:
+            Y0 = (Y_in - M[:, 1, 0] * X0) / M[:, 1, 1]
+        else:
+            Y0 = Y_in
+
+        z = jnp.linspace(0.0, 1.0, n_seg + 1) * L
+        Mz = jax.vmap(lambda zz: jax.vmap(lambda A: expm(A * zz))(A_mats))(z)
+        X_prof = Mz[:, :, 0, 0] * X0 + Mz[:, :, 0, 1] * Y0
+        Y_prof = Mz[:, :, 1, 0] * X0 + Mz[:, :, 1, 1] * Y0
+        X_L = M[:, 0, 0] * X0 + M[:, 0, 1] * Y0
+        Y_out = Y0 if counter else M[:, 1, 0] * X0 + M[:, 1, 1] * Y0
+
+        F_raff = X_L * F_aq
+        F_in = X0 * F_aq
+        F_sin = Y_in * F_org
+        F_ext = F_in + F_sin - F_raff  # exact for the linear model; closes the balance
+
+        raffinate_flows = {s: F_raff[i] for i, s in enumerate(solutes)}
+        extract_flows = {s: F_ext[i] for i, s in enumerate(solutes)}
         raffinate_flows[eq.aqueous_carrier] = F_aq
         extract_flows[eq.organic_carrier] = F_org
 
@@ -1308,214 +1438,22 @@ class DifferentialContactor:
         raffinate = make_stream(raffinate_flows, T, P)
         extract = make_stream(extract_flows, T, P)
 
+        HTU = F_aq / alpha
         info = {
             "length": p.length,
             "n_segments": n_seg,
-            "profiles": profiles,
+            "HTU_OR": {s: HTU[i] for i, s in enumerate(solutes)},
+            "NTU_OR": {s: L / HTU[i] for i, s in enumerate(solutes)},
+            "extraction_factor": {s: (K_arr * F_org / F_aq)[i] for i, s in enumerate(solutes)},
+            "Y_out": {s: Y_out[i] for i, s in enumerate(solutes)},
+            "profiles": {
+                "z": z,
+                "c_aq": {s: X_prof[:, i] for i, s in enumerate(solutes)},
+                "c_org": {s: Y_prof[:, i] for i, s in enumerate(solutes)},
+            },
             "T": T,
         }
-
         return raffinate, extract, info
-
-    def _integrate_counter_current(
-        self,
-        c_aq_init: dict,
-        c_org_init: dict,
-        F_aq: Array,
-        F_org: Array,
-        K_dict: dict,
-        T: Array,
-        dz: float,
-        n_seg: int,
-    ) -> tuple[dict, dict, dict]:
-        """Integrate rate equations for counter-current flow.
-
-        Aqueous enters at z=0, organic enters at z=L.
-
-        For constant K (linear system), solves the two-point BVP exactly
-        using matrix exponential. Each solute is independent.
-
-        System for each solute:
-            dc_aq/dz = -Kla * (K*c_aq - c_org) * area / F_aq
-            dc_org/dz = +Kla * (K*c_aq - c_org) * area / F_org
-
-        Boundary conditions:
-            c_aq(0) = c_aq_init (known)
-            c_org(L) = c_org_init (known)
-
-        Fully vectorized over solutes for JAX compatibility.
-        """
-        from jax.scipy.linalg import expm
-
-        p = self.params
-        eq = p.equilibrium
-        solutes = eq.solutes
-        n_solutes = len(solutes)
-        L = p.length
-
-        # Convert to arrays
-        K_arr = jnp.array([K_dict[s] for s in solutes])
-        if isinstance(p.Kla, dict):
-            Kla_arr = jnp.array([p.Kla[s] for s in solutes])
-        else:
-            Kla_arr = jnp.full(n_solutes, p.Kla)
-
-        c_aq_0 = jnp.array([c_aq_init[s] for s in solutes])
-        c_org_L = jnp.array([c_org_init[s] for s in solutes])
-
-        area = p.area
-
-        # Build system matrices for each solute
-        # For counter-current flow, organic flows in -z direction, so:
-        #   dc_aq/dz = -Kla*(K*c_aq - c_org)*area/F_aq  (aqueous loses to organic)
-        #   dc_org/dz = +Kla*(K*c_aq - c_org)*area/F_org  (organic: positive sign
-        #       because organic flows in -z direction; in a differential element,
-        #       c_org increases at lower z where the organic exits enriched)
-        #
-        # A = [[-a,  b],    where a = Kla*K*area/F_aq, b = Kla*area/F_aq
-        #      [ c, -d]]          c = Kla*K*area/F_org, d = Kla*area/F_org
-        alpha = Kla_arr * area
-        a = alpha * K_arr / F_aq  # shape (n_solutes,)
-        b = alpha / F_aq
-        c = alpha * K_arr / F_org
-        d = alpha / F_org
-
-        # Stack into matrices: shape (n_solutes, 2, 2)
-        # Build explicitly per-solute: A[i] = [[-a[i], b[i]], [c[i], -d[i]]]
-        # Use column_stack for each row, then stack rows along axis=1
-        row0 = jnp.stack([-a, b], axis=-1)   # (n_solutes, 2)
-        row1 = jnp.stack([c, -d], axis=-1)   # (n_solutes, 2)  [c, -d] for counter-current
-        A_matrices = jnp.stack([row0, row1], axis=1)  # (n_solutes, 2, 2)
-
-        # Compute matrix exponential at z=L for each solute
-        # M = expm(A * L), shape (n_solutes, 2, 2)
-        def compute_expm(A):
-            return expm(A * L)
-        M = jax.vmap(compute_expm)(A_matrices)
-
-        # Extract matrix elements
-        M00 = M[:, 0, 0]
-        M01 = M[:, 0, 1]
-        M10 = M[:, 1, 0]
-        M11 = M[:, 1, 1]
-
-        # Solve for c_org(0) using boundary conditions
-        # c_org(L) = M10 * c_aq(0) + M11 * c_org(0)
-        # c_org(0) = (c_org(L) - M10 * c_aq(0)) / M11
-        c_org_0 = safe_divide(c_org_L - M10 * c_aq_0, M11)
-
-        # Compute c_aq(L)
-        c_aq_L = M00 * c_aq_0 + M01 * c_org_0
-
-        # Compute profiles at each z position using lax.scan
-        z_positions = jnp.linspace(0, L, n_seg + 1)
-
-        def compute_profile_at_z(z):
-            """Compute concentrations at position z for all solutes."""
-            def expm_at_z(A):
-                return expm(A * z)
-            M_z = jax.vmap(expm_at_z)(A_matrices)
-            c_aq_z = M_z[:, 0, 0] * c_aq_0 + M_z[:, 0, 1] * c_org_0
-            c_org_z = M_z[:, 1, 0] * c_aq_0 + M_z[:, 1, 1] * c_org_0
-            return c_aq_z, c_org_z
-
-        # Vectorize over z positions
-        c_aq_profile, c_org_profile = jax.vmap(compute_profile_at_z)(z_positions)
-        # Shapes: (n_seg+1, n_solutes)
-
-        # Ensure non-negative with soft clipping for smooth gradients
-        # (should be automatic for physical systems, this is a safety net)
-        c_aq_profile = soft_clip_positive(c_aq_profile)
-        c_org_profile = soft_clip_positive(c_org_profile)
-
-        # Final concentrations
-        c_aq_final = c_aq_profile[-1]
-        c_org_final = c_org_profile[0]  # Organic exits at z=0
-
-        # Convert back to dicts
-        raffinate_flows = {s: c_aq_final[i] * F_aq for i, s in enumerate(solutes)}
-        extract_flows = {s: c_org_final[i] * F_org for i, s in enumerate(solutes)}
-
-        profiles = {
-            "z": z_positions,
-            "c_aq": {s: c_aq_profile[:, i] for i, s in enumerate(solutes)},
-            "c_org": {s: c_org_profile[:, i] for i, s in enumerate(solutes)},
-        }
-
-        return raffinate_flows, extract_flows, profiles
-
-    def _integrate_co_current(
-        self,
-        c_aq_init: dict,
-        c_org_init: dict,
-        F_aq: Array,
-        F_org: Array,
-        K_dict: dict,
-        T: Array,
-        dz: float,
-        n_seg: int,
-    ) -> tuple[dict, dict, dict]:
-        """Integrate rate equations for co-current flow.
-
-        Both phases enter at z=0 and exit at z=L.
-        Straightforward forward integration using lax.scan.
-
-        Fully vectorized over solutes for JAX compatibility.
-        """
-        p = self.params
-        eq = p.equilibrium
-        solutes = eq.solutes
-
-        # Convert to arrays for vectorized computation
-        K_arr = jnp.array([K_dict[s] for s in solutes])
-        if isinstance(p.Kla, dict):
-            Kla_arr = jnp.array([p.Kla[s] for s in solutes])
-        else:
-            Kla_arr = jnp.full(len(solutes), p.Kla)
-
-        c_aq_init_arr = jnp.array([c_aq_init[s] for s in solutes])
-        c_org_init_arr = jnp.array([c_org_init[s] for s in solutes])
-
-        area = p.area
-
-        def step(state, _):
-            """Single integration step (Euler method)."""
-            c_aq, c_org = state
-
-            # Equilibrium concentration in organic phase
-            c_eq = c_aq * K_arr
-
-            # Mass transfer rate (vectorized over solutes)
-            rate = Kla_arr * (c_eq - c_org) * area * dz
-
-            # Update concentrations with soft clipping for smooth gradients
-            c_aq_new = soft_clip_positive(c_aq - rate / F_aq)
-            c_org_new = soft_clip_positive(c_org + rate / F_org)
-
-            return (c_aq_new, c_org_new), (c_aq_new, c_org_new)
-
-        # Run integration with lax.scan
-        init_state = (c_aq_init_arr, c_org_init_arr)
-        (c_aq_final, c_org_final), (c_aq_history, c_org_history) = lax.scan(
-            step, init_state, None, length=n_seg
-        )
-
-        # Build profiles (prepend initial values)
-        # c_aq_history has shape (n_seg, n_solutes)
-        c_aq_full = jnp.concatenate([c_aq_init_arr[None, :], c_aq_history], axis=0)
-        c_org_full = jnp.concatenate([c_org_init_arr[None, :], c_org_history], axis=0)
-
-        # Convert back to dicts
-        raffinate_flows = {s: c_aq_final[i] * F_aq for i, s in enumerate(solutes)}
-        extract_flows = {s: c_org_final[i] * F_org for i, s in enumerate(solutes)}
-
-        profiles = {
-            "z": jnp.linspace(0, p.length, n_seg + 1),
-            "c_aq": {s: c_aq_full[:, i] for i, s in enumerate(solutes)},
-            "c_org": {s: c_org_full[:, i] for i, s in enumerate(solutes)},
-        }
-
-        return raffinate_flows, extract_flows, profiles
 
 
 # =============================================================================
@@ -1535,15 +1473,21 @@ def separation_factor(K1: Array, K2: Array) -> Array:
 def minimum_solvent_ratio(K: Array, recovery: float = 0.99) -> Array:
     """Calculate minimum solvent-to-feed ratio for desired recovery.
 
-    For counter-current extraction with infinite stages:
+    For counter-current extraction with immiscible carriers, a solute-free
+    solvent and infinite stages, the pinch is at the feed end:
     (S/F)_min = recovery / K
 
+    ``K`` must be on the same basis as the flows: with ``K = Y/X`` on the
+    solute-free (ratio) basis, ``S`` and ``F`` are the organic and aqueous
+    *carrier* flows (the basis of :class:`MultistageCascade`). A tabulated
+    concentration-basis ``K_c`` (mol/L over mol/L) goes with volumetric flows.
+
     Args:
-        K: Distribution coefficient
+        K: Distribution coefficient (organic over aqueous)
         recovery: Desired fraction of solute recovered
 
     Returns:
-        Minimum molar solvent-to-feed ratio
+        Minimum solvent-to-feed (carrier) ratio
     """
     return recovery / K
 
@@ -1558,8 +1502,10 @@ def stages_for_recovery(
     Using Kremser equation for counter-current extraction.
 
     Convention: K = C_extract / C_raffinate (K > 1 favors organic phase).
-    Extraction factor E = K * (S/F) where S/F is the solvent-to-feed
-    molar flow ratio.
+    Extraction factor E = K * (S/F), with ``S/F`` on the same basis as ``K``
+    (ratio-basis ``K`` with carrier flows, as in :class:`MultistageCascade`;
+    concentration-basis ``K`` with volumetric flows). Solute-free solvent.
+    The result is real (continuous); round it up for a design.
 
     Args:
         K: Distribution coefficient (C_org / C_aq)

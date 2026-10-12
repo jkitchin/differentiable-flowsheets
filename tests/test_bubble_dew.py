@@ -98,10 +98,11 @@ class TestEOSBubbleDew:
         Pb = float(eos_bubble_P(eos, z, 277.6)["P"])
         V_below, _, _ = flash_TP_eos(eos, z, 277.6, 0.97 * Pb)
         assert 0.0 < float(V_below) < 0.1
-        # Above it the feed is one (liquid) phase. (flash_TP_eos labels this
-        # single-root liquid V = 1, so test the stability verdict instead.)
-        two_phase, _ = _phase_stability(eos, z, 277.6, 1.03 * Pb)
-        assert not bool(two_phase)
+        # Above it the feed is one (liquid) phase.
+        two_phase, is_vapor = _phase_stability(eos, z, 277.6, 1.03 * Pb)
+        assert not bool(two_phase) and not bool(is_vapor)
+        V_above, x, y = flash_TP_eos(eos, z, 277.6, 1.03 * Pb)
+        assert float(V_above) == 0.0
 
     @pytest.mark.slow
     def test_dew_P_brackets_the_tp_flash(self):
@@ -162,6 +163,26 @@ class TestEOSBubbleDew:
         two_lo, _ = _phase_stability(eos, jnp.array([0.3, 0.7]), 300.0, 0.99 * r["P"])
         two_hi, _ = _phase_stability(eos, jnp.array([0.3, 0.7]), 300.0, 1.01 * r["P"])
         assert bool(two_lo) and not bool(two_hi)
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("x1, T, P_ref", [
+        (0.90, 205.0, 55.58e5), (0.95, 200.0, 52.54e5)])
+    def test_near_cricondenbar_bubble_P_by_continuation(self, x1, T, P_ref):
+        # Methane-rich liquids near the cricondenbar: every Wilson start
+        # failed (unconverged, ~15 bar). The continuation in T from 0.75 T
+        # finds the point; P_ref is that root, and the stability test
+        # brackets it.
+        eos = _c1c3()
+        x = jnp.array([x1, 1 - x1])
+        r = eos_bubble_P(eos, x, T)
+        assert bool(r["converged"]) and not bool(r["trivial"])
+        assert float(r["P"]) == pytest.approx(P_ref, rel=1e-3)
+        two_lo, _ = _phase_stability(eos, x, T, 0.995 * r["P"])
+        two_hi, _ = _phase_stability(eos, x, T, 1.005 * r["P"])
+        assert bool(two_lo) and not bool(two_hi)
+        # The root carries implicit derivatives: dP/dT > 0.
+        g = jax.grad(lambda T_: eos_bubble_P(eos, x, T_)["P"])(T)
+        assert np.isfinite(float(g)) and float(g) > 0
 
     @pytest.mark.slow
     def test_near_critical_bubble_T_heavy_liquid(self):
@@ -432,3 +453,44 @@ def test_pure_component_is_not_flagged_trivial():
     assert float(r["P"]) == pytest.approx(float(d["P"]), rel=1e-8)
     assert float(t["T"]) == pytest.approx(300.0, abs=1e-6)
     assert 9.5e5 < float(r["P"]) < 1.05e6   # NIST propane Psat(300 K) = 9.97 bar
+
+
+class TestSingleRootPhaseLabel:
+    """One cubic root: the phase comes from the PIP, not the largest root (issue 442)."""
+
+    @pytest.mark.parametrize("P_bar", [34.0, 36.0, 50.0, 100.0])
+    def test_single_root_compressed_liquid_is_liquid(self, P_bar):
+        # Above the bubble point the cubic has one root; it used to be labelled
+        # vapour because "largest root" and "smallest root" coincide.
+        eos = _c1c3()
+        z = jnp.array([0.2, 0.8])
+        Zv = eos.solve_Z(277.6, P_bar * 1e5, z, "vapor")
+        Zl = eos.solve_Z(277.6, P_bar * 1e5, z, "liquid")
+        assert float(Zv) == pytest.approx(float(Zl))  # one root
+        V, _, _ = flash_TP_eos(eos, z, 277.6, P_bar * 1e5)
+        assert float(V) == 0.0
+
+    def test_single_root_gas_is_vapour(self):
+        # Methane well above its critical temperature: one root, a gas.
+        eos = _c1c3()
+        z = jnp.array([0.999, 0.001])
+        for P in (1e5, 50e5, 100e5):
+            V, _, _ = flash_TP_eos(eos, z, 300.0, P)
+            assert float(V) == 1.0
+
+    def test_phase_identification_parameter(self):
+        from difflow import phase_identification_parameter, eos_pressure_TV
+        eos = _c1c3()
+        # A subcooled liquid is PIP > 1, a dilute gas PIP < 1.
+        assert float(phase_identification_parameter(
+            eos, 250.0, 20e5, jnp.array([0.0, 1.0]))) > 1.0
+        assert float(phase_identification_parameter(
+            eos, 300.0, 1e5, jnp.array([1.0, 0.0]))) < 1.0
+        # Two roots: the liquid root is liquid-like, the vapour root vapour-like.
+        z = jnp.array([0.2, 0.8])
+        assert float(phase_identification_parameter(eos, 277.6, 20e5, z, phase="liquid")) > 1
+        assert float(phase_identification_parameter(eos, 277.6, 20e5, z, phase="vapor")) < 1
+        # eos_pressure_TV inverts solve_Z.
+        Z = eos.solve_Z(277.6, 20e5, z, "liquid")
+        v = Z * 8.314462618 * 277.6 / 20e5
+        assert float(eos_pressure_TV(eos, 277.6, v, z)) == pytest.approx(20e5, rel=1e-6)

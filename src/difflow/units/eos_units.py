@@ -33,6 +33,8 @@ Units
   isentropic-efficiency enthalpy correction; extracts shaft work.
 - :class:`Compressor` -- isentropic compression to ``P_out`` with an
   isentropic-efficiency correction; consumes shaft work.
+- :class:`MultistageCompressor` -- intercooled stages of :class:`Compressor`
+  with intercooler pressure drops and the equal-ratio stage split.
 - :class:`JTValve` -- isenthalpic pressure letdown on the EOS enthalpy (a real
   Joule-Thomson valve).
 - :class:`ComponentSeparator` -- fixed per-component recoveries to a product
@@ -184,8 +186,10 @@ def _flash_spec(
         t = _phase_terms(thermo, flows_c, T, P_c)
         return _two_phase_value(t, t["V"], kind) - target_c
 
-    r_lo = r(jnp.asarray(lo))
-    r_hi = r(jnp.asarray(hi))
+    # Both bracket ends in one batched evaluation (one traced copy of the
+    # flash instead of two: compile time, not run time, dominates this unit).
+    r_ends = jax.vmap(r)(jnp.asarray([lo, hi]))
+    r_lo, r_hi = r_ends[0], r_ends[1]
     bracketed = (r_lo <= 0.0) & (r_hi >= 0.0)
 
     def body(_, ab):
@@ -197,14 +201,9 @@ def _flash_spec(
     a, b = jax.lax.fori_loop(0, n_bisect, body, (jnp.asarray(lo), jnp.asarray(hi)))
     T_s = jnp.where(r_lo > 0.0, lo, jnp.where(r_hi < 0.0, hi, 0.5 * (a + b)))
 
-    # Is there a jump at T_s (latent heat not spanned by the TP flash)?
-    t_s = _phase_terms(thermo, flows_c, T_s, P_c)
-    res_s = _two_phase_value(t_s, t_s["V"], kind) - target_c
-    scale = jnp.abs(target_c) + t_s["F"] * 8.314462618 * T_s
-    jump = bracketed & (jnp.abs(res_s) > SPEC_FLASH_TOL * scale)
-
     # Implicit-function derivative: T_s carries no gradient; add one through
-    # the residual that defines T (balance, or saturation at a jump).
+    # the residual that defines T (balance, or saturation at a jump). One
+    # forward-mode pass gives the residual and its slope together.
     def g_balance(T):
         t = _phase_terms(thermo, flows, T, P)
         return _two_phase_value(t, t["V"], kind) - target
@@ -215,13 +214,19 @@ def _flash_spec(
         return _sat_residual(thermo, z, T, P)
 
     def attach(g):
-        val = g(T_s)
-        dgdT = sg(jax.grad(g)(T_s))
+        val, dgdT = jax.jvp(g, (T_s,), (jnp.ones_like(T_s),))
+        dgdT = sg(dgdT)
         dgdT = jnp.where(jnp.abs(dgdT) > 0.0, dgdT, 1.0)
-        return T_s - (val - sg(val)) / dgdT
+        return T_s - (val - sg(val)) / dgdT, val
 
-    T_bal = attach(g_balance)
-    T_sat = attach(g_sat)
+    T_bal, res_s = attach(g_balance)
+    T_sat, _ = attach(g_sat)
+
+    # Is there a jump at T_s (latent heat not spanned by the TP flash)? The
+    # balance residual at T_s says so.
+    F_s = sg(sum(jnp.asarray(v) for v in flows.values()))
+    scale = jnp.abs(target_c) + F_s * 8.314462618 * T_s
+    jump = bracketed & (jnp.abs(sg(res_s)) > SPEC_FLASH_TOL * scale)
     T = jnp.where(jump, T_sat, T_bal)
     T = jnp.where(bracketed, T, T_s)
 
@@ -351,8 +356,9 @@ def _warn_unconverged(unit: str, info: dict) -> None:
 
 @partial(jax.jit, static_argnames=("thermo", "bounds", "expander"))
 def _isentropic_core(thermo, flows, T_in, P_in, P_out, eta, bounds, expander):
-    S_in = thermo.stream_entropy_flash(flows, T_in, P_in)
-    H_in = thermo.stream_enthalpy_flash(flows, T_in, P_in)
+    t_in = _phase_terms(thermo, flows, T_in, P_in)
+    S_in = _two_phase_value(t_in, t_in["V"], "S")
+    H_in = _two_phase_value(t_in, t_in["V"], "H")
     isen = _flash_spec(thermo, flows, P_out, S_in, "S", bounds)
     H_isen = isen["H"]
     if expander:
@@ -378,7 +384,8 @@ def _isentropic_core(thermo, flows, T_in, P_in, P_out, eta, bounds, expander):
 
 @partial(jax.jit, static_argnames=("thermo", "bounds"))
 def _jtvalve_core(thermo, flows, T_in, P_in, P_out, bounds):
-    H_in = thermo.stream_enthalpy_flash(flows, T_in, P_in)
+    t_in = _phase_terms(thermo, flows, T_in, P_in)
+    H_in = _two_phase_value(t_in, t_in["V"], "H")
     out = _flash_spec(thermo, flows, P_out, H_in, "H", bounds)
     return {
         "T_out": out["T"],
@@ -531,6 +538,163 @@ class Compressor:
         )
         _warn_unconverged("Compressor", info)
         return make_stream(flows, info["T_out"], P_out), info
+
+
+# =============================================================================
+# Multistage compressor (intercooled train on the EOS compressor)
+# =============================================================================
+@partial(jax.jit, static_argnames=("thermo",))
+def _cooler_core(thermo, flows, T_out, P_out, H_in):
+    t = _phase_terms(thermo, flows, T_out, P_out)
+    H_out = _two_phase_value(t, t["V"], "H")
+    return {"Q": H_out - H_in, "H_out": H_out, "vapor_fraction": t["V"]}
+
+
+@dataclass
+class MultistageCompressorParams(ParamsMixin):
+    """Parameters for :class:`MultistageCompressor`.
+
+    Attributes:
+        P_out: Final discharge pressure (Pa).
+        n_stages: Number of compression stages.
+        eta_isentropic: Isentropic efficiency of every stage, in (0, 1].
+        T_intercool: Gas temperature leaving each intercooler (K).
+        intercooler_dP: Pressure drop of each intercooler (Pa).
+        aftercool: Also cool the last stage's discharge to ``T_intercool``
+            (through an aftercooler with the same pressure drop).
+        discharge_pressures: Stage discharge pressures (Pa), one per stage,
+            instead of the equal-ratio split; the last is the train outlet
+            before any aftercooler, and ``P_out`` is then not used.
+        T_bounds: (T_min, T_max) window for the internal temperature solves (K).
+    """
+
+    P_out: float
+    n_stages: int = 2
+    eta_isentropic: float = 0.75
+    T_intercool: float = 313.15
+    intercooler_dP: float = 0.0
+    aftercool: bool = False
+    discharge_pressures: tuple | None = None
+    T_bounds: tuple[float, float] = DEFAULT_T_BOUNDS
+
+
+class MultistageCompressor:
+    """Intercooled multistage compressor on the cubic-EOS compressor.
+
+    ``n_stages`` :class:`Compressor` stages in series, each an isentropic
+    compression corrected by ``eta_isentropic`` on the two-phase EOS enthalpy
+    and entropy, with an intercooler after every stage but the last that
+    returns the gas to ``T_intercool`` and loses ``intercooler_dP``. The
+    stage pressures follow :func:`difflow.compressible.stage_pressures`
+    (equal ratios, the intercooler loss made up by a higher ratio) unless
+    ``discharge_pressures`` sets them; the total work is differentiable in
+    those pressures, so the true optimum of a real gas can be found by
+    gradient descent from the equal-ratio split.
+
+    Each intercooler's outlet is flashed: ``info["intercooler_vapor_fraction"]``
+    below 1 means liquid condenses there (wet gas). The liquid is not knocked
+    out; it stays in the stream to the next stage, and a concrete run warns.
+
+    Info keys: ``W`` (total shaft work, W), ``Q`` (total intercooler and
+    aftercooler duty, W, negative = heat removed), ``stage_W``,
+    ``stage_T_out``, ``suction_pressures``, ``discharge_pressures``,
+    ``intercooler_Q``, ``intercooler_vapor_fraction`` (arrays),
+    ``pressure_ratio`` (per stage), ``converged``.
+
+    Example:
+        >>> train = MultistageCompressor(MultistageCompressorParams(
+        ...     P_out=30e5, n_stages=3, intercooler_dP=0.2e5), thermo)
+        >>> out, info = train(make_stream({"methane": 1.0}, T=313.15, P=1e5))
+    """
+
+    symbol = "MSC"
+    equations = [
+        r"P_{d,k} = r\,P_{s,k},\quad P_{s,k+1} = P_{d,k} - \Delta P_{ic},\quad P_{d,N} = P_\mathrm{out}",
+        r"H_{\mathrm{out},k} = H_{\mathrm{in},k} + \frac{H_{\mathrm{isen},k} - H_{\mathrm{in},k}}{\eta}",
+        r"\dot{W} = \sum_k (H_{\mathrm{out},k} - H_{\mathrm{in},k})",
+    ]
+    assumptions = [
+        "Adiabatic stages with one isentropic efficiency; real-fluid properties from the cubic EOS.",
+        "Intercoolers return the gas to a fixed temperature with a fixed pressure drop.",
+        "Condensate formed in an intercooler is not removed.",
+    ]
+    references = [
+        "McCabe, Smith & Harriott, Unit Operations of Chemical Engineering, 7e, Ch. 8.",
+        "Smith, Van Ness, Abbott. Introduction to Chemical Engineering Thermodynamics, 7e, Ch. 7.",
+    ]
+    parameter_units = {"P_out": "Pa", "n_stages": "-", "eta_isentropic": "-",
+                       "T_intercool": "K", "intercooler_dP": "Pa",
+                       "discharge_pressures": "Pa", "T_bounds": "K"}
+
+    def __init__(self, params: MultistageCompressorParams, thermo: CubicThermo):
+        self.params = params
+        self.thermo = thermo
+
+    def _pressures(self, P_in):
+        from difflow.compressible import stage_pressures
+
+        p = self.params
+        dP = jnp.asarray(p.intercooler_dP, dtype=float)
+        if p.discharge_pressures is None:
+            return stage_pressures(P_in, p.P_out, int(p.n_stages), dP)
+        Pd = jnp.stack([jnp.asarray(v, dtype=float) for v in p.discharge_pressures])
+        Ps = jnp.concatenate([jnp.atleast_1d(jnp.asarray(P_in, dtype=float)), Pd[:-1] - dP])
+        return Ps, Pd
+
+    def __call__(self, inlet: Stream) -> tuple[Stream, dict]:
+        p = self.params
+        thermo = self.thermo
+        flows = _flow_dict(inlet, thermo.species_order)
+        Ps, Pd = self._pressures(inlet["P"])
+        n = Pd.shape[0]
+        eta = jnp.asarray(p.eta_isentropic, dtype=float)
+        T_ic = jnp.asarray(p.T_intercool, dtype=float)
+        dP = jnp.asarray(p.intercooler_dP, dtype=float)
+        bounds = tuple(p.T_bounds)
+
+        T = jnp.asarray(inlet["T"], dtype=float)
+        W, T_out, Q, V_ic = [], [], [], []
+        converged = jnp.asarray(True)
+        for k in range(n):
+            info = _isentropic_core(thermo, flows, T, Ps[k], Pd[k], eta, bounds, False)
+            _warn_unconverged(f"MultistageCompressor stage {k + 1}", info)
+            W.append(info["W"])
+            T_out.append(info["T_out"])
+            converged = converged & info["converged"]
+            T = info["T_out"]
+            if k < n - 1 or p.aftercool:
+                P_next = Ps[k + 1] if k < n - 1 else Pd[k] - dP
+                c = _cooler_core(thermo, flows, T_ic, P_next, info["H_out"])
+                Q.append(c["Q"])
+                V_ic.append(c["vapor_fraction"])
+                T = T_ic
+        P_final = Pd[-1] - dP if p.aftercool else Pd[-1]
+        V_ic_arr = jnp.stack(V_ic) if V_ic else jnp.zeros((0,))
+        Q_arr = jnp.stack(Q) if Q else jnp.zeros((0,))
+        try:
+            wet = bool(jnp.any(V_ic_arr < 1.0 - 1e-9))
+        except Exception:  # traced
+            wet = False
+        if wet:
+            warnings.warn(
+                "MultistageCompressor: liquid condenses in an intercooler "
+                f"(vapour fractions {[round(float(v), 4) for v in V_ic_arr]}); "
+                "it is not knocked out and is fed to the next stage.",
+                EOSUnitConvergenceWarning, stacklevel=2)
+        W_arr = jnp.stack(W)
+        info = {
+            "W": jnp.sum(W_arr),
+            "Q": jnp.sum(Q_arr),
+            "stage_W": W_arr,
+            "stage_T_out": jnp.stack(T_out),
+            "suction_pressures": Ps,
+            "discharge_pressures": Pd,
+            "pressure_ratio": Pd / Ps,
+            "intercooler_Q": Q_arr,
+            "intercooler_vapor_fraction": V_ic_arr,
+            "converged": converged,
+        }
+        return make_stream(flows, T, P_final), info
 
 
 # =============================================================================
