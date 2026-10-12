@@ -1756,6 +1756,18 @@ is `q > 1`. Specifying a feed stage *earlier* than the optimal one
 extends the stripping line into a region where it lies above the curve; the
 stepper does not guard against that.
 
+**Side draws, side feeds and several feeds.** Pass the operating lines of
+every section, from the top down, as `lines=[...]` (with `top_line=None`
+and `bottom_line=None`). Give one switch per pair of adjacent lines:
+`switch_x` (the composition where the two lines meet, or a feed's q-line
+crossing; a sigmoid like the optimal feed) or `switch_stages` (stage
+numbers). Build each line from its section balance with
+`operating_line(L, V, x_out, y_in)` or as `(L, -V, c)` directly. For a liquid
+side draw `S` at `x_S` from the rectifying section, the line below it is
+`V y = (L - S) x + D x_D + S x_S`, and it meets the top line at `x_S`. The
+result adds `switch_stage` (fractional stage of each switch) and
+`N_sections` (stages on each line).
+
 **Pinches.** `minimum_reflux` takes the largest chord slope
 `(x_D - y*(x))/(x_D - x)` from `(x_D, x_D)` to the curve over
 `[x_q, x_D)`, `x_q` being where the q-line meets the curve. A constant-alpha
