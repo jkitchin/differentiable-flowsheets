@@ -694,7 +694,8 @@ class Dryer:
         "residence_time": "s", "load": "kg", "area": "m^2", "solids_per_area": "kg/m^2",
         "turnaround_time": "s", "solid_molar_mass": "kg/mol", "solids_cp": "J/(kg K)",
         "cp_water": "J/(kg K)", "max_solids_T": "K", "heat_loss": "W", "T_ambient": "K",
-        "entrainment": "-", "lewis": "-",
+        "entrainment": "-", "lewis": "-", "T_solids_out": "K", "diameter": "m",
+        "ua_coefficient": "W m^-2 K^-1 (kg m^-2 s^-1)^-0.67",
     }
     numerical_method = (
         "Closed-form drying-time integrals with softplus-smoothed regime switch; continuous air outlet by "
