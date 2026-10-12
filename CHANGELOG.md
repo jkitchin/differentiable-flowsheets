@@ -943,6 +943,9 @@ All notable changes to difflow are recorded here. The format follows
   nearly right value with a wrong gradient: `d T_air_out / d G` was -0.012 against +3.14 K per kg/s by finite
   differences at 60 kg/s of 400 C air. The direction is now read from the finite end and a NaN midpoint counts as
   lying on the NaN end's side. Used by the dryer, leaching, crystallizer, batch-distillation and filtration solves.
+- **`total_utility_cost` is differentiable.** It called `float()` and branched in Python on the duties, so
+  `jax.grad`/`jit`/`vmap` over it raised; it is now pure JAX (negative duties still cost nothing).
+
 - **Flash derivatives and near-boundary values (#444).** (1) `flash_TP_eos` second derivatives were wrong (the
   Hessian of a two-flash PR train had the wrong sign): derivatives came from unrolling 50 damped substitution steps.
   The substitution now runs under `stop_gradient`, Newton finishes the split, and two chord steps on `[ln K, V]`
