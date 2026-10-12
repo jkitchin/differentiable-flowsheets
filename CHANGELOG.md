@@ -8,6 +8,24 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Dryer: rotary sizing and textbook checks (unit-ops book Ch 19).** `rotary_dryer_ua` (MSH Ch. 24
+  `Ua = 237 G^0.67 / D`, SI, recalled from memory) and `heat_transfer_units` (`N_t`); a continuous (countercurrent or
+  cocurrent) `Dryer` with `diameter=` sizes the shell by the three-zone method (preheat, constant rate at the wet bulb,
+  product heating: `zone_duties`, `zone_lengths`, `length`, `L_over_D`) and reports `N_t`. `T_solids_out=` specifies
+  the product temperature instead of estimating it. `interpolate="inverse"` on `drying_rate_curve`/`drying_periods`/
+  `drying_time` (and `DryerParams.rate_interpolation`) interpolates `1/R` linearly, so the falling-rate integral is the
+  trapezoid rule on the graphical `1/R` plot. Tests reproduce Geankoplis Examples 9.6-1, 9.7-1, 9.7-2 and 9.10-1
+  (inputs recalled from memory).
+- **Unit-ops book Ch 20 (crystallization) gaps.** `Crystallizer(mode="adiabatic")`, a vacuum
+  crystallizer: the evaporation is solved from the heat balance (feed sensible heat plus heat of
+  crystallization, `duty=` for any jacket heat) in closed form, differentiable.
+  `sieve_population_density` converts a screen analysis into the MSMPR population density for
+  `fit_msmpr`. `TestPublishedExamples` reproduces Geankoplis Example 12.11-1 (Na2CO3.10H2O
+  yield, with and without evaporation).
+- **Published-example tests for cake filtration (book Ch. 21).** `TestGeankoplisFiltration` reproduces
+  Geankoplis 5e Examples 14.2-1 (alpha and R_m from the CaCO3 t-V data with `fit_ruth`), 14.2-2 (the 20-frame
+  press, 269.7 s) and 14.2-3 (wash at a quarter of the final rate, 194 s), also through the `CakeFilter` unit.
+
 - **Unit-ops book Parts I-II gaps (issue 442).**
   *Fixes.* `phase_identification_parameter` uses closed-form derivatives of the cubic (cheaper to compile inside
   every TP flash); `eos_pressure_TV` gives the cubic's P(T, v). `eos_bubble_*`/`eos_dew_*` fall back to continuation (from 0.75 T or P/4) when no Wilson start converges
@@ -908,6 +926,43 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Fixed
+
+- **`cool_dehumidify` no longer delivers supersaturated air (book Ch. 18).** With a cold coil and a small bypass
+  factor the straight line to the apparatus dew point crosses the saturation curve: 30 C / 60 % air on a 2 C coil
+  at BF = 0.1 left at RH = 1.034. The coil now delivers saturated air at the same total enthalpy and adds the fog
+  to the condensate (`info["fog"]`); the duty is unchanged. `adiabatic_humidify` gains `RH_out=` and `mu_out=`
+  (degree of saturation) targets; Geankoplis Ex. 9.3-1 to 9.3-3 and the cooling tower of Ex. 10.5-1 (z = 6.0 m
+  against about 6.1 m printed) are now tests.
+- **`Crystallizer` residence time from `volume`** now divides by the product slurry flow
+  `(m_F - E)/rho_L` (the MSMPR definition), not the feed flow; an evaporative crystallizer that
+  boils off half its feed water had half the true `tau`.
+- **`Crystallizer` kinetic mode under `jax.jit`** raised `ConcretizationTypeError` (the
+  `j <= 1` check called `float()` on `jnp.asarray(j)`, a tracer under jit); it now checks the raw
+  value. Regression test `test_kinetic_mode_under_jit`. `CrystallizerParams` made the same
+  check, so differentiating with respect to the kinetic constants (or passing them as a jnp
+  array inside `jit`) failed; it now skips the check for traced values. Regression test
+  `test_gradient_with_respect_to_kinetics` (checks the `j = 1` closed form
+  `d ln L50/d ln k_b = -g/(b+3g)`).
+- **Sigma theory in the bio centrifuges was off by factors of 2 and sqrt(pi) (book Ch. 21).** `Centrifuge`
+  captured `min(1, 2 v_s Sigma/Q)`, twice the ideal-settler value, so a disc stack (whose Sigma is the standard
+  Ambler form) over-predicted the recovery by up to 2x below complete capture. It now captures
+  `min(1, v_s e Sigma/Q)`: complete at `Q = v_s e Sigma`, half at `Q_critical = 2 v_s e Sigma`
+  (Geankoplis 5e Sec. 14.4C). `efficiency` is now Ambler's correction on Sigma (the machine is an ideal settler
+  of area `efficiency * Sigma`); it used to multiply the capture, so a disc stack at the default 0.7 could never
+  recover more than 70 % of the cells however slow the feed. `critical_particle_diameter` had a spurious pi in the denominator (cut size 1.77x
+  too small): `d50 = sqrt(9 mu Q/(Delta rho g Sigma))`. `tubular_bowl_sigma` returned half the thin-layer value
+  (`pi` for `2 pi omega^2 L r^2/g`); it is now the thin-layer value and takes `r_inner=` for the thick-layer
+  form `omega^2 pi L (r2^2 - r1^2)/(2 g ln(2 r2/(r1 + r2)))`. The `equations` entry (a tanh that the code never
+  used) and the bio docs now match the code. Tests: `TestSigmaTheory` (Hazen capture, cut size, the
+  Stokes-trajectory oracle for a thick layer, a gradient in rpm).
+- **Lapple cyclone outlet-duct length.** `CYCLONE_GEOMETRIES["lapple"]` had `S = D/8`; Lapple's standard is
+  `S = 5D/8` (Cooper & Alley Table 4.1, recalled). `S` enters no calculation, so no result changes.
+- **`SettlerParams` accepted unsorted or repeated settling data (book Ch. 21).** The PCHIP interpolation behind
+  `coe_clevenger` needs strictly increasing `C_data`; a Kynch table passed in descending order, or with the
+  repeated `C0` of the constant-rate points, silently gave a thickener area of 1442 m^2 instead of 63. It now
+  raises `ValueError` for `C_data` (and for `t_data` in `kynch`/`talmage_fitch`) that is not strictly
+  increasing. Concrete-only: traced values pass unchecked. Test:
+  `TestSettlerUnit.test_unsorted_or_repeated_data_is_rejected`.
 
 - **Le Bas oxygen increment for ethers (book Ch. 14).** `LE_BAS_INCREMENTS["O_ether"]` was 9.1, which is the
   methyl-ester value; it is now 9.9 (methyl ethers), and the table gains `O_methyl_ester` (9.1), `O_methyl_ether`

@@ -86,6 +86,8 @@ from jax import Array
 
 from difflow.params_mixin import ParamsMixin
 from difflow.psychrometrics import (
+    CP_DRY_AIR,
+    CP_VAPOR,
     MW_WATER,
     P_ATM,
     dry_air_flow,
@@ -282,7 +284,9 @@ def heat_transfer_coefficient_tray(G: Array | float, flow: str = "parallel") -> 
     **Unverified: both correlations and their ranges are typed from memory of
     Geankoplis Eqs. 9.6-7 and 9.6-8** (the 0.0204 coefficient is the one the
     issue also quotes); check them against the book before relying on the
-    numbers. ``G`` is converted from kg/m^2/s here. No range check is made.
+    numbers. The parallel-flow form reproduces the h = 62.45 W/m^2/K of
+    Geankoplis Example 9.6-1 (also recalled; see ``tests/test_dryer.py``).
+    ``G`` is converted from kg/m^2/s here. No range check is made.
     """
     Gh = 3600.0 * _f(G)
     if flow == "parallel":
@@ -332,7 +336,9 @@ def _scale(X_c, X_eq, sharpness):
     return jnp.maximum(_f(X_c) - _f(X_eq), 1e-9) / _f(sharpness)
 
 
-def _check_falling(falling, rate_curve):
+def _check_falling(falling, rate_curve, interpolate="rate"):
+    if interpolate not in ("rate", "inverse"):
+        raise ValueError("interpolate must be 'rate' (R linear between table points) or 'inverse' (1/R linear)")
     if falling not in ("linear", "integral"):
         raise ValueError(
             "falling must be 'linear' or 'integral' (the Fick-diffusion series is not implemented)")
@@ -340,34 +346,42 @@ def _check_falling(falling, rate_curve):
         raise ValueError("falling='integral' needs rate_curve=(X, R)")
 
 
+def _table_rate(X, Xt, Rt, interpolate):
+    """Rate from the table ``(Xt, Rt)``: ``R`` (``"rate"``) or ``1/R`` (``"inverse"``) linear between points."""
+    if interpolate == "inverse":
+        return 1.0 / jnp.interp(X, Xt, 1.0 / jnp.maximum(Rt, _TINY))
+    return jnp.interp(X, Xt, Rt)
+
+
 def drying_rate_curve(X: Array | float, X_c: Array | float, X_eq: Array | float, R_c: Array | float,
                       falling: str = "linear", sharpness: float = 200.0,
-                      rate_curve: tuple | None = None) -> Array:
+                      rate_curve: tuple | None = None, interpolate: str = "rate") -> Array:
     """Drying rate ``R(X)`` (kg/m^2/s) against the dry-basis moisture, for plotting and for the unit.
 
     ``falling="linear"``: ``R_c`` above ``X_c`` and ``R_c (X - X_eq)/(X_c - X_eq)``
     below, joined and floored at zero with the same softplus (width
     ``(X_c - X_eq)/sharpness``) the drying time uses. ``falling="integral"``:
     ``R_c`` above ``X_c`` and the tabulated ``rate_curve = (X_table, R_table)``
-    (``X_table`` increasing, linearly interpolated) below.
+    (``X_table`` increasing) below, with ``R`` (``interpolate="rate"``) or ``1/R``
+    (``"inverse"``) linear between the table points.
     """
-    _check_falling(falling, rate_curve)
+    _check_falling(falling, rate_curve, interpolate)
     X, X_c, X_eq, R_c = _f(X), _f(X_c), _f(X_eq), _f(R_c)
     s = 1.0 / _f(sharpness)
     if falling == "linear":
         fr = (X - X_eq) / jnp.maximum(X_c - X_eq, 1e-9)
         return R_c * _sp(1.0 - _sp(1.0 - fr, s), s)
     Xt, Rt = _f(rate_curve[0]), _f(rate_curve[1])
-    below = jnp.interp(X, Xt, Rt)
+    below = _table_rate(X, Xt, Rt, interpolate)
     sig = jax.nn.sigmoid((X - X_c) / _scale(X_c, X_eq, sharpness))  # smooth step at X_c
     return below + (R_c - below) * sig
 
 
 def drying_periods(X1, X2, X_c, X_eq, R_c, Ls_over_A, falling: str = "linear",
                    sharpness: float = 200.0, rate_curve: tuple | None = None,
-                   n_quad: int = 12) -> tuple[Array, Array]:
+                   n_quad: int = 12, interpolate: str = "rate") -> tuple[Array, Array]:
     """Constant- and falling-rate times ``(t_c, t_f)`` (s) from ``X1`` to ``X2``; see :func:`drying_time`."""
-    _check_falling(falling, rate_curve)
+    _check_falling(falling, rate_curve, interpolate)
     X1, X2, X_c, X_eq, R_c, LsA = (_f(v) for v in (X1, X2, X_c, X_eq, R_c, Ls_over_A))
     s = _scale(X_c, X_eq, sharpness)
     c1 = _sp(X1 - X_c, s)
@@ -390,14 +404,14 @@ def drying_periods(X1, X2, X_c, X_eq, R_c, Ls_over_A, falling: str = "linear",
         lo = jnp.clip(edges[:-1], X_b, X_a)
         hi = jnp.clip(edges[1:], X_b, X_a)
         X = lo[:, None] + (hi - lo)[:, None] * xi[None, :]
-        R = jnp.maximum(jnp.interp(X, Xt, Rt), _TINY)
+        R = jnp.maximum(_table_rate(X, Xt, Rt, interpolate), _TINY)
         t_f = LsA * jnp.sum((hi - lo) * jnp.sum(w / R, axis=1))
     return t_c, t_f
 
 
 def drying_time(X1, X2, X_c, X_eq, R_c, Ls_over_A, falling: str = "linear",
                 sharpness: float = 200.0, rate_curve: tuple | None = None,
-                n_quad: int = 12) -> Array:
+                n_quad: int = 12, interpolate: str = "rate") -> Array:
     """Drying time (s) from moisture ``X1`` down to ``X2`` across the constant- and falling-rate periods.
 
     Args:
@@ -417,21 +431,82 @@ def drying_time(X1, X2, X_c, X_eq, R_c, Ls_over_A, falling: str = "linear",
         rate_curve: ``(X_table, R_table)`` for ``falling="integral"``, ``X_table``
             increasing.
         n_quad: Gauss-Legendre points per table segment for ``"integral"``.
+        interpolate: How the table is read between its points for
+            ``"integral"``: ``"rate"`` (``R`` linear, the default) or
+            ``"inverse"`` (``1/R`` linear, so the integral is exactly the
+            trapezoid rule on ``1/R`` at the table points, the textbook's
+            graphical integration). The two differ by a few percent where the
+            curve bends; neither is "right" between measured points.
 
     Returns:
         ``t_c + t_f`` (s). The three cases ``X1 > X_c > X2``, falling only
         (``X1 < X_c``) and constant only (``X2 > X_c``) are one smooth expression,
         differentiable in every argument.
     """
-    t_c, t_f = drying_periods(X1, X2, X_c, X_eq, R_c, Ls_over_A, falling, sharpness, rate_curve, n_quad)
+    t_c, t_f = drying_periods(X1, X2, X_c, X_eq, R_c, Ls_over_A, falling, sharpness, rate_curve, n_quad,
+                              interpolate)
     return t_c + t_f
 
 
-def _rate_fraction(X, X_c, X_eq, falling, sharpness, rate_table):
+def _rate_fraction(X, X_c, X_eq, falling, sharpness, rate_table, interpolate="rate"):
     """``R(X)/R_c`` (0-1), smooth; ``rate_table`` is the *relative* table ``(X, R/R_c)``."""
     if falling == "linear":
         return drying_rate_curve(X, X_c, X_eq, 1.0, "linear", sharpness)
-    return drying_rate_curve(X, X_c, X_eq, 1.0, "integral", sharpness, rate_table)
+    return drying_rate_curve(X, X_c, X_eq, 1.0, "integral", sharpness, rate_table, interpolate)
+
+
+# =============================================================================
+# Rotary-dryer heat transfer (McCabe, Smith & Harriott, Ch. 24)
+# =============================================================================
+
+
+def rotary_dryer_ua(G: Array | float, D: Array | float, coefficient: float = 237.0,
+                    exponent: float = 0.67) -> Array:
+    """Volumetric heat-transfer coefficient ``Ua`` (W/m^3/K) of a direct-heat rotary dryer.
+
+    ``Ua = coefficient G^exponent / D`` with the air mass velocity ``G``
+    (kg/m^2/s) and the shell diameter ``D`` (m). The defaults are the SI form of
+    the McCabe, Smith & Harriott (Ch. 24) correlation ``Ua = 0.5 G^0.67 / D``
+    (Btu/ft^3/h/F, ``G`` in lb/ft^2/h, ``D`` in ft); the factor 237 is that
+    unit conversion (18.63 x 0.5 x 0.3048 x 737.3^0.67). **Recalled from
+    memory, not checked against the printed book**: verify before relying on
+    it. Rotary dryers run at ``G`` of about 0.5-5 kg/m^2/s.
+
+    Args:
+        G: Air mass velocity (kg/m^2/s) through the shell cross-section.
+        D: Shell diameter (m).
+        coefficient: Prefactor in SI units.
+        exponent: Exponent on ``G``.
+
+    Returns:
+        ``Ua`` (W/m^3/K).
+
+    Example:
+        >>> float(rotary_dryer_ua(1.0, 1.0))
+        237.0
+    """
+    return coefficient * _f(G) ** exponent / _f(D)
+
+
+def heat_transfer_units(T_air_in: Array | float, T_air_out: Array | float,
+                        T_surface: Array | float) -> Array:
+    """Number of heat-transfer units ``N_t = ln[(T_in - T_s)/(T_out - T_s)]`` of the air in a dryer.
+
+    The air cools from ``T_air_in`` to ``T_air_out`` against solids at
+    ``T_surface`` (the wet-bulb temperature in the constant-rate zone). Rotary
+    dryers are usually designed for ``N_t`` of 1.5-2.5 (McCabe, Smith &
+    Harriott, Ch. 24).
+
+    Args:
+        T_air_in: Air inlet temperature (K).
+        T_air_out: Air outlet temperature (K), above ``T_surface``.
+        T_surface: Solids surface temperature (K).
+
+    Returns:
+        ``N_t`` (dimensionless).
+    """
+    T_s = _f(T_surface)
+    return jnp.log(jnp.maximum(_f(T_air_in) - T_s, _TINY) / jnp.maximum(_f(T_air_out) - T_s, _TINY))
 
 
 # =============================================================================
@@ -463,6 +538,8 @@ class DryerParams(ParamsMixin):
         falling: ``"linear"`` or ``"integral"`` falling-rate model.
         rate_curve: ``[[X ...], [R/R_c ...]]``: the falling-rate curve relative to the
             constant rate, for ``falling="integral"``.
+        rate_interpolation: ``"rate"`` (``R`` linear between table points) or
+            ``"inverse"`` (``1/R`` linear, the trapezoid rule on ``1/R``).
         sharpness: Smooth-switch sharpness (see :func:`drying_time`).
         product_moisture: Product moisture ``X_out`` (kg/kg dry solid), the spec.
         residence_time: Drying/residence time (s): the product moisture is
@@ -476,6 +553,16 @@ class DryerParams(ParamsMixin):
         solid_species: Name of the dry-solid pseudo-species (stream key ``F_<name>``).
         solid_molar_mass: Pseudo molar mass of the dry solid (kg/mol); the
             default 1 makes ``F_<solid>`` numerically kg/s.
+        T_solids_out: Specified product temperature (K). If ``None`` (default)
+            it is estimated as ``T_a - (T_a - T_wb) R(X_out)/R_c`` in the air at
+            the solids' exit end; a value overrides that estimate (the
+            textbook balance problems state it).
+        diameter: Shell diameter (m) of a continuous rotary dryer (either flow). When
+            given, the unit sizes the dryer by the three-zone method (solids
+            preheat to the wet bulb, evaporation at the wet bulb, heating of
+            the dried solids), ``q_i = Ua S L_i dT_lm,i`` with ``Ua`` from
+            :func:`rotary_dryer_ua`.
+        ua_coefficient: Prefactor of :func:`rotary_dryer_ua` (SI).
         solids_cp: Specific heat of the dry solid (J/kg/K).
         cp_water: Specific heat of liquid water in the solid (J/kg/K).
         max_solids_T: Product-quality limit on the solids temperature (K); the
@@ -501,6 +588,7 @@ class DryerParams(ParamsMixin):
     tray_flow: Literal["parallel", "perpendicular"] = "parallel"
     falling: Literal["linear", "integral"] = "linear"
     rate_curve: list | None = None
+    rate_interpolation: Literal["rate", "inverse"] = "rate"
     sharpness: float = 200.0
     product_moisture: float | None = None
     residence_time: float | None = None
@@ -510,6 +598,9 @@ class DryerParams(ParamsMixin):
     turnaround_time: float = 0.0
     solid_species: str = "solid"
     solid_molar_mass: float = 1.0
+    T_solids_out: float | None = None
+    diameter: float | None = None
+    ua_coefficient: float = 237.0
     solids_cp: float = 1500.0
     cp_water: float = 4186.0
     max_solids_T: float | None = None
@@ -528,6 +619,10 @@ class DryerParams(ParamsMixin):
             raise ValueError("falling must be 'linear' or 'integral'")
         if self.falling == "integral" and self.rate_curve is None:
             raise ValueError("falling='integral' needs rate_curve")
+        if self.rate_interpolation not in ("rate", "inverse"):
+            raise ValueError("rate_interpolation must be 'rate' or 'inverse'")
+        if self.diameter is not None and self.mode != "continuous":
+            raise ValueError("diameter (three-zone rotary sizing) needs mode='continuous'")
 
 
 class Dryer:
@@ -556,8 +651,14 @@ class Dryer:
     cocurrent), which fixes ``T_a,out`` (a bisection for cocurrent). If
     ``solids_per_area`` is given the unit also reports the residence time
     from :func:`drying_time` with the constant rate taken in the air at the wet
-    end of the dryer. The three-zone McCabe sizing (``Q = U a V dT_lm`` per
-    zone) is not implemented.
+    end of the dryer. ``T_solids_out`` overrides the product-temperature
+    estimate. With ``diameter`` (continuous, either flow) the unit sizes a rotary
+    dryer by the three-zone method of McCabe, Smith & Harriott (Ch. 24):
+    zone I preheats the wet solids to the wet bulb ``T_wb`` of the inlet air,
+    zone II evaporates all the water at ``T_wb`` (duty ``m_s (X_in - X_out)
+    lambda(T_wb)``), zone III heats the dried solids to ``T_s,out``; the air
+    temperatures between zones follow from the zone I and III duties, and each zone's length is ``q_i / (Ua S dT_lm,i)`` with ``Ua``
+    from :func:`rotary_dryer_ua` and ``S`` the shell cross-section.
     """
 
     symbol = "Dryer"
@@ -593,7 +694,8 @@ class Dryer:
         "residence_time": "s", "load": "kg", "area": "m^2", "solids_per_area": "kg/m^2",
         "turnaround_time": "s", "solid_molar_mass": "kg/mol", "solids_cp": "J/(kg K)",
         "cp_water": "J/(kg K)", "max_solids_T": "K", "heat_loss": "W", "T_ambient": "K",
-        "entrainment": "-", "lewis": "-",
+        "entrainment": "-", "lewis": "-", "T_solids_out": "K", "diameter": "m",
+        "ua_coefficient": "W m^-2 K^-1 (kg m^-2 s^-1)^-0.67",
     }
     numerical_method = (
         "Closed-form drying-time integrals with softplus-smoothed regime switch; continuous air outlet by "
@@ -639,11 +741,19 @@ class Dryer:
         if p.falling == "integral":
             rt = self._rate_table()
             table = (rt[0], R_c * rt[1])
-        return drying_periods(X1, X2, p.X_c, X_eq, R_c, LsA, p.falling, p.sharpness, table)
+        return drying_periods(X1, X2, p.X_c, X_eq, R_c, LsA, p.falling, p.sharpness, table,
+                              interpolate=p.rate_interpolation)
 
     def _frac(self, X, X_eq):
         p = self.params
-        return _rate_fraction(X, p.X_c, X_eq, p.falling, p.sharpness, self._rate_table())
+        return _rate_fraction(X, p.X_c, X_eq, p.falling, p.sharpness, self._rate_table(), p.rate_interpolation)
+
+    def _Ts_out(self, T_a, T_wb, X, X_eq):
+        """Product temperature: the specification, or the surface estimate in air at ``T_a``."""
+        p = self.params
+        if p.T_solids_out is not None:
+            return _f(p.T_solids_out) + 0.0 * T_a
+        return T_a - (T_a - T_wb) * self._frac(X, X_eq)
 
     def _hs(self, X, T):
         p = self.params
@@ -715,7 +825,11 @@ class Dryer:
                 streams, ``fines`` (the entrained solids stream, continuous).
                 Batch adds ``drying_time``, ``cycle_time``, ``area_required``
                 (m^2), ``Ls_over_A``, ``air_humidity_rise``; continuous adds
-                ``residence_time_required`` (with ``solids_per_area``).
+                ``residence_time_required`` (with ``solids_per_area``),
+                ``N_t`` (air heat-transfer units against the inlet wet bulb) and, with ``diameter``, ``zone_duties`` (W),
+                ``zone_lengths`` (m), ``zone_dT_lm`` (K) in the solids' order,
+                ``zone_air_T`` (K, the air at the I/II and II/III boundaries), ``length``,
+                ``volume``, ``L_over_D``, ``Ua``, ``air_mass_velocity``.
         """
         if self.params.mode == "batch":
             return self._batch(wet_solids, air_in)
@@ -749,8 +863,7 @@ class Dryer:
         t_c, t_f = self._times(X1, X2, X_eq, R_c, LsA)
         t_dry = t_c + t_f
 
-        f2 = self._frac(X2, X_eq)
-        T_s_out = T_a - (T_a - T_wb) * f2
+        T_s_out = self._Ts_out(T_a, T_wb, X2, X_eq)
         rate = load / jnp.maximum(t_dry, _TINY)           # dry solid processed while drying (kg/s)
         evap = rate * (X1 - X2)
         W_out = W_a + evap / G
@@ -812,6 +925,51 @@ class Dryer:
         info["water_balance_residual"] = dw
         info["energy_balance_residual"] = e_out - e_in
 
+    def _three_zone(self, m_s, X_in, X_out, T_s_in, T_s_out, st_in, st_out, G):
+        """Three-zone length of a rotary dryer (McCabe, Smith & Harriott, Ch. 24), either flow direction.
+
+        Zones in the solids' order: I preheats the wet solids to the wet bulb, II
+        evaporates at the wet bulb, III heats the dried solids. ``zone_air_T`` is
+        the air temperature at the I/II and II/III boundaries.
+        """
+        from difflow.units.heat_exchanger import log_mean_temperature_difference as lmtd
+
+        p = self.params
+        T_wb = st_in["T_wb"]
+        cs_in = CP_DRY_AIR + CP_VAPOR * st_in["W"]
+        cs_out = CP_DRY_AIR + CP_VAPOR * st_out["W"]
+        # heat passed from the air to the solids in each zone; the latent heat leaves the solids as vapor
+        q3 = m_s * (p.solids_cp + X_out * p.cp_water) * (T_s_out - T_wb)    # heat the dried solids (hot end)
+        q1 = m_s * (p.solids_cp + X_in * p.cp_water) * (T_wb - T_s_in)      # preheat the wet solids (cold end)
+        q2 = m_s * (X_in - X_out) * latent_heat(T_wb)                       # evaporate at the wet bulb
+        T_in, T_out = st_in["T"], st_out["T"]
+        if p.flow == "countercurrent":
+            T_b = T_in - q3 / (G * cs_in)         # air leaving zone III (II/III boundary)
+            T_c = T_out + q1 / (G * cs_out)       # air entering zone I (I/II boundary)
+            dT3 = lmtd(T_in - T_s_out, T_b - T_wb)
+            dT2 = lmtd(T_b - T_wb, T_c - T_wb)
+            dT1 = lmtd(T_c - T_wb, T_out - T_s_in)
+            T_12, T_23 = T_c, T_b
+        else:                                     # cocurrent: the hot air meets the wet feed
+            T_b = T_in - q1 / (G * cs_in)         # air leaving zone I
+            T_c = T_out + q3 / (G * cs_out)       # air entering zone III
+            dT1 = lmtd(T_in - T_s_in, T_b - T_wb)
+            dT2 = lmtd(T_b - T_wb, T_c - T_wb)
+            dT3 = lmtd(T_c - T_wb, T_out - T_s_out)
+            T_12, T_23 = T_b, T_c
+        D = _f(p.diameter)
+        S = jnp.pi * D ** 2 / 4.0
+        G_mass = G / S
+        Ua = rotary_dryer_ua(G_mass, D, p.ua_coefficient)
+        L1, L2, L3 = (q / (Ua * S * dT) for q, dT in ((q1, dT1), (q2, dT2), (q3, dT3)))
+        length = L1 + L2 + L3
+        return {
+            "air_mass_velocity": G_mass, "Ua": Ua, "cross_section": S,
+            "zone_duties": jnp.stack([q1, q2, q3]), "zone_lengths": jnp.stack([L1, L2, L3]),
+            "zone_dT_lm": jnp.stack([dT1, dT2, dT3]), "zone_air_T": jnp.stack([T_12, T_23]),
+            "length": length, "volume": S * length, "L_over_D": length / D,
+        }
+
     def _continuous(self, wet, air_in):
         p = self.params
         counter = p.flow == "countercurrent"
@@ -831,14 +989,14 @@ class Dryer:
             W_out = W_a + evap / G
             if counter:
                 Xeq = Xeq_in
-                T_s_out = T_a - (T_a - st["T_wb"]) * self._frac(X_out, Xeq)
+                T_s_out = self._Ts_out(T_a, st["T_wb"], X_out, Xeq)
                 h_out = h_in + (m_s * (hs_in - self._hs(X_out, T_s_out)) - loss) / G
                 T_out = humid_temperature(h_out, W_out)
             else:
                 def ends(T):
                     Twb = jnp.minimum(wet_bulb_temperature(T, W_out, P, p.lewis), T)
                     Xe = self._Xeq(rh_from_humidity_ratio(T, W_out, P), T)
-                    return T - (T - Twb) * self._frac(X_out, Xe), Xe
+                    return self._Ts_out(T, Twb, X_out, Xe), Xe
 
                 def resid(T):
                     return (G * humid_enthalpy(T, W_out) + m_s * self._hs(X_out, ends(T)[0]) + loss
@@ -884,6 +1042,9 @@ class Dryer:
                                  o["evap"], G, st, t_c, t_f)
         info["mode"] = "continuous"
         info["fines"] = fines
+        info["N_t"] = heat_transfer_units(T_a, o["T_out"], st["T_wb"])
+        if p.diameter is not None:
+            info.update(self._three_zone(m_s, X_in, X_out, T_s_in, o["T_s_out"], st, st_out, G))
         if LsA is not None:
             info["residence_time_required"] = t_c + t_f
             info["Ls_over_A"] = LsA
