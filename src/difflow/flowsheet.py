@@ -395,7 +395,7 @@ def _initialized_outlets(result: Any, unit: "Unit") -> dict[str, Stream]:
     return dict(zip(unit.outlet_names, outlets))
 
 
-@dataclass
+@dataclass(eq=False)
 class Unit:
     """A unit operation in a flowsheet.
 

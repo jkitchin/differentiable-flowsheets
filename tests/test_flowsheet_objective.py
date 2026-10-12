@@ -401,3 +401,61 @@ class TestSolveKeywordsForwarded:
         h = 1e-5
         fd = (float(f(p0 + h)) - float(f(p0 - h))) / (2 * h)
         assert g == pytest.approx(fd, rel=1e-4)
+
+
+def _react(inlet, X=0.5):
+    out = dict(inlet)
+    out["F_A"], out["F_B"] = inlet["F_A"] * (1 - X), inlet["F_B"] + X * inlet["F_A"]
+    return out
+
+def _mix(feed, rec):
+    out = {k: feed[k] + rec[k] for k in ("F_A", "F_B")}
+    out["T"], out["P"] = feed["T"], feed["P"]
+    return out
+
+
+class TestGradAfterJittedGrad:
+    """``Unit`` compares by identity, so a traced ``Unit.params`` is never ``==``-tested.
+
+    A value ``__eq__`` over ``params`` (which hold tracers inside ``jit``) made
+    equinox's cache raise on a later trace: after ``jit(grad(f))``,
+    ``grad(jit(f))`` and ``grad(f)`` failed with "Exception raised while
+    checking equality of metadata fields ... _ClosureConvert".
+    """
+
+    def test_units_compare_by_identity(self):
+        fs = _purge_loop()
+        a = fs.units[0]
+        b = Unit(a.name, a.operation, list(a.inlet_names), list(a.outlet_names),
+                 dict(a.params))
+        assert a == a and a != b
+        assert hash(a) == hash(b)
+
+    def test_grad_after_a_jitted_grad(self):
+        """A traced value in the ``Unit.params`` of a plain-function unit.
+
+        The functions live at module scope, so both traces build Units with
+        equal hashes and the cache falls through to ``__eq__``.
+        """
+        from difflow import Splitter
+
+        sp = ["A", "B"]
+
+        def f(X):
+            fs = Flowsheet(species_order=sp, default_P=None)
+            fs.add_feed("feed", make_stream({"A": 1.0, "B": 0.0}, T=300.0, P=1e5))
+            fs.add_unit(Unit("mix", _mix, ["feed", "rec"], ["rx_in"]))
+            fs.add_unit(Unit("rx", _react, ["rx_in"], ["rx_out"], {"X": X}))
+            fs.add_unit(Unit("split", Splitter(sp), ["rx_out"], ["rec", "prod"],
+                             {"split_frac": 0.5}))
+            fs.add_recycle("rec", "rec")
+            return fs.solve(max_iter=200)["prod"]["F_B"]
+
+        X0 = 0.4
+        g0 = float(jax.jit(jax.grad(f))(X0))    # one traced solve first ...
+        g1 = float(jax.grad(jax.jit(f))(X0))    # ... then these used to raise
+        g2 = float(jax.grad(f)(X0))
+        h = 1e-5
+        fd = (float(f(X0 + h)) - float(f(X0 - h))) / (2 * h)
+        assert g0 == pytest.approx(fd, rel=1e-4)
+        assert g1 == pytest.approx(g0, rel=1e-10) and g2 == pytest.approx(g0, rel=1e-10)

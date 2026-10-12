@@ -943,6 +943,13 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- **`grad` of a recycle solve after a jitted `grad` (`difflow.flowsheet.Unit`).** `Unit` was a dataclass with a
+  value `__eq__` over `params`, which holds tracers when a design variable goes in through `Unit.params`. The
+  Units ride in the `optx.fixed_point` args, so equinox's trace cache compared them and raised "Exception raised
+  while checking equality of metadata fields ... _ClosureConvert": once `jit(grad(f))` had run, `grad(jit(f))`
+  and `grad(f)` failed in the same process (this broke `sensitivity_analysis` on a jitted plant model). `Unit`
+  now compares by identity (`@dataclass(eq=False)`); its hash is unchanged.
+
 - **Bisection with a NaN bracket end (`difflow.staged._solve_monotone`).** When the residual was NaN at one end of
   the bracket (humid air below its dew point at the 200 K lower bound of the cocurrent `Dryer` outlet solve), the
   direction of monotonicity came out wrong, the bisection walked to the wrong end and the final Newton step gave a
