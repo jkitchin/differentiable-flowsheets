@@ -69,13 +69,15 @@ Ideal stages, the solute fully dissolved and in equilibrium with the solution
 (no rate limit and no adsorption on the solids); one solute, one solvent, one
 inert (other species in the streams are ignored); the inert flow is the same in
 every stage; isothermal. Rate-limited (diffusion-controlled) leaching kinetics
-is out of scope. No textbook numerical example is reproduced: see
-``tests/test_leaching.py`` for what is checked and against what.
+is out of scope. The variable-underflow path reproduces McCabe-Smith-Harriott
+7e Example 23.1 (oil from meal with benzene: overflow 0.60 oil, four ideal
+stages) with the problem data as recalled, not yet checked against the printed
+book; see ``tests/test_leaching.py`` for what is checked and against what.
 
 References
 ----------
 - McCabe, Smith & Harriott, Unit Operations of Chemical Engineering, Ch. 23
-  (equations; no numerical example reproduced).
+  (equations; Example 23.1 reproduced from recalled data, see above).
 - Geankoplis, Transport Processes and Separation Process Principles, Ch. 12
   (leaching; equations only).
 - Treybal, Mass-Transfer Operations, Ch. 13 (leaching).
