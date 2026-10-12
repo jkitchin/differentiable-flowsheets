@@ -244,3 +244,49 @@ class TestFlashCompositionGradients:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestSinglePhaseReverseMode:
+    """Reverse-mode gradients through a single-phase flash stay finite.
+
+    The Newton polish of ``flash_TP_eos`` (issue #444) is singular at the
+    trivial K = 1 point of a single-phase feed. Its value was protected by a
+    select, but reverse mode pulled a zero cotangent through the singular
+    solve and returned NaN for every gradient through a supercritical gas,
+    e.g. a JT valve's dT_out/dT_in (unit-ops book ex05-05).
+    """
+
+    def test_flash_TP_eos_grad_is_finite_and_matches_forward(self):
+        from difflow.eos import flash_TP_eos
+        sp = ["methane", "ethane", "propane"]
+        eos = PengRobinson({s: get_critical_props(s) for s in sp})
+        z = jnp.array([0.90, 0.06, 0.04])   # the ex05-05 gas, single phase
+
+        def h(T):   # a smooth function of T through the flash outputs
+            V, x, y = flash_TP_eos(eos, z, T, 150e5)
+            return eos.enthalpy_departure(T, 150e5, x, "liquid") + V
+
+        rev = jax.grad(h)(323.0)
+        fwd = jax.jvp(h, (323.0,), (1.0,))[1]
+        assert jnp.isfinite(rev)
+        npt.assert_allclose(rev, fwd, rtol=1e-10)
+
+    @pytest.mark.slow
+    def test_jt_valve_reverse_gradient(self):
+        from difflow import JTValve, JTValveParams
+        from difflow.database import get_species_data
+        from difflow.thermo import CubicThermo
+        sp = ["methane", "ethane", "propane"]
+        ng = CubicThermo(IdealThermo({s: get_species_data(s) for s in sp}),
+                         PengRobinson({s: get_critical_props(s) for s in sp}))
+        flows = {"methane": 90.0, "ethane": 6.0, "propane": 4.0}
+
+        def T_out(T_in):
+            out, _ = JTValve(JTValveParams(P_out=70e5), ng)(
+                make_stream(flows, T=T_in, P=150e5))
+            return out["T"]
+
+        rev = jax.grad(T_out)(323.0)
+        fwd = jax.jvp(T_out, (323.0,), (1.0,))[1]
+        assert jnp.isfinite(rev)
+        npt.assert_allclose(rev, fwd, rtol=1e-8)
