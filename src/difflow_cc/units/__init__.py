@@ -22,6 +22,8 @@ from difflow_cc.units.stripper import (
     AmineStripper,
 )
 
+from difflow_cc.units.amine_loop import solve_amine_loop
+
 from difflow_cc.units.membrane import (
     MembraneParams,
     MembraneSeparator,
@@ -43,6 +45,8 @@ __all__ = [
     # Amine stripping
     "StripperParams",
     "AmineStripper",
+    # Closed absorber-stripper loop (library function, not a palette op)
+    "solve_amine_loop",
     # Membrane
     "MembraneParams",
     "MembraneSeparator",

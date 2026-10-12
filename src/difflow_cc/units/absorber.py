@@ -30,7 +30,7 @@ from difflow.streams import Stream, make_stream, get_flows, total_flow
 from difflow.params_mixin import ParamsMixin
 from difflow.numerics import safe_divide, safe_log
 from difflow_cc.database import get_solvent
-from difflow_cc.equilibrium.vle import AmineVLE
+from difflow_cc.equilibrium.vle import AmineVLE, equilibrium_loading
 
 
 # =============================================================================
@@ -125,6 +125,19 @@ class AbsorberParams(ParamsMixin):
         P_absorber: Operating pressure (Pa)
         stage_efficiency: Murphree stage efficiency (0-1)
         lean_loading: Lean solvent CO2 loading (mol CO2/mol amine)
+        model_water_transfer: Saturate the treated gas with water at the
+            operating temperature and draw that water from the solvent.
+        rich_loading_limit: What bounds the rich loading. ``"equilibrium"``
+            (default): the rich-end pinch -- the solvent leaving the bottom
+            cannot hold more CO2 than the loading in equilibrium with the
+            inlet gas's CO2 partial pressure (``y_CO2_in * P_absorber``) at
+            the operating temperature, from the solvent's Kent-Eisenberg
+            VLE (``equilibrium_loading``); the stoichiometric capacity
+            (0.5 for MEA, carbamate) stays an upper bound.
+            ``"stoichiometric"``: the pre-#448 behaviour, capacity only.
+        rich_approach: Fraction of the lean-to-equilibrium loading span the
+            rich solvent can reach, in (0, 1] (1 = a full rich-end pinch).
+            Used only with ``rich_loading_limit="equilibrium"``.
 
     Notes:
         The simplified model assumes:
@@ -151,6 +164,12 @@ class AbsorberParams(ParamsMixin):
     # and the evaporated water is removed from the rich solvent, closing the
     # water balance. Default False keeps the CO2-only model (backward compat).
     model_water_transfer: bool = False
+    # Rich-end VLE pinch (#448). The rich loading used to be capped only at
+    # the stoichiometric capacity, so a high-L/G column could load MEA to
+    # 0.5 from 15 % CO2 although its VLE allows ~0.48 there, and capture
+    # depended on the circulation alone.
+    rich_loading_limit: Literal["equilibrium", "stoichiometric"] = "equilibrium"
+    rich_approach: float | Array = 1.0
 
     # Extensibility for rate-based (not used in simplified model)
     column_diameter: float | None = None  # m
@@ -186,6 +205,17 @@ class AbsorberParams(ParamsMixin):
             if lean < 0:
                 raise ValueError(
                     f"lean_loading must be >= 0, got {lean}"
+                )
+        if self.rich_loading_limit not in ("equilibrium", "stoichiometric"):
+            raise ValueError(
+                "rich_loading_limit must be 'equilibrium' or "
+                f"'stoichiometric', got {self.rich_loading_limit!r}"
+            )
+        app = self.rich_approach
+        if not hasattr(app, 'shape') and not hasattr(app, '_trace'):
+            if not 0.0 < app <= 1.0:
+                raise ValueError(
+                    f"rich_approach must be in (0, 1], got {app}"
                 )
 
 
@@ -243,6 +273,7 @@ class AmineAbsorber:
         "Equilibrium stages with user-specified Murphree efficiency.",
         "Reactive absorption lumped into a VLE correlation (loading-dependent).",
         "Constant column pressure; isothermal or supplied temperature profile.",
+        "Rich loading bounded by the rich-end pinch: VLE with the inlet gas CO2 partial pressure at the operating temperature, and by the stoichiometric capacity.",
     ]
     references = [
         "Kohl, A.L., Nielsen, R.B. Gas Purification, 5e, Gulf Publishing, 1997.",
@@ -264,6 +295,7 @@ class AmineAbsorber:
         "P_absorber": "Pa",
         "stage_efficiency": "-",
         "lean_loading": "mol CO2 / mol amine",
+        "rich_approach": "-",
         "column_diameter": "m",
         "packing_height": "m",
     }
@@ -310,6 +342,12 @@ class AmineAbsorber:
                 - n_stages_effective: stages after Murphree efficiency
                 - absorption_factor: A = L / (m G)
                 - L_G_ratio: liquid/gas molar ratio actually used
+                - rich_loading_max: largest rich loading allowed (rich-end
+                  VLE pinch, capped at the stoichiometric capacity)
+                - equilibrium_rich_loading: VLE loading at the inlet CO2
+                  partial pressure and T_op
+                - P_CO2_rich_end: inlet CO2 partial pressure (Pa)
+                - rich_pinch: True where the rich-end limit binds
         """
         p = self.params
         T_op = T_op if T_op is not None else p.T_liquid_in
@@ -401,11 +439,13 @@ class AmineAbsorber:
 
         # Rich loading
         rich_loading = lean_loading + safe_divide(F_CO2_absorbed, F_amine)
-        # A fed solvent may already sit above capacity; never let the clip
+        rich_max, alpha_eq_rich, P_CO2_bottom = self._rich_loading_max(
+            F_CO2_in, F_total_gas, P_total, T_op, lean_loading)
+        # A fed solvent may already sit above the limit; never let the clip
         # turn absorption into desorption.
-        rich_loading = jnp.clip(
-            rich_loading, lean_loading,
-            jnp.maximum(self._solvent_data.loading_capacity, lean_loading))
+        rich_upper = jnp.maximum(rich_max, lean_loading)
+        rich_pinched = rich_loading >= rich_upper
+        rich_loading = jnp.clip(rich_loading, lean_loading, rich_upper)
         # Back-correct absorbed CO2 to match clipped loading
         F_CO2_absorbed = (rich_loading - lean_loading) * F_amine
         F_CO2_out = F_CO2_in - F_CO2_absorbed
@@ -460,6 +500,13 @@ class AmineAbsorber:
             "CO2_captured": F_CO2_absorbed,
             "rich_loading": rich_loading,
             "lean_loading": lean_loading,
+            # Rich-end pinch (#448): the largest rich loading allowed, the
+            # VLE loading at the inlet CO2 partial pressure, and whether
+            # the limit binds (capture then rises only with circulation).
+            "rich_loading_max": rich_max,
+            "equilibrium_rich_loading": alpha_eq_rich,
+            "P_CO2_rich_end": P_CO2_bottom,
+            "rich_pinch": rich_pinched,
             "n_stages": n_stages,
             "n_stages_effective": N_eff,
             "absorption_factor": A,
@@ -470,6 +517,38 @@ class AmineAbsorber:
         }
 
         return gas_out, solvent_out, info
+
+    def _rich_loading_max(self, F_CO2_in, F_total_gas, P_total, T_op,
+                          lean_loading):
+        """Largest rich loading the column can reach (#448).
+
+        The rich solvent leaves the bottom in contact with the inlet gas, so
+        it cannot be loaded beyond the loading in equilibrium with the inlet
+        CO2 partial pressure at the operating temperature (the rich-end
+        pinch). The stoichiometric capacity is kept as an upper bound.
+
+        Args:
+            F_CO2_in: Inlet gas CO2 flow (mol/s).
+            F_total_gas: Inlet gas total flow (mol/s).
+            P_total: Column pressure (Pa).
+            T_op: Operating (rich-end) temperature (K).
+            lean_loading: Lean loading (mol CO2/mol amine).
+
+        Returns:
+            ``(rich_max, alpha_eq, P_CO2_bottom)``: the bound, the VLE
+            loading (the capacity itself for ``"stoichiometric"``) and the
+            inlet CO2 partial pressure (Pa).
+        """
+        p = self.params
+        cap = jnp.asarray(self._solvent_data.loading_capacity, dtype=float)
+        P_CO2_bottom = safe_divide(F_CO2_in, F_total_gas) * P_total
+        if p.rich_loading_limit == "stoichiometric":
+            return cap, cap, P_CO2_bottom
+        alpha_eq = equilibrium_loading(P_CO2_bottom, T_op, p.solvent)
+        approach = jnp.asarray(p.rich_approach)
+        rich_max = jnp.minimum(
+            lean_loading + approach * (alpha_eq - lean_loading), cap)
+        return rich_max, alpha_eq, P_CO2_bottom
 
     def required_stages(
         self,
@@ -485,7 +564,9 @@ class AmineAbsorber:
             gas_in: Inlet gas stream
 
         Returns:
-            Required number of stages
+            Required number of stages (``inf`` when the target cannot be
+            reached: Kremser with ``A < 1``, or a capture that would load
+            the solvent past the rich-end limit, see ``rich_loading_limit``)
         """
         p = self.params
         capture_target = jnp.asarray(capture_target)
@@ -539,4 +620,14 @@ class AmineAbsorber:
                          jnp.log(num_s) / jnp.log(A_s) - 1.0)
         N = N_eq / _stage_ratio(eta, A)
 
-        return jnp.where(feasible | near, jnp.maximum(N, 1.0), jnp.inf)
+        # Rich-end pinch (#448): no stage count loads the solvent past
+        # rich_loading_max, which caps the capture at
+        # (rich_max - lean) F_amine / F_CO2_in.
+        rich_max, _, _ = self._rich_loading_max(
+            F_CO2_in, F_total_gas, P_total, T_op, lean_loading)
+        capture_max = safe_divide(
+            jnp.maximum(rich_max - lean_loading, 0.0) * F_amine, F_CO2_in)
+        reachable = capture_target <= capture_max
+
+        return jnp.where((feasible | near) & reachable,
+                         jnp.maximum(N, 1.0), jnp.inf)

@@ -337,6 +337,8 @@ class AbsorberParams:
     stage_efficiency: float = 0.25 # Murphree efficiency
     lean_loading: float = 0.2      # Lean loading (mol CO2/mol amine)
     model_water_transfer: bool = False
+    rich_loading_limit: str = "equilibrium"  # or "stoichiometric"
+    rich_approach: float = 1.0     # fraction of the lean -> equilibrium span
 ```
 
 `L_G_ratio`, `solvent_conc` and `lean_loading` build the lean solvent
@@ -363,11 +365,32 @@ flows set the amine and water rates, the lean loading and therefore L/G.
 | `info['rich_loading']`, `info['lean_loading']` | float | mol/mol | Solvent loadings |
 | `info['absorption_factor']` | float | - | Kremser $A = L/(mG)$ |
 | `info['n_stages_effective']` | float | - | Equilibrium stages after Murphree efficiency |
+| `info['rich_loading_max']` | float | mol/mol | Largest rich loading allowed (rich-end pinch, capped at capacity) |
+| `info['equilibrium_rich_loading']` | float | mol/mol | VLE loading at the inlet CO2 partial pressure and `T_op` |
+| `info['rich_pinch']` | bool | - | True where the rich-end limit binds |
 
 The Kremser form holds for every absorption factor: when $A < 1$ the
 column cannot capture more than the fraction $A$ however many stages it
 has, which is what slow, low-capacity solvents such as MDEA show at
 flue-gas conditions.
+
+The rich loading is bounded by the **rich-end pinch**: the solvent leaving
+the bottom of the column is in contact with the inlet gas, so it cannot
+hold more CO2 than the loading in equilibrium with the inlet partial
+pressure $y_{CO_2,in} P$ at the operating temperature
+(`equilibrium_loading`, the same Kent-Eisenberg VLE the stripper uses for
+its reboiler floor). The stoichiometric capacity (0.5 for MEA, carbamate)
+stays an upper bound. For 30 wt% MEA at 40 C and 15 % CO2 that limit is
+about 0.48 mol/mol, not 0.5; once it binds (`info['rich_pinch']`) capture
+rises only with the circulation, and more stages do not help. A hotter
+column or a leaner gas lowers it. `rich_approach < 1` stops the rich
+solvent short of equilibrium (a fraction of the lean-to-equilibrium span),
+and `rich_loading_limit="stoichiometric"` restores the earlier,
+capacity-only bound. The VLE constant is anchored on MEA data, so for the
+other solvents the limit is only as good as that correlation: at the
+default lean loading of 0.2, MDEA and AMP already sit above their rich-end
+equilibrium at 15 kPa and capture nothing. Give them a lower
+`lean_loading`, or use the stoichiometric option.
 
 #### Example Usage
 
@@ -468,6 +491,53 @@ Feeding `lean_solvent` back to `absorber(flue_gas, lean_solvent)` closes
 the solvent loop: the absorber then uses the stripper's amine, water and
 lean loading, and at steady state the CO2 captured equals the CO2
 stripped (water lost with the product needs make-up).
+
+(amine-loop)=
+### Closed absorber-stripper loop: `solve_amine_loop`
+
+`solve_amine_loop(gas_in, absorber, stripper)` solves that loop with the
+lean solvent as the tear. The circulation comes from the absorber's
+`L_G_ratio` and `solvent_conc`; the lean loading is solved for, not taken
+from `lean_loading`. The amine is conserved and make-up water replaces
+what leaves with the treated gas and the CO2 product, so the tear is the
+scalar lean loading. Its residual is bracketed on `[0, capacity]`, so a
+bisection always converges, and derivatives come from the implicit
+function theorem rather than from unrolling iterations. The lean/rich
+exchanger is the stripper's own `cross_exchanger_approach`; adding a
+separate `LeanRichExchanger` would count the same heat recovery twice.
+This is a library function, not a palette operation.
+
+```python
+import jax
+jax.config.update("jax_enable_x64", True)
+from difflow import make_stream
+from difflow_cc import AbsorberParams, StripperParams, solve_amine_loop
+
+flue_gas = make_stream({"CO2": 13.0, "N2": 87.0}, T=313.15, P=101325.0)
+absorber_p = AbsorberParams(solvent="MEA", n_stages=15, L_G_ratio=3.5)
+stripper_p = StripperParams(solvent="MEA", n_stages=10)
+
+treated_gas, co2_product, loop = solve_amine_loop(flue_gas, absorber_p, stripper_p)
+print(f"Capture {float(loop['capture_efficiency']):.1%}, "
+      f"lean {float(loop['lean_loading']):.3f}, rich {float(loop['rich_loading']):.3f}, "
+      f"reboiler {float(loop['reboiler_duty'])/1e6:.2f} MW, "
+      f"pinched: {bool(loop['rich_pinch'])}")
+
+# Sensitivity of capture to the circulation, through the converged loop
+d_capture = jax.grad(lambda lg: solve_amine_loop(
+    flue_gas, absorber_p.update(L_G_ratio=lg), stripper_p)[2]["capture_efficiency"])(3.5)
+```
+
+| `info` key | Units | Description |
+|------------|-------|-------------|
+| `capture_efficiency` | - | CO2 captured / CO2 fed |
+| `CO2_captured`, `CO2_stripped` | mol/s | Equal at convergence |
+| `lean_loading`, `rich_loading` | mol/mol | Converged loadings |
+| `reboiler_duty`, `specific_energy` | W, GJ/t | From the stripper |
+| `rich_pinch` | bool | Absorber rich-end limit binds |
+| `makeup_water` | mol/s | Water added to the lean solvent |
+| `converged`, `residual` | -, mol/mol | Tear closure |
+| `absorber`, `stripper` | dict | The units' own `info` |
 
 ---
 
@@ -1095,7 +1165,8 @@ print(f"Membrane lifetime: {float(lifetime):.1f} years")
 The absorber, stripper and lean/rich exchanger close on the solvent: the
 stripper's lean outlet is the absorber's `solvent_in`. A few
 successive-substitution passes (or a `Flowsheet` recycle) converge the
-loop, after which CO2 captured equals CO2 stripped.
+loop, after which CO2 captured equals CO2 stripped;
+[`solve_amine_loop`](amine-loop) does the same solve in one call.
 
 ```python
 import jax

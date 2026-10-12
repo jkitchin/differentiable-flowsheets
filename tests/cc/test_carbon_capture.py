@@ -1663,9 +1663,14 @@ class TestVLEMagnitude:
         from difflow.streams import get_flows, make_stream
         from difflow_cc import AbsorberParams, AmineAbsorber
 
+        # L/G 4, not 3: at L/G 3 the 10 % CO2 feed pinches the rich end
+        # (#448: the solvent can load only to ~0.47 in equilibrium with
+        # 10 kPa CO2, i.e. ~91 % capture) already at one stage, so the
+        # stage count rightly moves nothing there. At L/G 4 the pinch allows
+        # >100 % and the Kremser stage count is what limits capture.
         def capture(n):
             absorber = AmineAbsorber(AbsorberParams(
-                solvent="MEA", n_stages=n, solvent_conc=30.0, L_G_ratio=3.0))
+                solvent="MEA", n_stages=n, solvent_conc=30.0, L_G_ratio=4.0))
             gas, _, _ = absorber(
                 make_stream({"CO2": 1.0, "N2": 9.0}, T=313.15, P=101325.0))
             return 1.0 - float(get_flows(gas)["CO2"])

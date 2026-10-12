@@ -763,3 +763,109 @@ class TestRateBasedContactor:
             return raf["F_A"]
 
         check_grads(f, (2.0, 3e-3), order=1, modes=["rev"])
+
+
+class TestCascadeStageEfficiency:
+    """#448: stage_efficiency applies to counter-current and crossflow, and
+    profiles survive jit over n_stages."""
+
+    F, S, N, ETA = 10.0, 6.0, 4, 0.6
+
+    def _streams(self):
+        feed = make_stream({"H2O": self.F, "A": 1.0, "B": 0.5}, T=298.0, P=1e5)
+        solv = make_stream({"Solvent": self.S, "A": 0.05}, T=298.0, P=1e5)
+        return feed, solv
+
+    def _brute(self, cfg, K, X0, Yin):
+        """Real Murphree (raffinate) stages solved directly, ratio basis."""
+        F, S, N, eta = self.F, self.S, self.N, self.ETA
+        if cfg == "crossflow":
+            x, xs, ys = X0, [], []
+            for _ in range(N):
+                A = np.array([[F, S / N], [-1.0, eta / K]])
+                xn, y = np.linalg.solve(A, [F * x + S / N * Yin, -(1 - eta) * x])
+                xs.append(xn)
+                ys.append(y)
+                x = xn
+            return np.array(xs), np.array(ys)
+        A, b = np.zeros((2 * N, 2 * N)), np.zeros(2 * N)
+        for n in range(1, N + 1):
+            r, ix, iy = 2 * (n - 1), n - 1, N + n - 1
+            A[r, ix] += F
+            A[r, iy] += S
+            if n > 1:
+                A[r, ix - 1] -= F
+                A[r + 1, ix - 1] = 1 - eta
+            else:
+                b[r] += F * X0
+                b[r + 1] -= (1 - eta) * X0
+            if n < N:
+                A[r, iy + 1] -= S
+            else:
+                b[r] += S * Yin
+            A[r + 1, ix] = -1.0
+            A[r + 1, iy] = eta / K
+        z = np.linalg.solve(A, b)
+        return z[:N], z[N:]
+
+    @pytest.mark.parametrize("cfg", ["counter_current", "crossflow"])
+    def test_matches_stage_by_stage_murphree(self, simple_equilibrium, cfg):
+        feed, solv = self._streams()
+        r, e, info = MultistageCascade(CascadeParams(self.N, simple_equilibrium, flow_config=cfg,
+                                                     stage_efficiency=self.ETA))(feed, solv)
+        for sp, K, X0, Yin in [("A", 2.0, 0.1, 0.05 / self.S), ("B", 0.5, 0.05, 0.0)]:
+            xs, ys = self._brute(cfg, K, X0, Yin)
+            assert float(r[f"F_{sp}"]) / self.F == pytest.approx(xs[-1], rel=1e-6)
+            np.testing.assert_allclose(np.array(info["profiles"]["x"][sp][1:]), xs, rtol=1e-6, atol=1e-9)
+            np.testing.assert_allclose(np.array(info["profiles"]["y"][sp][1:]), ys, rtol=1e-6, atol=1e-9)
+            assert float(r[f"F_{sp}"] + e[f"F_{sp}"]) == pytest.approx(
+                float(feed[f"F_{sp}"]) + float(solv.get(f"F_{sp}", 0.0)), rel=1e-12)
+
+    @pytest.mark.parametrize("cfg", ["counter_current", "crossflow"])
+    def test_efficiency_changes_result(self, simple_equilibrium, cfg):
+        """The issue's repro: eta = 0.5 must not give the ideal raffinate."""
+        feed, solv = self._streams()
+        ideal = MultistageCascade(CascadeParams(3, simple_equilibrium, flow_config=cfg))(feed, solv)[0]
+        one = MultistageCascade(CascadeParams(3, simple_equilibrium, flow_config=cfg,
+                                              stage_efficiency=1.0))(feed, solv)[0]
+        half = MultistageCascade(CascadeParams(3, simple_equilibrium, flow_config=cfg,
+                                               stage_efficiency=0.5))(feed, solv)[0]
+        assert float(one["F_A"]) == pytest.approx(float(ideal["F_A"]), rel=1e-12)
+        assert float(half["F_A"]) > 1.05 * float(ideal["F_A"])
+
+    def test_rigorous_rejects_efficiency(self, simple_equilibrium):
+        p = CascadeParams(3, simple_equilibrium, model="rigorous", stage_efficiency=0.5)
+        feed, solv = self._streams()
+        with pytest.raises(ValueError, match="stage_efficiency"):
+            MultistageCascade(p)(feed, solv)
+
+    @pytest.mark.parametrize("cfg", ["counter_current", "crossflow"])
+    def test_grad_wrt_efficiency(self, simple_equilibrium, cfg):
+        feed, solv = self._streams()
+
+        def f(eta):
+            return MultistageCascade(CascadeParams(4.0, simple_equilibrium, flow_config=cfg,
+                                                   stage_efficiency=eta))(feed, solv)[0]["F_A"]
+        g = float(jax.grad(f)(0.7))
+        fd = (float(f(0.7 + 1e-6)) - float(f(0.7 - 1e-6))) / 2e-6
+        assert g < 0.0
+        assert g == pytest.approx(fd, rel=1e-5)
+
+    @pytest.mark.parametrize("cfg", ["counter_current", "crossflow", "co_current"])
+    def test_profiles_under_jit(self, simple_equilibrium, cfg):
+        feed, solv = self._streams()
+
+        def prof(n):
+            p = CascadeParams(n, simple_equilibrium, flow_config=cfg, profile_stages=6)
+            return jnp.stack(MultistageCascade(p)(feed, solv)[2]["profiles"]["x"]["A"])
+        jitted = np.asarray(jax.jit(prof)(4.0))
+        eager = np.asarray(jnp.stack(MultistageCascade(CascadeParams(
+            4, simple_equilibrium, flow_config=cfg))(feed, solv)[2]["profiles"]["x"]["A"]))
+        assert jitted.shape == (7,)
+        np.testing.assert_allclose(jitted[:5], eager, rtol=1e-12)
+        assert np.all(np.isnan(jitted[5:]))
+
+    def test_traced_without_profile_stages_warns(self, simple_equilibrium):
+        feed, solv = self._streams()
+        with pytest.warns(UserWarning, match="profile_stages"):
+            jax.jit(lambda n: MultistageCascade(CascadeParams(n, simple_equilibrium))(feed, solv)[0]["F_A"])(3.0)
