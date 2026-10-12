@@ -2367,8 +2367,11 @@ class DistillationColumn(ValueKeyed):
                 - 'y_profile': Vapor composition profiles
                 - 'T_condenser': Condenser temperature (K), = distillate T
                 - 'T_reboiler': Reboiler temperature (K), = bottoms T
-                - 'L_rect': Rectifying liquid flow rate (CMO) or 'L_profile'
-                - 'V_rect': Rectifying vapor flow rate (CMO) or 'V_profile'
+                - 'L_profile': (n,) liquid flows leaving each stage (mol/s);
+                  on the CMO path the constant-molar-overflow profile
+                - 'V_profile': (n,) vapor flows leaving each stage (mol/s)
+                - 'L_rect', 'V_rect': rectifying liquid and vapor flows (CMO
+                  path only)
                 - 'D': Distillate flow rate
                 - 'B': Bottoms flow rate
                 - 'balance_error': (n_species,) component balance residual
@@ -2392,9 +2395,6 @@ class DistillationColumn(ValueKeyed):
                   ``Q_condenser`` the duty on the partial basis (reflux latent
                   heat only). The distillate stream is that vapour at
                   ``T_condenser``.
-                When use_mesh=True, also includes:
-                - 'L_profile': (n,) liquid flows leaving each stage (mol/s)
-                - 'V_profile': (n,) vapor flows leaving each stage (mol/s)
         """
         # Jitted body, plain-function wrapper: see :meth:`ShortcutColumn._solve`.
         # By keyword, not positionally: `static_argnames` only marks an
@@ -2526,6 +2526,9 @@ class DistillationColumn(ValueKeyed):
         else:
             info["L_rect"] = R * D
             info["V_rect"] = (R + 1) * D
+            # The frozen CMO profiles the solve used (issue #444), so code
+            # that reads L_profile/V_profile works on either path.
+            info["L_profile"], info["V_profile"] = self._cmo_flows(F_total, R, D)
         if partial_cond:
             info["y_D"] = y_D
             info["x_R"] = x_R

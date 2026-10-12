@@ -684,6 +684,25 @@ class TestDistillationColumn:
         assert float(info["Q_condenser"]) < 0.0
 
 
+class TestCMOProfiles:
+    """The CMO path reports ``L_profile``/``V_profile`` too (issue #444)."""
+
+    def test_cmo_profiles(self, benzene_toluene_thermo):
+        n, fs, R, F, D, q = 10, 4, 2.0, 100.0, 50.0, 1.0
+        column = DistillationColumn(DistillationColumnParams(
+            species_order=["benzene", "toluene"], n_stages=n, feed_stage=fs,
+            P=101325.0), benzene_toluene_thermo)
+        feed = make_stream({"benzene": 50.0, "toluene": 50.0}, T=370.0, P=101325.0)
+        _, _, info = column(feed, R=R, D_spec=D, use_mesh=False)
+        L, V = np.asarray(info["L_profile"]), np.asarray(info["V_profile"])
+        assert L.shape == V.shape == (n,)
+        np.testing.assert_allclose(L[-1], R * D)              # top: reflux
+        np.testing.assert_allclose(V[-1], (R + 1) * D)
+        np.testing.assert_allclose(L[0], F - D)               # bottoms
+        np.testing.assert_allclose(L[1:fs], R * D + q * F)    # stripping
+        np.testing.assert_allclose(float(info["L_rect"]), R * D)
+
+
 class TestFeedStageConvention:
     """The feed stage belongs to one section on each of its two sides.
 
