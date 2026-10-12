@@ -8,6 +8,33 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Core membrane separations (unit-ops book Ch. 22).** New `difflow.units.membranes`: `GasPermeator` (any
+  number of species; complete mixing, cross flow, cocurrent or countercurrent; given area or stage cut;
+  implicit-function gradients), `ReverseOsmosis` (plug-flow RO with solution-diffusion fluxes, film-theory
+  polarization, van't Hoff osmotic pressure and the recovery limit), and library functions: the binary
+  complete-mixing closed forms (Geankoplis 5e §13.4), `permeation_stage`, `area_for_stage_cut`,
+  `osmotic_pressure`, `ro_local_flux`, `polarization_modulus`, `gel_polarization_flux`, `uf_flux`,
+  `batch_concentration_time`, `BARRER`, `GPU`. The carbon-capture `MembraneSeparator`/`MultistageMembrane`
+  use the core solver and gain `flow_pattern=` and `n_steps=`; bio `gel_layer_flux` uses the core gel model.
+  The plug-flow models are tested against hand integrations in the feed-side mole fraction.
+- **`difflow.adsorption` (unit-ops book Ch 23).** A core module for adsorption, ion exchange and chromatography,
+  independent of the CO2-only cycle models in `difflow_cc` and the mAb column in `difflow_bio`: linear, Langmuir
+  (affinity form) and Freundlich isotherms; `fit_isotherm` (linearized start, Levenberg-Marquardt polish);
+  `batch_adsorption`; the length-of-unused-bed method (`lub_analysis`, `lub_break_time`, `stoichiometric_time`);
+  `fixed_bed_breakthrough`, an isothermal LDF bed. A clean bed without dispersion is solved in corrected time
+  theta = t - eps z/v_s, where the fluid hold-up drops out exactly, so a liquid bed that lasts months costs a few
+  hundred steps; otherwise a method-of-lines form. Both use adaptive Tsit5 with the step capped inside the stability
+  region so reverse-mode gradients are right (uncapped, the gradient of the stoichiometric time came out -1010
+  against +50); `klinkenberg_breakthrough`; `ion_exchange_equilibrium` (mass action, any valences);
+  and `retention_factor`, `plate_count`, `resolution`, `purnell_resolution`, `plates_for_resolution`, `van_deemter`,
+  `van_deemter_optimum`, `gaussian_peak`. Tests reproduce Geankoplis 5e Examples 12.2-1 and 12.3-1 (data recalled
+  from memory) and the Klinkenberg solution (`tests/test_adsorption.py`).
+- **`create_objective` / `Flowsheet.make_objective_fn` forward solve keywords and reach `Unit.params`.** Extra
+  keyword arguments go to `fs.solve` (e.g. `max_iter` for a slow loop under `jax.grad`, which takes plain
+  substitution), and a `"unit.field"` key that names an entry of the unit's call-keyword dict (a splitter's
+  `split_frac`, a reactor's `T_spec`) now sets it; before, only fields of the operation's `Params` were reachable
+  and `split_frac` raised `AttributeError`. A field that is neither still raises.
+
 - **Unit-ops book Part V gaps (issue 448).**
   *Extraction.* `CascadeParams.stage_efficiency` (Murphree, raffinate phase) now applies to counter-current
   (Lewis overall efficiency, exact for straight lines) and crossflow (stage by stage), not only co-current; its
@@ -960,6 +987,35 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Fixed
+
+- `tests/test_docs_examples.py` (release) honours `<!-- doc-test: skip -->` like
+  `test_doc_examples.py`, and the `underwood_class2` docs example imports `jnp`: the nightly
+  Distillation docs examples ran a call fragment and a block without its import.
+
+- **Bio `concentration_polarization` swapped R and 1-R (unit-ops book Ch. 22).** It returned
+  `C_b exp(J/k)/(1-R+R exp(J/k))`, which gives `C_w = C_b` for a fully retained solute (R = 1), the case that
+  polarizes most. It now returns `C_b exp(J/k)/(R+(1-R) exp(J/k))` (film theory; `C_b exp(J/k)` at R = 1) via
+  the core `polarization_modulus`.
+- **Protein A load volume used the resin's saturation capacity as its dynamic capacity.**
+  `ProteinAChromatography.calculate_load_volume` took the dynamic binding capacity as `0.9 q_max` whatever the
+  feed titre; it now uses the Langmuir loading at the feed concentration times `(1 - breakthrough_limit)`, as the
+  column call does, and the unit's `equations` show the dissociation-constant isotherm `q_max C/(K_d + C)` it
+  actually evaluates.
+- **`grad` of a recycle solve after a jitted `grad` (`difflow.flowsheet.Unit`).** `Unit` was a dataclass with a
+  value `__eq__` over `params`, which holds tracers when a design variable goes in through `Unit.params`. The
+  Units ride in the `optx.fixed_point` args, so equinox's trace cache compared them and raised "Exception raised
+  while checking equality of metadata fields ... _ClosureConvert": once `jit(grad(f))` had run, `grad(jit(f))`
+  and `grad(f)` failed in the same process (this broke `sensitivity_analysis` on a jitted plant model). `Unit`
+  now compares by identity (`@dataclass(eq=False)`); its hash is unchanged.
+
+- **Bisection with a NaN bracket end (`difflow.staged._solve_monotone`).** When the residual was NaN at one end of
+  the bracket (humid air below its dew point at the 200 K lower bound of the cocurrent `Dryer` outlet solve), the
+  direction of monotonicity came out wrong, the bisection walked to the wrong end and the final Newton step gave a
+  nearly right value with a wrong gradient: `d T_air_out / d G` was -0.012 against +3.14 K per kg/s by finite
+  differences at 60 kg/s of 400 C air. The direction is now read from the finite end and a NaN midpoint counts as
+  lying on the NaN end's side. Used by the dryer, leaching, crystallizer, batch-distillation and filtration solves.
+- **`total_utility_cost` is differentiable.** It called `float()` and branched in Python on the duties, so
+  `jax.grad`/`jit`/`vmap` over it raised; it is now pure JAX (negative duties still cost nothing).
 
 - **Flash derivatives and near-boundary values (#444).** (1) `flash_TP_eos` second derivatives were wrong (the
   Hessian of a two-flash PR train had the wrong sign): derivatives came from unrolling 50 damped substitution steps.

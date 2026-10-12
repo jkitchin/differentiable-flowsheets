@@ -265,17 +265,33 @@ def _solve_monotone(f, lo, hi, n_iter: int = 60):
     Bisection on stop-gradient values, then one Newton step with a
     stop-gradient slope, so ``d root/d params = -(df/dp)/(df/dx)`` for any
     parameters ``f`` closes over.
+
+    ``f`` may be NaN over one end of the bracket (outside its physical
+    domain, e.g. humid air below its dew point): the direction of
+    monotonicity is then read from the finite end alone, and a NaN at a
+    midpoint counts as lying on the NaN end's side of the root. Without
+    this, a NaN at ``lo`` flipped the bisection, which then walked to the
+    wrong end and returned a Newton step from there: a nearly right value
+    with a wrong gradient.
     """
     def g(x):
         return lax.stop_gradient(f(x))
 
-    increasing = g(hi) >= g(lo)
+    g_lo, g_hi = g(jnp.asarray(lo, float)), g(jnp.asarray(hi, float))
+    fin_lo, fin_hi = jnp.isfinite(g_lo), jnp.isfinite(g_hi)
+    # With one end NaN, assume the root is in the bracket: the finite end's
+    # sign then says which way f runs.
+    increasing = jnp.where(fin_lo & fin_hi, g_hi >= g_lo,
+                           jnp.where(fin_hi, g_hi > 0.0, g_lo < 0.0))
+    nan_at_hi = fin_lo & ~fin_hi
 
     def body(_, carry):
         a, b = carry
         m = 0.5 * (a + b)
-        pos = g(m) > 0.0
+        gm = g(m)
+        pos = gm > 0.0
         go_left = jnp.where(increasing, pos, ~pos)
+        go_left = jnp.where(jnp.isfinite(gm), go_left, nan_at_hi)
         return jnp.where(go_left, a, m), jnp.where(go_left, m, b)
 
     a, b = lax.fori_loop(0, n_iter, body, (jnp.asarray(lo, float), jnp.asarray(hi, float)))

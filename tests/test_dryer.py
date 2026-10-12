@@ -623,6 +623,33 @@ class TestContinuousDryer:
         assert float(ev(T_opt + 15.0)[1]) > T_max + 5.0                  # a hotter inlet breaks the limit
 
 
+class TestCocurrentHumidExhaust:
+    """Cocurrent dryer whose exhaust is too humid to exist at 200 K.
+
+    The outlet-temperature solve brackets on [200 K, T_in]; at high air
+    flow the residual is NaN at 200 K (air above saturation), which used to
+    flip the bisection and give a wrong ``d T_air_out / d G`` (-0.012
+    against +3.14 K per kg/s by finite differences at G = 60 kg/s).
+    """
+
+    @pytest.mark.slow
+    def test_grad_matches_fd(self):
+        wet = {"F_solid": 4.334, "F_H2O": 4.334 * 1.4045 / MW_WATER, "T": 330.0,
+               "P": 101325.0}
+        p = DryerParams(mode="continuous", flow="cocurrent", X_c=2.0, X_eq=0.05,
+                        product_moisture=0.1111, h=50.0, solids_cp=1500.0)
+
+        def t_out(G):
+            air = air_stream_from_state(state(T=400.0 + K0, W=0.01), G)
+            return Dryer(p)(wet, air)[2]["T_air_out"]
+
+        G, h = 60.0, 1e-3
+        fd = (float(t_out(G + h)) - float(t_out(G - h))) / (2 * h)
+        g = float(jax.grad(t_out)(G))
+        assert fd > 0
+        assert g == pytest.approx(fd, rel=1e-6)
+
+
 class TestBatchDryer:
     def params(self, **kw):
         base = dict(mode="batch", X_c=0.20, X_eq=0.05, product_moisture=0.10, air_mass_velocity=1.0,

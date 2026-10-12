@@ -277,8 +277,9 @@ class ProteinAChromatography:
 
     symbol = "Protein A"
     equations = [
-        r"q = \frac{q_\mathrm{max}\,K_d\,C}{1 + K_d\,C}\qquad \text{(Langmuir binding)}",
-        r"\mathrm{DBC}_{10\%} = \frac{q_\mathrm{max}\,\rho_\mathrm{bed}\,t_r}{1 + k'}\qquad \text{(dynamic binding capacity)}",
+        r"q = \frac{q_\mathrm{max}\,C}{K_d + C}\qquad \text{(Langmuir binding, dissociation constant } K_d)",
+        r"\mathrm{DBC} = q(C_\mathrm{feed})\,(1 - f_b)\quad\text{or, with } k_\mathrm{ads}:\ "
+        r"q(C_\mathrm{feed})\,(1 - e^{-k_\mathrm{ads} t_r})\,0.9",
         r"Y_\mathrm{load} = 1 - C_\mathrm{breakthrough}/C_0",
     ]
     assumptions = [
@@ -467,18 +468,27 @@ class ProteinAChromatography:
         self,
         feed_concentration: float | Array,
         target_utilization: float | Array = 0.8,
+        breakthrough_limit: float | Array = 0.1,
     ) -> Array:
         """Calculate recommended load volume.
+
+        The capacity is the same static estimate ``__call__`` uses, the
+        Langmuir loading at the feed concentration times
+        ``1 - breakthrough_limit``; it used to be ``0.9 q_max`` whatever the
+        feed, so ``K_d`` and a dilute feed did nothing here.
 
         Args:
             feed_concentration: mAb concentration in feed (g/L)
             target_utilization: Target fraction of DBC to use (0-1)
+            breakthrough_limit: Breakthrough fraction defining the DBC
+                (default 0.1, a DBC at 10 % breakthrough)
 
         Returns:
             Recommended load volume (L)
         """
         p = self.params
-        DBC = p.q_max * 0.9  # 10% breakthrough capacity
+        q_eq = langmuir_isotherm(jnp.asarray(feed_concentration), p.q_max, p.K_d)
+        DBC = q_eq * (1.0 - jnp.asarray(breakthrough_limit))
         max_mass = DBC * p.column_volume * target_utilization
         return max_mass / jnp.asarray(feed_concentration)
 

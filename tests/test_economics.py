@@ -692,3 +692,40 @@ class TestCostRangeWarning:
             warnings.simplefilter("error", CostRangeWarning)
             g = jax.grad(lambda s: compressor_cost(s, "centrifugal"))(30.0)
         assert float(g) > 0.0
+
+
+class TestTotalUtilityCostDifferentiable:
+    """total_utility_cost is a JAX function of the consumption (unit-ops book, Ch 24)."""
+
+    def test_value_matches_the_pieces(self):
+        c = econ.UtilityConsumption(heating_duty=1e6, cooling_duty=2e6, electricity=100.0,
+                                    process_water=0.01, wastewater=0.005,
+                                    steam_level="low_pressure")
+        p = econ.UtilityPrices()
+        expected = (1e-3 * p.steam_low_pressure + 2e-3 * p.cooling_water
+                    + 100.0 * p.electricity / 3600.0 + 0.01 * p.process_water
+                    + 0.005 * p.wastewater_treatment)
+        assert float(econ.total_utility_cost(c)) == pytest.approx(expected, rel=1e-12)
+
+    def test_negative_terms_cost_nothing(self):
+        c = econ.UtilityConsumption(heating_duty=-1e6, electricity=-5.0)
+        assert float(econ.total_utility_cost(c)) == 0.0
+
+    def test_grad_jit_and_vmap(self):
+        from jax.test_util import check_grads
+
+        def f(x):
+            q, kw = x[0], x[1]
+            return econ.total_utility_cost(econ.UtilityConsumption(
+                heating_duty=q, cooling_duty=0.8 * q, electricity=kw,
+                steam_level="low_pressure")) * 1e3
+
+        x0 = jnp.array([2.0e6, 300.0])
+        check_grads(f, (x0,), order=1, modes=["fwd", "rev"])
+        g = jax.grad(f)(x0)
+        p = econ.UtilityPrices()
+        assert float(g[0]) == pytest.approx((p.steam_low_pressure + 0.8 * p.cooling_water) * 1e-6,
+                                            rel=1e-10)
+        assert float(jax.jit(f)(x0)) == pytest.approx(float(f(x0)))
+        ys = jax.vmap(f)(jnp.stack([x0, 2 * x0]))
+        assert float(ys[1]) == pytest.approx(2 * float(ys[0]))

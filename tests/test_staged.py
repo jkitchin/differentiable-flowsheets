@@ -660,3 +660,35 @@ class TestMcCabeThieleSections:
             S.mccabe_thiele(c, None, None, XD, XB, lines=[rect, strip])
         with pytest.raises(ValueError, match="switches"):
             S.mccabe_thiele(c, None, None, XD, XB, lines=[rect, strip], switch_x=[0.4, 0.3])
+
+
+class TestSolveMonotoneNanBracket:
+    """``_solve_monotone`` when ``f`` is NaN over one end of the bracket.
+
+    Regression: a NaN at ``lo`` made ``increasing`` False, the bisection
+    walked to ``lo`` and the final Newton step returned a near-right value
+    from the wrong end with a wrong gradient (seen as a wrong
+    ``d T_air_out / d G`` in the cocurrent Dryer at high air flow).
+    """
+
+    @pytest.mark.parametrize("sign", [1.0, -1.0])
+    def test_nan_at_lo(self, sign):
+        def root(p):
+            return S._solve_monotone(
+                lambda x: sign * (jnp.sqrt(x - 300.0) - jnp.sqrt(p - 300.0)),
+                200.0, 674.0)
+        assert float(root(350.0)) == pytest.approx(350.0, abs=1e-9)
+        assert float(jax.grad(root)(350.0)) == pytest.approx(1.0, rel=1e-9)
+        check_grads(root, (350.0,), order=1, modes=["fwd", "rev"])
+
+    def test_nan_at_hi(self):
+        def root(p):
+            return S._solve_monotone(
+                lambda x: jnp.sqrt(500.0 - x) - jnp.sqrt(500.0 - p), 200.0, 674.0)
+        assert float(root(350.0)) == pytest.approx(350.0, abs=1e-9)
+        assert float(jax.grad(root)(350.0)) == pytest.approx(1.0, rel=1e-9)
+
+    def test_finite_bracket_unchanged(self):
+        root = lambda p: S._solve_monotone(lambda x: x ** 3 - p, 0.0, 10.0)
+        assert float(root(8.0)) == pytest.approx(2.0, abs=1e-12)
+        assert float(jax.grad(root)(8.0)) == pytest.approx(1.0 / 12.0, rel=1e-9)

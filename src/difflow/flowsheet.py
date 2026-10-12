@@ -395,7 +395,7 @@ def _initialized_outlets(result: Any, unit: "Unit") -> dict[str, Stream]:
     return dict(zip(unit.outlet_names, outlets))
 
 
-@dataclass
+@dataclass(eq=False)
 class Unit:
     """A unit operation in a flowsheet.
 
@@ -2261,6 +2261,13 @@ class Flowsheet:
         ``unit.operation.params.update(V=2.0)`` on the unit named
         ``"reactor"``.
 
+        A field that is a key of the unit's own :attr:`Unit.params` dict
+        (the keyword arguments the flowsheet passes to the operation on every
+        call, e.g. ``{"split_frac": 0.1}`` on a :class:`Splitter`) updates
+        that dict instead: ``{"purge.split_frac": 0.05}``. Those keywords
+        override the operation's own parameters at call time, so they take
+        precedence here too.
+
         Feed streams are addressed with a ``"feed:"`` prefix:
         ``{"feed:F1.total_flow": 12.0, "feed:F1.x_A": 0.3, "feed:F1.T": 340.0}``.
         See :func:`_update_feed_stream` for the recognised field names
@@ -2322,20 +2329,27 @@ class Flowsheet:
         for unit_name, updates in unit_updates.items():
             idx = unit_index[unit_name]
             unit = self.units[idx]
+            # Keywords the flowsheet passes to the call (Unit.params) first:
+            # they override the operation's own parameters anyway.
+            call_updates = {k: v for k, v in updates.items() if k in unit.params}
+            op_updates = {k: v for k, v in updates.items() if k not in unit.params}
             operation = unit.operation
-            if not hasattr(operation, "params"):
-                raise AttributeError(
-                    f"Unit {unit_name!r} operation has no .params attribute; "
-                    f"cannot apply parameter updates {list(updates.keys())}"
-                )
-            new_op_params = operation.params.update(**updates)
-            # Shallow-copy the operation object and replace its .params so that
-            # all other attributes (e.g. thermo, mode) are preserved without
-            # having to know the constructor signature of each unit type.
-            new_operation = copy.copy(operation)
-            new_operation.params = new_op_params
-            new_unit = replace(unit, operation=new_operation)
-            new_units[idx] = new_unit
+            if op_updates:
+                if not hasattr(operation, "params"):
+                    raise AttributeError(
+                        f"Unit {unit_name!r} operation has no .params attribute "
+                        f"and {sorted(op_updates)} are not keys of its Unit.params "
+                        f"{sorted(unit.params)}; cannot apply these updates"
+                    )
+                new_op_params = operation.params.update(**op_updates)
+                # Shallow-copy the operation object and replace its .params so
+                # that all other attributes (e.g. thermo, mode) are preserved
+                # without having to know the constructor signature of each
+                # unit type.
+                operation = copy.copy(operation)
+                operation.params = new_op_params
+            new_call_params = {**unit.params, **call_updates}
+            new_units[idx] = replace(unit, operation=operation, params=new_call_params)
 
         # Build a shallow copy of the flowsheet with the new units
         new_fs = Flowsheet(self.species_order, **self._default_kwargs())
@@ -2353,6 +2367,7 @@ class Flowsheet:
     def make_objective_fn(
         self,
         objective_fn: Callable[[dict[str, Stream]], Array],
+        **solve_kwargs: Any,
     ) -> Callable[[dict], Array]:
         """Create a differentiable objective function from this flowsheet.
 
@@ -2375,21 +2390,37 @@ class Flowsheet:
 
             grad = jax.grad(obj)({"reactor.V": 2.0, "feed:F1.total_flow": 10.0})
 
+        A key whose field is in the unit's :attr:`Unit.params` dict updates
+        that dict (``"purge.split_frac"`` on a :class:`Splitter`).
+
+        Keyword arguments are passed on to :meth:`solve` on every call. A
+        recycle with a loop gain near 1 needs them under ``jax.grad``, where
+        the solve falls back to plain substitution and the default
+        ``max_iter=100`` can run out::
+
+            obj = fs.make_objective_fn(product, max_iter=2000)
+
         Args:
             objective_fn: Callable that maps the solved stream dict returned
                 by :meth:`solve` to a scalar :class:`jax.Array`.
+            **solve_kwargs: Keyword arguments for :meth:`solve` (``max_iter``,
+                ``tol``, ``acceleration``, ``damping``, ``tol_basis``, ...).
 
         Returns:
             Callable ``objective(params_dict) -> Array`` that updates unit
             parameters, solves the flowsheet, then evaluates
             ``objective_fn``.
+
+        Example:
+            >>> obj = fs.make_objective_fn(lambda s: s["crude"]["F_MeOH"], max_iter=500)
+            >>> dM = jax.grad(obj)({"purge.split_frac": 0.1})
         """
 
         def objective(params: dict) -> Array:
             # Apply parameter updates to a temporary copy of the flowsheet
             # using dot-notation keys of the form "<unit_name>.<param_name>".
             updated_fs = self._apply_params(params)
-            streams = updated_fs.solve()
+            streams = updated_fs.solve(**solve_kwargs)
             return objective_fn(streams)
 
         return objective
@@ -2531,6 +2562,7 @@ class Flowsheet:
 def create_objective(
     flowsheet: Flowsheet,
     objective_fn: Callable[[dict[str, Stream]], Array],
+    **solve_kwargs: Any,
 ) -> Callable[[dict], Array]:
     """Create a differentiable objective function from a flowsheet.
 
@@ -2544,8 +2576,10 @@ def create_objective(
     Args:
         flowsheet: The flowsheet to solve
         objective_fn: Function that computes objective from solved streams
+        **solve_kwargs: Passed to :meth:`Flowsheet.solve` on every call
+            (``max_iter``, ``tol``, ``acceleration``, ...).
 
     Returns:
         Function mapping parameter dict to objective value
     """
-    return flowsheet.make_objective_fn(objective_fn)
+    return flowsheet.make_objective_fn(objective_fn, **solve_kwargs)

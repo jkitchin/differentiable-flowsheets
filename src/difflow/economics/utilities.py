@@ -548,64 +548,45 @@ class UtilityConsumption:
 def total_utility_cost(
     consumption: UtilityConsumption,
     prices: UtilityPrices | None = None,
-) -> float:
+) -> Array:
     """Calculate total utility cost from consumption data.
 
+    Differentiable: every field of ``consumption`` may be a JAX array (or a
+    tracer under ``jax.grad``/``jit``/``vmap``), and each term is clipped at
+    zero by its own cost function (a negative duty costs nothing), so there
+    is no Python branching on the values. ``steam_level``, ``cooling_type``
+    and ``cooling_temperature`` are configuration and stay Python values.
+
     Args:
-        consumption: Utility consumption breakdown
+        consumption: Utility consumption breakdown. ``heating_duty`` and
+            ``cooling_duty`` in W, ``electricity`` in kW, ``process_water``
+            and ``wastewater`` in m^3/s.
         prices: Utility prices
 
     Returns:
-        Total utility cost ($/s)
+        Total utility cost ($/s) as a JAX scalar.
+
+    Example:
+        >>> c = UtilityConsumption(heating_duty=1e6, electricity=100.0)
+        >>> round(float(total_utility_cost(c)) * 3600, 2)   # $/h
+        49.48
     """
     if prices is None:
         prices = DEFAULT_PRICES
 
-    cost = 0.0
-
-    # Heating (steam)
-    if consumption.heating_duty > 0:
-        cost += float(steam_cost_from_duty(
-            jnp.array(consumption.heating_duty),
-            consumption.steam_level,
-            prices
-        ))
-
-    # Cooling
-    if consumption.cooling_duty > 0:
-        if consumption.cooling_type == "cooling_water":
-            cost += float(cooling_water_cost(
-                jnp.array(consumption.cooling_duty),
-                prices=prices
-            ))
-        else:
-            cost += float(refrigeration_cost(
-                jnp.array(consumption.cooling_duty),
-                consumption.cooling_temperature,
-                prices
-            ))
-
-    # Electricity
-    if consumption.electricity > 0:
-        cost += float(electricity_cost(
-            jnp.array(consumption.electricity),
-            prices
-        )) / 3600  # Convert $/h to $/s
-
-    # Water
-    if consumption.process_water > 0:
-        cost += float(process_water_cost(
-            jnp.array(consumption.process_water),
-            prices
-        ))
-
-    if consumption.wastewater > 0:
-        cost += float(wastewater_cost(
-            jnp.array(consumption.wastewater),
-            prices
-        ))
-
-    return cost
+    heating = steam_cost_from_duty(
+        jnp.asarray(consumption.heating_duty, dtype=float),
+        consumption.steam_level, prices)
+    duty_c = jnp.asarray(consumption.cooling_duty, dtype=float)
+    if consumption.cooling_type == "cooling_water":
+        cooling = cooling_water_cost(duty_c, prices=prices)
+    else:
+        cooling = refrigeration_cost(duty_c, consumption.cooling_temperature, prices)
+    power = jnp.maximum(jnp.asarray(consumption.electricity, dtype=float), 0.0)
+    electric = electricity_cost(power, prices) / 3600.0      # $/h -> $/s
+    water = process_water_cost(jnp.asarray(consumption.process_water, dtype=float), prices)
+    waste = wastewater_cost(jnp.asarray(consumption.wastewater, dtype=float), prices)
+    return heating + cooling + electric + water + waste
 
 
 def utility_cost_from_heat_duties(
