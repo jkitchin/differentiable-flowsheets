@@ -144,6 +144,7 @@ class TestDiluteVolatileFeed:
         assert Vs[2] > 0.1                      # was 1.4e-4 at 367.5 K
         assert all(b > a for a, b in zip(Vs, Vs[1:]))   # V rises with T
 
+    @pytest.mark.slow
     def test_gradient_matches_finite_difference(self):
         flash = self._flash()
         feed = make_stream({"ethanol": 0.05, "water": 0.95}, T=360.0, P=101325.0)

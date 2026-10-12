@@ -659,6 +659,7 @@ class TestPhaseIdentification:
         from difflow.database import get_critical_props
         return PengRobinson({s: get_critical_props(s) for s in ("methane", "propane")})
 
+    @pytest.mark.slow
     def test_compressed_liquid_is_liquid(self, c1c3):
         from difflow.eos import eos_bubble_P
         z = jnp.array([0.2, 0.8])
@@ -682,6 +683,7 @@ class TestPhaseIdentification:
         assert float(pip(c1c3, 277.6, 10e5, z, "liquid")) > 1.0
         assert float(pip(c1c3, 277.6, 10e5, z, "vapor")) < 1.0
 
+    @pytest.mark.slow
     def test_supercritical_gas_and_dense_pure_liquid(self):
         from difflow.database import get_critical_props
         ch4 = PengRobinson({"methane": get_critical_props("methane")})

@@ -973,6 +973,7 @@ class TestPHFlashPureComponent:
         assert float(vapor["F_water"] + liquid["F_water"]) == pytest.approx(1.0, rel=1e-12)
         assert bool(info["converged"])
 
+    @pytest.mark.slow
     def test_gradients_clausius_clapeyron(self, water):
         ph, th = water
 

@@ -100,6 +100,7 @@ class TestTearPressureInference:
         st = methanol_loop(fresh=_fresh(T=480.0)).solve()
         assert float(st["recycle"]["T"]) == pytest.approx(480.0)
 
+    @pytest.mark.slow
     def test_explicit_default_pins_the_old_way(self):
         # A pinned 1 atm start is what the Mixer's min-pressure rule then
         # locks the loop at: the reason inference is the default.

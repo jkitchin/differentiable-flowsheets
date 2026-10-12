@@ -2100,6 +2100,7 @@ class TestMulticomponentFUG:
         ratio = (d[0] / b[0]) / ((d[2] / b[2]) * alpha[0] ** N_min)
         assert float(ratio) == pytest.approx(1.0, rel=1e-8)
 
+    @pytest.mark.slow
     def test_underwood_theta_stays_bracketed(self):
         """The old Newton step left (1, alpha_LK) and was clipped to 1.001."""
         from scipy.optimize import brentq

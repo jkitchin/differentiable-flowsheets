@@ -829,6 +829,7 @@ class TestPublishedExamples:
         assert float(info["steam_economy"]) == pytest.approx(0.78, rel=0.01)
         assert float(info["A"]) / 0.09290304 == pytest.approx(930.0, rel=0.03)
 
+    @pytest.mark.slow
     def test_geankoplis_8_5_1_triple_effect(self):
         """Geankoplis 4e Ex. 8.5-1: 22 680 kg/h of 10 % sugar at 26.7 C to
         50 %, forward feed, steam 205.5 kPa, 13.4 kPa in effect 3,

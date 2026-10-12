@@ -570,12 +570,14 @@ class TestGeankoplis:
     x = jnp.array([0.0, 0.059, 0.145, 0.254, 0.398, 0.594, 0.867, 1.0])
     y = jnp.array([0.0, 0.271, 0.521, 0.701, 0.836, 0.925, 0.984, 1.0])
 
+    @pytest.mark.slow
     def test_example_11_3_2(self):
         r = rayleigh(tabulated(self.x, self.y), 0.5, W_over_F=0.6)
         assert float(r["x_W"]) == pytest.approx(0.277, abs=0.003)
         assert float(r["x_D_avg"]) == pytest.approx(0.835, abs=0.005)
         assert float(r["ln_F_over_W"]) == pytest.approx(np.log(1 / 0.6), rel=1e-12)
 
+    @pytest.mark.slow
     def test_rectifier_with_no_stages_is_the_same(self):
         unit = BatchDistillation(
             BatchDistillationParams(["a", "b"], n_stages=0, R=0.0),

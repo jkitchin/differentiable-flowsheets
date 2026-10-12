@@ -79,6 +79,7 @@ class TestKValues:
             return jnp.sum(thermo.K_values_array(T, 101325.0, jnp.array([x1, 1 - x1])) ** 2)
         check_grads(f, (0.3, 355.0), order=1, modes=["rev", "fwd"])
 
+    @pytest.mark.slow
     def test_azeotrope_is_where_K_is_one(self, thermo):
         # at the NRTL azeotrope (x ~ 0.89, about 351.3 K) both K-values are ~1
         from difflow.phase_diagrams import find_azeotrope
@@ -90,6 +91,7 @@ class TestKValues:
 
 
 class TestColumn:
+    @pytest.mark.slow
     @pytest.mark.parametrize("use_mesh", [False, True])
     def test_ethanol_water_column_closes(self, thermo, use_mesh):
         p = DistillationColumnParams(species_order=["ethanol", "water"], n_stages=12,
