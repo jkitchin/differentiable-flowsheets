@@ -289,6 +289,15 @@ class TestSigmaTheory:
         _, _, info = cf(feed, 2 * v * sigma, d, rp, rf, mu)
         assert float(info["Q_critical"]) == pytest.approx(2 * v * sigma, rel=1e-12)
 
+    def test_efficiency_scales_sigma_not_the_capture(self):
+        """A slow feed is captured completely even with efficiency < 1 (Ambler's correction on Sigma)."""
+        sigma, d, rp, rf, mu = 2000.0, 4e-6, 1080.0, 1000.0, 1e-3
+        v = float(stokes_velocity(d, rp, rf, mu))
+        feed = make_stream({"cells": 1.0, "water": 50.0}, T=298.15, P=101325.0)
+        cf = Centrifuge(CentrifugeParams(sigma=sigma, efficiency=0.5))
+        assert float(cf(feed, 0.1 * v * sigma, d, rp, rf, mu)[2]["cell_recovery"]) == pytest.approx(1.0)
+        assert float(cf(feed, v * sigma, d, rp, rf, mu)[2]["cell_recovery"]) == pytest.approx(0.5, rel=1e-12)
+
     def test_cut_size_is_the_particle_at_half_capture(self):
         sigma, Q, rp, rf, mu = 1500.0, 2e-3, 1100.0, 1000.0, 1.2e-3
         d50 = critical_particle_diameter(Q, sigma, rp, rf, mu)

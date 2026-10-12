@@ -916,8 +916,10 @@ All notable changes to difflow are recorded here. The format follows
 - **Sigma theory in the bio centrifuges was off by factors of 2 and sqrt(pi) (book Ch. 21).** `Centrifuge`
   captured `min(1, 2 v_s Sigma/Q)`, twice the ideal-settler value, so a disc stack (whose Sigma is the standard
   Ambler form) over-predicted the recovery by up to 2x below complete capture. It now captures
-  `efficiency * min(1, v_s Sigma/Q)`: complete at `Q = v_s Sigma`, half at `Q_critical = 2 v_s Sigma`
-  (Geankoplis 5e Sec. 14.4C). `critical_particle_diameter` had a spurious pi in the denominator (cut size 1.77x
+  `min(1, v_s e Sigma/Q)`: complete at `Q = v_s e Sigma`, half at `Q_critical = 2 v_s e Sigma`
+  (Geankoplis 5e Sec. 14.4C). `efficiency` is now Ambler's correction on Sigma (the machine is an ideal settler
+  of area `efficiency * Sigma`); it used to multiply the capture, so a disc stack at the default 0.7 could never
+  recover more than 70 % of the cells however slow the feed. `critical_particle_diameter` had a spurious pi in the denominator (cut size 1.77x
   too small): `d50 = sqrt(9 mu Q/(Delta rho g Sigma))`. `tubular_bowl_sigma` returned half the thin-layer value
   (`pi` for `2 pi omega^2 L r^2/g`); it is now the thin-layer value and takes `r_inner=` for the thick-layer
   form `omega^2 pi L (r2^2 - r1^2)/(2 g ln(2 r2/(r1 + r2)))`. The `equations` entry (a tanh that the code never

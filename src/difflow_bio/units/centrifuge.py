@@ -44,8 +44,10 @@ class CentrifugeParams(ParamsMixin):
     Attributes:
         sigma: Sigma factor - equivalent settling area (m²)
                Can be calculated from geometry or specified directly
-        efficiency: Separation efficiency factor (0-1), accounts for
-                   non-ideal effects. Default 0.7.
+        efficiency: Correction factor on Sigma (0-1) for non-ideal flow: the
+                   machine behaves as an ideal settler of area efficiency*Sigma
+                   (Ambler's factor; typically 0.4-0.7 for a disc stack, about
+                   0.9 for a tubular bowl). Default 0.7.
         species_order: List of species names. First species assumed to be cells.
         cell_species: Name of cell species (default "cells")
     """
@@ -114,7 +116,7 @@ class Centrifuge:
     equations = [
         r"v_s = \frac{(\rho_p - \rho_f)\,g\,d_p^2}{18\,\mu}\qquad \text{(Stokes settling)}",
         r"Q_{50} = 2\,v_s\,\Sigma\qquad \text{(Ambler: 50\% capture of a particle of velocity } v_s)",
-        r"\eta = e\,\min\!\left(1, \frac{v_s\,\Sigma}{Q}\right)\qquad \text{(Hazen capture in the equivalent settler)}",
+        r"\eta = \min\!\left(1, \frac{v_s\,e\,\Sigma}{Q}\right)\qquad \text{(Hazen capture in the equivalent settler, } e \text{ = efficiency)}",
     ]
     assumptions = [
         "Stokes flow regime (dilute suspension, low Re).",
@@ -187,15 +189,16 @@ class Centrifuge:
         # gravity settler that does the same job. A particle of Stokes velocity v_s is
         # captured completely when Q <= v_s Sigma and in the proportion v_s Sigma / Q
         # above that (ideal Hazen settler), so half of them at Q_crit = 2 v_s Sigma.
-        Q_crit = 2 * v_s * p.sigma
-        theoretical_sep = jnp.clip(v_s * p.sigma / Q, 0.0, 1.0)
-
-        # Apply efficiency factor (clamp to prevent mass creation)
-        actual_sep = jnp.clip(theoretical_sep * p.efficiency, 0.0, 1.0)
+        # ``efficiency`` is Ambler's correction to Sigma for non-ideal flow (the machine
+        # behaves as a settler of area efficiency * Sigma), so slow enough feeds are
+        # still captured completely.
+        sigma_eff = p.efficiency * p.sigma
+        Q_crit = 2 * v_s * sigma_eff
+        actual_sep = jnp.clip(v_s * sigma_eff / Q, 0.0, 1.0)
 
         # Cut size: the particle captured at 50% at this flow
         d_crit = critical_particle_diameter(
-            Q, p.sigma, rho_particle, rho_fluid, viscosity
+            Q, sigma_eff, rho_particle, rho_fluid, viscosity
         )
 
         # Split flows

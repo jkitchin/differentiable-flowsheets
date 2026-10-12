@@ -356,7 +356,7 @@ Centrifugation is used for:
 @dataclass
 class CentrifugeParams:
     sigma: float                    # Sigma factor (equivalent settling area, m²)
-    efficiency: float = 0.7         # Separation efficiency (0-1)
+    efficiency: float = 0.7         # Ambler correction on Sigma (0-1)
     species_order: list = None
     cell_species: str = "cells"
     lysis_threshold_g: float = None # RCF above which cells lyse (x g)
@@ -415,10 +415,11 @@ $\Sigma$ is the area of the ideal gravity settler that does the same job
 captured completely when $Q \le v_s\Sigma$ and in the proportion $v_s\Sigma/Q$ above
 that, so
 
-$$\eta = e\,\min\left(1, \frac{v_s \Sigma}{Q}\right), \qquad Q_{50} = 2 v_s \Sigma$$
+$$\eta = \min\left(1, \frac{v_s\, e\,\Sigma}{Q}\right), \qquad Q_{50} = 2 v_s\, e\,\Sigma$$
 
-where $e$ is `efficiency` (non-ideal flow) and $Q_{50}$ (`info['Q_critical']`) the flow at
-which these particles are captured at 50%. For a given separation $Q_1/\Sigma_1 = Q_2/\Sigma_2$.
+where $e$ is `efficiency`, Ambler's correction to $\Sigma$ for non-ideal flow (about 0.4-0.7 for
+a disc stack), and $Q_{50}$ (`info['Q_critical']`) the flow at which these particles are
+captured at 50%. For a given separation $Q_1/\Sigma_1 = Q_2/\Sigma_2$.
 Tubular bowl (`tubular_bowl_sigma`): $\Sigma = 2\pi\omega^2 L r^2/g$ for a thin liquid layer,
 or $\Sigma = \omega^2\pi L(r_2^2 - r_1^2)/(2g\ln[2r_2/(r_1 + r_2)])$ with the liquid surface at
 $r_1$ (`r_inner`).
