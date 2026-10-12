@@ -184,6 +184,7 @@ from difflow.units.distillation import (
     fenske_distribution,
     underwood_theta,
     underwood_minimum_reflux,
+    underwood_class2,
     kirkbride_feed_stage,
     column_diameter,
 )
@@ -415,6 +416,7 @@ __all__ = [
     "fenske_distribution",
     "underwood_theta",
     "underwood_minimum_reflux",
+    "underwood_class2",
     "kirkbride_feed_stage",
     "column_diameter",
     # Evaporators

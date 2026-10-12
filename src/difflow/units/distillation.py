@@ -2871,6 +2871,115 @@ def underwood_minimum_reflux(
     return R_min, theta
 
 
+def underwood_class2(
+    alpha: Array,
+    f: Array,
+    d_LK: Array,
+    d_HK: Array,
+    light_key: int,
+    heavy_key: int,
+    q: Array = 1.0,
+    distributing: tuple[int, ...] | list[int] | None = None,
+) -> tuple[Array, Array, Array]:
+    """Minimum reflux by Underwood's general method (class 2: distributing non-keys).
+
+    When non-key species distribute between the products at minimum reflux
+    (always for species boiling between the keys, sometimes for a non-key
+    just outside them), the single-root form :func:`underwood_minimum_reflux`
+    does not apply. Each root ``theta_k`` of
+    ``sum_i alpha_i f_i / (alpha_i - theta) = (1 - q) F`` in the volatility
+    gaps spanned by the keys and the distributing species gives one equation
+
+        ``sum_i alpha_i d_i / (alpha_i - theta_k) = V_min``
+
+    in the unknowns ``V_min = D (R_min + 1)`` and the distillate flows of the
+    distributing species; there is one root more than distributing species,
+    so the linear system is square (Shiras, Hanson and Gibson, *Ind. Eng.
+    Chem.* 42 (1950) 871; Seader and Henley, Sec. 9.2). Species lighter than
+    the span go wholly to the distillate and heavier ones wholly to the
+    bottoms.
+
+    Args:
+        alpha: Relative volatilities, shape ``(n,)`` (any reference species).
+        f: Feed molar flows, shape ``(n,)``.
+        d_LK: Distillate flow of the light key (same basis as ``f``).
+        d_HK: Distillate flow of the heavy key.
+        light_key: Index of the light key.
+        heavy_key: Index of the heavy key.
+        q: Feed thermal condition (1 saturated liquid, 0 saturated vapour).
+        distributing: Indices of the distributing non-keys. Default: every
+            species with a volatility strictly between the keys. Every
+            species inside the span of keys and distributing species must be
+            listed (a species cannot sit inside the span and not distribute).
+
+    Returns:
+        ``(R_min, d, thetas)``: the minimum reflux ratio, the distillate
+        flows of every species at minimum reflux (shape ``(n,)``), and the
+        roots used, in increasing order. A distributing species whose ``d``
+        comes out below 0 or above its feed does not in fact distribute;
+        drop it from ``distributing`` and solve again.
+
+    Example:
+        >>> R_min, d, th = underwood_class2(
+        ...     jnp.array([4.0, 2.0, 1.5, 1.0]), jnp.array([30.0, 30.0, 10.0, 30.0]),
+        ...     d_LK=29.0, d_HK=1.0, light_key=1, heavy_key=3)
+    """
+    from difflow.staged import _solve_monotone
+
+    alpha = jnp.asarray(alpha, dtype=float)
+    f = jnp.asarray(f, dtype=float)
+    n = int(alpha.shape[0])
+    a_np = np.asarray(lax.stop_gradient(alpha))
+    if not a_np[light_key] > a_np[heavy_key]:
+        raise ValueError("the light key must be more volatile than the heavy key")
+    if distributing is None:
+        distributing = [i for i in range(n)
+                        if a_np[heavy_key] < a_np[i] < a_np[light_key]]
+    distributing = sorted(set(int(i) for i in distributing) - {light_key, heavy_key})
+    span = [light_key, heavy_key, *distributing]
+    a_lo, a_hi = min(a_np[i] for i in span), max(a_np[i] for i in span)
+    inside = [i for i in range(n) if a_lo <= a_np[i] <= a_hi]
+    stray = sorted(set(inside) - set(span))
+    if stray:
+        raise ValueError(
+            f"species {stray} lie inside the span of the keys and distributing "
+            "species; list them in `distributing`")
+    order = sorted(span, key=lambda i: a_np[i])
+    F = jnp.sum(f)
+
+    def underwood(theta):
+        return jnp.sum(alpha * f / (alpha - theta)) - (1.0 - q) * F
+
+    thetas = []
+    for lo_i, hi_i in zip(order[:-1], order[1:]):
+        a, b = alpha[lo_i], alpha[hi_i]
+        gap = lax.stop_gradient(b - a)
+        thetas.append(_solve_monotone(underwood, lax.stop_gradient(a) + 1e-10 * gap,
+                                      lax.stop_gradient(b) - 1e-10 * gap, n_iter=80))
+    thetas = jnp.stack(thetas)
+
+    # Known distillate flows: keys as given, lighter than the span all up,
+    # heavier all down.
+    idx = jnp.arange(n)
+    d_known = jnp.where(alpha > a_hi, f, 0.0)
+    d_known = jnp.where(idx == light_key, d_LK, d_known)
+    d_known = jnp.where(idx == heavy_key, d_HK, d_known)
+    m = len(distributing)
+    # Rows k: sum_j alpha_j/(alpha_j - th_k) d_j - V = -sum_known alpha_i d_i/(alpha_i - th_k)
+    W = alpha[None, :] / (alpha[None, :] - thetas[:, None])          # (m+1, n)
+    known_mask = jnp.ones(n).at[jnp.asarray(distributing, dtype=int)].set(0.0) \
+        if m else jnp.ones(n)
+    rhs = -jnp.sum(W * (d_known * known_mask)[None, :], axis=1)
+    cols = [W[:, j] for j in distributing] + [-jnp.ones(m + 1)]
+    sol = jnp.linalg.solve(jnp.stack(cols, axis=1), rhs)
+    d = d_known * known_mask
+    if m:
+        d = d.at[jnp.asarray(distributing, dtype=int)].set(sol[:m])
+    V_min = sol[m]
+    D = jnp.sum(d)
+    return V_min / D - 1.0, d, thetas
+
+
 def kirkbride_feed_stage(
     N: Array,
     z_LK: Array,

@@ -2197,3 +2197,42 @@ class TestShortcutColumnMulticomponentFenske:
             float(info["N"]))
         # theta lies between the keys
         assert 1.0 < float(info["theta"]) < float(a)
+
+
+class TestUnderwoodClass2:
+    """Underwood's general method with distributing non-keys (issue #444)."""
+
+    alpha = jnp.array([11.14, 4.93, 2.14, 1.0])
+    f = jnp.array([40.0, 25.0, 20.0, 15.0])
+
+    def test_class1_limit_matches_single_root(self):
+        from difflow.units.distillation import underwood_class2, underwood_minimum_reflux
+        R2, d, th = underwood_class2(self.alpha, self.f, 22.5, 2.0, 1, 2)
+        assert th.shape == (1,)
+        np.testing.assert_allclose(np.asarray(d), [40.0, 22.5, 2.0, 0.0])
+        R1, theta = underwood_minimum_reflux(self.alpha, self.f / 100.0, d / jnp.sum(d),
+                                             1.0, 2.14)
+        assert float(R2) == pytest.approx(float(R1), rel=1e-10)
+        assert float(th[0]) == pytest.approx(float(theta), rel=1e-10)
+
+    def test_intermediate_distributes(self):
+        from difflow.units.distillation import underwood_class2
+        alpha = jnp.array([4.0, 2.0, 1.5, 1.0])
+        f = jnp.array([30.0, 30.0, 10.0, 30.0])
+        R, d, th = underwood_class2(alpha, f, 29.0, 1.0, light_key=1, heavy_key=3, q=1.0)
+        assert th.shape == (2,)
+        assert 1.0 < float(th[0]) < 1.5 < float(th[1]) < 2.0
+        assert 0.0 < float(d[2]) < 10.0           # the intermediate splits
+        assert float(d[0]) == 30.0 and float(d[3]) == 1.0
+        # Underwood's first and second equations hold at every root
+        V = (float(R) + 1.0) * float(jnp.sum(d))
+        for t in np.asarray(th):
+            assert float(jnp.sum(alpha * f / (alpha - t))) == pytest.approx(0.0, abs=1e-8)
+            assert float(jnp.sum(alpha * d / (alpha - t))) == pytest.approx(V, rel=1e-10)
+        g = jax.grad(lambda q: underwood_class2(alpha, f, 29.0, 1.0, 1, 3, q=q)[0])(1.0)
+        assert np.isfinite(float(g)) and float(g) < 0.0   # vapour feed needs more reflux
+
+    def test_stray_species_rejected(self):
+        from difflow.units.distillation import underwood_class2
+        with pytest.raises(ValueError, match="distributing"):
+            underwood_class2(self.alpha, self.f, 22.5, 2.0, 0, 2, distributing=[])

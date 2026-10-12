@@ -1142,6 +1142,20 @@ N = gilliland_stages(1.5 * R_min, R_min, N_min, method="molokanov")
 N_R, N_S = kirkbride_feed_stage(11.0, z[1], z[2], x_B[1], x_D[2], 35.52, 64.48)  # 5.96, 5.04
 ```
 
+`underwood_minimum_reflux` is the one-root (class 1) form. When non-keys
+distribute at minimum reflux, as a species boiling between the keys always
+does, use `underwood_class2`. It finds one root per volatility gap spanned by the keys and
+the distributing species, and solves Underwood's second equation for
+`V_min` and their distillate flows:
+
+```python
+from difflow import underwood_class2
+R_min, d, thetas = underwood_class2(jnp.array([4.0, 2.0, 1.5, 1.0]),   # alpha
+                                    jnp.array([30.0, 30.0, 10.0, 30.0]),  # feed flows
+                                    d_LK=29.0, d_HK=1.0, light_key=1, heavy_key=3)
+# d[2] = 4.31 of 10: the intermediate splits; R_min = 1.00
+```
+
 `gilliland_stages` defaults to Eduljee's fit; `method="molokanov"` is the fit
 `ShortcutColumn` uses. `fenske_stages` (above) is the pseudo-binary form, right
 only for a binary.
