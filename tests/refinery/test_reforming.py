@@ -439,3 +439,23 @@ def test_reformer_carries_sulfur(lean):
     assert float(res.reformate["S_ppm"]) == pytest.approx(expect, rel=1e-12)
     assert float(res.blend_component().properties["S_ppm"]) == pytest.approx(expect, rel=1e-12)
     assert float(S["net_gas.H2S_ppmv"]) > 0.0 and float(S["H2S.fuel_gas"]) > 0.0
+
+
+@pytest.mark.slow
+def test_jitted_reformer_keeps_anderson_and_says_so(lean):
+    """#440: a traced reformer solve is Anderson-accelerated, not silently
+    plain substitution, and the planning model reports which it ran."""
+    from difflow_refinery.reforming.planning import ReformerPlanningModel
+
+    ref = CatalyticReformer(ReformerParams())
+    model = ReformerPlanningModel(ref, lean_naphtha(), ["wait"], ["reformate.RON", "h2.net_mol_s"])
+    assert model.last_solve_method == "anderson"
+    u = jnp.array([503.0])
+    y = jax.jit(model)(u)
+    assert model.last_solve_method == "fixed_point (traced)"
+    assert model.last_solve_acceleration == "anderson"
+    p, f = model._params_and_feed(u)
+    eager = ref.solve(f, p, tear_initial=model.tear, tol=model.tol, max_iter=model.max_iter,
+                      on_nonconvergence="ignore").outputs()
+    np.testing.assert_allclose(np.asarray(y), [float(eager["reformate.RON"]),
+                                               float(eager["h2.net_mol_s"])], rtol=1e-7)
