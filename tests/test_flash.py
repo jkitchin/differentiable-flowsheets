@@ -942,5 +942,62 @@ class TestPHFlash:
         assert "converged" in info
 
 
+class TestPHFlashPureComponent:
+    """Ideal-path PHFlash of a pure liquid let down into its two-phase region.
+
+    The old Newton on T could not land on the boiling point (the flashed
+    enthalpy jumps by the latent heat there) and returned saturated water let
+    down from 180 C to 1.5 bar at the 150 K clip with V_frac = 0.
+    """
+
+    @pytest.fixture
+    def water(self):
+        from difflow.database import get_species_data
+        th = IdealThermo({"water": get_species_data("water")})
+        return PHFlash(FlashParams(species_order=["water"]), th), th
+
+    def test_letdown_is_two_phase_at_boiling_point(self, water):
+        ph, th = water
+        feed = make_stream({"water": 1.0}, T=453.15, P=12e5)
+        liquid, vapor, info = ph(feed, P=1.5e5)
+        T = float(info["T_flash"])
+        assert float(th.Psat("water", T)) == pytest.approx(1.5e5, rel=1e-8)
+        # lever rule on the model's own enthalpies
+        hL = float(th.stream_enthalpy({"water": 1.0}, T, phase="liquid"))
+        hV = float(th.stream_enthalpy({"water": 1.0}, T, phase="vapor"))
+        beta = (float(info["H_inlet"]) - hL) / (hV - hL)
+        assert float(info["V_frac"]) == pytest.approx(beta, rel=1e-8)
+        # steam tables: Tsat(1.5 bar) = 111.4 C, quality 0.133
+        assert T - 273.15 == pytest.approx(111.4, abs=1.0)
+        assert float(info["V_frac"]) == pytest.approx(0.133, abs=0.01)
+        assert float(vapor["F_water"] + liquid["F_water"]) == pytest.approx(1.0, rel=1e-12)
+        assert bool(info["converged"])
+
+    @pytest.mark.slow
+    def test_gradients_clausius_clapeyron(self, water):
+        ph, th = water
+
+        def T_out(P):
+            return ph(make_stream({"water": 1.0}, T=453.15, P=12e5), P=P)[2]["T_flash"]
+
+        def V_out(T_in):
+            return ph(make_stream({"water": 1.0}, T=T_in, P=12e5), P=1.5e5)[2]["V_frac"]
+
+        h = 10.0
+        fd = (float(T_out(1.5e5 + h)) - float(T_out(1.5e5 - h))) / (2 * h)
+        assert float(jax.grad(T_out)(1.5e5)) == pytest.approx(fd, rel=1e-5)
+        h = 0.05
+        fd = (float(V_out(453.15 + h)) - float(V_out(453.15 - h))) / (2 * h)
+        assert float(jax.grad(V_out)(453.15)) == pytest.approx(fd, rel=1e-5)
+
+    def test_mixture_closes_energy_balance(self, binary_thermo, flash_params):
+        ph = PHFlash(flash_params, binary_thermo)
+        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=380.0, P=101325.0)
+        _, _, info = ph(feed, P=30000.0)
+        assert bool(info["converged"])
+        assert abs(float(info["residual"])) < 1e-6 * abs(float(info["H_inlet"])) + 1e-3
+        assert 0.0 < float(info["V_frac"]) < 1.0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -346,6 +346,33 @@ its stage compositions unconditionally and run unchanged on a
 `IdealThermo.K_depends_on_composition` is `False` and `CubicThermo`'s is `True`,
 for callers that want to skip a composition iteration they do not need.
 
+(activity-thermo)=
+#### ActivityThermo: modified Raoult for a nonideal liquid
+
+`ActivityThermo(ideal, activity_model)` wraps an `IdealThermo` and an activity
+model (`NRTLParams`, `UNIQUACParams`, `WilsonParams`, `MargulesParams`,
+`VanLaarParams`) and returns modified-Raoult K-values,
+$K_i = \gamma_i(x, T) P_i^{sat}(T)/P$. Everything else (enthalpies, `Psat`,
+`Cp`) is delegated to the wrapped `IdealThermo`, so the liquid's excess
+enthalpy is neglected. `K_depends_on_composition` is `True`; called without
+`x` the K-values are Raoult's. This is how the rigorous `DistillationColumn`
+runs on ethanol-water:
+
+```python
+import jax.numpy as jnp
+from difflow import ActivityThermo, IdealThermo, NRTLParams
+from difflow.database import get_species_data
+
+ideal = IdealThermo({sp: get_species_data(sp) for sp in ("ethanol", "water")})
+nrtl = NRTLParams(("ethanol", "water"),
+                  a=jnp.array([[0.0, -0.8009], [3.4578, 0.0]]),
+                  b=jnp.array([[0.0, 246.18], [-586.0809, 0.0]]),
+                  alpha=jnp.array([[0.0, 0.3], [0.3, 0.0]]))
+th = ActivityThermo(ideal, nrtl)
+K = th.K_values_array(355.0, 101325.0, jnp.array([0.2, 0.8]))
+# DistillationColumn(params, th) then runs on CMO or MESH, unchanged
+```
+
 #### Bubble Point and Dew Point
 
 ```python
@@ -472,21 +499,31 @@ K = pr.K_values(T=250.0, P=2e6, x=x, y=y)
 V_frac, x, y = flash_TP_eos(pr, z=jnp.array([0.5, 0.5]), T=250.0, P=2e6)
 ```
 
-`flash_TP_eos` first runs a Michelsen tangent-plane stability test. A
-single-phase feed comes back with `V` exactly 1 or 0. When the cubic has two
-roots, the lower-Gibbs root decides which. When it has one root, for example a
-compressed liquid above its bubble point or any supercritical fluid, "largest
-root = vapour" says nothing. That root is then labelled by the
-Venkatarathnam-Oellrich phase identification parameter
-`phase_identification_parameter(eos, T, P, z)`:
+#### Phase identification of a single-phase feed
 
-$$\Pi = v\left[\frac{\partial^2P/\partial T\partial v}{\partial P/\partial T}
-- \frac{\partial^2P/\partial v^2}{\partial P/\partial v}\right]$$
+When the stability test finds the feed stable, `flash_TP_eos` must still say
+whether that one phase is liquid ($V = 0$) or vapor ($V = 1$). Picking the
+lower-Gibbs-energy root is not enough: above the bubble point of a compressed
+liquid the cubic has only one real root, and both root selectors return it. The
+label comes from the phase identification parameter of Venkatarathnam and
+Oellrich (*Fluid Phase Equilib.* 301 (2011) 225),
 
-with $\Pi > 1$ liquid-like and $\Pi < 1$ vapour-like (Fluid Phase Equilib. 301
-(2011) 225). Before this, a C1/C3 liquid (z = 0.2/0.8, 277.6 K) above about
-34 bar came back as V = 1. A dense supercritical fluid can now be labelled
-liquid (V = 0). `eos_pressure_TV(eos, T, v, z)` is the cubic's $P(T, v)$.
+$$\Pi = V\left[\frac{\partial^2 P/\partial T\partial V}{(\partial P/\partial T)_V}
+ - \frac{(\partial^2 P/\partial V^2)_T}{(\partial P/\partial V)_T}\right],$$
+
+public as `phase_identification_parameter(eos, T, P, y, phase)`. The phase is
+liquid when $\Pi > 1$ and $T$ is below the Kay's-rule pseudo-critical
+temperature $\sum_i z_i T_{c,i}$, and vapor otherwise. (A hot gas well above
+its critical temperature also has $\Pi$ slightly above 1, so the temperature
+guard is needed.) Before this fix, CH$_4$/C$_3$H$_8$ ($z = 0.2/0.8$) at 277.6 K
+returned $V = 1$ for every pressure above its 33.4 bar bubble point (issue #442).
+
+```python
+from difflow.eos import phase_identification_parameter
+pip = phase_identification_parameter(pr, T=250.0, P=2e6, y=jnp.array([0.5, 0.5]))
+```
+
+`eos_pressure_TV(eos, T, v, z)` is the cubic's $P(T, v)$ at a molar volume.
 
 #### Fugacity Calculation
 

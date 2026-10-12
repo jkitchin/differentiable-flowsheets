@@ -28,7 +28,9 @@ What is in here and how far to trust it
     the derivative (the two branches cross at the triple point).
 ``water_latent_heat(T)`` / ``water_liquid_enthalpy(T)`` / ``water_vapor_enthalpy(T)``
     Fits to eight steam-table points between 25 and 200 C (about 0.1 %),
-    **unchanged** in 20-200 C. Below 20 C the raw fit drifts (at 0.01 C it
+    **unchanged** in 20-200 C. Checked against Geankoplis 4e Appendix A.2-9
+    at 50-126 C: h_f within 0.05 %, h_fg within 0.04 %
+    (``tests/test_evaporator.py::TestPublishedExamples``). Below 20 C the raw fit drifts (at 0.01 C it
     gives h_fg = 2493.7 kJ/kg against 2500.9 and h_f = -0.19 kJ/kg against 0),
     so a correction that is zero at 20 C and exactly restores the triple-point
     values (h_fg = 2500.9 kJ/kg, h_f = 0, both recalled, flagged unverified)

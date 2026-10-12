@@ -106,3 +106,52 @@ class TestGammaPhiFlash:
         _, _, ii = Flash(params, thermo=_thermo())(
             self._feed(0.3), T=351.4, P=101325.0)
         assert float(ig["K"]["ethanol"]) != pytest.approx(float(ii["K"]["ethanol"]), rel=1e-3)
+
+
+class TestDiluteVolatileFeed:
+    """Rachford-Rice Newton must not leave [0, 1] for a dilute volatile feed.
+
+    5 mol% ethanol in water at 1 atm, NRTL in the orientation that puts the
+    feed's bubble point near 364 K (experiment: about 362 K). With K_ethanol
+    near 8, Newton from the interpolated guess overshot past the pole at
+    V = 1/(1 - K) and the flash reported V ~ 1e-5 at 366.5-369.5 K, well
+    inside the two-phase region (bubble and dew sums both above 1.1). The
+    root is now bracketed by bisection on [0, 1] before Newton polishes it.
+    """
+
+    def _flash(self):
+        nrtl = NRTLParams(
+            species=("ethanol", "water"),
+            a=jnp.array([[0.0, -0.8009], [3.4578, 0.0]]),
+            b=jnp.array([[0.0, 246.18], [-586.0809, 0.0]]),
+            alpha=jnp.array([[0.0, 0.3], [0.3, 0.0]]),
+        )
+        return Flash(FlashParams(species_order=["ethanol", "water"]),
+                     thermo=_thermo(), activity_model=nrtl)
+
+    def test_two_phase_split_is_found(self):
+        flash = self._flash()
+        feed = make_stream({"ethanol": 0.05, "water": 0.95}, T=360.0, P=101325.0)
+        Vs = []
+        for T in (365.5, 366.5, 367.5, 368.5):
+            _, _, info = flash(feed, T=T, P=101325.0)
+            V = float(info["V_frac"])
+            K = float(info["K"]["ethanol"])
+            x = float(info["x"]["ethanol"])
+            # the returned split satisfies its own Rachford-Rice balance
+            assert x == pytest.approx(0.05 / (1.0 + V * (K - 1.0)), rel=1e-3)
+            Vs.append(V)
+        assert Vs[2] > 0.1                      # was 1.4e-4 at 367.5 K
+        assert all(b > a for a, b in zip(Vs, Vs[1:]))   # V rises with T
+
+    @pytest.mark.slow
+    def test_gradient_matches_finite_difference(self):
+        flash = self._flash()
+        feed = make_stream({"ethanol": 0.05, "water": 0.95}, T=360.0, P=101325.0)
+
+        def V(T):
+            return flash(feed, T=T, P=101325.0)[2]["V_frac"]
+
+        g = float(jax.grad(V)(367.5))
+        fd = float((V(367.51) - V(367.49)) / 0.02)
+        assert g == pytest.approx(fd, rel=1e-3)

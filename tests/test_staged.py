@@ -401,6 +401,49 @@ class TestOptions:
         assert float(part["N"]) == pytest.approx(float(total["N"]))   # same staircase
         assert float(part["N_column"]) == pytest.approx(float(total["N"]) - 1.0)
 
+    def test_reboiler_equilibrium_matches_hand_loop(self):
+        # Murphree trays, equilibrium reboiler: a plain loop with no library code
+        R, E = 2.5, 0.7
+        D = (Z - XB) / (XD - XB)            # per unit feed, q = 1
+        Lb, Vb = R * D + 1.0, (R + 1.0) * D
+
+        def y_op(x):
+            yr = R / (R + 1.0) * x + XD / (R + 1.0)
+            ys = Lb / Vb * x - (1.0 - D) * XB / Vb
+            return yr if x > Z else ys
+
+        def x_eq(y):
+            return y / (AL - (AL - 1.0) * y)
+
+        x, n = XD, 0
+        while True:
+            n += 1
+            y = y_op(x)
+            xe = x_eq(y)
+            if xe <= XB:
+                N_hand = (n - 1) + (x - XB) / (x - xe)
+                break
+            # Murphree tray: solve y = y_op(x') + E (y*(x') - y_op(x')) by bisection
+            lo, hi = 0.0, 1.0
+            for _ in range(200):
+                m = 0.5 * (lo + hi)
+                f = y_op(m) + E * (_y_alpha(m) - y_op(m)) - y
+                lo, hi = (lo, m) if f > 0 else (m, hi)
+            x = 0.5 * (lo + hi)
+        c = S.constant_alpha(AL).with_efficiency(E)
+        r = S.mccabe_thiele(c, S.rectifying_line(R, XD), S.stripping_line(R, XD, XB, Z, 1.0),
+                            XD, XB, q_line=S.q_line(1.0, Z), feed_width=1e-6,
+                            reboiler_equilibrium=True)
+        assert float(r["N"]) == pytest.approx(N_hand, abs=2e-3)
+        plain = S.mccabe_thiele(c, S.rectifying_line(R, XD), S.stripping_line(R, XD, XB, Z, 1.0),
+                                XD, XB, q_line=S.q_line(1.0, Z), feed_width=1e-6)
+        assert float(r["N"]) < float(plain["N"])   # the reboiler does a full step
+
+    def test_reboiler_equilibrium_is_a_no_op_at_full_efficiency(self):
+        a = self._run()
+        b = self._run(reboiler_equilibrium=True)
+        assert float(b["N"]) == pytest.approx(float(a["N"]))
+
     def test_open_steam_needs_fewer_stages_than_reboiler_diagram(self):
         # with the stripping line aimed at (x_B, 0) the last steps are larger
         base = float(self._run()["N"])
