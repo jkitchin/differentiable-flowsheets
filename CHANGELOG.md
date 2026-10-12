@@ -8,6 +8,17 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Unit-ops book Ch. 10-13 gaps (#444).** (1) `DistillationColumn.solve_specs(feed, specs)` solves for `R` and
+  `D` from any two of `x_D`/`x_B` purities, `recovery_D`/`recovery_B`, `R`, `D`, `B` (damped Newton, implicit
+  derivative; an infeasible pair ends with `spec_converged` False). (2) `underwood_class2`: Underwood's general
+  method with distributing non-keys (one root per volatility gap, linear solve for `V_min` and their distillate
+  flows). (3) `staged.mccabe_thiele(..., lines=[...], switch_x=[...] | switch_stages=[...])` steps any number of
+  operating lines, for side draws, side feeds and several feeds; returns `switch_stage` and `N_sections`.
+  (4) `EVAPORATOR_COSTS` / `evaporator_cost` (Turton Table A.1 evaporator rows). (5) Liquid surface tension for
+  tray sizing: `column_design.surface_tension_curl_pitzer`, `surface_tension_brock_bird`, `liquid_surface_tension`.
+  (6) `MVRParams.steam_T`. (7) The CMO path of `DistillationColumn` reports `L_profile`/`V_profile`. Tests in
+  `tests/test_distillation.py`, `test_staged.py`, `test_economics.py`, `test_column_design.py`, `test_evaporator.py`.
+
 - **`ActivityThermo` and an equilibrium reboiler in the McCabe-Thiele stepper (book Ch. 12 gaps).**
   (1) `difflow.ActivityThermo(ideal, activity_model)` gives modified-Raoult K-values
   `gamma_i(x, T) Psat_i / P` with the wrapped `IdealThermo`'s enthalpies, so `DistillationColumn` (CMO and MESH)
@@ -859,6 +870,18 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Fixed
+
+- **Flash derivatives and near-boundary values (#444).** (1) `flash_TP_eos` second derivatives were wrong (the
+  Hessian of a two-flash PR train had the wrong sign): derivatives came from unrolling 50 damped substitution steps.
+  The substitution now runs under `stop_gradient`, Newton finishes the split, and two chord steps on `[ln K, V]`
+  carry derivatives exact through second order; `_solve_rachford_rice` takes two Newton steps. (2) Near the
+  critical region (0.8 CH4 / 0.2 C3H8, 250 K) the split stopped at 0.993 of the bubble pressure and V was off by
+  60 %; a converged split that lowers the Gibbs energy now counts as two-phase. (3) `Flash` (Raoult / gamma-phi)
+  returns the exact Rachford-Rice root: the `PHASE_TRANSITION_WIDTH` sigmoid biased V by 10-30 % within a few per
+  cent of the bubble and dew points and did nothing outside them. (4) The ideal `PHFlash` took every inlet's
+  enthalpy as liquid; it now flashes the inlet at its own (T, P) (`inlet_phase=` to name it). (5) The ethanol-water
+  NRTL set in `tests/test_flash_azeotrope.py` and `tests/test_bubble_dew.py` was transposed relative to
+  `NRTLParams`; a bubble-point test now pins the orientation.
 
 - **`MechanicalVaporRecompression` compressor work was 6 % low.** The
   isentropic work used `Cp_vapor` (1880 J/kg/K) with the exponent of
