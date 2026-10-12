@@ -81,6 +81,7 @@ def both(char):
     return P, new, _old_hand_code(P, char)
 
 
+@pytest.mark.slow
 def test_matches_the_hand_code_of_example_38(both):
     P, new, (comps, cuts, off, nap, frac) = both
     assert new.components.names == comps.names
@@ -98,6 +99,7 @@ def test_matches_the_hand_code_of_example_38(both):
     assert abs(float(new.folded_fraction) - frac) <= 1e-12 * frac
 
 
+@pytest.mark.slow
 def test_moles_conserved_and_folded_mass_reported(both, char):
     P, new, _ = both
     mw = dict(zip(char.names, np.asarray(char.component_MW)))
@@ -127,6 +129,7 @@ def test_moles_conserved_and_folded_mass_reported(both, char):
     assert "folded into" in new.summary()
 
 
+@pytest.mark.slow
 def test_threshold_and_explicit_cuts(char):
     P = _products(char)
     loose = gas_plant_feed(P, char, LIGHT, min_fraction=1e-2)
@@ -139,12 +142,14 @@ def test_threshold_and_explicit_cuts(char):
     assert not loose.h2s_mol and float(loose["naphtha"]["T"]) == 313.0
 
 
+@pytest.mark.slow
 def test_unknown_light_end_raises(char):
     P = _products(char)
     with pytest.raises(ValueError, match="neither in light"):
         gas_plant_feed(P, char, LIGHT[:-1])
 
 
+@pytest.mark.slow
 def test_differentiable_in_the_flows(char):
     P = _products(char)
     cuts = gas_plant_feed(P, char, LIGHT).cuts

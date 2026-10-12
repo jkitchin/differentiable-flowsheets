@@ -85,7 +85,9 @@ def small():
     return c, col, lpg, naphtha, info
 
 
+@pytest.mark.slow
 class TestSmallDebutanizer:
+    @pytest.mark.slow
     def test_it_converges_and_meets_its_specs(self, small):
         c, col, lpg, naphtha, info = small
         assert bool(info["converged"])
@@ -93,6 +95,7 @@ class TestSmallDebutanizer:
         assert float(o["distillate.x.C5+"]) == pytest.approx(0.01, rel=1e-8)
         assert float(o["bottoms.rvp"]) == pytest.approx(80e3, rel=1e-8)
 
+    @pytest.mark.slow
     def test_mass_balance(self, small):
         c, col, lpg, naphtha, info = small
         assert_balanced(col, [SMALL_FEED], [lpg, naphtha])
@@ -117,6 +120,7 @@ class TestSmallDebutanizer:
         T = np.asarray(info["profiles"]["T"])
         assert T.shape == (22,) and np.all(np.diff(T) > 0)
 
+    @pytest.mark.slow
     def test_products(self, small):
         c, col, lpg, naphtha, info = small
         fl = jnp.asarray(_flows(lpg, c.names))
@@ -134,6 +138,7 @@ class TestSmallDebutanizer:
         with pytest.raises(ValueError, match="grade"):
             lpg_quality(jnp.ones(c.n), c, "HD-6")
 
+    @pytest.mark.slow
     def test_planning_block_wiring(self, small):
         c, col, *_ = small
         blk = gasplant_block(col, [SMALL_FEED], ["distillate.x.C5+", "top.P", "feed.mol"],
@@ -157,6 +162,7 @@ class TestSmallDebutanizer:
 
 
 class TestValidation:
+    @pytest.mark.slow
     def test_unknown_species_is_refused(self, small):
         col = small[1]
         with pytest.raises(ValueError, match="not components"):
@@ -285,6 +291,7 @@ class TestCompressor:
         assert np.all(np.asarray(info["discharge_T"]) > 313.15)
         assert float(gas["P"]) == pytest.approx(14e5)
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_one_stage_matches_difflows_eos_compressor(self):
         """A dry gas, one stage: the same isentropic-efficiency construction
@@ -407,6 +414,7 @@ def test_log_mmatrix_solve_matches_lu_and_resolves_tiny_flows():
     np.testing.assert_allclose(got, -100.0 * np.arange(N - 1, -1, -1), atol=1e-9)
 
 
+@pytest.mark.slow
 def test_initial_guess_is_insensitive_to_round_off_in_the_feed():
     # the deisobutanizer's heavy cut sits ~e^-600 under its feed at the top:
     # an LU solve put round-off there, a 1e-12 change of a feed moved those

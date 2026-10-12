@@ -15,6 +15,7 @@ import difflow_power as dp
 from difflow_power.residuals import power_state_layout
 
 
+@pytest.mark.slow
 def test_a_solved_power_flow_solves_and_is_feasible():
     net = dp.cases.case9()
     report = dp.operating_report(dp.solve_power_flow(net).x, net)
@@ -52,6 +53,7 @@ def test_violations_carry_their_magnitude_and_sign():
     assert report.voltage_violations["9"] < 0.0     # under, not over
 
 
+@pytest.mark.slow
 @pytest.mark.release
 def test_branch_losses_are_non_negative_on_every_case():
     """The cheapest useful check on a new case file."""

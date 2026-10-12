@@ -40,6 +40,7 @@ def test_pH_factor_saturates_at_the_operating_pH():
     assert ox(_feed(), pH=6.0)[2]["ce_conversion"] == 0.0
 
 
+@pytest.mark.slow
 def test_train_runs_the_oxidizer_at_its_own_temperature():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)

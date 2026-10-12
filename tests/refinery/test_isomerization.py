@@ -137,12 +137,15 @@ def reactor_pass(request):
     return request.param, F0, T0, out
 
 
+@pytest.mark.slow
 class TestReactorPass:
+    @pytest.mark.slow
     def test_mass_atoms_and_carbon_numbers_close(self, reactor_pass):
         _, _, _, out = reactor_pass
         for k, v in out["info"]["balance"].items():
             assert abs(float(v)) < 1e-12, k
 
+    @pytest.mark.slow
     def test_the_bed_is_adiabatic(self, reactor_pass):
         _, F0, T0, out = reactor_pass
         h_in = float(jnp.dot(F0, tc.enthalpy(T0)))
@@ -205,7 +208,9 @@ def once_through():
     return unit, feed, iso, gas, info
 
 
+@pytest.mark.slow
 class TestOnceThrough:
+    @pytest.mark.slow
     def test_the_whole_unit_closes(self, once_through):
         unit, feed, _, _, info = once_through
         res = {"streams": info["streams"], "info": info}
@@ -214,6 +219,7 @@ class TestOnceThrough:
         for k, v in b.items():
             assert abs(float(v)) < 1e-8, k
 
+    @pytest.mark.slow
     def test_the_separator_converged(self, once_through):
         info = once_through[-1]
         assert bool(info["separator"]["converged"])
@@ -242,6 +248,7 @@ class TestFeedIsConserved:
     carries an unmodelled species, and feed hydrogen counts towards the
     target with the make-up floored at zero."""
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("extra", ["F_water", "F_n_heptane_extra"])
     def test_an_unmodelled_feed_species_is_refused(self, once_through, extra):
         unit, feed = once_through[:2]
@@ -273,6 +280,7 @@ class TestFeedIsConserved:
         b = unit.balances(rich, {"streams": info["streams"], "info": info})
         assert abs(float(b["mass"])) < 1e-10
 
+    @pytest.mark.slow
     def test_dip_feed_hydrogen_bypasses_the_column(self):
         # #381: with DIP, fresh-feed hydrogen went through the column and out
         # its overhead into the isomerate. It now bypasses to the charge.
@@ -380,6 +388,7 @@ class TestEquilibriumTrends:
 @pytest.mark.release
 @pytest.mark.slow
 class TestSecondFeed:
+    @pytest.mark.slow
     def test_the_benzene_rich_feed_closes(self):
         unit = IsomerizationUnit(IsomerizationUnitParams())
         feed = constructed_feed("benzene_rich", 10.0)
@@ -402,6 +411,7 @@ class TestRONMaximum:
     benzene-rich feed runs away above about 155 C at LHSV 2 and H2/HC 0.3;
     see the docs)."""
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("kind,temps", [("paraffinic", (110.0, 150.0, 190.0)),
                                             ("benzene_rich", (100.0, 120.0, 150.0))])
     def test_ron_has_an_interior_maximum(self, kind, temps):
@@ -429,6 +439,7 @@ class TestOnceThroughGradients:
     """jacfwd through the reactor's implicit stages and the separator and
     stabilizer's implicit solves, against central differences."""
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("kind", FEEDS)
     def test_gradients_match_central_differences(self, kind):
         unit = IsomerizationUnit(IsomerizationUnitParams())

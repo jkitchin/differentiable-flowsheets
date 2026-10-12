@@ -182,6 +182,7 @@ class TestEstimatorFit:
 # ---------------------------------------------------------------------------
 
 class TestConfidence:
+    @pytest.mark.slow
     def test_confidence_intervals(self):
         exps = make_linear_experiments(a_true=2.0, b_true=1.0, n=20, noise_std=0.1)
         est = Estimator(linear_model, ['a', 'b'])
@@ -250,6 +251,7 @@ class TestDiagnostics:
 
 @pytest.mark.slow
 class TestBootstrap:
+    @pytest.mark.slow
     @pytest.mark.release
     def test_nonparametric_bootstrap(self):
         exps = make_linear_experiments(a_true=2.0, b_true=1.0, n=15, noise_std=0.1)
@@ -264,6 +266,7 @@ class TestBootstrap:
         np.testing.assert_allclose(bs.mean['a'], 2.0, atol=0.5)
         np.testing.assert_allclose(bs.mean['b'], 1.0, atol=1.0)
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_parametric_bootstrap(self):
         exps = make_linear_experiments(a_true=2.0, b_true=1.0, n=15, noise_std=0.1)
@@ -275,6 +278,7 @@ class TestBootstrap:
         assert bs.method == 'parametric'
         np.testing.assert_allclose(bs.mean['a'], 2.0, atol=0.5)
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_bootstrap_honours_the_objective_it_is_given(self):
         """A weighted fit needs a weighted bootstrap.
@@ -327,6 +331,7 @@ class TestBootstrap:
 
         assert f"{ci.std_errors['a']:.6g}" in text
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_bootstrap_ci_contains_true(self):
         exps = make_linear_experiments(a_true=2.0, b_true=1.0, n=20, noise_std=0.05)

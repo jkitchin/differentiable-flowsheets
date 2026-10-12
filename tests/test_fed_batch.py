@@ -78,6 +78,7 @@ class TestFedBatchReactor:
         reactor = FedBatchReactor(params, mode="isothermal")
         assert reactor is not None
 
+    @pytest.mark.slow
     def test_batch_mode(self, simple_thermo, first_order_rate_fn):
         """Test batch operation (no feed)."""
         stoich = jnp.array([[-1.0], [+1.0]])
@@ -258,6 +259,7 @@ class TestFedBatchReactor:
         assert jnp.isfinite(X_A)
         assert float(X_A) > 0.3  # > 30% conversion (reasonable for these params)
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_differentiability(self, first_order_rate_fn):
         """Test that fed-batch reactor is differentiable."""

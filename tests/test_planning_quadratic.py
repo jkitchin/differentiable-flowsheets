@@ -107,6 +107,7 @@ def _subproblem(order="quadratic", radius=0.2):
     return planner, state, lins, planner.build_subproblem(lins, state, radius)
 
 
+@pytest.mark.slow
 def test_expansion_algebra_agrees_with_the_lp_at_the_centre():
     """The quadratic term vanishes at `u0`, so both models agree there."""
     planner, state, lins, (lp, qp) = _subproblem()
@@ -125,6 +126,7 @@ def test_expansion_algebra_agrees_with_the_lp_at_the_centre():
     npt.assert_allclose(float(x @ (qp.Q @ x)) > 0.0, True)
 
 
+@pytest.mark.slow
 def test_expansion_algebra_matches_a_direct_taylor_evaluation():
     """Away from the centre the QP objective is the second-order model."""
     planner, state, lins, (lp, qp) = _subproblem()
@@ -175,6 +177,7 @@ def test_unpriced_outputs_contribute_no_curvature():
 
 # -- 3 and 4. what it buys -------------------------------------------------
 
+@pytest.mark.slow
 @pytest.mark.parametrize("order", ["linear", "auto", "quadratic"])
 def test_every_model_order_reaches_the_same_optimum(order):
     res = _planner(order).solve()
@@ -182,6 +185,7 @@ def test_every_model_order_reaches_the_same_optimum(order):
     assert max(res.violations.values(), default=0.0) < 1e-6
 
 
+@pytest.mark.slow
 def test_quadratic_never_loses_to_linear():
     """The QP is warm-started from the LP and falls back to it."""
     lin = _planner("linear").solve()
@@ -189,6 +193,7 @@ def test_quadratic_never_loses_to_linear():
     assert float(quad.objective) >= float(lin.objective) - 1e-6
 
 
+@pytest.mark.slow
 def test_quadratic_terminates_in_fewer_iterations():
     """The headline: curvature is what lets the loop stop.
 

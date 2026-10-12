@@ -78,6 +78,7 @@ class TestReferenceIsCurrent:
     both models); if they have moved, every comparison is against a
     different residue, and the right response is to regenerate, not loosen."""
 
+    @pytest.mark.slow
     def test_the_component_table_is_the_one_the_reference_used(self):
         comp, feed = vc.characterize()
         assert comp["names"] == REF["components"]["names"], REGENERATE

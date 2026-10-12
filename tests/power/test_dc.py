@@ -29,6 +29,7 @@ from difflow_power.dc import (
 )
 
 
+@pytest.mark.slow
 @pytest.mark.release
 def test_case5_dcopf_matches_matpower():
     result = solve_dcopf(dp.cases.case5())
@@ -44,6 +45,7 @@ def test_case5_dcopf_matches_matpower():
         assert result.lmp_mw[bus] == pytest.approx(value, abs=0.02)
 
 
+@pytest.mark.slow
 def test_dcopf_is_lossless_so_generation_equals_load():
     for case in ("case5", "case9"):
         net = dp.cases.load_case(case)
@@ -54,6 +56,7 @@ def test_dcopf_is_lossless_so_generation_equals_load():
         )
 
 
+@pytest.mark.slow
 @pytest.mark.release
 def test_dcopf_is_optimistic_about_cost():
     """No losses means nobody generates them, so DC always under-prices."""
@@ -61,6 +64,7 @@ def test_dcopf_is_optimistic_about_cost():
     assert solve_dcopf(net).cost < dp.solve_acopf(net).cost
 
 
+@pytest.mark.slow
 def test_uncongested_dc_prices_are_identical():
     """With no losses and no binding constraint there is nothing to
     separate one bus's price from another's."""
@@ -80,6 +84,7 @@ def test_dc_power_flow_balances_and_is_lossless():
     assert result.va_degrees[net.slack_bus] == pytest.approx(0.0)
 
 
+@pytest.mark.slow
 def test_dc_flows_are_within_a_few_percent_of_ac():
     """The claim that justifies using the DC model at all.
 
@@ -152,6 +157,7 @@ def test_ptdf_is_slack_independent_for_a_real_transfer():
     )
 
 
+@pytest.mark.slow
 def test_lodf_diagonal_is_minus_one_where_the_outage_is_survivable():
     """An outaged branch loses all of its own flow.
 
@@ -206,6 +212,7 @@ def test_lodf_marks_an_islanding_outage_as_undefined():
     assert bool(jnp.all(jnp.isnan(factors)))
 
 
+@pytest.mark.slow
 def test_dc_matrices_differentiate_with_respect_to_reactance():
     net = dp.cases.case9()
     reactances = net.branch_param_arrays()["x"]
@@ -225,6 +232,7 @@ def test_dc_matrices_differentiate_with_respect_to_reactance():
     assert float(grad[j]) == pytest.approx(float(want), rel=1e-4)
 
 
+@pytest.mark.slow
 def test_dcopf_binding_constraints_are_named():
     result = solve_dcopf(dp.cases.case5())
     binding = result.binding()

@@ -1088,6 +1088,7 @@ class TestFeedThermalCondition:
 
         assert float(sub["R_min"]) < float(sat["R_min"])
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_q_stays_differentiable(self, benzene_toluene_thermo):
         """A traced ``q`` passes the guard, and the duty responds to it.
@@ -1240,6 +1241,7 @@ class TestCubicThermoColumn:
             ideal.K_values_array(350.0, self.P),
         )
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("x_raw", [
         [10.0, 7.0, 7.0, 8.0, 8.0, 20.0, 10.0, 30.0],       # feed
         [0.38, 0.16, 0.13, 0.09, 0.08, 0.10, 0.03, 0.04],   # light cut
@@ -1312,6 +1314,7 @@ class TestCubicThermoColumn:
         assert 0.5 < T_light_c - T_light_i < 3.0
         assert abs(T_heavy_c - T_heavy_i) < 2.0
 
+    @pytest.mark.slow
     def test_column_runs_on_cubic_thermo(self, thermo_pair, cubic_column, column_params, feed):
         """The issue's reproducer: no AttributeError, and a physical answer."""
         _, cubic = thermo_pair
@@ -1351,6 +1354,7 @@ class TestCubicThermoColumn:
             K = cubic.K_values_array(T[j], self.P, x[j])
             assert float(jnp.sum(K * x[j])) == pytest.approx(1.0, abs=1e-3)
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_condenser_is_well_below_the_top_stage_for_a_wide_cut(
         self, thermo_pair, cubic_column, feed
@@ -1379,6 +1383,7 @@ class TestCubicThermoColumn:
         assert float(V_below) == pytest.approx(0.0, abs=1e-6)
         assert float(V_above) > 1e-3
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_shortcut_column_runs_on_cubic_thermo(self, thermo_pair, feed):
         """The shortcut column reaches the EOS through the same K-value and
@@ -1408,6 +1413,7 @@ class TestCubicThermoColumn:
         assert float(results["ideal"]["alpha_LK"]) > float(results["eos"]["alpha_LK"])
         assert float(results["ideal"]["N_min"]) < float(results["eos"]["N_min"])
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_shortcut_column_end_temperatures_are_eos_bubble_points(
         self, thermo_pair, feed
@@ -1530,6 +1536,7 @@ class TestRigorousColumnComponentBalance:
             max(abs(e) for e in expected) / 100.0, rel=1e-6
         )
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("use_mesh", [True, False])
     def test_responds_to_feed_stage(self, multicomponent_thermo, feed, use_mesh):
         """Moving the feed must change the products (issue #211).
@@ -1576,6 +1583,7 @@ class TestRigorousColumnComponentBalance:
 
         assert heavy_in_dist[0] > heavy_in_dist[1] > heavy_in_dist[2]
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("use_mesh", [True, False])
     @pytest.mark.release
     def test_gradient_wrt_reflux_is_finite(self, column, feed, use_mesh):
@@ -1591,6 +1599,7 @@ class TestRigorousColumnComponentBalance:
         assert jnp.isfinite(g)
         assert g != 0.0
 
+    @pytest.mark.slow
     def test_issue_211_reported_case(self):
         """The exact case from issue #211, on real pentane/hexane/heptane data.
 
@@ -1635,6 +1644,7 @@ class TestRigorousColumnComponentBalance:
             assert 5.0 < float(dist_flows["n_hexane"]) < 35.0
             assert 5.0 < float(bot_flows["n_hexane"]) < 35.0
 
+    @pytest.mark.slow
     def test_balance_error_falls_with_cmo_iter(self, column, feed):
         """Raising cmo_iter tightens the reported closure (issue #211)."""
         errors = [
@@ -1648,6 +1658,7 @@ class TestRigorousColumnComponentBalance:
         assert errors[0] > errors[1] > errors[2]
         assert errors[2] < 1e-6
 
+    @pytest.mark.slow
     def test_cmo_gives_up_the_energy_balance_not_the_material_balance(self):
         """The two paths must differ where the energy balance bites, and agree
         on the component balance (issue #211).
@@ -1816,6 +1827,7 @@ class TestPartialCondenser:
         assert "y_D" not in info
         assert float(info["overall_efficiency_equiv"]) == 1.0
 
+    @pytest.mark.slow
     def test_partial_N_matches_total_N_plus_one_on_cmo(self, alpha_thermo):
         """A partial condenser is one more equilibrium stage (exact under CMO).
 
@@ -1845,9 +1857,11 @@ class TestPartialCondenser:
                                      feed_stage=2, condenser_type="bogus")
 
 
+@pytest.mark.slow
 class TestMurphreeEfficiency:
     """``stage_efficiency``: Murphree vapour efficiency, scalar or per stage."""
 
+    @pytest.mark.slow
     def test_unity_is_the_default_exactly(self, alpha_thermo):
         """E = 1 (scalar or array) takes the original code path: identical."""
         feed = _alpha_feed()
@@ -1860,6 +1874,7 @@ class TestMurphreeEfficiency:
                     assert jnp.array_equal(base[2][k], other[2][k]), k
                 assert float(other[0]["F_lk"]) == float(base[0]["F_lk"])
 
+    @pytest.mark.slow
     def test_reboiler_efficiency_is_ignored(self, alpha_thermo):
         """Stage 0 is an equilibrium stage: its entry in the array is forced to 1."""
         feed = _alpha_feed()
@@ -1869,6 +1884,7 @@ class TestMurphreeEfficiency:
             feed, R=2.5, D_spec=0.5, use_mesh=False)
         assert jnp.array_equal(a[2]["x_profile"], b[2]["x_profile"])
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("cond", ["total", "partial"])
     def test_matches_mccabe_thiele_pseudo_equilibrium(self, alpha_thermo, cond):
         """E_MV = 0.7 on a constant-alpha CMO binary reproduces the stepper.
@@ -1902,6 +1918,7 @@ class TestMurphreeEfficiency:
         # stepper stage k is column stage n - k
         assert jnp.allclose(r["x"][1:n], xp[::-1][: n - 1], atol=1e-10)
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("cond", ["total", "partial"])
     def test_separation_falls_monotonically_and_E_zero_is_a_flash(self, alpha_thermo, cond):
         """Less efficient trays separate less; at E = 0 the column is a flash.
@@ -1935,6 +1952,7 @@ class TestMurphreeEfficiency:
                 lo, hi = (x, hi) if D * y + (1 - D) * x < 0.5 else (lo, x)
             assert top == pytest.approx(ALPHA * x / (1 + (ALPHA - 1) * x), abs=1e-6)
 
+    @pytest.mark.slow
     def test_efficiency_equivalent_is_between_zero_and_one(self, alpha_thermo):
         """The Fenske-style proxy falls with E and is 1 at E = 1 (see docs)."""
         feed = _alpha_feed()
@@ -1945,6 +1963,7 @@ class TestMurphreeEfficiency:
             vals.append(float(i["overall_efficiency_equiv"]))
         assert vals[0] == 1.0 and vals[0] > vals[1] > vals[2] > 0.0
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("cond", ["total", "partial"])
     def test_mesh_balances_close_with_low_efficiency(self, alpha_thermo, cond):
         _, _, i = _alpha_column(alpha_thermo, stage_efficiency=0.3, condenser_type=cond)(

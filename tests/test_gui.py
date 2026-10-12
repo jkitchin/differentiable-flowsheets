@@ -157,6 +157,7 @@ class TestRoutes:
         assert status == 200
         assert b"<title>difflow editor</title>" in body
 
+    @pytest.mark.slow
     def test_the_catalog_lists_registered_operations(self, client):
         status, catalog = client.get_json("/api/catalog")
         assert status == 200
@@ -325,6 +326,7 @@ class TestStatic:
                      "/..%2fserver.py", "/static/../../__init__.py"):
             assert client.get(path)[0] == 404, path
 
+    @pytest.mark.slow
     def test_the_module_entry_point_still_runs(self):
         """``python -m difflow.gui`` is the documented way in."""
         result = subprocess.run(
@@ -718,7 +720,9 @@ def heater_unit(name="heater", inlet="liq"):
             "inlets": [inlet], "outlets": [name + "_out"]}
 
 
+@pytest.mark.slow
 class TestPalette:
+    @pytest.mark.slow
     def test_the_catalog_says_what_a_form_can_build(self, client):
         """The palette dims what it cannot add; it needs to be told which."""
         _, catalog = client.get_json("/api/catalog")
@@ -769,6 +773,7 @@ class TestWhatBlocksADrop:
     the flag must predict the parking exactly.
     """
 
+    @pytest.mark.slow
     def test_the_catalog_names_the_fields_and_not_just_the_extras(self, client):
         """`constructor_extras` is empty for a CSTR; the rate law is not."""
         _, catalog = client.get_json("/api/catalog")
@@ -1960,6 +1965,7 @@ class TestResults:
         assert answer["tol"] is not None
         assert answer["species"] == SPECIES
 
+    @pytest.mark.slow
     def test_a_recycle_reports_its_tear_streams(self, thermo):
         fs = Flowsheet(species_order=SPECIES)
         fs.add_feed("feed", make_stream({"water": 1.0, "ethanol": 0.1},
@@ -2018,6 +2024,7 @@ class TestSensitivity:
         keys = {o["key"] for o in sensitivity.outputs(fs.solve())}
         assert {"liq.total_flow", "liq.T", "liq.P", "liq.F_ethanol"} <= keys
 
+    @pytest.mark.slow
     def test_forward_moves_every_stream_from_one_lever(self, thermo):
         answer = sensitivity.forward(build_flowsheet(thermo), "reactor.V")
         assert answer["mode"] == "forward" and answer["u0"] == 1.0
@@ -2039,6 +2046,7 @@ class TestSensitivity:
         fd = (float(up["liq"]["F_ethanol"]) - float(down["liq"]["F_ethanol"])) / (2 * h)
         assert answer["streams"]["liq"]["F_ethanol"]["d"] == pytest.approx(fd, rel=1e-5)
 
+    @pytest.mark.slow
     def test_reverse_ranks_the_levers_dimensionlessly(self, thermo):
         answer = sensitivity.reverse(build_flowsheet(thermo), "liq.F_ethanol")
         assert answer["mode"] == "reverse" and answer["y0"] > 0
@@ -2053,6 +2061,7 @@ class TestSensitivity:
             by_key["reactor.molar_density"]["rel"], rel=1e-9
         )
 
+    @pytest.mark.slow
     def test_total_flow_differentiates_through_every_species(self, thermo):
         answer = sensitivity.reverse(build_flowsheet(thermo), "rx.total_flow")
         assert answer["y0"] == pytest.approx(1.1)
@@ -2073,6 +2082,7 @@ class TestSensitivity:
         assert not session.sensitivity(lever="reactor.V",
                                        target="liq.T")["ok"]
 
+    @pytest.mark.slow
     def test_the_routes_answer(self, thermo):
         live = Client(FlowsheetSession(build_flowsheet(thermo)))
         try:
@@ -2136,6 +2146,7 @@ class TestPlanning:
     LEVERS = ["reactor.V", "feed:feed.total_flow"]
     OUTPUTS = ["liq.F_ethanol", "vap.total_flow"]
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_the_jacobian_matches_central_differences(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
@@ -2145,6 +2156,7 @@ class TestPlanning:
         assert answer["check"]["passed"], answer["check"]
         assert answer["check"]["max_rel_error"] < 1e-5
 
+    @pytest.mark.slow
     def test_a_lever_the_flowsheet_moves_has_a_nonzero_column(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
         session.solve()
@@ -2153,6 +2165,7 @@ class TestPlanning:
         assert vector["J"][0][0] > 0, "a bigger reactor makes more ethanol"
         assert vector["u0"] == [1.0]
 
+    @pytest.mark.slow
     def test_units_travel_with_the_coefficients(self, thermo):
         """A Jacobian with unlabelled axes is not an export."""
         session = FlowsheetSession(build_flowsheet(thermo))
@@ -2164,6 +2177,7 @@ class TestPlanning:
         assert vector["u_units"] == ["m^3", "mol/s"]
         assert vector["y_units"] == ["mol/s", "mol/s"]
 
+    @pytest.mark.slow
     def test_an_unbounded_lever_gets_a_window_not_an_infinity(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
         session.solve()
@@ -2172,6 +2186,7 @@ class TestPlanning:
         assert vector["lb"] == [0.0] and vector["ub"] == [2.0]
         assert all(map(math.isfinite, vector["tr_lo"] + vector["tr_hi"]))
 
+    @pytest.mark.slow
     def test_bounds_given_are_the_bounds_used(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
         session.solve()
@@ -2181,6 +2196,7 @@ class TestPlanning:
         vector = answer["delta_vectors"]["vectors"][0]
         assert vector["lb"] == [0.5] and vector["ub"] == [4.0]
 
+    @pytest.mark.slow
     def test_the_selection_is_persisted_so_the_panel_reopens_on_it(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
         session.solve()
@@ -2225,6 +2241,7 @@ class TestPlanning:
         answer = FlowsheetSession(None).linearize(["a"], ["b"])
         assert answer["ok"] is False and answer["error"]
 
+    @pytest.mark.slow
     def test_health_findings_travel_with_the_export(self, thermo):
         """A dead lever has to be visible downstream, not just locally."""
         session = FlowsheetSession(build_flowsheet(thermo))
@@ -2235,6 +2252,7 @@ class TestPlanning:
         assert "dead_lever" in kinds
         assert answer["delta_vectors"]["health"] == answer["health"]
 
+    @pytest.mark.slow
     def test_the_downloads_are_what_the_export_writers_write(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
         session.solve()
@@ -2253,6 +2271,7 @@ class TestPlanning:
         names = {f["name"] for f in tables["files"]}
         assert "flowsheet_jacobian.csv" in names and "bounds.csv" in names
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("fmt", ["lp", "mps"])
     def test_the_structural_lp_downloads(self, thermo, fmt):
         """The model rows and bounds, with nothing to price them."""
@@ -2271,6 +2290,7 @@ class TestPlanning:
         assert ("s.t." in text) if fmt == "lp" else ("ROWS" in text)
         assert "flowsheet_reactor_V" in text
 
+    @pytest.mark.slow
     def test_a_format_that_does_not_exist_is_refused(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
         session.solve()
@@ -2282,6 +2302,7 @@ class TestPlanning:
         assert FlowsheetSession(build_flowsheet(thermo)).linearization_files(
             "json") == {"ok": False, "error": "nothing linearized yet"}
 
+    @pytest.mark.slow
     def test_the_route_is_guarded_because_it_writes(self, thermo):
         """It persists the selection, so it goes through the token check."""
         live = Client(FlowsheetSession(build_flowsheet(thermo)))
@@ -2302,6 +2323,7 @@ class TestPlanning:
         finally:
             live.close()
 
+    @pytest.mark.slow
     def test_the_assistant_can_brief_on_the_linearization(self, thermo):
         """`context.pack(kind="planning")` reads what linearize stored."""
         session = FlowsheetSession(build_flowsheet(thermo))
@@ -2319,6 +2341,7 @@ class TestPlanning:
 # =============================================================================
 
 
+@pytest.mark.slow
 class TestConsole:
     """A Python prompt over the objects the editor is already holding.
 

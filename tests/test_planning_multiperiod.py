@@ -135,6 +135,7 @@ def test_linked_inventory_is_not_a_free_decision():
         assert f"tank@t{t}.release" in free
 
 
+@pytest.mark.slow
 def test_storage_arbitrage_beats_selling_everything_immediately():
     """The plan must hold inventory back for the price spike."""
     net, prices, specs = storage_network()
@@ -151,6 +152,7 @@ def test_storage_arbitrage_beats_selling_everything_immediately():
         assert spike >= float(state[f"tank@t{t}.sold"])
 
 
+@pytest.mark.slow
 def test_physics_holds_in_the_accepted_plan():
     """Inventory stays between zero and the lid, to the solver's tolerance.
 
@@ -170,6 +172,7 @@ def test_physics_holds_in_the_accepted_plan():
 
 # -- the two ways to get it wrong -----------------------------------------
 
+@pytest.mark.slow
 def test_elastic_specs_would_sell_from_an_empty_tank():
     """Elastic slack on a mass balance buys a better objective with fiction.
 
@@ -186,6 +189,7 @@ def test_elastic_specs_would_sell_from_an_empty_tank():
         f"levels were {levels}")
 
 
+@pytest.mark.slow
 def test_inelastic_spec_violated_at_the_start_is_restored():
     """An infeasible start is recovered rather than fatal.
 
@@ -205,6 +209,7 @@ def test_inelastic_spec_violated_at_the_start_is_restored():
     assert np.all(levels >= -1e-4), f"negative inventory: {levels}"
 
 
+@pytest.mark.slow
 def test_a_feasible_start_reaches_the_same_plan_with_the_level_as_a_decision():
     """The dead end is the start point, not the formulation."""
     net, prices, specs = storage_network(start_as_decision=True)

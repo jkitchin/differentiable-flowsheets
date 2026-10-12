@@ -75,12 +75,15 @@ def numpy_trapezoid_merkel(lg, n=4001, T_in=T_IN, T_out=T_OUT, h_in=H_AIN):
     return float(np.trapezoid(4186.0 * (T_in - T_out) / (hs - ha), x))
 
 
+@pytest.mark.slow
 class TestMerkelNumber:
+    @pytest.mark.slow
     @pytest.mark.parametrize("lg", sorted(ISSUE_NTU))
     def test_wex18_1_matches_the_issue_illustration(self, lg):
         got = float(merkel_number(T_IN, T_OUT, H_AIN, lg, quadrature="gauss", n_quad=16))
         assert got == pytest.approx(ISSUE_NTU[lg], rel=0.01)
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("lg", sorted(ISSUE_NTU))
     def test_against_an_independent_numpy_trapezoid(self, lg):
         got = float(merkel_number(T_IN, T_OUT, H_AIN, lg, quadrature="gauss", n_quad=16))
@@ -102,6 +105,7 @@ class TestMerkelNumber:
         by_hand = 4186.0 * 8.0 / 4.0 * np.sum(1.0 / (hs - ha))
         assert float(merkel_number(T_IN, T_OUT, H_AIN, lg)) == pytest.approx(by_hand, rel=1e-12)
 
+    @pytest.mark.slow
     def test_gauss_converges_with_points(self):
         ref = float(merkel_number(T_IN, T_OUT, H_AIN, 1.4, quadrature="gauss", n_quad=40))
         errs = [abs(float(merkel_number(T_IN, T_OUT, H_AIN, 1.4, quadrature="gauss", n_quad=n)) - ref)
@@ -122,6 +126,7 @@ class TestMerkelNumber:
 
 
 class TestPinch:
+    @pytest.mark.slow
     def test_pinch_limit_is_where_the_driving_force_vanishes(self):
         lg_max = float(maximum_L_over_G(T_IN, T_OUT, H_AIN))
         assert 1.4 < lg_max < 3.0
@@ -136,6 +141,7 @@ class TestPinch:
              for f in (0.5, 0.8, 0.95, 0.99)]
         assert all(a < b for a, b in zip(n, n[1:])) and n[-1] > 3 * n[0]
 
+    @pytest.mark.slow
     def test_unit_above_the_pinch_is_infeasible_with_no_nans(self):
         lg_max = float(maximum_L_over_G(T_IN, T_OUT, H_AIN))
         wo, ao, info = tower(L_over_G=1.3 * lg_max)(water(), T_wb=T_WB)
@@ -149,6 +155,7 @@ class TestPinch:
         for v in jax.tree_util.tree_leaves((wo, ao, info["air_out"])):
             assert bool(jnp.all(jnp.isfinite(v)))
 
+    @pytest.mark.slow
     def test_gradients_stay_finite_when_infeasible(self):
         lg_max = float(maximum_L_over_G(T_IN, T_OUT, H_AIN))
         f = lambda lg: tower(L_over_G=lg)(water(), T_wb=T_WB)[2]["min_driving_force"]
@@ -176,11 +183,13 @@ class TestDesignMode:
         assert float(info["G"]) == pytest.approx(L / 1.2)
         assert float(info["L_over_G_max"]) > 1.2
 
+    @pytest.mark.slow
     def test_approach_replaces_T_out(self):
         a = tower(T_out=None, approach=5.0)(water(), T_wb=T_WB)[2]
         b = tower()(water(), T_wb=T_WB)[2]
         assert float(a["KaV_L"]) == pytest.approx(float(b["KaV_L"]), rel=1e-12)
 
+    @pytest.mark.slow
     def test_heat_balance_across_the_tower(self):
         wo, ao, info = tower()(water(), T_wb=T_WB)
         # water side: L cp (T_in - T_out); air side: G (h_out - h_in); evaporated
@@ -192,6 +201,7 @@ class TestDesignMode:
         assert float(s_out["RH"]) == pytest.approx(1.0, rel=1e-8)          # Merkel: leaves saturated
         assert float(ao["T"]) < T_IN                                       # and cooler than the hot water
 
+    @pytest.mark.slow
     def test_air_state_is_read_from_a_stream(self):
         s = state(T=T_WB + 4.0, T_wb=T_WB)
         air = air_stream_from_state(s, L / 1.2)
@@ -237,6 +247,7 @@ class TestLosses:
         # cycles of concentration: solids in = solids out  =>  M = C (D + B)
         assert M == pytest.approx(5.0 * (D + B), rel=1e-12)
 
+    @pytest.mark.slow
     def test_outlet_flow_bookkeeping(self):
         with_makeup = tower()(water(), T_wb=T_WB)[0]
         short = tower(makeup_in_outlet=False)(water(), T_wb=T_WB)
@@ -257,6 +268,7 @@ class TestLosses:
 
 
 class TestRatingMode:
+    @pytest.mark.slow
     def test_design_rating_round_trip(self):
         for lg in (0.8, 1.2, 1.6):
             d = tower(L_over_G=lg)(water(), T_wb=T_WB)[2]
@@ -264,16 +276,19 @@ class TestRatingMode:
             assert float(r["T_out"]) == pytest.approx(T_OUT, abs=1e-8)
             assert bool(r["converged"]) and bool(r["feasible"])
 
+    @pytest.mark.slow
     def test_round_trip_with_the_gauss_quadrature(self):
         d = tower(quadrature="gauss", n_quad=12)(water(), T_wb=T_WB)[2]
         r = tower(mode="rating", quadrature="gauss", n_quad=12, KaV_L=float(d["KaV_L"]))(water(), T_wb=T_WB)[2]
         assert float(r["T_out"]) == pytest.approx(T_OUT, abs=1e-8)
 
+    @pytest.mark.slow
     def test_bigger_fill_cools_more(self):
         outs = [float(tower(mode="rating", KaV_L=k)(water(), T_wb=T_WB)[2]["T_out"]) for k in (0.5, 1.0, 2.0, 4.0)]
         assert all(a > b for a, b in zip(outs, outs[1:]))
         assert all(o > T_WB for o in outs)               # never below the wet bulb
 
+    @pytest.mark.slow
     def test_huge_fill_approaches_the_wet_bulb(self):
         # the Merkel number diverges only logarithmically at the pinch: KaV/L = 8
         # still leaves an approach of about 2 K
@@ -281,11 +296,13 @@ class TestRatingMode:
         a16 = float(tower(mode="rating", KaV_L=16.0)(water(), T_wb=T_WB)[2]["approach"])
         assert 0.0 < a16 < a8 < 3.0
 
+    @pytest.mark.slow
     def test_ka_and_volume_give_the_merkel_number(self):
         a = tower(mode="rating", Ka=1.5, V=200.0)(water(), T_wb=T_WB)[2]
         b = tower(mode="rating", KaV_L=1.5 * 200.0 / L)(water(), T_wb=T_WB)[2]
         assert float(a["T_out"]) == pytest.approx(float(b["T_out"]), abs=1e-10)
 
+    @pytest.mark.slow
     def test_fill_characteristic(self):
         C, n = 1.6, 0.6
         a = tower(mode="rating", L_over_G=1.0, fill_characteristic=[C, n])(water(), T_wb=T_WB)[2]
@@ -299,6 +316,7 @@ class TestRatingMode:
         with pytest.raises(ValueError, match="KaV_L"):
             tower(mode="rating")(water(), T_wb=T_WB)
 
+    @pytest.mark.slow
     def test_unreachable_kav_l_is_flagged_not_nan(self):
         info = tower(mode="rating", KaV_L=1e6)(water(), T_wb=T_WB)[2]
         assert not bool(info["converged"])
@@ -311,6 +329,7 @@ class TestRatingMode:
             CoolingTowerParams(quadrature="simpson")
 
 
+@pytest.mark.slow
 class TestGradients:
     def test_merkel_number_wrt_LG_Tin_Tout_Twb(self):
         def f(lg, t_in, t_out, t_wb):
@@ -318,6 +337,7 @@ class TestGradients:
 
         check_grads(f, (1.2, T_IN, T_OUT, T_WB), order=1, modes=["rev"], rtol=1e-5, atol=1e-7)
 
+    @pytest.mark.slow
     def test_merkel_number_through_the_unit(self):
         def f(lg, t_in, t_out, t_wb):
             t = CoolingTower(CoolingTowerParams(mode="design", L_over_G=lg, T_out=t_out))
@@ -325,6 +345,7 @@ class TestGradients:
 
         check_grads(f, (1.2, T_IN, T_OUT, T_WB), order=1, modes=["rev"], rtol=1e-5, atol=1e-7)
 
+    @pytest.mark.slow
     def test_gradient_signs(self):
         f = lambda lg, t_out, t_wb: tower(L_over_G=lg, T_out=t_out)(water(), T_wb=t_wb)[2]["KaV_L"]
         g = jax.grad(f, argnums=(0, 1, 2))(1.2, T_OUT, T_WB)
@@ -332,6 +353,7 @@ class TestGradients:
         assert g[1] < 0          # a warmer outlet is cheaper
         assert g[2] > 0          # a wetter day shrinks the driving force at a fixed outlet
 
+    @pytest.mark.slow
     def test_rating_T_out_wrt_KaV_L(self):
         def f(k):
             return tower(mode="rating", KaV_L=k)(water(), T_wb=T_WB)[2]["T_out"]
@@ -339,6 +361,7 @@ class TestGradients:
         check_grads(f, (1.4,), order=1, modes=["rev"], rtol=1e-5, atol=1e-8)
         assert float(jax.grad(f)(1.4)) < 0
 
+    @pytest.mark.slow
     def test_rating_T_out_wrt_LG_and_wet_bulb(self):
         def f(lg, t_wb, t_in):
             return CoolingTower(CoolingTowerParams(mode="rating", L_over_G=lg, KaV_L=1.5))(
@@ -348,6 +371,7 @@ class TestGradients:
         g = jax.grad(f, argnums=(0, 1, 2))(1.2, T_WB, T_IN)
         assert g[0] > 0 and g[1] > 0 and g[2] > 0
 
+    @pytest.mark.slow
     def test_design_gradient_of_approach_vs_size_trade_off(self):
         # the textbook design question: dV/d(approach), fill volume with a fixed Ka
         def volume(approach):
@@ -410,6 +434,7 @@ def _loop(T_process=340.0, kav_l=1.4, lg=1.2, UA=2.0e6, T_wb=T_WB):
 
 
 class TestCoolingWaterLoop:
+    @pytest.mark.slow
     def test_loop_converges_and_closes_the_energy_balance(self):
         fs, guess = _loop()
         with warnings.catch_warnings():
@@ -434,6 +459,7 @@ class TestCoolingWaterLoop:
         assert float(s["cw_basin"]["P"]) == P
         assert float(s["cw_pumped"]["P"]) > P
 
+    @pytest.mark.slow
     def test_loop_state_is_the_tower_rating_at_the_loop_inlet(self):
         fs, guess = _loop()
         s = fs.solve(tear_initial=guess, tol=1e-12, max_iter=100)
@@ -441,6 +467,7 @@ class TestCoolingWaterLoop:
         _, _, info = ct(s["cw_hot"], T_wb=T_WB)
         assert float(info["T_out"]) == pytest.approx(float(s["cw_basin"]["T"]), abs=1e-8)
 
+    @pytest.mark.slow
     def test_a_wetter_day_warms_the_loop(self):
         def T_cold(t_wb):
             fs, guess = _loop(T_wb=t_wb)
@@ -448,6 +475,7 @@ class TestCoolingWaterLoop:
 
         assert 1.5 < T_cold(T_WB + 5.0) - T_cold(T_WB) < 5.0     # warms, by less than the wet bulb did
 
+    @pytest.mark.slow
     def test_gradient_of_the_loop_wrt_fill_size(self):
         def T_cold(kav_l):
             fs, guess = _loop(kav_l=kav_l)

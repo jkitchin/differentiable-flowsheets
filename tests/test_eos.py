@@ -245,6 +245,7 @@ class TestFlashTPEOS:
         # Vapor should be enriched in lighter component (propane)
         assert y[0] > x[0]
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_flash_differentiability(self, propane_butane_system):
         """Test that flash is differentiable w.r.t. temperature."""
@@ -262,6 +263,7 @@ class TestFlashTPEOS:
         # Gradient should be finite (may be zero at certain conditions)
         assert jnp.isfinite(grad_T)
 
+    @pytest.mark.slow
     def test_flash_single_phase_no_trivial_root(self, propane_butane_system):
         """Single-phase feeds return V=1 (vapor) or V=0 (liquid) robustly.
 
@@ -306,6 +308,7 @@ class TestFlashTPEOS:
             assert lo <= hi + 1e-6
         assert max(abs(a - b) for a, b in zip(Vs[1:], Vs[:-1])) < 0.2
 
+    @pytest.mark.slow
     def test_flash_wide_k_spread_ngl(self):
         """Regression test for issue #169.
 
@@ -536,6 +539,7 @@ class TestCubicThermo:
         H_vapor = cubic.stream_enthalpy(flows, T, phase="vapor", P=P)
         assert float(H_flash) == pytest.approx(float(H_vapor), rel=1e-6)
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_flash_enthalpy_differentiable(self, propane_butane_system):
         """stream_enthalpy_flash stays differentiable through the flash."""
@@ -567,6 +571,7 @@ class TestCubicThermo:
         S_hi = cubic.stream_entropy(flows, T, "vapor", jnp.array(5e5))
         assert float(S_hi) < float(S_lo)
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_isentropic_expansion_cools(self, propane_butane_system):
         """Matching entropy across a pressure drop yields a lower temperature --
@@ -586,6 +591,7 @@ class TestCubicThermo:
         T_out = float(jnp.clip(sol.value, 200.0, 400.0))
         assert T_out < float(T_in)
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_stream_entropy_flash_differentiable(self, propane_butane_system):
         """stream_entropy_flash stays differentiable through the flash."""
@@ -624,6 +630,7 @@ class TestLiquidRootNearAtmospheric:
         assert float(eos.solve_Z(T, P, z, "liquid")) == pytest.approx(min(roots), rel=1e-9)
         assert float(eos.solve_Z(T, P, z, "vapor")) == pytest.approx(max(roots), rel=1e-9)
 
+    @pytest.mark.slow
     def test_water_liquid_density_and_flash(self):
         from difflow.database import get_critical_props
         from difflow.eos import flash_TP_eos

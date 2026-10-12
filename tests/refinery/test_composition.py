@@ -205,6 +205,7 @@ class TestCorrelations:
 # =============================================================================
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("which", ["heavy", "light"])
 @pytest.mark.parametrize("method", ["riazi_daubert", "ndm"])
 def test_types_are_a_composition_per_cut(chars, which, method):
@@ -227,6 +228,7 @@ def test_types_are_a_composition_per_cut(chars, which, method):
     assert x[-2, 2] > x[k, 2]
 
 
+@pytest.mark.slow
 def test_classes_partition_the_heteroatoms(chars):
     comp = chars["heavy"].composition
     np.testing.assert_allclose(np.asarray(comp.sulfur_split).sum(1), 1.0, atol=1e-14)
@@ -241,6 +243,7 @@ def test_classes_partition_the_heteroatoms(chars):
     assert s[-1, 4] > 0.2
 
 
+@pytest.mark.slow
 def test_split_overrides():
     char = _quiet(dr.characterize, light_assay())
     n = char.n_cuts
@@ -255,6 +258,7 @@ def test_split_overrides():
     assert s[0, 0] == 1.0 and s[-1, 4] == 1.0
 
 
+@pytest.mark.slow
 def test_measured_hydrogen_moves_the_types():
     """C/H comes from the hydrogen, so a cut measured richer in hydrogen is
     estimated less aromatic -- hydrogen and type stay consistent."""
@@ -287,6 +291,7 @@ def _products(char, rng):
     return feed, products
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("which", ["heavy", "light"])
 def test_balances_close_through_product_properties(chars, which):
     char = chars[which]
@@ -319,6 +324,7 @@ def test_balances_close_through_product_properties(chars, which):
     assert float(fc.nitrogen_wppm) == pytest.approx(a.nitrogen_wppm, rel=1e-12)
 
 
+@pytest.mark.slow
 def test_product_properties_without_composition_is_unchanged(chars):
     char = chars["light"]
     thermo = ColumnThermo.from_characterization(char)
@@ -353,6 +359,7 @@ def _fd(f, x, h):
     return (np.asarray(f(x + h)) - np.asarray(f(x - h))) / (2 * h)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("which", ["heavy", "light"])
 def test_gradients_wrt_tbp_point_and_gravity(which):
     assay = heavy_assay() if which == "heavy" else light_assay()
@@ -437,6 +444,7 @@ class TestMeasured:
         assert x[2] == pytest.approx(0.60, rel=1e-13)
         assert x[0] / x[1] == pytest.approx(e[0] / e[1], rel=1e-12)
 
+    @pytest.mark.slow
     def test_override_is_differentiable(self):
         assay = light_assay()
         cuts = dr.default_cut_points(assay)
@@ -502,6 +510,7 @@ def test_traceable_and_a_pytree(chars):
     assert again.composition.names == char.composition.names
 
 
+@pytest.mark.slow
 def test_composition_reaches_the_blend_pool(chars):
     char = chars["light"]
     comp = char.composition

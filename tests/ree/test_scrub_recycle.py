@@ -42,6 +42,7 @@ def _circuit(recycle):
     )), _feed(els)
 
 
+@pytest.mark.slow
 def test_recycle_is_off_for_a_stand_alone_circuit_by_default():
     assert ExtractScrubStripParams(
         extractant="D2EHPA", elements=("La", "Nd")).recycle_scrub_liquor is False
@@ -49,6 +50,7 @@ def test_recycle_is_off_for_a_stand_alone_circuit_by_default():
     assert c(feed)["recycle"] is None
 
 
+@pytest.mark.slow
 def test_the_loop_converges_and_closes_the_balance():
     c, feed = _circuit(True)
     r = c(feed)
@@ -62,6 +64,7 @@ def test_the_loop_converges_and_closes_the_balance():
         assert float(liquor[e]) == pytest.approx(r["recycle"]["scrub_liquor_ree"][e], abs=1e-8)
 
 
+@pytest.mark.slow
 def test_recycle_raises_the_recovery_of_the_targets():
     open_r = _circuit(False)[0](_circuit(False)[1])
     closed_r = _circuit(True)[0](_circuit(True)[1])
@@ -71,6 +74,7 @@ def test_recycle_raises_the_recovery_of_the_targets():
     assert float(closed_r["target_purity"]) > 0.99
 
 
+@pytest.mark.slow
 def test_the_default_train_no_longer_leaks_gd_to_the_light_product():
     def gd_split(recycle):
         train = FullSeparationTrain(SeparationTrainParams(

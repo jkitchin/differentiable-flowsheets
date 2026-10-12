@@ -112,9 +112,11 @@ def _check_column(info, ref):
 
 @pytest.mark.slow
 class TestColumnAgainstReference:
+    @pytest.mark.slow
     def test_equilibrium_beds(self, equilibrium):
         _check_column(equilibrium, REF["column"])
 
+    @pytest.mark.slow
     def test_murphree_beds(self, murphree):
         """LVGO 80 %, HVGO 70 %, wash 50 %, stripping 40 %, on a 520 C LVGO
         end point: the efficiency path, where the beds' below-stage vapour
@@ -159,6 +161,7 @@ class TestGradientsAgainstReference:
     """``jax.jacfwd`` through difflow's solve against central differences of
     the reference column, re-solved by IPOPT at each perturbed point."""
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("knob", ["furnace_T", "flash_zone_P", "steam_per_feed"])
     def test_sensitivities(self, comp, knob):
         fd = REF["sensitivities"][knob]["d"]

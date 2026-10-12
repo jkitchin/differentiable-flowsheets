@@ -86,6 +86,7 @@ class TestSolubility:
         s100 = Solubility.vant_hoff(A, B, per_100g=True)
         assert float(s100.c_sat(300.0)) == pytest.approx(0.01 * math.exp(A + B / 300.0))
 
+    @pytest.mark.slow
     def test_table_interpolates_and_is_monotone(self):
         T = np.array([280.0, 290.0, 300.0, 320.0])
         c = np.array([0.10, 0.15, 0.25, 0.60])
@@ -599,6 +600,7 @@ class TestEvaporatorToCrystallizer:
         w = float(out["vap"]["F_water"] + out["crystals"]["F_water"] + out["liquor"]["F_water"])
         assert w == pytest.approx(float(feed["F_water"]), rel=1e-10)
 
+    @pytest.mark.slow
     def test_with_a_mother_liquor_recycle(self):
         from difflow import Mixer
         from difflow.flowsheet import Flowsheet, Unit

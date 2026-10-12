@@ -150,9 +150,11 @@ def links():
             for name in catalog()}
 
 
+@pytest.mark.slow
 class TestEveryOperationIsDocumented:
     """#228: a registered operation with no prose is a defect."""
 
+    @pytest.mark.slow
     def test_every_operation_resolves_to_something(self, links):
         missing = sorted(name for name, link in links.items() if link is None)
         assert missing == [], (
@@ -160,6 +162,7 @@ class TestEveryOperationIsDocumented:
             "section for each, do not add them to an exception list"
         )
 
+    @pytest.mark.slow
     def test_no_operation_has_to_fall_back_to_a_passing_mention(self, links):
         # A `mention` link lands on a section about something else. The
         # resolver offers it so a link is never withheld; the prose is

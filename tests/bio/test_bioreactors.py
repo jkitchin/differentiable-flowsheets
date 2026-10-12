@@ -210,6 +210,7 @@ class TestFedBatchBioreactor:
         # Cells should grow
         assert float(info["X_final"]) > 0.5
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_fedbatch_differentiability(self, fedbatch_params):
         """Test that fed-batch is differentiable w.r.t. initial conditions."""
@@ -247,11 +248,13 @@ class TestFedBatchTransforms:
         )
         return info["P_final"]
 
+    @pytest.mark.slow
     def test_jit_grad_matches_eager_grad(self):
         eager = jax.grad(self._final_titer)(1.0)
         jitted = jax.jit(jax.grad(self._final_titer))(1.0)
         assert float(jitted) == pytest.approx(float(eager), rel=1e-8)
 
+    @pytest.mark.slow
     def test_vmap_over_feed_rates(self):
         rates = jnp.array([0.5, 1.0, 1.5])
         batched = jax.jit(jax.vmap(self._final_titer))(rates)
@@ -283,6 +286,7 @@ class TestFedBatchStarvation:
             X0=0.2, S0=6.0, P0=0.0, t_final=336.0, solver=solver, n_steps=336,
         )[1]
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("solver", ["diffrax", "rk4"])
     def test_substrate_stays_non_negative(self, solver):
         info = self._batch(solver)
@@ -307,6 +311,7 @@ class TestFedBatchStarvation:
         ref = self._batch("diffrax", m_s=0.0, K_m=0.05)
         assert float(info["P_final"]) == pytest.approx(float(ref["P_final"]), rel=1e-12)
 
+    @pytest.mark.slow
     def test_gradient_finite_through_starvation(self):
         def p_final(m_s):
             return self._batch("diffrax", m_s=m_s)["P_final"]
@@ -353,6 +358,7 @@ class TestFedBatchOxygenCoupling:
         # And runs at a lower dissolved-O2 / limitation factor
         assert float(jnp.min(lo["o2_limitation"])) < float(jnp.min(hi["o2_limitation"]))
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_oxygen_differentiable_through_kla(self):
         def final_cells(kla):

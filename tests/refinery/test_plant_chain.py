@@ -86,6 +86,7 @@ def forward(char):
     return chain, chain.jacobian(X0), fd
 
 
+@pytest.mark.slow
 def test_an_all_forward_chain_is_one_jacfwd_and_matches_central_differences(forward):
     chain, res, fd = forward
     assert chain.modes == ("fwd",) and res.method == "fwd"
@@ -97,6 +98,7 @@ def test_an_all_forward_chain_is_one_jacfwd_and_matches_central_differences(forw
     np.testing.assert_allclose(J, fd, rtol=2e-3, atol=1e-9 * np.max(np.abs(fd), axis=1, keepdims=True).max())
 
 
+@pytest.mark.slow
 def test_a_mixed_chain_by_unit_jacobians_gives_the_same_jacobian(char, forward):
     _, ref, _ = forward
     chain = _chain(char, "checkpoint")

@@ -194,6 +194,7 @@ def test_the_unsaponified_network_is_untouched():
 # 2. The counter-ion is conserved
 # =============================================================================
 
+@pytest.mark.slow
 @pytest.mark.parametrize("counter_ion", ["Na", "NH4", "Mg"])
 def test_counter_ion_conserved_to_machine_precision(counter_ion):
     """Total counter-ion in equals total out, aqueous plus organic (#197)."""
@@ -225,6 +226,7 @@ def test_counter_ion_conserved_to_machine_precision(counter_ion):
     assert 0.0 < float(extract[f"F_{org_key}"]) < total_in
 
 
+@pytest.mark.slow
 def test_counter_ion_partitions_rather_than_being_a_spectator():
     """Sodium is in the organic phase now, which it never was before (#197)."""
     section = saponified_section()
@@ -241,6 +243,7 @@ def test_counter_ion_partitions_rather_than_being_a_spectator():
 # 3. The central claim: a flatter pH profile
 # =============================================================================
 
+@pytest.mark.slow
 def test_saponified_cascade_holds_a_markedly_flatter_ph_profile():
     """#197's central claim, with the same reagent placed two ways.
 
@@ -279,6 +282,7 @@ def test_saponified_cascade_holds_a_markedly_flatter_ph_profile():
     assert (span_dosed / moved_dosed) / (span_sap / moved_sap) > 1.5
 
 
+@pytest.mark.slow
 def test_the_flatness_advantage_grows_with_the_stage_count():
     """The buffer is what lets a LONG cascade hold a flat profile (#197)."""
     degree = 0.35
@@ -301,6 +305,7 @@ def test_the_flatness_advantage_grows_with_the_stage_count():
     assert ratios[0] > 1.7
 
 
+@pytest.mark.slow
 def test_an_unsaponified_section_underpredicts_loading():
     """The failure mode the issue names: plausible, closed, and wrong (#197).
 
@@ -321,6 +326,7 @@ def test_an_unsaponified_section_underpredicts_loading():
 # 4. S = 0 is the unsaponified model, exactly
 # =============================================================================
 
+@pytest.mark.slow
 def test_degree_zero_reproduces_proton_exchange_exactly():
     """The saponified network is a strict generalization (#197).
 
@@ -378,6 +384,7 @@ def test_divalent_counter_ion_still_needs_three_equivalents():
     assert net.base_equivalents_per_mole_ree == pytest.approx(3.0)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("counter_ion", ["Na", "Mg"])
 def test_three_equivalents_delivered_to_the_aqueous_phase(counter_ion):
     """The exact identity the tableau forces on any solved section (#197).
@@ -484,6 +491,7 @@ def test_kg_base_per_kg_reo_matches_the_hand_calculation():
         ) == pytest.approx(expected, rel=1e-12)
 
 
+@pytest.mark.slow
 def test_kg_base_per_kg_reo_from_a_solved_section():
     """The same balance that makes the cascade correct predicts the duty.
 
@@ -649,6 +657,7 @@ def test_henderson_hasselbalch_round_trip_and_capacity():
             saponification_log_K(bad)
 
 
+@pytest.mark.slow
 def test_the_degree_is_an_output_of_the_section_not_a_parameter():
     """The organic re-equilibrates; the inlet degree is only an inlet (#197)."""
     section = saponified_section(n_stages=6, degree=0.4)
@@ -789,6 +798,7 @@ def test_saponifier_picks_the_right_reagent(counter_ion, base, eq_per_mole):
     )
 
 
+@pytest.mark.slow
 def test_saponifier_and_section_compose_into_a_reagent_duty():
     """The whole point: the duty comes off the flowsheet, not a rule of thumb."""
     unit = Saponifier(SaponifierParams(
@@ -916,6 +926,7 @@ def test_saponified_section_rejects_what_cannot_be_saponified():
 # 10. The manipulated variable: differentiable, jittable, invertible
 # =============================================================================
 
+@pytest.mark.slow
 @pytest.mark.release
 def test_saponification_degree_is_differentiable_and_jits():
     """The primary manipulated variable is a real handle (#197)."""
@@ -958,6 +969,7 @@ def test_base_flow_is_differentiable_through_the_saponifier():
     check_grads(degree, (0.05,), order=2, modes=["rev"])
 
 
+@pytest.mark.slow
 def test_saponification_degree_for_ph_inverts_the_section():
     """A pH specification maps onto the degree, not onto stage setpoints."""
     section = saponified_section(n_stages=3, degree=0.35)

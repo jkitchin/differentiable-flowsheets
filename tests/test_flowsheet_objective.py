@@ -205,6 +205,7 @@ class TestApplyParamsErrors:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 class TestFeedStreamParams:
     """``feed:<name>.<field>`` keys make feed rate and composition levers."""
 
@@ -268,6 +269,7 @@ class TestFeedStreamParams:
 
         assert large > small
 
+    @pytest.mark.slow
     def test_gradient_through_a_feed_lever(self, cstr_flowsheet):
         """The whole point: d(product)/d(feed rate) must be finite and right."""
         objective = cstr_flowsheet.make_objective_fn(
