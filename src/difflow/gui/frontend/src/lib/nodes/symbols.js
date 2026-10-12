@@ -560,6 +560,10 @@ export const OPERATION_SYMBOLS = {
   GasTurbine: 'turbine',
   GasCompressor: 'compressor',
 
+  // membranes (core)
+  GasPermeator: 'membrane',
+  ReverseOsmosis: 'membrane',
+
   // carbon capture
   AmineAbsorber: 'packed_column',
   AmineStripper: 'packed_column',
@@ -633,6 +637,7 @@ export const CATEGORY_SYMBOLS = {
   extraction: 'column',
   separations: 'separator',
   filtration: 'membrane',
+  membranes: 'membrane',
   chromatography: 'chromatography',
   heat_transfer: 'heat_exchanger',
   evaporation: 'evaporator',

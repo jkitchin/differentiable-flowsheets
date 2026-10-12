@@ -69,6 +69,7 @@ CORE_CATEGORIES = {
     "mechanical": "mechanical",
     "lle": "extraction",
     "leaching": "extraction",
+    "membranes": "membranes",
     "eos_units": "pressure_change",
     "pipe": "pressure_change",
     "pump": "pressure_change",
