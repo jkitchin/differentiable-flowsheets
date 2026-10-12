@@ -20,6 +20,7 @@ import pytest
 jax.config.update("jax_enable_x64", True)
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+_SKIP = re.compile(r"<!--\s*doc-test:\s*skip\b")
 
 # (file, section heading, heading that ends it)
 DOC_SECTIONS = [
@@ -36,6 +37,9 @@ def _blocks(doc: str, start_heading: str, end_heading: str):
     end = text.index(end_heading, start)
     section = text[start:end]
     for match in re.finditer(r"```python\n(.*?)```", section, re.S):
+        before = section[:match.start()].rstrip("\n").rsplit("\n", 1)[-1]
+        if _SKIP.search(before):
+            continue  # marked <!-- doc-test: skip --> (the rule test_doc_examples.py uses)
         line_no = text[:start].count("\n") + section[:match.start()].count("\n") + 2
         yield match.group(1), line_no
 

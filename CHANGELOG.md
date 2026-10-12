@@ -964,6 +964,10 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- `tests/test_docs_examples.py` (release) honours `<!-- doc-test: skip -->` like
+  `test_doc_examples.py`, and the `underwood_class2` docs example imports `jnp`: the nightly
+  Distillation docs examples ran a call fragment and a block without its import.
+
 - **Bio `concentration_polarization` swapped R and 1-R (unit-ops book Ch. 22).** It returned
   `C_b exp(J/k)/(1-R+R exp(J/k))`, which gives `C_w = C_b` for a fully retained solute (R = 1), the case that
   polarizes most. It now returns `C_b exp(J/k)/(R+(1-R) exp(J/k))` (film theory; `C_b exp(J/k)` at R = 1) via

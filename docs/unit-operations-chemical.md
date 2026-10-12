@@ -1156,6 +1156,7 @@ the distributing species, and solves Underwood's second equation for
 `V_min` and their distillate flows:
 
 ```python
+import jax.numpy as jnp
 from difflow import underwood_class2
 R_min, d, thetas = underwood_class2(jnp.array([4.0, 2.0, 1.5, 1.0]),   # alpha
                                     jnp.array([30.0, 30.0, 10.0, 30.0]),  # feed flows
