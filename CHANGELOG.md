@@ -919,6 +919,9 @@ All notable changes to difflow are recorded here. The format follows
 - **`Crystallizer` residence time from `volume`** now divides by the product slurry flow
   `(m_F - E)/rho_L` (the MSMPR definition), not the feed flow; an evaporative crystallizer that
   boils off half its feed water had half the true `tau`.
+- **`Crystallizer` kinetic mode under `jax.jit`** raised `ConcretizationTypeError` (the
+  `j <= 1` check called `float()` on `jnp.asarray(j)`, a tracer under jit); it now checks the raw
+  value. Regression test `test_kinetic_mode_under_jit`.
 
 - **Le Bas oxygen increment for ethers (book Ch. 14).** `LE_BAS_INCREMENTS["O_ether"]` was 9.1, which is the
   methyl-ester value; it is now 9.9 (methyl ethers), and the table gains `O_methyl_ester` (9.1), `O_methyl_ether`

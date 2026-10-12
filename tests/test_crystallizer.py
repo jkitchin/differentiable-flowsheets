@@ -535,6 +535,15 @@ class TestCrystallizerUnit:
 
         assert np.isfinite(float(jax.grad(L_D)(900.0)))
 
+    def test_kinetic_mode_under_jit(self):
+        """Regression: float(j) on jnp.asarray(constant) raised ConcretizationTypeError under jit."""
+        def L50(t):
+            p = params(kinetics=list(KIN), residence_time=t, crystal_density=RHO_C, liquor_density=RHO_L)
+            return Crystallizer(p)(feed_stream())[2]["L_50"]
+
+        assert float(jax.jit(L50)(900.0)) == pytest.approx(float(L50(900.0)), rel=1e-12)
+        assert float(jax.jit(jax.grad(L50))(900.0)) == pytest.approx(float(jax.grad(L50)(900.0)), rel=1e-10)
+
     def test_jit(self):
         f = jax.jit(lambda feed: Crystallizer(params())(feed)[2]["yield_kg_s"])
         assert float(f(feed_stream())) == pytest.approx(

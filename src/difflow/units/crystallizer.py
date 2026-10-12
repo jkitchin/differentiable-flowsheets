@@ -514,11 +514,11 @@ def msmpr_steady_state(feed_solute, feed_water, T_out, sol: Solubility, kinetics
         supersaturated) and ``closure`` (relative mismatch of the third-moment
         magma density and the balance's, a convergence check).
     """
+    try:  # check the raw value: jnp.asarray of a constant is a tracer under jit
+        too_big = float(kinetics[4]) > 1.0
+    except (jax.errors.TracerArrayConversionError, jax.errors.ConcretizationTypeError):
+        too_big = False  # traced: cannot check
     k_g, g, k_b, b, j = (_f(v) for v in kinetics)
-    try:
-        too_big = float(j) > 1.0
-    except jax.errors.TracerArrayConversionError:  # traced: cannot check
-        too_big = False
     if too_big:
         raise ValueError("msmpr_steady_state needs j <= 1 (a single steady state)")
     S0, W0, E = _f(feed_solute), _f(feed_water), _f(water_evaporated)
