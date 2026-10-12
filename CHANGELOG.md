@@ -42,6 +42,12 @@ All notable changes to difflow are recorded here. The format follows
   stripper can be read on the basis it is designed on (a TCE air stripper has `H_OG` of several metres and
   `N_OG < 1`, which is correct but not what a textbook shows). Tests check `N_OL` against Colburn's
   liquid-phase form and a packed acetone absorber against the log-mean hand method.
+- **Crossflow LLE, tabulated ternary data (book Ch. 17).** `CascadeParams(flow_config="crossflow")` splits
+  fresh solvent equally over the stages, `(X_N - X*)/(X0 - X*) = (1 + E/N)^-N`, smooth in `N`.
+  `difflow.tabulated_lle(tie_lines, binodal=None, plait=None, T=None)` packs measured tie lines into the
+  `ternary_lle` dict, so `hunter_nash`, `tie_line_through` and `plot_ternary` run on published data
+  (tested on water-MIBK-acetic acid tie lines from NIST ThermoML). `Leacher` now reproduces
+  McCabe-Smith-Harriott 7e Example 23.1 (variable underflow, four stages; data as recalled).
 
 - **`ActivityThermo` and an equilibrium reboiler in the McCabe-Thiele stepper (book Ch. 12 gaps).**
   (1) `difflow.ActivityThermo(ideal, activity_model)` gives modified-Raoult K-values
@@ -909,6 +915,18 @@ All notable changes to difflow are recorded here. The format follows
   computed from those outlets instead of the specification, so `info["L_min"]` tracked the solvent rate given
   (e.g. 500 -> 500, 1000 -> 1000 mol/s for a 95 % SO2 scrubber whose true minimum is 1024). The minimum now uses
   the target end from `recovery`; feasible designs and rating mode are unchanged.
+- **LLE cascade and rate-based contactor gave wrong answers (book Ch. 17 audit).**
+  (1) `MultistageCascade` (counter-current) dropped any solute entering with the solvent: with 0.5 mol/s of
+  solute in the solvent the extract reported only what came from the feed, so 0.5 mol/s vanished. It now uses
+  the Kremser equation with `X* = Y_in/K` and closes the balance (extract = feed + solvent - raffinate).
+  (2) Its stage profile used the n-stage Kremser fraction at every stage instead of the profile of one
+  N-stage cascade; it is now `X_n = X* + (X0 - X*)(E^(N+1-n) - 1)/(E^(N+1) - 1)` and every stage balance
+  closes. (3) `DifferentialContactor(mass_transfer_model="rate_based")` created solute (a 1 mol/s feed came
+  out as 13.7 mol/s counter-current, 79.8 co-current): a softplus "clip" added ~0.07 to every ratio
+  concentration, the counter-current organic equation had the co-current sign, and `Kla * area / F` was
+  missing a molar density. It is rewritten as the exact matrix-exponential solution of the transfer-unit
+  equations with `alpha = Kla * aqueous_molar_density * area` (new field, default 55500 mol/m^3), reports
+  `HTU_OR`/`NTU_OR`, and matches the closed-form `N_OR` to 1e-8.
 
 - **`MechanicalVaporRecompression` compressor work was 6 % low.** The
   isentropic work used `Cp_vapor` (1880 J/kg/K) with the exponent of

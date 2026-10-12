@@ -3719,7 +3719,7 @@ they can be empty above.
 
 **Class**: `MultistageCascade`
 
-**Description**: Counter-current multistage extraction cascade for liquid-liquid separation.
+**Description**: Multistage extraction cascade for liquid-liquid separation: counter-current (Kremser), crossflow, or co-current.
 
 #### Process Role
 
@@ -3737,7 +3737,7 @@ LLE is used for:
 class CascadeParams:
     n_stages: int | float        # Equilibrium stages (continuous, for optimization)
     equilibrium: LLEEquilibrium  # The equilibrium model (see above)
-    flow_config: str = 'counter_current'  # or 'co_current'
+    flow_config: str = 'counter_current'  # or 'crossflow', 'co_current'
     stage_efficiency: float = 0.8         # Murphree efficiency, co-current only
     model: str = 'immiscible'             # or 'rigorous' (partially miscible, see below)
 ```
@@ -3760,11 +3760,33 @@ $$R_{j-1} x_{i,j-1} + E_{j+1} y_{i,j+1} = R_j x_{i,j} + E_j y_{i,j}$$
 
 $$y_{i,j} = K_i(T) x_{i,j}$$
 
-**Kremser Equation** (for dilute systems):
+**Kremser Equation** (immiscible carriers, constant $K$). The immiscible model
+works on the solute-free (ratio) basis, $X$ = solute per aqueous carrier and
+$Y$ = solute per organic carrier, with $K = Y/X$ and the extraction factor
+$E = K S/F$ from the *carrier* flows $S$ and $F$. With solute $Y_{in}$ in the
+entering solvent, $X^* = Y_{in}/K$ and
 
-$$\frac{x_{in} - x_{out}}{x_{in} - x_{out}^*} = \frac{A^{N+1} - A}{A^{N+1} - 1}$$
+$$\frac{X_N - X^*}{X_0 - X^*} = \frac{E - 1}{E^{N+1} - 1}$$
 
-Where $A = KE/R$ is the extraction factor.
+(Wankat 4e Ch. 13; Geankoplis 5e Sec. 12.7). The extract carries everything
+that entered and did not leave in the raffinate, so solute in the solvent is
+conserved. The stage profile `info["profiles"]["x"]` is
+$X_n = X^* + (X_0 - X^*)\,(E^{N+1-n} - 1)/(E^{N+1} - 1)$, $n = 0..N$
+(stage 1 is the feed end), and `["y"]` is $Y_n = K X_n$, with entry 0 holding
+the solvent inlet $Y_{in}$.
+
+**Crossflow** (`flow_config="crossflow"`): the raffinate passes through $N$
+stages, each fed $S/N$ of fresh solvent, and the extracts are combined:
+
+$$\frac{X_N - X^*}{X_0 - X^*} = \left(1 + \frac{E}{N}\right)^{-N},$$
+
+smooth in $N$. It always leaves more solute than counter-current flow with the
+same total solvent and stages, and less than a single stage.
+
+A distribution coefficient tabulated on a concentration basis, $K_c$ (mol/L
+over mol/L), goes with volumetric flows: $E = K_c V_{org}/V_{aq}$. For a dilute
+solute the ratio-basis $K$ is $K_c\,\rho_{aq}/\rho_{org}$ (molar densities of
+the two carriers).
 
 #### Activity Coefficient Models
 
@@ -3919,17 +3941,45 @@ N = stages_for_recovery(K, 1.5 * S_min, recovery=0.95)
 
 #### Governing Equations
 
-**Height of Transfer Unit (HTU)**:
+Two models, chosen by `ContactorParams(mass_transfer_model=...)`:
 
-$$HTU = \frac{R}{K_{OC} a A}$$
+- `"equilibrium"`: the column is `length / HETP` Kremser stages (any
+  `flow_config` of `MultistageCascade`).
+- `"rate_based"`: plug flow of both phases with an overall volumetric
+  coefficient based on the raffinate phase. On the ratio basis of the cascade,
+  with $\alpha = K_L a\,c_{aq} A$ (`Kla`, `aqueous_molar_density`, `area`),
 
-**Number of Transfer Units (NTU)**:
+$$F_{aq}\frac{dX}{dz} = -\alpha\,(X - Y/K), \qquad
+F_{org}\frac{dY}{dz} = \mp\alpha\,(X - Y/K)$$
 
-$$NTU = \int_{x_{out}}^{x_{in}} \frac{dx}{x - x^*}$$
+(upper sign counter-current, the organic entering at $z = L$; lower sign
+co-current). With constant $K$ the system is linear and is solved exactly with
+a matrix exponential. `info` reports the height and number of raffinate-phase
+overall transfer units,
 
-**Column Height**:
+$$H_{OR} = \frac{F_{aq}}{K_L a\,c_{aq} A}, \qquad N_{OR} = \frac{L}{H_{OR}},$$
 
-$$H = HTU \times NTU$$
+and the counter-current result obeys the closed form (solute-free solvent)
+
+$$N_{OR} = \frac{\ln\left[\frac{X_0}{X_L}\left(1 - \frac{1}{E}\right) + \frac{1}{E}\right]}{1 - 1/E}$$
+
+(Treybal, *Mass Transfer Operations* 3e, Ch. 10), which `tests/test_lle.py`
+checks. Profiles `info["profiles"]["c_aq"]`, `["c_org"]` are $X(z)$ and $Y(z)$.
+
+```python
+from difflow import make_stream, DifferentialContactor, ContactorParams
+from difflow.units.lle import LLEEquilibrium, DistributionCoeffs
+
+eq = LLEEquilibrium(solutes=["A"], aqueous_carrier="water", organic_carrier="solvent",
+                    K_coeffs=DistributionCoeffs(species=("A",), K0=(2.0,)))
+feed = make_stream({"water": 100.0, "A": 1.0, "solvent": 0.0}, T=298.15, P=101325.0)
+solvent = make_stream({"water": 0.0, "A": 0.0, "solvent": 100.0}, T=298.15, P=101325.0)
+col = DifferentialContactor(ContactorParams(length=2.0, area=0.1, equilibrium=eq,
+                                            mass_transfer_model="rate_based", Kla=3e-3))
+raffinate, extract, info = col(feed, solvent)
+print(f"N_OR = {float(info['NTU_OR']['A']):.3f}")        # N_OR = 0.333
+print(f"A left = {float(raffinate['F_A']):.3f} mol/s")   # A left = 0.734 mol/s
+```
 
 ---
 
@@ -3960,8 +4010,9 @@ $E_{n+1} - R_n = -\Delta$ passes through it. Stages alternate a tie line
 
 `mix` and `lever_rule` are pure `jnp` and differentiable. `tie_line_through`,
 `hunter_nash` and `difference_point` take the tie lines tabulated by
-`ternary_lle` (like it, they are numeric and not differentiated through the
-equilibrium), joined into conjugate curves by monotone cubic interpolation, so
+`ternary_lle` or packed from measured tie lines by `tabulated_lle(tie_lines,
+binodal=None, plait=None, T=None)` (like `ternary_lle`, they are numeric and
+not differentiated through the equilibrium), joined into conjugate curves by monotone cubic interpolation, so
 their accuracy is the interpolation's: use enough tie lines (`n_tie`). The
 difference point and the operating lines are built from the extensive balance
 (amounts times compositions), so they stay valid when $\Delta$ is at infinity
