@@ -311,6 +311,49 @@ class TestProcesses:
         assert float(info["condensate"]) == 0.0
         assert float(out["T"]) < 303.15
 
+    def test_cold_coil_does_not_deliver_fog(self):
+        # 30 C / 60 % onto a 2 C coil with BF = 0.1: the straight line to the apparatus
+        # dew point crosses the saturation curve (the mixed point had RH = 1.034)
+        a = state(T=303.15, RH=0.6)
+        out, info = cool_dehumidify(a, 275.15, bypass_factor=0.1)
+        assert float(out["RH"]) == pytest.approx(1.0, abs=1e-9)
+        assert float(info["fog"]) > 0.0
+        assert float(info["condensate"]) == pytest.approx(float(a["W"] - out["W"]), rel=1e-12)
+        # energy: air enthalpy + fog liquid enthalpy = the mixed-line enthalpy
+        bf, Ws = 0.1, float(saturation_humidity_ratio(275.15))
+        h_line = bf * float(a["h"]) + (1 - bf) * float(humid_enthalpy(275.15, Ws))
+        h_fog = float(info["fog"]) * 4186.0 * (float(out["T"]) - K)
+        assert float(out["h"]) + h_fog == pytest.approx(h_line, rel=1e-10)
+        # the coil duty is unchanged by where the fog condenses (to within its liquid enthalpy)
+        assert float(info["Q_sensible"]) + float(info["Q_latent"]) == pytest.approx(float(info["Q_total"]), rel=1e-12)
+
+    @pytest.mark.slow
+    def test_coil_fog_handling_is_differentiable(self):
+        a = state(T=303.15, RH=0.6)
+        f = lambda tc: cool_dehumidify(a, tc, bypass_factor=0.1)[0]["W"]
+        check_grads(f, (275.15,), order=1, modes=["rev"])
+
+    def test_humidify_to_a_degree_of_saturation_geankoplis_9_3_2(self):
+        # Geankoplis Ex. 9.3-2 (recalled): air at 87.8 C, H = 0.030 humidified adiabatically to
+        # 90 % saturation leaves at about 42.5 C with H = 0.0500 (chart reading)
+        a = state(T=87.8 + K, W=0.030)
+        out = adiabatic_humidify(a, mu_out=0.9)
+        assert float(out["mu"]) == pytest.approx(0.9, rel=1e-9)
+        assert float(out["W"]) == pytest.approx(0.0500, rel=0.01)
+        assert float(out["T"]) - K == pytest.approx(42.5, abs=0.5)
+        # it stays on the adiabatic-saturation line
+        assert float(adiabatic_saturation_temperature(out["T"], out["W"])) == pytest.approx(
+            float(adiabatic_saturation_temperature(a["T"], a["W"])), abs=0.02)
+        rh = adiabatic_humidify(a, RH_out=0.9)
+        assert float(rh["RH"]) == pytest.approx(0.9, rel=1e-9)
+        with pytest.raises(ValueError):
+            adiabatic_humidify(a, RH_out=0.9, mu_out=0.9)
+
+    @pytest.mark.slow
+    def test_humidify_target_gradient(self):
+        a = state(T=330.0, W=0.010)
+        check_grads(lambda r: adiabatic_humidify(a, RH_out=r)["T"], (0.8,), order=1, modes=["rev"])
+
     @pytest.mark.slow
     def test_adiabatic_humidification_follows_the_wet_bulb_line(self):
         a = state(T=308.15, RH=0.2)
@@ -463,3 +506,28 @@ class TestHotAirWetBulb:
         assert Twb == pytest.approx(optimize.brentq(res, 250.0, 372.0, xtol=1e-12), abs=1e-8)
         # the adiabatic-saturation temperature is the same state for this model
         assert float(adiabatic_saturation_temperature(T, W)) == pytest.approx(Twb, abs=1e-6)
+
+
+class TestGeankoplisExamples:
+    """Geankoplis, Transport Processes and Separation Process Principles, Sec. 9.3.
+
+    The printed answers are recalled (chart readings), not transcribed; the
+    tolerances reflect a chart-reading precision.
+    """
+
+    def test_ex_9_3_1_humidity_from_dew_point(self):
+        # air at 60 C with dew point 26.7 C: H = 0.0225 (chart), percentage humidity about 14 %
+        s = state(T=60.0 + K, T_dp=26.7 + K)
+        assert float(s["W"]) == pytest.approx(0.0225, rel=0.02)
+        assert float(s["mu"]) == pytest.approx(0.14, abs=0.01)
+
+    def test_ex_9_3_2_adiabatic_saturation(self):
+        # 87.8 C, H = 0.030, saturated adiabatically: about 40.5 C and H = 0.0505
+        Tas = adiabatic_saturation_temperature(87.8 + K, 0.030)
+        assert float(Tas) - K == pytest.approx(40.5, abs=0.4)
+        assert float(saturation_humidity_ratio(Tas)) == pytest.approx(0.0505, rel=0.01)
+
+    def test_ex_9_3_3_humidity_from_wet_bulb(self):
+        # dry bulb 60 C, wet bulb 29.5 C: H about 0.0140 by the psychrometric equation (0.0135 chart)
+        s = state(T=60.0 + K, T_wb=29.5 + K)
+        assert 0.0130 < float(s["W"]) < 0.0145

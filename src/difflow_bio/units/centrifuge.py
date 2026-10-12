@@ -4,8 +4,8 @@ This module provides centrifuge models for separating cells from broth:
 - Centrifuge: General centrifuge model using Sigma factor theory
 
 Key equations:
-    Sigma factor: Σ = (ω² * V_bowl) / g * geometry_factor
-    Throughput: Q = 2 * v_s * Σ
+    Sigma factor: Σ = (ω² * V_bowl) / g * geometry_factor (equivalent settler area)
+    Capture: η = min(1, v_s Σ / Q); 50% at Q = 2 * v_s * Σ
     Stokes velocity: v_s = d² * (ρ_p - ρ_f) * g / (18 * μ)
 
 where:
@@ -44,8 +44,10 @@ class CentrifugeParams(ParamsMixin):
     Attributes:
         sigma: Sigma factor - equivalent settling area (m²)
                Can be calculated from geometry or specified directly
-        efficiency: Separation efficiency factor (0-1), accounts for
-                   non-ideal effects. Default 0.7.
+        efficiency: Correction factor on Sigma (0-1) for non-ideal flow: the
+                   machine behaves as an ideal settler of area efficiency*Sigma
+                   (Ambler's factor; typically 0.4-0.7 for a disc stack, about
+                   0.9 for a tubular bowl). Default 0.7.
         species_order: List of species names. First species assumed to be cells.
         cell_species: Name of cell species (default "cells")
     """
@@ -113,8 +115,8 @@ class Centrifuge:
     symbol = "Centrifuge"
     equations = [
         r"v_s = \frac{(\rho_p - \rho_f)\,g\,d_p^2}{18\,\mu}\qquad \text{(Stokes settling)}",
-        r"Q/\Sigma = 2\,v_s\qquad \text{(Ambler's sigma scale-up)}",
-        r"\eta = \tanh\!\left(\frac{v_s\,\Sigma}{Q}\right)\qquad \text{(smooth separation efficiency)}",
+        r"Q_{50} = 2\,v_s\,\Sigma\qquad \text{(Ambler: 50\% capture of a particle of velocity } v_s)",
+        r"\eta = \min\!\left(1, \frac{v_s\,e\,\Sigma}{Q}\right)\qquad \text{(Hazen capture in the equivalent settler, } e \text{ = efficiency)}",
     ]
     assumptions = [
         "Stokes flow regime (dilute suspension, low Re).",
@@ -173,8 +175,9 @@ class Centrifuge:
             info: Dictionary with:
                 - 'separation_efficiency': Actual separation efficiency
                 - 'stokes_velocity': Particle settling velocity (m/s)
-                - 'critical_diameter': Minimum separable particle size (m)
+                - 'critical_diameter': Cut size captured at 50% at this Q (m)
                 - 'cell_recovery': Fraction of cells in concentrate
+                - 'Q_critical': Flow at which these particles are captured at 50%, ``2 v_s Sigma`` (m³/s)
         """
         p = self.params
         inlet_flows = get_flows(inlet)
@@ -182,21 +185,20 @@ class Centrifuge:
         # Stokes settling velocity
         v_s = stokes_velocity(d_particle, rho_particle, rho_fluid, viscosity)
 
-        # Theoretical separation: Q_crit = 2 * v_s * Σ
-        # At Q = Q_crit, 50% of particles of size d are captured
-        Q_crit = 2 * v_s * p.sigma
+        # Sigma theory (Ambler 1959; Geankoplis 5e Sec. 14.4C): Sigma is the area of the
+        # gravity settler that does the same job. A particle of Stokes velocity v_s is
+        # captured completely when Q <= v_s Sigma and in the proportion v_s Sigma / Q
+        # above that (ideal Hazen settler), so half of them at Q_crit = 2 v_s Sigma.
+        # ``efficiency`` is Ambler's correction to Sigma for non-ideal flow (the machine
+        # behaves as a settler of area efficiency * Sigma), so slow enough feeds are
+        # still captured completely.
+        sigma_eff = p.efficiency * p.sigma
+        Q_crit = 2 * v_s * sigma_eff
+        actual_sep = jnp.clip(v_s * sigma_eff / Q, 0.0, 1.0)
 
-        # Separation efficiency based on Q/Q_crit
-        # Using cumulative efficiency model
-        Q_ratio = Q / Q_crit
-        theoretical_sep = jnp.clip(1.0 / Q_ratio, 0.0, 1.0)
-
-        # Apply efficiency factor (clamp to prevent mass creation)
-        actual_sep = jnp.clip(theoretical_sep * p.efficiency, 0.0, 1.0)
-
-        # Critical particle diameter (smallest captured at 50% efficiency)
+        # Cut size: the particle captured at 50% at this flow
         d_crit = critical_particle_diameter(
-            Q, p.sigma, rho_particle, rho_fluid, viscosity
+            Q, sigma_eff, rho_particle, rho_fluid, viscosity
         )
 
         # Split flows
@@ -390,21 +392,42 @@ def tubular_bowl_sigma(
     r: Array | float,
     L: Array | float,
     rpm: Array | float,
+    r_inner: Array | float | None = None,
 ) -> Array:
     """Calculate Sigma factor for tubular bowl centrifuge.
 
-    Σ = (π * ω² * L * r²) / g
+    With the liquid surface at ``r_inner`` and the bowl wall at ``r``
+    (Geankoplis 5e Sec. 14.4C, from the Stokes trajectory of the particle
+    that starts midway through the liquid layer)::
+
+        Σ = ω² π L (r² - r_inner²) / (2 g ln(2 r / (r + r_inner)))
+
+    and for a thin liquid layer (``r_inner=None``, the limit ``r_inner -> r``)::
+
+        Σ = 2 π ω² L r² / g
+
+    The 50% cut flow is ``Q = 2 v_s Σ``, as for the disc stack. (Before the
+    unit-ops book Ch. 21 fix the thin-layer value was half of this.)
 
     Args:
-        r: Bowl radius (m)
+        r: Bowl radius (m), the outer radius of the liquid layer
         L: Bowl length (m)
         rpm: Rotational speed (rev/min)
+        r_inner: Radius of the liquid surface (m); ``None`` for a thin layer
 
     Returns:
         Sigma factor (m²)
+
+    Example:
+        >>> float(tubular_bowl_sigma(0.0285, 0.197, 23000.0, r_inner=0.02225))  # doctest: +ELLIPSIS
+        499.7...
     """
     omega = rpm * 2 * jnp.pi / 60
-    return jnp.pi * omega**2 * L * r**2 / G_ACCEL
+    r = jnp.asarray(r)
+    if r_inner is None:
+        return 2.0 * jnp.pi * omega**2 * L * r**2 / G_ACCEL
+    r_i = jnp.asarray(r_inner)
+    return omega**2 * jnp.pi * L * (r**2 - r_i**2) / (2.0 * G_ACCEL * jnp.log(2.0 * r / (r + r_i)))
 
 
 # =============================================================================
@@ -447,9 +470,14 @@ def critical_particle_diameter(
 ) -> Array:
     """Calculate critical particle diameter for separation.
 
-    The smallest particle that can be separated at 50% efficiency.
+    The cut size: the particle captured at 50% at the flow ``Q``. From
+    ``Q = 2 v_s Σ`` with the Stokes velocity ``v_s = (ρ_p - ρ_f) g d² / (18 μ)``
+    (Geankoplis 5e Sec. 14.4C)::
 
-    d_crit = sqrt(9 * μ * Q / (π * Σ * (ρ_p - ρ_f) * g))
+        d_crit = sqrt(9 * μ * Q / (Σ * (ρ_p - ρ_f) * g))
+
+    (An extra factor π in the denominator, which made the cut size 1.77 times
+    too small, was removed in the unit-ops book Ch. 21 fix.)
 
     Args:
         Q: Volumetric flow rate (m³/s)
@@ -467,7 +495,7 @@ def critical_particle_diameter(
     rho_f = jnp.asarray(rho_f)
     mu = jnp.asarray(mu)
 
-    d_sq = 9 * mu * Q / (jnp.pi * sigma * (rho_p - rho_f) * G_ACCEL)
+    d_sq = 9 * mu * Q / (sigma * (rho_p - rho_f) * G_ACCEL)
     return jnp.sqrt(jnp.maximum(d_sq, 0.0))
 
 

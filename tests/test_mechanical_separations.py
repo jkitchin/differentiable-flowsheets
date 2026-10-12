@@ -19,12 +19,16 @@ Oracles (none is a published textbook number; see the end of this docstring):
 * species balances to 1e-12; ``check_grads`` of the throughput, the thickener area and
   the cyclone efficiency; a ``Flowsheet`` and the Dryer -> Cyclone hand-off (wex21-3 structure).
 
-NOT reproduced: the Geankoplis Sec. 14.2 (CaCO3 data, alpha and R_m, press and rotary-drum
-examples), McCabe Ch. 29-30, Coulson & Richardson and Cooper & Alley (Ch. 4) worked
-examples. The issue calls those numbers "unverified, from recollection" and none could
-be recalled with confidence, so no test claims agreement with a published example. All data
-below are SYNTHETIC (illustrative). The Lapple constants (K = 16, the standard proportions,
-the Stairmand set) are from memory and flagged unverified in the module.
+Published examples (``TestGeankoplisFiltration``, added for unit-ops book Ch. 21): the
+Geankoplis 5e Example 14.2-1 CaCO3 data (t, V) are fitted by ``fit_ruth`` and give the
+book's alpha = 1.863e11 m/kg and R_m = 10.63e10 1/m within 0.5 % (the book fits the
+straight part of the graph, so the first point is dropped); the plate-and-frame scale-up
+(Example 14.2-2, 269.7 s) and the wash time at a quarter of the final rate (Example 14.2-3,
+194 s) are reproduced. The data table and the answers were typed from memory and should
+be checked against the printed book. NOT reproduced: the Geankoplis rotary-drum example,
+McCabe Ch. 29-30, Coulson & Richardson and Cooper & Alley (Ch. 4) worked examples. The other
+data below are SYNTHETIC (illustrative). The Lapple constants (K = 16, the standard
+proportions, the Stairmand set) are from memory and flagged unverified in the module.
 """
 
 import math
@@ -186,6 +190,49 @@ class TestRuth:
 # =============================================================================
 # Batch cycle and the optimum
 # =============================================================================
+
+
+class TestGeankoplisFiltration:
+    """Geankoplis 5e Examples 14.2-1 to 14.2-3 (CaCO3 slurry, -dP = 338 kPa, 298.2 K).
+
+    Data and answers recalled (check against the printed book): A = 0.0439 m^2,
+    c_s = 23.47 kg/m^3, mu = 8.937e-4 Pa s; alpha = 1.863e11 m/kg, R_m = 10.63e10 1/m;
+    a 20-frame press of 0.873 m^2 frames collects 3.37 m^3 in 269.7 s; a wash of 10 % of the
+    filtrate at a quarter of the final rate takes 194 s.
+    """
+
+    t = np.array([4.4, 9.5, 16.3, 24.6, 34.7, 46.1, 59.0, 73.6, 89.4, 107.3])
+    V = 1e-3 * np.array([0.498, 1.000, 1.501, 2.000, 2.498, 3.002, 3.506, 4.004, 4.502, 5.009])
+    lab = dict(A=0.0439, dP=338e3, mu=8.937e-4, c_s=23.47)
+
+    def test_example_14_2_1_alpha_and_Rm(self):
+        f = fit_ruth(self.t[1:], self.V[1:], **self.lab)
+        assert float(f["alpha"]) == pytest.approx(1.863e11, rel=5e-3)
+        assert float(f["R_m"]) == pytest.approx(10.63e10, rel=5e-3)
+        assert float(f["r2"]) > 0.999
+
+    def test_example_14_2_2_press_time(self):
+        K_p, B = ruth_constants(20 * 0.873, 338e3, 8.937e-4, 1.863e11, 23.47, 10.63e10)
+        assert float(ruth_constant_pressure(3.37, K_p, B)) == pytest.approx(269.7, rel=1e-3)
+
+    def test_example_14_2_3_wash_time(self):
+        K_p, B = ruth_constants(20 * 0.873, 338e3, 8.937e-4, 1.863e11, 23.47, 10.63e10)
+        t_w = wash_time(0.1 * 3.37, filtrate_rate(3.37, K_p, B), rate_factor=0.25)
+        assert float(t_w) == pytest.approx(194.0, rel=2e-3)
+
+    def test_cake_filter_unit_reproduces_the_press(self):
+        """The CakeFilter rating at the example's area and time collects 3.37 m^3 per cycle."""
+        rho, c_s, X = 997.0, 23.47, 0.0
+        Q_f = 3.37 / 1663.7                       # filtrate m^3/s over one cycle (feed rate is immaterial)
+        m_s = c_s * Q_f
+        slurry = {"F_solid": m_s, "F_H2O": Q_f * rho / 18.015e-3, "T": 298.15, "P": 101325.0}
+        _, _, info = CakeFilter(CakeFilterParams(
+            delta_P=338e3, area=20 * 0.873, alpha=1.863e11, R_m=10.63e10, viscosity=8.937e-4,
+            liquid_density=rho, filtration_time=269.7, wash_ratio=0.1, wash_rate_factor=0.25,
+            downtime=1200.0, cake_moisture=X))(slurry)
+        assert float(info["c_s"]) == pytest.approx(c_s, rel=1e-12)
+        assert float(info["V_cycle"]) == pytest.approx(3.37, rel=1e-3)
+        assert float(info["t_wash"]) == pytest.approx(194.0, rel=2e-3)
 
 
 class TestCycle:
@@ -575,6 +622,16 @@ def thick_feed(m_s=5.0, m_l=50.0):
 
 
 class TestSettlerUnit:
+    def test_unsorted_or_repeated_data_is_rejected(self):
+        """Descending C_data, or the repeated C0 of a Kynch construction, gave a silently wrong area."""
+        with pytest.raises(ValueError, match="strictly increasing"):
+            SettlerParams(underflow_concentration=200.0, C_data=[80.0, 60.0, 40.0], v_data=[1e-5, 5e-5, 2e-4])
+        with pytest.raises(ValueError, match="strictly increasing"):
+            SettlerParams(underflow_concentration=200.0, C_data=[40.0, 40.0, 60.0], v_data=[2e-4, 2e-4, 5e-5])
+        with pytest.raises(ValueError, match="strictly increasing"):
+            SettlerParams(underflow_concentration=200.0, method="kynch", t_data=[0.0, 0.0, 60.0],
+                          z_data=[0.5, 0.5, 0.4], batch_C0=40.0)
+
     def test_particle_route_matches_a_hand_calculation(self):
         d_p, C_u, n = 25e-6, 300.0, 4.65
         feed = thick_feed()
@@ -747,6 +804,7 @@ class TestCycloneLibrary:
     def test_standard_lapple_proportions(self):
         g = cyclone_geometry(2.0, "lapple")
         assert float(g["H"]) == pytest.approx(1.0) and float(g["W"]) == pytest.approx(0.5)
+        assert float(g["S"]) == pytest.approx(1.25)            # S = 5D/8 (outlet-duct length)
         assert float(lapple_turns(g["H"], g["L_b"], g["L_c"])) == pytest.approx(6.0)
         assert set(CYCLONE_GEOMETRIES) == {"lapple", "stairmand_he"}
         c = cyclone_geometry(1.0, "custom", [0.5, 0.2, 0.5, 0.5, 1.5, 2.5, 0.375])
