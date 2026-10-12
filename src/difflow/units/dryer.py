@@ -284,7 +284,9 @@ def heat_transfer_coefficient_tray(G: Array | float, flow: str = "parallel") -> 
     **Unverified: both correlations and their ranges are typed from memory of
     Geankoplis Eqs. 9.6-7 and 9.6-8** (the 0.0204 coefficient is the one the
     issue also quotes); check them against the book before relying on the
-    numbers. ``G`` is converted from kg/m^2/s here. No range check is made.
+    numbers. The parallel-flow form reproduces the h = 62.45 W/m^2/K of
+    Geankoplis Example 9.6-1 (also recalled; see ``tests/test_dryer.py``).
+    ``G`` is converted from kg/m^2/s here. No range check is made.
     """
     Gh = 3600.0 * _f(G)
     if flow == "parallel":
@@ -555,7 +557,7 @@ class DryerParams(ParamsMixin):
             it is estimated as ``T_a - (T_a - T_wb) R(X_out)/R_c`` in the air at
             the solids' exit end; a value overrides that estimate (the
             textbook balance problems state it).
-        diameter: Shell diameter (m) of a countercurrent rotary dryer. When
+        diameter: Shell diameter (m) of a continuous rotary dryer (either flow). When
             given, the unit sizes the dryer by the three-zone method (solids
             preheat to the wet bulb, evaporation at the wet bulb, heating of
             the dried solids), ``q_i = Ua S L_i dT_lm,i`` with ``Ua`` from
@@ -619,8 +621,8 @@ class DryerParams(ParamsMixin):
             raise ValueError("falling='integral' needs rate_curve")
         if self.rate_interpolation not in ("rate", "inverse"):
             raise ValueError("rate_interpolation must be 'rate' or 'inverse'")
-        if self.diameter is not None and (self.mode != "continuous" or self.flow != "countercurrent"):
-            raise ValueError("diameter (three-zone rotary sizing) needs mode='continuous', flow='countercurrent'")
+        if self.diameter is not None and self.mode != "continuous":
+            raise ValueError("diameter (three-zone rotary sizing) needs mode='continuous'")
 
 
 class Dryer:
@@ -650,7 +652,7 @@ class Dryer:
     ``solids_per_area`` is given the unit also reports the residence time
     from :func:`drying_time` with the constant rate taken in the air at the wet
     end of the dryer. ``T_solids_out`` overrides the product-temperature
-    estimate. With ``diameter`` (countercurrent only) the unit sizes a rotary
+    estimate. With ``diameter`` (continuous, either flow) the unit sizes a rotary
     dryer by the three-zone method of McCabe, Smith & Harriott (Ch. 24):
     zone I preheats the wet solids to the wet bulb ``T_wb`` of the inlet air,
     zone II evaporates all the water at ``T_wb`` (duty ``m_s (X_in - X_out)
@@ -823,10 +825,9 @@ class Dryer:
                 Batch adds ``drying_time``, ``cycle_time``, ``area_required``
                 (m^2), ``Ls_over_A``, ``air_humidity_rise``; continuous adds
                 ``residence_time_required`` (with ``solids_per_area``),
-                ``N_t`` (countercurrent: air heat-transfer units against the
-                inlet wet bulb) and, with ``diameter``, ``zone_duties`` (W),
-                ``zone_lengths`` (m), ``zone_dT_lm`` (K), ``zone_air_T`` (K,
-                air entering zone I and leaving zone III), ``length``,
+                ``N_t`` (air heat-transfer units against the inlet wet bulb) and, with ``diameter``, ``zone_duties`` (W),
+                ``zone_lengths`` (m), ``zone_dT_lm`` (K) in the solids' order,
+                ``zone_air_T`` (K, the air at the I/II and II/III boundaries), ``length``,
                 ``volume``, ``L_over_D``, ``Ua``, ``air_mass_velocity``.
         """
         if self.params.mode == "batch":
@@ -924,7 +925,12 @@ class Dryer:
         info["energy_balance_residual"] = e_out - e_in
 
     def _three_zone(self, m_s, X_in, X_out, T_s_in, T_s_out, st_in, st_out, G):
-        """Three-zone length of a countercurrent rotary dryer (McCabe, Smith & Harriott, Ch. 24)."""
+        """Three-zone length of a rotary dryer (McCabe, Smith & Harriott, Ch. 24), either flow direction.
+
+        Zones in the solids' order: I preheats the wet solids to the wet bulb, II
+        evaporates at the wet bulb, III heats the dried solids. ``zone_air_T`` is
+        the air temperature at the I/II and II/III boundaries.
+        """
         from difflow.units.heat_exchanger import log_mean_temperature_difference as lmtd
 
         p = self.params
@@ -935,11 +941,21 @@ class Dryer:
         q3 = m_s * (p.solids_cp + X_out * p.cp_water) * (T_s_out - T_wb)    # heat the dried solids (hot end)
         q1 = m_s * (p.solids_cp + X_in * p.cp_water) * (T_wb - T_s_in)      # preheat the wet solids (cold end)
         q2 = m_s * (X_in - X_out) * latent_heat(T_wb)                       # evaporate at the wet bulb
-        T_b = st_in["T"] - q3 / (G * cs_in)       # air leaving zone III
-        T_c = st_out["T"] + q1 / (G * cs_out)     # air entering zone I
-        dT3 = lmtd(st_in["T"] - T_s_out, T_b - T_wb)
-        dT2 = lmtd(T_b - T_wb, T_c - T_wb)
-        dT1 = lmtd(T_c - T_wb, st_out["T"] - T_s_in)
+        T_in, T_out = st_in["T"], st_out["T"]
+        if p.flow == "countercurrent":
+            T_b = T_in - q3 / (G * cs_in)         # air leaving zone III (II/III boundary)
+            T_c = T_out + q1 / (G * cs_out)       # air entering zone I (I/II boundary)
+            dT3 = lmtd(T_in - T_s_out, T_b - T_wb)
+            dT2 = lmtd(T_b - T_wb, T_c - T_wb)
+            dT1 = lmtd(T_c - T_wb, T_out - T_s_in)
+            T_12, T_23 = T_c, T_b
+        else:                                     # cocurrent: the hot air meets the wet feed
+            T_b = T_in - q1 / (G * cs_in)         # air leaving zone I
+            T_c = T_out + q3 / (G * cs_out)       # air entering zone III
+            dT1 = lmtd(T_in - T_s_in, T_b - T_wb)
+            dT2 = lmtd(T_b - T_wb, T_c - T_wb)
+            dT3 = lmtd(T_c - T_wb, T_out - T_s_out)
+            T_12, T_23 = T_b, T_c
         D = _f(p.diameter)
         S = jnp.pi * D ** 2 / 4.0
         G_mass = G / S
@@ -949,7 +965,7 @@ class Dryer:
         return {
             "air_mass_velocity": G_mass, "Ua": Ua, "cross_section": S,
             "zone_duties": jnp.stack([q1, q2, q3]), "zone_lengths": jnp.stack([L1, L2, L3]),
-            "zone_dT_lm": jnp.stack([dT1, dT2, dT3]), "zone_air_T": jnp.stack([T_c, T_b]),
+            "zone_dT_lm": jnp.stack([dT1, dT2, dT3]), "zone_air_T": jnp.stack([T_12, T_23]),
             "length": length, "volume": S * length, "L_over_D": length / D,
         }
 
@@ -1025,8 +1041,7 @@ class Dryer:
                                  o["evap"], G, st, t_c, t_f)
         info["mode"] = "continuous"
         info["fines"] = fines
-        if counter:
-            info["N_t"] = heat_transfer_units(T_a, o["T_out"], st["T_wb"])
+        info["N_t"] = heat_transfer_units(T_a, o["T_out"], st["T_wb"])
         if p.diameter is not None:
             info.update(self._three_zone(m_s, X_in, X_out, T_s_in, o["T_s_out"], st, st_out, G))
         if LsA is not None:

@@ -9,8 +9,8 @@ All notable changes to difflow are recorded here. The format follows
 ### Added
 
 - **Dryer: rotary sizing and textbook checks (unit-ops book Ch 19).** `rotary_dryer_ua` (MSH Ch. 24
-  `Ua = 237 G^0.67 / D`, SI, recalled from memory) and `heat_transfer_units` (`N_t`); a continuous countercurrent
-  `Dryer` with `diameter=` sizes the shell by the three-zone method (preheat, constant rate at the wet bulb,
+  `Ua = 237 G^0.67 / D`, SI, recalled from memory) and `heat_transfer_units` (`N_t`); a continuous (countercurrent or
+  cocurrent) `Dryer` with `diameter=` sizes the shell by the three-zone method (preheat, constant rate at the wet bulb,
   product heating: `zone_duties`, `zone_lengths`, `length`, `L_over_D`) and reports `N_t`. `T_solids_out=` specifies
   the product temperature instead of estimating it. `interpolate="inverse"` on `drying_rate_curve`/`drying_periods`/
   `drying_time` (and `DryerParams.rate_interpolation`) interpolates `1/R` linearly, so the falling-rate integral is the

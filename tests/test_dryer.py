@@ -797,15 +797,18 @@ class TestGeankoplis:
     """
 
     def test_example_9_6_1_constant_rate(self):
-        # air 65.6 C dry bulb, 29.4 C wet bulb, 6.1 m/s parallel to a 0.457 m square pan; 11.34 kg dry solid,
-        # X 0.35 -> 0.22 in the constant-rate period. Book: R_c = 3.39 kg/h/m^2, t = 2.08 h.
-        st = state(T=65.6 + K0, T_wb=29.4 + K0)
+        # air 65.6 C, H = 0.010 kg/kg, 6.1 m/s parallel to a 0.457 m square pan (book: T_w = 28.9 C from the
+        # chart, h = 62.45 W/m^2/K, R_c = 3.39 kg/h/m^2); then 11.34 kg dry solid, X 0.35 -> 0.22 in the constant-rate
+        # period, t = 2.08 h.
+        st = state(T=65.6 + K0, W=0.010)
+        assert float(st["T_wb"]) - K0 == pytest.approx(28.9, abs=0.05)
         G = 6.1 * (1.0 + st["W"]) / st["v"]
         h = heat_transfer_coefficient_tray(G)
+        assert float(h) == pytest.approx(62.45, rel=0.005)
         Rc = constant_drying_rate(65.6 + K0, st["W"], h)
-        assert float(Rc) * 3600.0 == pytest.approx(3.39, rel=0.02)
+        assert float(Rc) * 3600.0 == pytest.approx(3.39, rel=0.005)
         t = drying_time(0.35, 0.22, 0.20, 0.0, Rc, 11.34 / 0.457 ** 2)
-        assert float(t) / 3600.0 == pytest.approx(2.08, rel=0.02)
+        assert float(t) / 3600.0 == pytest.approx(2.08, rel=0.005)
 
     def test_examples_9_7_1_and_9_7_2_falling_rate(self):
         # 399 kg dry solid on 18.58 m^2 (Ls/A = 21.5), X 0.38 -> 0.04, X_c = 0.195, R_c = 1.51 kg/h/m^2.
@@ -898,8 +901,33 @@ class TestRotarySizing:
 
         check_grads(f, (10.0, 2.0), order=1, modes=["rev"], rtol=1e-5)
 
-    def test_diameter_needs_countercurrent(self):
-        with pytest.raises(ValueError):
-            DryerParams(mode="continuous", flow="cocurrent", diameter=1.0)
+    def test_diameter_needs_continuous(self):
         with pytest.raises(ValueError):
             DryerParams(mode="batch", diameter=1.0)
+
+    @pytest.mark.slow
+    def test_cocurrent_three_zone_against_hand_calculation(self):
+        from difflow.units.heat_exchanger import log_mean_temperature_difference as lmtd
+
+        ms, G, D = 0.5, 10.0, 2.0
+        wet, air = make_wet(ms, 0.30, 300.0), make_air(150.0, 0.01, G)
+        p = DryerParams(mode="continuous", flow="cocurrent", X_c=0.15, X_eq=0.02, product_moisture=0.02,
+                        h=60.0, T_solids_out=330.0, diameter=D)
+        _, _, info = Dryer(p)(wet, air)
+        Twb = _wet_bulb_independent(150.0 + K0, 0.01)
+        Xin = float(info["X_in"])
+        q1 = ms * (1500.0 + Xin * 4186.0) * (Twb - 300.0)
+        q2 = ms * (Xin - 0.02) * (2501e3 + (1860.0 - 4186.0) * (Twb - K0))
+        q3 = ms * (1500.0 + 0.02 * 4186.0) * (330.0 - Twb)
+        np.testing.assert_allclose(np.asarray(info["zone_duties"]), [q1, q2, q3], rtol=1e-6)
+        T_in, T_out, W_out = 150.0 + K0, float(info["T_air_out"]), float(info["W_out"])
+        T_b = T_in - q1 / (G * (1006.0 + 1860.0 * 0.01))
+        T_c = T_out + q3 / (G * (1006.0 + 1860.0 * W_out))
+        S = math.pi * D ** 2 / 4
+        Ua = 237.0 * (G / S) ** 0.67 / D
+        dts = [float(lmtd(T_in - 300.0, T_b - Twb)), float(lmtd(T_b - Twb, T_c - Twb)),
+               float(lmtd(T_c - Twb, T_out - 330.0))]
+        L = [q / (Ua * S * dt) for q, dt in zip((q1, q2, q3), dts)]
+        np.testing.assert_allclose(np.asarray(info["zone_lengths"]), L, rtol=1e-5)
+        np.testing.assert_allclose(np.asarray(info["zone_air_T"]), [T_b, T_c], rtol=1e-9)
+        assert float(info["N_t"]) == pytest.approx(math.log((T_in - Twb) / (T_out - Twb)), rel=1e-6)

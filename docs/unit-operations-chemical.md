@@ -6498,8 +6498,8 @@ print(f"X_eq(a_w = 0.5) = {float(X):.4f}, back to a_w = {float(water_activity(X,
 
 The numbers are an invented illustration. The tests (`TestGeankoplis`) reproduce
 Geankoplis (5e, Ch. 9) Examples 9.6-1 (constant rate from the tray correlation:
-$R_c$ = 3.34 against the book's 3.39 kg/h/m$^2$, which reads the humidity off a
-chart; time 2.11 h against 2.08 h), 9.7-1 (graphical falling-rate integral, 4.06 h
+wet bulb 28.9 C and $R_c$ = 3.39 kg/h/m$^2$ as in the book; the time for the
+constant-rate drop, 2.08 h), 9.7-1 (graphical falling-rate integral, 4.06 h
 with `interpolate="inverse"`), 9.7-2 (straight-line falling rate, 4.40 h against
 4.39 h) and 9.10-1 (a countercurrent dryer balance with the product temperature
 specified: 1170 against 1171 kg dry air/h, exit humidity 0.0247). Those inputs and
@@ -6647,12 +6647,14 @@ A direct-heat rotary dryer is sized by heat transfer (McCabe, Smith & Harriott
 7e, Ch. 24). The air cools from $T_{in}$ to $T_{out}$ against solids that sit at
 the wet bulb $T_{wb}$ through most of the shell; the number of heat-transfer units
 $N_t = \ln[(T_{in} - T_{wb})/(T_{out} - T_{wb})]$ (`heat_transfer_units`, in
-`info["N_t"]` for a countercurrent dryer) is usually 1.5-2.5. With `diameter`
-set, a continuous countercurrent `Dryer` splits the shell into three zones:
+`info["N_t"]` of a continuous dryer) is usually 1.5-2.5. With `diameter`
+set, a continuous `Dryer` (either flow) splits the shell into three zones:
 I heats the wet feed to $T_{wb}$, $q_I = m_s(c_{ps} + X_{in}c_{pw})(T_{wb} - T_{s,in})$;
 II evaporates the water at $T_{wb}$, $q_{II} = m_s(X_{in} - X_{out})\lambda(T_{wb})$;
 III heats the dry product to $T_{s,out}$, $q_{III} = m_s(c_{ps} + X_{out}c_{pw})(T_{s,out} - T_{wb})$.
-The air temperatures between the zones follow from the humid heat, and each zone
+In a cocurrent dryer the zones run in the same order along the
+shell but the hot air meets zone I. The air temperatures between the zones
+(`zone_air_T`, at the I/II and II/III boundaries) follow from the humid heat, and each zone
 length is $L_i = q_i/(U_a S\,\Delta T_{lm,i})$ with
 $U_a = 237\,G^{0.67}/D$ W/m$^3$/K (`rotary_dryer_ua`; $G$ the air mass velocity
 in kg/m$^2$/s over the cross-section $S$). This is the SI form of MSH's
@@ -6713,7 +6715,7 @@ class DryerParams:
     lewis: float = 1.0
     rate_interpolation: str = "rate"   # | "inverse" (1/R linear between rate_curve points)
     T_solids_out: float = None         # K, product temperature specified instead of estimated
-    diameter: float = None             # m, three-zone rotary sizing (continuous countercurrent)
+    diameter: float = None             # m, three-zone rotary sizing (continuous, either flow)
     ua_coefficient: float = 237.0      # SI prefactor of Ua = c G^0.67 / D
 ```
 
