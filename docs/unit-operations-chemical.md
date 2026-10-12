@@ -5299,9 +5299,11 @@ a diffusivity, a film coefficient or a transfer-unit height. Properties are
 *inputs*: core has no gas viscosity or surface-tension model, so the Onda
 functions take `mu_G` and `sigma` as required arguments (there is no hidden
 `sigma=0.072`). See the module docstring and `tests/test_mass_transfer.py` for
-exactly what was and was not verified; in short, **no textbook worked example
-is reproduced**, and the tables (diffusion volumes, Le Bas increments,
-packings) are transcribed from memory.
+exactly what was and was not verified. Fuller is checked against Poling et
+al. 5e Example 11-3 and Geankoplis Example 6.2-5, and Wilke-Chang (with Le Bas
+volumes) against Geankoplis Example 6.3-2; no published Onda worked example is
+reproduced, and the tables (diffusion volumes, Le Bas increments, packings)
+are transcribed from memory.
 
 (mass-transfer-diffusivities)=
 ### Diffusivity Correlations
@@ -5315,7 +5317,12 @@ solute molar volume at its normal boiling point `V_A` in cm$^3$/mol from
 water). `stokes_einstein_diffusivity(T, mu, r)` is for large solutes. Both
 published correlations are implemented in their native units (cm$^2$/s, atm,
 cP) and converted at the boundary. Diffusion volumes are in `FULLER_VOLUMES`
-and `FULLER_ATOMIC_VOLUMES`; `diffusion_volume` sums atoms.
+and `FULLER_ATOMIC_VOLUMES` (the 1969 refit recommended by Poling et al.);
+`diffusion_volume` sums atoms. `diffusion_volume(..., table="1966")` uses the
+original 1966 values (`FULLER_VOLUMES_1966`, `FULLER_ATOMIC_VOLUMES_1966`)
+that Geankoplis, Treybal and Welty tabulate, to reproduce their examples. The
+Le Bas table distinguishes oxygen environments (`O` 7.4, `O_methyl_ester`
+9.1, `O_methyl_ether` 9.9, `O_ester_ether` 11.0, `O_acid` 12.0, `O_SPN` 8.3).
 
 ```python
 from difflow.mass_transfer import (
@@ -5374,6 +5381,29 @@ print(float(ranz_marshall(0.0, 1.0)))
 for m in (0.01, 1e3):
     g, l = resistance_fractions(k_y=0.05, k_x=5.0, m=m)
     print(f"m = {m:g}: gas {float(g):.3f}, liquid {float(l):.3f}")
+```
+
+(mass-transfer-penetration)=
+### Penetration, Surface Renewal and Falling Films
+
+Film theory gives $k \propto D$; the unsteady theories give $k \propto
+D^{1/2}$. `penetration_coefficient(D, t_c)` is Higbie's $k_L =
+2\sqrt{D/(\pi t_c)}$ for an exposure time $t_c$, and
+`surface_renewal_coefficient(D, s)` is Danckwerts' $k_L = \sqrt{D s}$.
+For a wetted-wall column, `falling_film_thickness(Gamma, rho, mu)` is the
+Nusselt film $\delta = (3\mu\Gamma/\rho^2 g)^{1/3}$ ($\Gamma$ in kg/m/s of
+wetted perimeter), and `falling_film_liquid_coefficient(D, Gamma, rho, mu, L)`
+the short-contact mean $k_L = \sqrt{4 D v_{max}/(\pi L)}$ with the surface
+velocity $v_{max} = 1.5\Gamma/(\rho\delta)$ (Bird, Stewart & Lightfoot 2e,
+Sec. 20.1). It is valid for laminar, wave-free films while the penetration
+depth is small compared with $\delta$. The gas side of a wetted-wall column is
+`gilliland_sherwood`.
+
+```python
+from difflow.mass_transfer import falling_film_liquid_coefficient, penetration_coefficient
+
+k_L = falling_film_liquid_coefficient(2.0e-9, 0.02, 998.0, 1.0e-3, 1.0)
+print(f"k_L = {float(k_L):.2e} m/s")
 ```
 
 (mass-transfer-packed)=
