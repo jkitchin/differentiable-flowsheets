@@ -8,6 +8,17 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`difflow.adsorption` (unit-ops book Ch 23).** A core module for adsorption, ion exchange and chromatography,
+  independent of the CO2-only cycle models in `difflow_cc` and the mAb column in `difflow_bio`: linear, Langmuir
+  (affinity form) and Freundlich isotherms; `fit_isotherm` (linearized start, Levenberg-Marquardt polish);
+  `batch_adsorption`; the length-of-unused-bed method (`lub_analysis`, `lub_break_time`, `stoichiometric_time`);
+  `fixed_bed_breakthrough`, an isothermal LDF method-of-lines bed solved by adaptive Tsit5 whose step is capped
+  inside the stability region so reverse-mode gradients are right (uncapped, the gradient of the stoichiometric time
+  came out -1010 against +50); `klinkenberg_breakthrough`; `ion_exchange_equilibrium` (mass action, any valences);
+  and `retention_factor`, `plate_count`, `resolution`, `purnell_resolution`, `plates_for_resolution`, `van_deemter`,
+  `van_deemter_optimum`, `gaussian_peak`. Tests reproduce Geankoplis 5e Examples 12.2-1 and 12.3-1 (data recalled
+  from memory) and the Klinkenberg solution (`tests/test_adsorption.py`).
+
 - **Unit-ops book Ch. 10-13 gaps (#444).** (1) `DistillationColumn.solve_specs(feed, specs)` solves for `R` and
   `D` from any two of `x_D`/`x_B` purities, `recovery_D`/`recovery_B`, `R`, `D`, `B` (damped Newton, implicit
   derivative; an infeasible pair ends with `spec_converged` False). (2) `underwood_class2`: Underwood's general
@@ -936,6 +947,12 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Fixed
+
+- **Protein A load volume used the resin's saturation capacity as its dynamic capacity.**
+  `ProteinAChromatography.calculate_load_volume` took the dynamic binding capacity as `0.9 q_max` whatever the
+  feed titre; it now uses the Langmuir loading at the feed concentration times `(1 - breakthrough_limit)`, as the
+  column call does, and the unit's `equations` show the dissociation-constant isotherm `q_max C/(K_d + C)` it
+  actually evaluates.
 
 - **Flash derivatives and near-boundary values (#444).** (1) `flash_TP_eos` second derivatives were wrong (the
   Hessian of a two-flash PR train had the wrong sign): derivatives came from unrolling 50 damped substitution steps.

@@ -7064,6 +7064,97 @@ for t in (300.0, 900.0, 3600.0):
 
 ---
 
+## Adsorption, Ion Exchange and Chromatography
+
+**Location**: `difflow/adsorption.py` (`from difflow import adsorption`)
+
+A small core module, separate from the CO2-specific cycle models in `difflow_cc` and
+the mAb capture column in `difflow_bio`. Every function is JAX, so `jax.grad` goes
+through fits, equilibria and the fixed-bed solve.
+
+### Isotherms and Batch Adsorption
+
+**Functions**: `linear_isotherm(c, K)`, `langmuir_isotherm(c, q_max, K)` (affinity form
+$q = q_{max}Kc/(1+Kc)$; the bio plugin's `langmuir_isotherm` takes a dissociation constant
+$K_d = 1/K$), `freundlich_isotherm(c, K, n)` ($q = Kc^n$), `fit_isotherm(c, q, model)`,
+`batch_adsorption(c0, V, m, isotherm, **params)`
+
+`fit_isotherm` starts from the classical linearization (Langmuir $c/q$ vs. $c$, Freundlich
+$\log q$ vs. $\log c$, returned as `"linearized"`) and polishes it by Levenberg-Marquardt on the
+logarithms of the parameters (`relative=True` fits relative residuals). `batch_adsorption` solves
+$V(c_0 - c) = m\,(q(c) - q_0)$ by bisection with an implicit-derivative Newton step
+(Geankoplis 5e Example 12.2-1).
+
+### Fixed-Bed Breakthrough
+
+**Functions**: `lub_analysis(t, c_ratio, L, c_break)`, `lub_break_time(L_new, t_stoich, L, LUB)`,
+`stoichiometric_time(L, v_s, epsilon, rho_b, c_feed, q_feed)`,
+`fixed_bed_breakthrough(t, L, v_s, epsilon, rho_b, c_feed, k_ldf, isotherm, **params)`,
+`klinkenberg_breakthrough(t, L, v_s, epsilon, rho_b, K, k_ldf)`
+
+`lub_analysis` is the length-of-unused-bed scale-up method (Geankoplis 5e §12.3, MSH 7e Ch. 25):
+$t_s = \int_0^\infty (1 - c/c_0)\,dt$, $t_u = \int_0^{t_b}(1 - c/c_0)\,dt$, $L_B = L\,t_u/t_s$,
+$\mathrm{LUB} = L - L_B$; a bed of length $L'$ breaks at $t_s(L' - \mathrm{LUB})/L$.
+
+`fixed_bed_breakthrough` solves the isothermal bed by the method of lines (first-order upwind
+cells, optional axial dispersion `D_ax`, linear driving force $\partial q/\partial t = k(q^* - q)$)
+with an adaptive Tsit5 step. The step is capped inside the explicit method's stability region
+(advection, dispersion and the LDF uptake at the steepest part of the isotherm); without the cap
+reverse-mode derivatives along the accepted step sequence were wrong in sign. Upwind cells add
+numerical dispersion $\approx v\,\Delta z/2$, so use enough cells (`n_cells`) that the front width
+is set by `k_ldf`. `klinkenberg_breakthrough` is the analytic linear-isotherm LDF solution
+(Ruthven 1984), used as a check.
+
+### Ion Exchange
+
+**Function**: `ion_exchange_equilibrium(x, K, z_A=1, z_B=1, C_total=1.0, Q=1.0)`
+
+Resin fraction $y_A$ in equilibrium with solution fraction $x_A$ by the mass-action law
+$(y/x)^{z_B}\,((1-x)/(1-y))^{z_A} = K\,(Q/C)^{z_A - z_B}$. For equal valence this is the constant
+separation factor $y = Kx/(1 + (K-1)x)$; for 2:1 exchange the dilution factor $Q/C$ makes the resin
+strongly prefer the divalent ion in dilute solution (water softening).
+
+### Chromatography
+
+**Functions**: `retention_factor(t_R, t_0)`, `plate_count(t_R, w, width="base"|"half")`,
+`resolution(t_R1, t_R2, w1, w2)`, `purnell_resolution(N, alpha, k2)`,
+`plates_for_resolution(R_s, alpha, k2)`, `van_deemter(u, A, B, C)`, `van_deemter_optimum(A, B, C)`,
+`gaussian_peak(t, t_R, N, area)`
+
+$N = 16(t_R/w)^2 = 5.545(t_R/w_{1/2})^2$, $R_s = 2(t_{R2}-t_{R1})/(w_1+w_2)$, the Purnell equation
+$R_s = (\sqrt N/4)\,((\alpha-1)/\alpha)\,(k_2/(1+k_2))$, and $H = A + B/u + Cu$ with
+$u_{opt} = \sqrt{B/C}$, $H_{min} = A + 2\sqrt{BC}$ (Wankat 4e Ch. 18; Seader 3e Ch. 15).
+
+```python
+import jax
+import jax.numpy as jnp
+from difflow import adsorption as ad
+
+# Freundlich fit to Geankoplis Example 12.1-1 (phenol on carbon, recalled data)
+c = jnp.array([0.322, 0.117, 0.039, 0.0061, 0.0011])   # kg/m^3
+q = jnp.array([0.150, 0.122, 0.094, 0.059, 0.045])     # kg/kg
+fit = ad.fit_isotherm(c, q, model="freundlich")
+print({k: round(float(v), 3) for k, v in fit["params"].items()})
+
+# batch: 1 m^3 at 0.21 kg/m^3 with 1.40 kg carbon (Example 12.2-1)
+b = ad.batch_adsorption(0.21, 1.0, 1.40, "freundlich", K=0.199, n=0.229)
+print(f"c = {float(b['c']):.4f} kg/m^3, q = {float(b['q']):.4f} kg/kg")
+
+# fixed bed, Langmuir; the stoichiometric time and its derivative
+t = jnp.linspace(0.0, 1000.0, 101)
+def area(q_max):
+    r = ad.fixed_bed_breakthrough(t, L=1.0, v_s=0.01, epsilon=0.4, rho_b=1.0, c_feed=1.0,
+                                  k_ldf=0.05, isotherm="langmuir", n_cells=15, q_max=q_max, K=1.0)
+    return jnp.trapezoid(1.0 - r["c_out"], t)
+print(f"t_s = {float(area(5.0)):.1f} s, dt_s/dq_max = {float(jax.grad(area)(5.0)):.2f}")
+
+# chromatography
+print(f"R_s = {float(ad.resolution(10.0, 11.0, 0.8, 0.9)):.2f}")
+print("u_opt, H_min =", [round(float(v), 4) for v in ad.van_deemter_optimum(1e-3, 2e-6, 4e-3)])
+```
+
+---
+
 ## Summary Tables
 
 ### Reactor Comparison

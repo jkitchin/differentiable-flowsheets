@@ -1,5 +1,5 @@
 {
- "n_sections": 1214,
+ "n_sections": 1219,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -7568,6 +7568,46 @@
    "source": "unit-operations-chemical.md",
    "targets": [],
    "text": "**Location**: `difflow/units/crystallizer.py`\n\n**Functions**: `msmpr_distribution`, `msmpr_moments`, `msmpr_dominant_size`,\n`msmpr_mass_median_size`, `msmpr_mass_cv`, `msmpr_from_magma`, `fit_msmpr`,\n`sieve_population_density`, `growth_rate`, `nucleation_rate`, `msmpr_steady_state`\n\nFor a steady mixed-suspension, mixed-product-removal crystallizer with residence time\n$\\tau$, size-independent growth rate $G$ and nuclei density $n_0$ (Randolph & Larson):\n\n$$n(L) = n_0\\,e^{-L/(G\\tau)}, \\qquad m_k = \\int_0^\\infty L^k n\\,dL = k!\\,n_0\\,(G\\tau)^{k+1},$$\n\nthe suspension (magma) density is $M_T = 6\\rho_c k_v n_0 (G\\tau)^4$, the dominant\n(mass-mode) size, the maximum of $L^3 n(L)$, is $L_D = 3G\\tau$, and the mass median size\n$L_{50} = x_{50}\\,G\\tau$ with $x_{50} = 3.672\\ldots$ the root of the cumulative mass\nfraction of the gamma(4) law at one half; `msmpr_mass_median_size` computes it (Newton on\nthe gamma(4) law), it is not typed in. The coefficient of variation of the mass\ndistribution is $1/\\sqrt{4} = 50\\%$. `msmpr_from_magma(M_T, rho_c, k_v, G, tau)` gives\n$n_0$ from a measured magma density and `fit_msmpr(L, n)` is the \"$\\ln n$ vs. $L$\" line\n(slope $-1/(G\\tau)$, intercept $\\ln n_0$). A measured product is usually a screen analysis:\n`sieve_population_density(w, L_upper, L_lower, M_T, rho_c, k_v)` turns the mass fraction $w_i$\non each screen into $n_i = M_T w_i/(\\rho_c k_v \\bar L_i^3 \\Delta L_i)$ at the mean size\n$\\bar L_i$ of the cut, ready for `fit_msmpr` (McCabe, Smith & Harriott Ch. 27)."
+  },
+  {
+   "anchor": "adsorption-ion-exchange-and-chromatography",
+   "heading": "Adsorption, Ion Exchange and Chromatography",
+   "path": "Chemical Unit Operations > Adsorption, Ion Exchange and Chromatography",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "**Location**: `difflow/adsorption.py` (`from difflow import adsorption`)\n\nA small core module, separate from the CO2-specific cycle models in `difflow_cc` and\nthe mAb capture column in `difflow_bio`. Every function is JAX, so `jax.grad` goes\nthrough fits, equilibria and the fixed-bed solve."
+  },
+  {
+   "anchor": "isotherms-and-batch-adsorption",
+   "heading": "Isotherms and Batch Adsorption",
+   "path": "Chemical Unit Operations > Adsorption, Ion Exchange and Chromatography > Isotherms and Batch Adsorption",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "**Functions**: `linear_isotherm(c, K)`, `langmuir_isotherm(c, q_max, K)` (affinity form\n$q = q_{max}Kc/(1+Kc)$; the bio plugin's `langmuir_isotherm` takes a dissociation constant\n$K_d = 1/K$), `freundlich_isotherm(c, K, n)` ($q = Kc^n$), `fit_isotherm(c, q, model)`,\n`batch_adsorption(c0, V, m, isotherm, **params)`\n\n`fit_isotherm` starts from the classical linearization (Langmuir $c/q$ vs. $c$, Freundlich\n$\\log q$ vs. $\\log c$, returned as `\"linearized\"`) and polishes it by Levenberg-Marquardt on the\nlogarithms of the parameters (`relative=True` fits relative residuals). `batch_adsorption` solves\n$V(c_0 - c) = m\\,(q(c) - q_0)$ by bisection with an implicit-derivative Newton step\n(Geankoplis 5e Example 12.2-1)."
+  },
+  {
+   "anchor": "fixed-bed-breakthrough",
+   "heading": "Fixed-Bed Breakthrough",
+   "path": "Chemical Unit Operations > Adsorption, Ion Exchange and Chromatography > Fixed-Bed Breakthrough",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "**Functions**: `lub_analysis(t, c_ratio, L, c_break)`, `lub_break_time(L_new, t_stoich, L, LUB)`,\n`stoichiometric_time(L, v_s, epsilon, rho_b, c_feed, q_feed)`,\n`fixed_bed_breakthrough(t, L, v_s, epsilon, rho_b, c_feed, k_ldf, isotherm, **params)`,\n`klinkenberg_breakthrough(t, L, v_s, epsilon, rho_b, K, k_ldf)`\n\n`lub_analysis` is the length-of-unused-bed scale-up method (Geankoplis 5e \u00a712.3, MSH 7e Ch. 25):\n$t_s = \\int_0^\\infty (1 - c/c_0)\\,dt$, $t_u = \\int_0^{t_b}(1 - c/c_0)\\,dt$, $L_B = L\\,t_u/t_s$,\n$\\mathrm{LUB} = L - L_B$; a bed of length $L'$ breaks at $t_s(L' - \\mathrm{LUB})/L$.\n\n`fixed_bed_breakthrough` solves the isothermal bed by the method of lines (first-order upwind\ncells, optional axial dispersion `D_ax`, linear driving force $\\partial q/\\partial t = k(q^* - q)$)\nwith an adaptive Tsit5 step. The step is capped inside the explicit method's stability region\n(advection, dispersion and the LDF uptake at the steepest part of the isotherm); without the cap\nreverse-mode derivatives along the accepted step sequence were wrong in sign. Upwind cells add\nnumerical dispersion $\\approx v\\,\\Delta z/2$, so use enough cells (`n_cells`) that the front width\nis set by `k_ldf`. `klinkenberg_breakthrough` is the analytic linear-isotherm LDF solution\n(Ruthven 1984), used as a check."
+  },
+  {
+   "anchor": "ion-exchange",
+   "heading": "Ion Exchange",
+   "path": "Chemical Unit Operations > Adsorption, Ion Exchange and Chromatography > Ion Exchange",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "**Function**: `ion_exchange_equilibrium(x, K, z_A=1, z_B=1, C_total=1.0, Q=1.0)`\n\nResin fraction $y_A$ in equilibrium with solution fraction $x_A$ by the mass-action law\n$(y/x)^{z_B}\\,((1-x)/(1-y))^{z_A} = K\\,(Q/C)^{z_A - z_B}$. For equal valence this is the constant\nseparation factor $y = Kx/(1 + (K-1)x)$; for 2:1 exchange the dilution factor $Q/C$ makes the resin\nstrongly prefer the divalent ion in dilute solution (water softening)."
+  },
+  {
+   "anchor": "chromatography",
+   "heading": "Chromatography",
+   "path": "Chemical Unit Operations > Adsorption, Ion Exchange and Chromatography > Chromatography",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "**Functions**: `retention_factor(t_R, t_0)`, `plate_count(t_R, w, width=\"base\"|\"half\")`,\n`resolution(t_R1, t_R2, w1, w2)`, `purnell_resolution(N, alpha, k2)`,\n`plates_for_resolution(R_s, alpha, k2)`, `van_deemter(u, A, B, C)`, `van_deemter_optimum(A, B, C)`,\n`gaussian_peak(t, t_R, N, area)`\n\n$N = 16(t_R/w)^2 = 5.545(t_R/w_{1/2})^2$, $R_s = 2(t_{R2}-t_{R1})/(w_1+w_2)$, the Purnell equation\n$R_s = (\\sqrt N/4)\\,((\\alpha-1)/\\alpha)\\,(k_2/(1+k_2))$, and $H = A + B/u + Cu$ with\n$u_{opt} = \\sqrt{B/C}$, $H_{min} = A + 2\\sqrt{BC}$ (Wankat 4e Ch. 18; Seader 3e Ch. 15).\n\n```python\nimport jax\nimport jax.numpy as jnp\nfrom difflow import adsorption as ad\n\n# Freundlich fit to Geankoplis Example 12.1-1 (phenol on carbon, recalled data)\nc = jnp.array([0.322, 0.117, 0.039, 0.0061, 0.0011])   # kg/m^3\nq = jnp.array([0.150, 0.122, 0.094, 0.059, 0.045])     # kg/kg\nfit = ad.fit_isotherm(c, q, model=\"freundlich\")\nprint({k: round(float(v), 3) for k, v in fit[\"params\"].items()})\n\n# batch: 1 m^3 at 0.21 kg/m^3 with 1.40 kg carbon (Example 12.2-1)\nb = ad.batch_adsorption(0.21, 1.0, 1.40, \"freundlich\", K=0.199, n=0.229)\nprint(f\"c = {float(b['c']):.4f} kg/m^3, q = {float(b['q']):.4f} kg/kg\")\n\n# fixed bed, Langmuir; the stoichiometric time and its derivative\nt = jnp.linspace(0.0, 1000.0, 101)\ndef area(q_max):\n    r = ad.fixed_bed_breakthrough(t, L=1.0, v_s=0.01, epsilon=0.4, rho_b=1.0, c_feed=1.0,\n                                  k_ldf=0.05, isotherm=\"langmuir\", n_cells=15, q_max=q_max, K=1.0)\n    return jnp.trapezoid(1.0 - r[\"c_out\"], t)\nprint(f\"t_s = {float(area(5.0)):.1f} s, dt_s/dq_max = {float(jax.grad(area)(5.0)):.2f}\")\n\n# chromatography\nprint(f\"R_s = {float(ad.resolution(10.0, 11.0, 0.8, 0.9)):.2f}\")\nprint(\"u_opt, H_min =\", [round(float(v), 4) for v in ad.van_deemter_optimum(1e-3, 2e-6, 4e-3)])\n```\n\n---"
   },
   {
    "anchor": "reactor-comparison",
