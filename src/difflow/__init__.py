@@ -37,7 +37,7 @@ from difflow.streams import (
     scale_stream,
 )
 from difflow.thermo import (
-    IdealThermo, CubicThermo, SpeciesData,
+    IdealThermo, CubicThermo, ActivityThermo, SpeciesData,
     AntoineRangeWarning, BubbleDewConvergenceWarning,
 )
 from difflow.eos import (
@@ -46,6 +46,7 @@ from difflow.eos import (
     CriticalProperties,
     EOSParams,
     flash_TP_eos,
+    phase_identification_parameter,
     eos_bubble_P,
     eos_bubble_T,
     eos_dew_P,
@@ -295,6 +296,11 @@ from difflow.units.distillation import (
     fenske_stages,
     minimum_reflux_ratio,
     gilliland_stages,
+    fenske_stages_multicomponent,
+    fenske_distribution,
+    underwood_theta,
+    underwood_minimum_reflux,
+    kirkbride_feed_stage,
     column_diameter,
 )
 from difflow.units.evaporator import (
@@ -553,6 +559,7 @@ __all__ = [
     # Thermodynamics - Ideal
     "IdealThermo",
     "CubicThermo",
+    "ActivityThermo",
     "SpeciesData",
     "AntoineRangeWarning",
     "BubbleDewConvergenceWarning",
@@ -562,6 +569,7 @@ __all__ = [
     "CriticalProperties",
     "EOSParams",
     "flash_TP_eos",
+    "phase_identification_parameter",
     "eos_bubble_P",
     "eos_bubble_T",
     "eos_dew_P",
@@ -763,6 +771,11 @@ __all__ = [
     "fenske_stages",
     "minimum_reflux_ratio",
     "gilliland_stages",
+    "fenske_stages_multicomponent",
+    "fenske_distribution",
+    "underwood_theta",
+    "underwood_minimum_reflux",
+    "kirkbride_feed_stage",
     "column_diameter",
     # Unit operations - Evaporators
     "Evaporator",

@@ -8,6 +8,30 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`ActivityThermo` and an equilibrium reboiler in the McCabe-Thiele stepper (book Ch. 12 gaps).**
+  (1) `difflow.ActivityThermo(ideal, activity_model)` gives modified-Raoult K-values
+  `gamma_i(x, T) Psat_i / P` with the wrapped `IdealThermo`'s enthalpies, so `DistillationColumn` (CMO and MESH)
+  runs on a nonideal liquid such as ethanol-water; before, it took only `IdealThermo` (Raoult) or `CubicThermo`.
+  (2) `staged.mccabe_thiele(..., reboiler_equilibrium=True)` treats the last stage as an equilibrium stage when the
+  curve carries a Murphree efficiency, matching `DistillationColumn` and the textbook construction; the default still
+  applies `E` to every step. Tests `tests/test_activity_thermo.py`, `tests/test_staged.py`.
+
+- **Multicomponent FUG functions (unit-ops book Ch. 13).** `fenske_stages_multicomponent` (key-ratio Fenske),
+  `fenske_distribution` (non-key split at total reflux), `underwood_theta` / `underwood_minimum_reflux` (bracketed
+  root between the keys, implicit gradient), `kirkbride_feed_stage` (continuous `N_R`, `N_S`), and
+  `gilliland_stages(..., method="eduljee"|"molokanov")`. `ShortcutColumn` reports `info['N_rect']` and
+  `info['N_strip']`. Checked against Geankoplis 5e Examples 11.7-2 and 11.7-3 in `tests/test_distillation.py`.
+
+- **`phase_identification_parameter` (book Ch. 11 gap).** `difflow.eos.phase_identification_parameter(eos, T, P,
+  y, phase)` is the Venkatarathnam-Oellrich parameter Pi (Pi > 1 liquid-like), from autodiff derivatives of the
+  cubic's P(T, V). `flash_TP_eos` uses it to label a stable feed (see Fixed, #442). Test
+  `tests/test_eos.py::TestPhaseIdentification`.
+
+- **`flash_drum_size` (book Ch. 11 gap).** `difflow.units.column_design.flash_drum_size(Q_V, Q_L, rho_L, rho_V,
+  ...)` sizes a vertical flash drum by Souders-Brown with Walas's rules of thumb (k = 0.107 m/s with a mesh pad,
+  L/D = 3, 5 min holdup half full); the larger of the vapor and liquid diameters; differentiable. Test
+  `tests/test_column_design.py::TestFlashDrumSize`.
+
 - **`OperatingPointWarning`.** `operating_point` warns on a concrete negative `Q*` (no forward-flow operating
   point, e.g. a valveless parallel pair with a weak pump running backwards) or an unconverged Newton solve; silent
   under `jit`/`grad`. `PipeCavitationWarning` is exported from `difflow`. Test `tests/test_pump.py`.
@@ -835,6 +859,52 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Fixed
+
+- **`MechanicalVaporRecompression` compressor work was 6 % low.** The
+  isentropic work used `Cp_vapor` (1880 J/kg/K) with the exponent of
+  `gamma = 1.3`, a pair no ideal gas has. It now uses
+  `cp = gamma R/(gamma - 1)`; compressing saturated steam from 100 C to
+  200 kPa gives 127 kJ/kg against 126.2 kJ/kg from the steam tables
+  (before: 119 kJ/kg).
+
+- **Built-in NaOH boiling-point rise was 12 K low at evaporator vacuum.**
+  The `naoh` Dühring lines were drawn from the 1 atm table with the
+  colligative slope (`BPR ~ R T^2/lambda`), but concentrated NaOH lines are
+  nearly parallel to the water line. At 11.7 kPa the 50 wt % solution boiled
+  at 77 C instead of the chart's 89.5 C, so Geankoplis Ex. 8.4-3 came out
+  with 33.0 m^2 instead of 49.2 m^2. The lines now use an empirical slope
+  fitted to cited 50 % values (`DUHRING_SLOPE_COEFF`); the 1 atm 50 % point is
+  141.7 C. Geankoplis Ex. 8.4-2/8.4-3 and McCabe Ex. 16.1 are reproduced
+  (`TestPublishedExamples`, issue #421). The sucrose BPR is credited to
+  Geankoplis Ex. 8.5-1 (not 8.4-1) and no longer warns as unverified; the
+  former regression pin on those inputs is now a textbook-agreement test.
+
+- **`BatchDistillation` took 10-30 s a call.** The body ran eagerly, dispatching every bisection of its nested root
+  solves op by op. It is now jitted like `ShortcutColumn` (cached on the value key, the stop-criterion names and
+  `n_traj`; the curve is an argument because it is not in the value key): about 1-3 s, same answers. `rayleigh`
+  is checked against Geankoplis 5e Example 11.3-2 (`TestGeankoplis` in `tests/test_batch_distillation.py`).
+
+- **`ShortcutColumn` used the pseudo-binary Fenske equation.** `N_min` took `1 - x_LK` for `x_HK`, so a light
+  non-key in the distillate understated it (8.7 instead of 10.4 on a C2-nC5 depropanizer). It is now the
+  key-ratio form. The Underwood root was a Newton step from `sqrt(alpha_LK)` clipped to `(1.001, alpha_LK-0.001)`;
+  it left the interval and returned 1.001 in about a quarter of random feeds. It is now bracketed bisection.
+  `R_min` is floored at 0 rather than 0.1.
+
+- **Ideal-thermo `PHFlash` could not flash a pure liquid into its two-phase region.** The Newton on T cannot land
+  on a boiling point, where the flashed enthalpy jumps by the latent heat; saturated water let down from 180 C,
+  12 bar to 1.5 bar came back at the 150 K clip with `V_frac = 0`. The ideal path now brackets T by bisection
+  on `T_bounds` over the exact (unsmoothed) Rachford-Rice split, applies the lever rule at a jump (111.2 C,
+  12.6 % vapour; steam tables 111.4 C, 13.3 %), and attaches implicit-function gradients (the Clausius-Clapeyron
+  slope at a jump). `info` gains `residual`; an unbracketed solve warns `EOSUnitConvergenceWarning`; `T_guess`
+  is ignored. Test `tests/test_flash.py::TestPHFlashPureComponent`.
+
+- **`flash_TP_eos` labelled a single-root compressed liquid as vapor (#442).** A stable feed was called vapor
+  when its lower-Gibbs root was the "vapor" root; above the bubble point of a liquid the cubic has one real root,
+  so both selectors return it and the label was wrong. CH4/C3H8 (z = 0.2/0.8, PR) at 277.6 K gave V = 1 for every
+  P above its 33.4 bar bubble point, with V jumping from 0.04 at 30 bar to 1. The stable phase is now liquid when
+  the phase identification parameter Pi > 1 and T is below the Kay's-rule pseudo-critical temperature, vapor
+  otherwise; V now falls continuously to 0 at the bubble point. Affects `EOSFlash`, `Flash(eos=...)` and
+  everything that calls `flash_TP_eos`. Test `tests/test_eos.py::TestPhaseIdentification`.
 
 - **A named acceleration survives `jax.jit` / `jax.jacfwd` (#440).** `Flowsheet.solve(acceleration="anderson"|"wegstein")`
   used to be replaced by plain substitution whenever a feed or unit parameter was traced. It now runs

@@ -643,3 +643,90 @@ class TestLiquidRootNearAtmospheric:
         assert float(flash_TP_eos(eos, z, 320.0, 3e5)[0]) == 0.0
         assert float(flash_TP_eos(eos, z, 400.0, 3e5)[0]) == 0.0
         assert float(flash_TP_eos(eos, z, 415.0, 3e5)[0]) == 1.0
+
+
+class TestPhaseIdentification:
+    """Issue #442: a single-root compressed liquid was labelled vapour.
+
+    Above its bubble pressure a liquid's cubic has ONE real root, so the
+    "vapour" and "liquid" roots coincide and ``g_v <= g_l`` was always true:
+    ``flash_TP_eos`` returned V = 1 for CH4/C3H8 z = [0.2, 0.8] at 277.6 K
+    above ~34 bar. The phase identification parameter (PIP) labels the root.
+    """
+
+    @pytest.fixture
+    def c1c3(self):
+        from difflow.database import get_critical_props
+        return PengRobinson({s: get_critical_props(s) for s in ("methane", "propane")})
+
+    @pytest.mark.slow
+    def test_compressed_liquid_is_liquid(self, c1c3):
+        from difflow.eos import eos_bubble_P
+        z = jnp.array([0.2, 0.8])
+        Pb = float(eos_bubble_P(c1c3, z, 277.6)["P"])
+        assert 30e5 < Pb < 37e5
+        for P in (1.02 * Pb, 40e5, 60e5, 100e5, 300e5):
+            V, x, y = flash_TP_eos(c1c3, z, 277.6, P)
+            assert float(V) == 0.0, P
+        # just below the bubble point it is two-phase with a little vapour
+        V, _, _ = flash_TP_eos(c1c3, z, 277.6, 0.97 * Pb)
+        assert 0.0 < float(V) < 0.05
+
+    def test_pip_signs(self, c1c3):
+        from difflow.eos import phase_identification_parameter as pip
+        z = jnp.array([0.2, 0.8])
+        # single-root compressed liquid: both "roots" coincide and Pi > 1
+        assert float(pip(c1c3, 277.6, 60e5, z, "vapor")) > 1.0
+        # low-pressure gas: Pi < 1
+        assert float(pip(c1c3, 277.6, 2e5, z, "vapor")) < 1.0
+        # three-root region: the liquid root is liquid-like, the vapour root vapour-like
+        assert float(pip(c1c3, 277.6, 10e5, z, "liquid")) > 1.0
+        assert float(pip(c1c3, 277.6, 10e5, z, "vapor")) < 1.0
+
+    @pytest.mark.slow
+    def test_supercritical_gas_and_dense_pure_liquid(self):
+        from difflow.database import get_critical_props
+        ch4 = PengRobinson({"methane": get_critical_props("methane")})
+        c3 = PengRobinson({"propane": get_critical_props("propane")})
+        one = jnp.array([1.0])
+        # methane at 300 K, 100 bar: supercritical and gas-like
+        assert float(flash_TP_eos(ch4, one, 300.0, 100e5)[0]) == 1.0
+        # propane at 300 K (Psat ~10 bar) and 100 bar: a compressed liquid
+        assert float(flash_TP_eos(c3, one, 300.0, 100e5)[0]) == 0.0
+        assert float(flash_TP_eos(c3, one, 300.0, 5e5)[0]) == 1.0
+        # a hot dilute gas is repulsion-dominated (Pi slightly above 1, an
+        # ideal gas has Pi = 1): above the pseudo-critical T it stays vapour
+        from difflow.eos import phase_identification_parameter as pip
+        assert float(pip(ch4, 1000.0, 30e5, one)) > 1.0
+        assert float(flash_TP_eos(ch4, one, 1000.0, 30e5)[0]) == 1.0
+
+    def test_pip_matches_finite_differences(self, c1c3):
+        """The autodiff PIP agrees with a central-difference PIP of P(T, V)."""
+        import numpy as np
+        from difflow.eos import phase_identification_parameter as pip, R
+        z = jnp.array([0.2, 0.8])
+        T, P = 277.6, 60e5
+        Vm = float(c1c3.molar_volume(T, P, z, "liquid"))
+        b = float(c1c3.b_mix(z))
+
+        def Pf(TT, VV):
+            a = float(c1c3.a_mix(TT, z))
+            return R * TT / (VV - b) - a / (VV**2 + 2 * b * VV - b**2)
+
+        hT, hV = 1e-3, 1e-4 * Vm
+        PV = (Pf(T, Vm + hV) - Pf(T, Vm - hV)) / (2 * hV)
+        PT = (Pf(T + hT, Vm) - Pf(T - hT, Vm)) / (2 * hT)
+        PVV = (Pf(T, Vm + hV) - 2 * Pf(T, Vm) + Pf(T, Vm - hV)) / hV**2
+        PTV = (Pf(T + hT, Vm + hV) - Pf(T + hT, Vm - hV)
+               - Pf(T - hT, Vm + hV) + Pf(T - hT, Vm - hV)) / (4 * hT * hV)
+        ref = Vm * (PTV / PT - PVV / PV)
+        assert float(pip(c1c3, T, P, z, "liquid")) == pytest.approx(ref, rel=1e-4)
+        assert np.isfinite(ref)
+
+    def test_gradient_through_liquid_label(self, c1c3):
+        """d(property)/dP stays finite through the PIP-gated single-phase branch."""
+        from jax.test_util import check_grads
+        from difflow.eos import phase_identification_parameter as pip
+        z = jnp.array([0.2, 0.8])
+        check_grads(lambda P: pip(c1c3, 277.6, P, z, "liquid"), (60e5,),
+                    order=1, modes=["rev"], eps=1e2)

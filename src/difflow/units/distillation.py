@@ -457,6 +457,8 @@ class ShortcutColumn(ValueKeyed):
         x_D_LK: Array,
         x_B_LK: Array,
         alpha_LK: Array,
+        x_D_HK: Array | None = None,
+        x_B_HK: Array | None = None,
     ) -> tuple[Array, Array]:
         """Calculate minimum number of stages using Fenske equation.
 
@@ -470,20 +472,34 @@ class ShortcutColumn(ValueKeyed):
         - Uses smooth blending to cap N_min at MAX_STAGES
         - Returns a flag indicating if the system is close-boiling
 
+        With ``x_D_HK`` and ``x_B_HK`` given this is the multicomponent
+        Fenske equation, ``ln[(x_LK/x_HK)_D (x_HK/x_LK)_B] / ln(alpha_LK)``,
+        which is what the column uses. The pseudo-binary form above (the
+        default when the heavy-key fractions are omitted) treats every species
+        that is not the light key as heavy key; with a light non-key in the
+        distillate (ethane over a propane/isobutane split) it understates
+        ``N_min`` -- by 16 % on the depropanizer of the unit-ops book's
+        Chapter 13.
+
         Args:
             x_D_LK: Mole fraction of LK in distillate
             x_B_LK: Mole fraction of LK in bottoms
             alpha_LK: Relative volatility of LK vs HK
+            x_D_HK: Mole fraction of HK in distillate (multicomponent form)
+            x_B_HK: Mole fraction of HK in bottoms (multicomponent form)
 
         Returns:
             Tuple of (N_min, close_boiling_flag):
             - N_min: Minimum number of theoretical stages, capped at MAX_STAGES
             - close_boiling_flag: True if α is close to 1 (hard separation)
         """
-        # Fenske equation for binary
+        if x_D_HK is None or x_B_HK is None:
+            # Pseudo-binary: everything that is not LK counts as HK
+            x_D_HK = 1 - x_D_LK
+            x_B_HK = 1 - x_B_LK
         numer = safe_log(
-            safe_divide(x_D_LK, 1 - x_D_LK) *
-            safe_divide(1 - x_B_LK, x_B_LK)
+            safe_divide(x_D_LK, x_D_HK) *
+            safe_divide(x_B_HK, x_B_LK)
         )
 
         # Handle singularity when alpha → 1
@@ -534,29 +550,13 @@ class ShortcutColumn(ValueKeyed):
             Underwood theta parameter
         """
         p = self.params
-        alpha_LK = alpha[p.light_key]
-        alpha_HK = alpha[p.heavy_key]  # = 1.0 by definition
-
-        # Theta is between alpha_HK and alpha_LK
-        # For numerical stability, search in (1, alpha_LK)
-
-        def underwood_func(theta, args):
-            total = jnp.zeros(())
-            for s in p.species_order:
-                total = total + safe_divide(alpha[s] * z[s], alpha[s] - theta)
-            return total - (1 - q)
-
-        # Use Newton iteration to find theta
-        # Initial guess: geometric mean
-        theta_init = jnp.sqrt(alpha_LK * alpha_HK)
-        solver = optx.Newton(rtol=1e-10, atol=1e-10)
-        sol = optx.root_find(underwood_func, solver, theta_init, args=None, max_steps=50, throw=False)
-        theta = sol.value
-
-        # Ensure theta is in valid range
-        theta = jnp.clip(theta, 1.001, alpha_LK - 0.001)
-
-        return theta
+        alpha_arr = jnp.stack([jnp.asarray(alpha[s_]) for s_ in p.species_order])
+        z_arr = jnp.stack([jnp.asarray(z[s_]) for s_ in p.species_order])
+        # Bracketed: the root lies between the heavy key and the next volatility
+        # above it (the light key, when no species boils between the keys).
+        # A Newton iteration from sqrt(alpha_LK) used to leave that interval
+        # and be clipped to 1.001 in about a quarter of random feeds.
+        return underwood_theta(alpha_arr, z_arr, q, alpha_HK=alpha[p.heavy_key])
 
     def underwood_minimum_reflux(
         self,
@@ -581,7 +581,9 @@ class ShortcutColumn(ValueKeyed):
             total = total + safe_divide(alpha[s] * x_D[s], alpha[s] - theta)
 
         R_min = total - 1
-        return jnp.maximum(R_min, 0.1)  # Ensure positive
+        # Floored at zero (a non-negative reflux), not at 0.1 as it used to be:
+        # an easy split has an R_min below 0.1, and the floor overstated it.
+        return jnp.maximum(R_min, 0.0)
 
     def gilliland_correlation(
         self,
@@ -891,7 +893,10 @@ class ShortcutColumn(ValueKeyed):
         # Fenske minimum stages
         x_D_LK = x_D[p.light_key]
         x_B_LK = x_B[p.light_key]
-        N_min, close_boiling = self.fenske_minimum_stages(x_D_LK, x_B_LK, alpha_LK)
+        N_min, close_boiling = self.fenske_minimum_stages(
+            x_D_LK, x_B_LK, alpha_LK,
+            x_D_HK=x_D[p.heavy_key], x_B_HK=x_B[p.heavy_key],
+        )
 
         # Underwood minimum reflux
         theta = self.underwood_theta(z, alpha, q)
@@ -904,6 +909,11 @@ class ShortcutColumn(ValueKeyed):
         B_over_D = safe_divide(B_total, D_total)
         x_D_HK = x_D[p.heavy_key]
         N_feed = self.feed_stage_kirkbride(N, z_LK, z_HK, x_B_LK, x_D_HK, B_over_D)
+        # The rounded feed stage has a zero derivative; report the continuous
+        # Kirkbride split too, for gradients and for reading the correlation.
+        N_rect, N_strip = kirkbride_feed_stage(
+            N, z_LK, z_HK, x_B_LK, x_D_HK, B_total, D_total
+        )
 
         # Create output streams. The distillate leaves the condenser as a
         # saturated liquid (T_top is its bubble point); the bottoms leaves the
@@ -977,6 +987,8 @@ class ShortcutColumn(ValueKeyed):
             "R_min": R_min,
             "N": N,
             "N_feed": N_feed,
+            "N_rect": N_rect,
+            "N_strip": N_strip,
             "alpha": alpha,
             "alpha_LK": alpha_LK,
             "theta": theta,
@@ -1287,6 +1299,10 @@ class DistillationColumn(ValueKeyed):
                 where the vapor is far from ideal. The column code
                 is the same either way; the composition dependence of the EOS
                 K-values rides along inside the existing MESH iteration.
+                An :class:`~difflow.thermo.ActivityThermo` gives
+                modified-Raoult K-values (``K_i = gamma_i P_i^sat / P``) for a
+                nonideal liquid such as ethanol-water, with the ideal
+                enthalpies of the :class:`IdealThermo` it wraps.
         """
         self.params = params
         self.thermo = thermo
@@ -2618,17 +2634,24 @@ def gilliland_stages(
     R: Array,
     R_min: Array,
     N_min: Array,
+    method: str = "eduljee",
 ) -> Array:
     """Calculate actual stages using Gilliland correlation.
 
+    ``X = (R - R_min)/(R + 1)``, ``Y = (N - N_min)/(N + 1)``, with ``Y(X)``
+    from Eduljee's fit ``Y = 0.75 (1 - X^0.5668)`` (the default) or
+    Molokanov's ``Y = 1 - exp[(1 + 54.4X)/(11 + 117.2X) (X - 1)/sqrt(X)]``,
+    which is the one :class:`ShortcutColumn` uses. The two differ by a stage
+    or so at moderate ``X``.
+
     Handles singularities:
     - R → R_min: Y → 1, N → ∞ (capped at MAX_STAGES)
-    - Uses Eduljee correlation with proper numerical safeguards
 
     Args:
         R: Actual reflux ratio
         R_min: Minimum reflux ratio
         N_min: Minimum stages
+        method: ``"eduljee"`` (default) or ``"molokanov"``.
 
     Returns:
         Number of theoretical stages, capped at MAX_STAGES
@@ -2639,8 +2662,18 @@ def gilliland_stages(
     X = (R_safe - R_min) / (R_safe + 1)
     X_safe = jnp.maximum(X, 1e-6)
 
-    # Eduljee correlation (simpler than Molokanov)
-    Y = 0.75 - 0.75 * X_safe**0.5668
+    if method == "eduljee":
+        Y = 0.75 - 0.75 * X_safe**0.5668
+    elif method == "molokanov":
+        Y = 1 - jnp.exp(
+            (1 + 54.4 * X_safe) / (11 + 117.2 * X_safe)
+            * (X_safe - 1) / jnp.sqrt(X_safe)
+        )
+    else:
+        raise ValueError(
+            f"gilliland_stages: method must be 'eduljee' or 'molokanov', "
+            f"got {method!r}"
+        )
 
     # Cap Y to prevent N → ∞
     Y = jnp.clip(Y, 0.01, MAX_GILLILAND_Y)
@@ -2654,6 +2687,225 @@ def gilliland_stages(
     N = jnp.maximum(N, N_min)
 
     return N
+
+
+def fenske_stages_multicomponent(
+    x_D_LK: Array,
+    x_D_HK: Array,
+    x_B_LK: Array,
+    x_B_HK: Array,
+    alpha_LK: Array,
+) -> Array:
+    """Minimum stages of a multicomponent split (Fenske, key-ratio form).
+
+    ``N_min = ln[(x_LK/x_HK)_D (x_HK/x_LK)_B] / ln(alpha_LK)``, with
+    ``alpha_LK`` the light-key volatility relative to the heavy key. Only the
+    ratios enter, so product flows (``d_i``, ``b_i``) work as well as mole
+    fractions. Unlike :func:`fenske_stages` (pseudo-binary, ``1 - x_LK`` in
+    place of ``x_HK``) it is not thrown off by non-key species. ``N_min``
+    counts equilibrium stages and includes a partial reboiler.
+
+    Args:
+        x_D_LK: Light key in the distillate (mole fraction or flow).
+        x_D_HK: Heavy key in the distillate (same basis as ``x_D_LK``).
+        x_B_LK: Light key in the bottoms (mole fraction or flow).
+        x_B_HK: Heavy key in the bottoms (same basis as ``x_B_LK``).
+        alpha_LK: Relative volatility of the light key to the heavy key.
+
+    Returns:
+        Minimum number of equilibrium stages (not capped below; capped at
+        ``MAX_STAGES`` above).
+
+    Example:
+        Geankoplis (5e) Example 11.7-2, 90 % key recoveries:
+
+        >>> fenske_stages_multicomponent(0.3489, 0.0310, 0.0704, 0.5068, 2.258)
+        Array(5.39..., dtype=float64)
+    """
+    numer = safe_log(
+        safe_divide(x_D_LK, x_D_HK) * safe_divide(x_B_HK, x_B_LK)
+    )
+    log_alpha = jnp.maximum(
+        safe_log(jnp.maximum(alpha_LK, 1.0 + EPS_DIVISION)), MIN_ALPHA_DIFF
+    )
+    return jnp.minimum(numer / log_alpha, MAX_STAGES)
+
+
+def fenske_distribution(
+    feed: Array,
+    alpha: Array,
+    light_key: int,
+    heavy_key: int,
+    recovery_LK: Array,
+    recovery_HK: Array,
+) -> tuple[Array, Array, Array]:
+    """Split every species between the products at total reflux (Fenske).
+
+    The keys are placed by their recoveries (``recovery_LK`` of the light key
+    to the distillate, ``recovery_HK`` of the heavy key to the bottoms);
+    ``N_min`` follows from the key ratios, and each other species ``i`` is
+    distributed by ``d_i/b_i = (d/b)_HK alpha_i^N_min`` (``alpha`` relative to
+    the heavy key). This is the Fenske-Geddes estimate of where the non-keys
+    go; it is the distribution :class:`ShortcutColumn` uses.
+
+    Args:
+        feed: Component feed flows, shape ``(n,)`` (mol/s).
+        alpha: Relative volatilities to the heavy key, shape ``(n,)``.
+        light_key: Index of the light key.
+        heavy_key: Index of the heavy key.
+        recovery_LK: Fraction of the light key recovered in the distillate.
+        recovery_HK: Fraction of the heavy key recovered in the bottoms.
+
+    Returns:
+        Tuple ``(d, b, N_min)``: distillate and bottoms component flows and
+        the Fenske minimum stages.
+
+    Example:
+        >>> d, b, N_min = fenske_distribution(
+        ...     jnp.array([40., 25., 20., 15.]),
+        ...     jnp.array([4.5, 2.0, 1.0, 0.45]), 1, 2, 0.9, 0.9)
+    """
+    feed = jnp.asarray(feed, dtype=float)
+    alpha = jnp.asarray(alpha, dtype=float)
+    alpha = alpha / alpha[heavy_key]
+    dLK = recovery_LK * feed[light_key]
+    bLK = feed[light_key] - dLK
+    bHK = recovery_HK * feed[heavy_key]
+    dHK = feed[heavy_key] - bHK
+    N_min = fenske_stages_multicomponent(dLK, dHK, bLK, bHK, alpha[light_key])
+    ratio_HK = safe_divide(dHK, bHK)
+    # d_i/b_i = ratio_HK alpha_i^N; d_i = f_i r/(1+r), done in log space
+    log_r = safe_log(ratio_HK) + N_min * safe_log(alpha)
+    frac_d = jax.nn.sigmoid(log_r)
+    idx = jnp.arange(feed.shape[0])
+    frac_d = jnp.where(idx == light_key, recovery_LK, frac_d)
+    frac_d = jnp.where(idx == heavy_key, 1.0 - recovery_HK, frac_d)
+    d = feed * frac_d
+    return d, feed - d, N_min
+
+
+def underwood_theta(
+    alpha: Array,
+    z: Array,
+    q: Array = 1.0,
+    alpha_HK: Array = 1.0,
+) -> Array:
+    """Root of Underwood's first equation between the keys.
+
+    Solves ``sum_i alpha_i z_i / (alpha_i - theta) = 1 - q`` for the root
+    that lies between ``alpha_HK`` and the next volatility above it (the
+    light key when no species boils between the keys). The function is
+    monotone (increasing) between adjacent poles, so the root is found by
+    bisection on that open interval and cannot escape it; the derivative is
+    the implicit one, ``-(df/dp)/(df/dtheta)``.
+
+    Args:
+        alpha: Relative volatilities, shape ``(n,)`` (any reference species).
+        z: Feed mole fractions, shape ``(n,)``.
+        q: Feed thermal condition (1 saturated liquid, 0 saturated vapour).
+        alpha_HK: Volatility of the heavy key on the same basis as ``alpha``.
+
+    Returns:
+        theta, with ``alpha_HK < theta < alpha_next``.
+
+    Example:
+        Geankoplis (5e) Example 11.7-3:
+
+        >>> underwood_theta(jnp.array([11.14, 4.93, 2.14, 1.0]),
+        ...                 jnp.array([0.40, 0.25, 0.20, 0.15]), 1.0, 2.14)
+    """
+    from difflow.staged import _solve_monotone
+
+    alpha = jnp.asarray(alpha, dtype=float)
+    z = jnp.asarray(z, dtype=float)
+    alpha_HK = jnp.asarray(alpha_HK, dtype=float)
+    above = alpha > alpha_HK * (1.0 + 1e-9)
+    alpha_up = jnp.min(jnp.where(above, alpha, jnp.inf))
+    gap = lax.stop_gradient(alpha_up - alpha_HK)
+    lo = lax.stop_gradient(alpha_HK) + 1e-10 * gap
+    hi = lax.stop_gradient(alpha_up) - 1e-10 * gap
+
+    def f(theta):
+        return jnp.sum(alpha * z / (alpha - theta)) - (1.0 - q)
+
+    return _solve_monotone(f, lo, hi, n_iter=80)
+
+
+def underwood_minimum_reflux(
+    alpha: Array,
+    z: Array,
+    x_D: Array,
+    q: Array = 1.0,
+    alpha_HK: Array = 1.0,
+) -> tuple[Array, Array]:
+    """Minimum reflux ratio by Underwood's method (one root, class 1 split).
+
+    ``theta`` from :func:`underwood_theta`, then
+    ``R_min = sum_i alpha_i x_D,i / (alpha_i - theta) - 1``. ``x_D`` should
+    hold the distillate composition at (or near) minimum reflux, including the
+    non-keys -- a Fenske distribution is the usual estimate.
+
+    Args:
+        alpha: Relative volatilities, shape ``(n,)``.
+        z: Feed mole fractions, shape ``(n,)``.
+        x_D: Distillate mole fractions, shape ``(n,)``.
+        q: Feed thermal condition.
+        alpha_HK: Volatility of the heavy key on the basis of ``alpha``.
+
+    Returns:
+        Tuple ``(R_min, theta)``. ``R_min`` is not floored; a negative value
+        means the specified distillate is reachable without reflux.
+
+    Example:
+        >>> R_min, theta = underwood_minimum_reflux(
+        ...     jnp.array([11.14, 4.93, 2.14, 1.0]),
+        ...     jnp.array([0.40, 0.25, 0.20, 0.15]),
+        ...     jnp.array([0.6197, 0.3489, 0.0310, 0.0004]), 1.0, 2.14)
+    """
+    alpha = jnp.asarray(alpha, dtype=float)
+    theta = underwood_theta(alpha, z, q, alpha_HK)
+    R_min = jnp.sum(alpha * jnp.asarray(x_D, dtype=float) / (alpha - theta)) - 1.0
+    return R_min, theta
+
+
+def kirkbride_feed_stage(
+    N: Array,
+    z_LK: Array,
+    z_HK: Array,
+    x_B_LK: Array,
+    x_D_HK: Array,
+    B: Array,
+    D: Array,
+) -> tuple[Array, Array]:
+    """Continuous Kirkbride split of ``N`` stages above and below the feed.
+
+    ``N_R/N_S = [(B/D) (z_HK/z_LK) (x_B,LK/x_D,HK)^2]^0.206``, with
+    ``N_R + N_S = N``. The values are not rounded (a rounded stage has a zero
+    derivative); round ``N_R`` to place the feed on a real tray.
+
+    Args:
+        N: Total equilibrium stages.
+        z_LK: Light key mole fraction in the feed.
+        z_HK: Heavy key mole fraction in the feed.
+        x_B_LK: Light key mole fraction in the bottoms.
+        x_D_HK: Heavy key mole fraction in the distillate.
+        B: Bottoms flow (any basis shared with ``D``).
+        D: Distillate flow.
+
+    Returns:
+        Tuple ``(N_R, N_S)``: stages above the feed (rectifying) and the
+        rest (stripping, feed stage included).
+
+    Example:
+        >>> N_R, N_S = kirkbride_feed_stage(11.0, 0.25, 0.20, 0.0704, 0.0310,
+        ...                                 35.52, 64.48)
+    """
+    ratio = jnp.exp(0.206 * safe_log(
+        safe_divide(B, D) * safe_divide(z_HK, z_LK)
+        * safe_divide(x_B_LK, x_D_HK) ** 2
+    ))
+    N_R = N * ratio / (1.0 + ratio)
+    return N_R, N - N_R
 
 
 def column_diameter(

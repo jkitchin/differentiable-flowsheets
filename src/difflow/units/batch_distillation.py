@@ -64,6 +64,7 @@ References
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Literal
 
 import jax
@@ -452,6 +453,27 @@ class BatchDistillation(ValueKeyed):
                 ``x_azeotrope`` (NaN if none), ``feasible`` and
                 ``azeotrope_limited``, ``stop_reached`` flags.
         """
+        stop = dict(stop or {})
+        if t_final is not None:
+            stop["time"] = t_final
+        if not stop:
+            raise ValueError("give t_final or a stop criterion; one of " + ", ".join(_STOP_KEYS))
+        for k in stop:
+            if k not in _STOP_KEYS:
+                raise ValueError(f"unknown stop criterion {k!r}; use {_STOP_KEYS}")
+        # The body is jitted (cached on the unit's value key, the stop criteria
+        # names and n_traj). Run eagerly it dispatched every bisection of every
+        # nested root solve op by op and took 10-30 s a call; compiled, a few.
+        # The curve goes in as an argument, not through ``self``: it is not
+        # part of the value key, so two units differing only in ``curve`` would
+        # otherwise share one compiled body.
+        keys = tuple(stop)
+        vals = tuple(jnp.asarray(stop[k], float) for k in keys)
+        return self._solve(charge, self.curve, vals, stop_keys=keys, n_traj=int(n_traj))
+
+    @partial(jax.jit, static_argnums=(0,), static_argnames=("stop_keys", "n_traj"))
+    def _solve(self, charge, curve_arg, stop_vals, stop_keys, n_traj):
+        """The body of :meth:`__call__`, cached on (self, argument shapes)."""
         p = self.params
         key = p.light_key or p.species_order[0]
         other = [s for s in p.species_order if s != key][0]
@@ -461,16 +483,9 @@ class BatchDistillation(ValueKeyed):
         F = n_key + n_oth
         x_F = n_key / F
         P = jnp.asarray(charge.get("P", p.P), float)
-        stop = dict(stop or {})
-        if t_final is not None:
-            stop["time"] = t_final
-        if not stop:
-            raise ValueError("give t_final or a stop criterion; one of " + ", ".join(_STOP_KEYS))
-        for k in stop:
-            if k not in _STOP_KEYS:
-                raise ValueError(f"unknown stop criterion {k!r}; use {_STOP_KEYS}")
+        stop = dict(zip(stop_keys, stop_vals))
 
-        curve = self._curve()
+        curve = curve_arg if curve_arg is not None else self._curve()
         N = int(p.n_stages)
         E = p.stage_efficiency
         V = jnp.asarray(p.boilup, float)

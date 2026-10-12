@@ -1252,6 +1252,66 @@ def _solve_rachford_rice(z: Array, K: Array, n_bisect: int = 60) -> Array:
     return jnp.clip(V, 0.0, 1.0)
 
 
+def phase_identification_parameter(
+    eos: "PengRobinson | SRK",
+    T: Array,
+    P: Array,
+    y: Array,
+    phase: Literal["vapor", "liquid"] = "vapor",
+    k_ij: Array | None = None,
+) -> Array:
+    """Venkatarathnam-Oellrich phase identification parameter (PIP).
+
+    .. math::
+
+        \\Pi = V\\left[\\frac{\\partial^2 P/\\partial T\\partial V}
+        {(\\partial P/\\partial T)_V}
+        - \\frac{(\\partial^2 P/\\partial V^2)_T}{(\\partial P/\\partial V)_T}\\right]
+
+    evaluated on the cubic ``P(T, V) = RT/(V-b) - a(T)/(V^2 + u b V + w b^2)``
+    at the molar volume of the requested root. A single phase with
+    ``Pi > 1`` is liquid-like and one with ``Pi < 1`` is vapour-like
+    (Venkatarathnam and Oellrich, *Fluid Phase Equilib.* 301 (2011) 225).
+    Unlike "which cubic root is it" the test still works when the cubic has
+    only one real root, as for a compressed liquid above its bubble pressure
+    or a supercritical fluid, where the "vapour" and "liquid" roots coincide.
+
+    Args:
+        eos: Peng-Robinson or SRK object.
+        T: Temperature (K).
+        P: Pressure (Pa).
+        y: Mole fractions (array in ``eos.species_order``).
+        phase: Which cubic root to evaluate (they coincide when the cubic
+            has a single real root).
+        k_ij: Binary interaction parameters (uses the stored ones if None).
+
+    Returns:
+        The dimensionless PIP (differentiable in T, P and y).
+
+    Example:
+        >>> from difflow.eos import PengRobinson, phase_identification_parameter
+        >>> from difflow.database import get_critical_props
+        >>> pr = PengRobinson({"propane": get_critical_props("propane")})
+        >>> float(phase_identification_parameter(pr, 300.0, 50e5, jnp.array([1.0]))) > 1
+        True
+    """
+    T = jnp.asarray(T, dtype=float)
+    Vm = eos.molar_volume(T, P, y, phase, k_ij)
+    b = eos.b_mix(y)
+    u, w = eos.u, eos.w
+
+    def pressure(TT, VV):
+        a = eos.a_mix(TT, y, k_ij)
+        return R * TT / (VV - b) - a / (VV**2 + u * b * VV + w * b**2)
+
+    dP_dV = jax.grad(pressure, argnums=1)
+    dP_dT = jax.grad(pressure, argnums=0)
+    d2P_dV2 = jax.grad(dP_dV, argnums=1)(T, Vm)
+    d2P_dTdV = jax.grad(dP_dV, argnums=0)(T, Vm)
+    return Vm * (safe_divide(d2P_dTdV, dP_dT(T, Vm))
+                 - safe_divide(d2P_dV2, dP_dV(T, Vm)))
+
+
 def _phase_stability(
     eos: "PengRobinson | SRK",
     z: Array,
@@ -1272,8 +1332,11 @@ def _phase_stability(
     Returns (two_phase, feed_is_vapor):
       - two_phase: boolean array, True if the feed splits.
       - feed_is_vapor: boolean array, which single phase the feed is (used only
-        when single-phase, to return V = 1 vs 0), chosen as the lower-Gibbs
-        cubic root at the feed composition.
+        when single-phase, to return V = 1 vs 0): the lower-Gibbs cubic root at
+        the feed composition, labelled liquid when its phase identification
+        parameter (:func:`phase_identification_parameter`) exceeds 1 and T is
+        below the Kay's-rule pseudo-critical temperature sum(z_i Tc_i), and
+        vapour otherwise (so a supercritical fluid is reported as vapour).
 
     Fixed-length ``lax.scan`` trial iterations keep this differentiable.
     """
@@ -1285,7 +1348,21 @@ def _phase_stability(
     lnphi_zl = safe_log(eos.fugacity_coefficient(T, P, z, "liquid", k_ij))
     g_v = jnp.sum(z * (lnz + lnphi_zv))
     g_l = jnp.sum(z * (lnz + lnphi_zl))
-    feed_is_vapor = g_v <= g_l
+    stable_is_vapor_root = g_v <= g_l
+    # Which phase the stable root IS: by the phase identification parameter
+    # of that root, not by which root it is. When the cubic has one real root
+    # (a compressed liquid above its bubble pressure, a dense supercritical
+    # fluid) the "vapour" and "liquid" roots coincide, g_v == g_l, and the
+    # old ``g_v <= g_l`` test called every such fluid a vapour (issue #442).
+    # Above the (Kay's rule) pseudo-critical temperature a single phase is
+    # reported as vapour, the usual simulator convention: a hot dilute gas
+    # is repulsion-dominated and has Pi slightly above 1 (an ideal gas has
+    # Pi = 1 exactly), so PIP alone would call it a liquid.
+    pip_v = phase_identification_parameter(eos, T, P, z, "vapor", k_ij)
+    pip_l = phase_identification_parameter(eos, T, P, z, "liquid", k_ij)
+    pip = jnp.where(stable_is_vapor_root, pip_v, pip_l)
+    T_pc = jnp.sum(z * eos.params.Tc)
+    feed_is_vapor = (T >= T_pc) | (pip < 1.0)
     lnphi_feed = jnp.where(feed_is_vapor, lnphi_zv, lnphi_zl)
     d = lnz + lnphi_feed  # tangent-plane reference
 

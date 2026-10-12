@@ -721,8 +721,15 @@ liquid, vapor, info = flash(feed)
 
 Performs adiabatic flash at constant pressure and enthalpy. Solves for flash temperature.
 
-With an `IdealThermo` (ideal K-values) it solves the Rachford-Rice energy
-balance as before. With a `CubicThermo` it calls `flash_PH_eos` (see
+With an `IdealThermo` (ideal K-values) the inlet is taken as liquid at its own
+T, and the outlet T comes from a bracketed bisection on `T_bounds` over the
+exact (unsmoothed) Rachford-Rice split, so there is no guess and no wrong root
+(`T_guess` is ignored). A pure component let down into its two-phase region
+lands on its boiling point with the lever-rule vapour fraction: saturated
+water at 180 °C let down to 1.5 bar gives 111.2 °C and 12.6 % vapour (steam
+tables: 111.4 °C, 13.3 %). The old Newton on T returned the 150 K clip with
+no vapour. `info` carries `residual` and `converged`, and an unbracketed solve
+warns `EOSUnitConvergenceWarning`. With a `CubicThermo` it calls `flash_PH_eos` (see
 [EOS units](#eos-units)): the inlet enthalpy is the EOS enthalpy at the inlet
 T and P, and the split uses the EOS liquid and vapour compositions. `info` then
 also carries `x`, `y`, `residual` and `converged`, and `T_bounds=(100, 1000)`
@@ -1007,6 +1014,16 @@ Where:
 - $\theta$: Root between $\alpha_{HK}$ and $\alpha_{LK}$
 - $q$: Feed quality (1 for saturated liquid, 0 for saturated vapor)
 
+The Fenske equation is the key-ratio (multicomponent) form above. Before the
+unit-ops book's Chapter 13 the column used the pseudo-binary form, with
+$1 - x_{LK}$ in place of $x_{HK}$; a light non-key in the distillate (ethane
+over a propane/isobutane split) then made $N_{min}$ 16 % too small. The
+Underwood root is found by bisection on the open interval between the heavy
+key and the next volatility above it, where the function is monotone; a Newton
+iteration used to leave that interval and be clipped to 1.001, which happened
+in about a quarter of random feeds. $R_{min}$ is floored at 0 (it used to be
+floored at 0.1, which overstated an easy split).
+
 **Gilliland Correlation** (actual stages):
 
 $$\frac{N - N_{min}}{N + 1} = 1 - \exp\left[\frac{(1 + 54.4X)(X - 1)}{(11 + 117.2X)(X^{0.5})}\right]$$
@@ -1027,7 +1044,8 @@ $$\frac{N_R}{N_S} = \left[\frac{B}{D} \cdot \frac{x_{F,HK}}{x_{F,LK}} \cdot \lef
 | `info['N_min']` | float | - | Minimum stages (Fenske) |
 | `info['R_min']` | float | - | Minimum reflux ratio (Underwood) |
 | `info['N']` | float | - | Actual stages (Gilliland) |
-| `info['N_feed']` | float | - | Feed stage (Kirkbride) |
+| `info['N_feed']` | float | - | Feed stage (Kirkbride), counted from the bottom and rounded |
+| `info['N_rect']`, `info['N_strip']` | float | - | Continuous Kirkbride split of `N` above / below the feed (differentiable; the rounded `N_feed` has a zero derivative) |
 | `info['D']`, `info['B']` | float | mol/s | Distillate and bottoms flow |
 | `info['x_D']`, `info['x_B']` | dict | - | Product compositions by species |
 | `info['T_condenser']` / `info['T_top']` | float | K | Condenser temperature = bubble point of $x_D$ |
@@ -1102,6 +1120,31 @@ from difflow.units.column_design import tray_column_diameter
 diameter, _ = tray_column_diameter(V_molar=50.0, MW_V=80.0, rho_V=3.0,
                                    L_molar=50.0, MW_L=85.0, rho_L=800.0, sigma=0.02)
 ```
+
+The multicomponent versions take arrays over every species (`alpha` on any
+basis; give `alpha_HK` on the same basis) and are differentiable, the
+Underwood root by its implicit derivative:
+
+```python
+import jax.numpy as jnp
+from difflow import (fenske_stages_multicomponent, fenske_distribution,
+                     underwood_theta, underwood_minimum_reflux,
+                     kirkbride_feed_stage, gilliland_stages)
+
+# Geankoplis 5e, Examples 11.7-2 and 11.7-3 (keys B and C, 90 % recoveries)
+K = jnp.array([3.12, 1.38, 0.60, 0.28]); z = jnp.array([0.40, 0.25, 0.20, 0.15])
+x_D = jnp.array([0.6197, 0.3489, 0.0310, 0.0004])
+x_B = jnp.array([0.0011, 0.0704, 0.5068, 0.4217])
+N_min = fenske_stages_multicomponent(x_D[1], x_D[2], x_B[1], x_B[2], 2.258)  # 5.40
+d, b, N_min_d = fenske_distribution(100 * z, K, 1, 2, 0.9, 0.9)  # non-keys by Fenske
+R_min, theta = underwood_minimum_reflux(K / K[2], z, x_D, q=1.0)          # 0.395
+N = gilliland_stages(1.5 * R_min, R_min, N_min, method="molokanov")
+N_R, N_S = kirkbride_feed_stage(11.0, z[1], z[2], x_B[1], x_D[2], 35.52, 64.48)  # 5.96, 5.04
+```
+
+`gilliland_stages` defaults to Eduljee's fit; `method="molokanov"` is the fit
+`ShortcutColumn` uses. `fenske_stages` (above) is the pseudo-binary form, right
+only for a binary.
 
 Relative volatility is a method on the column, not a free function
 (`column.relative_volatility(T, P, x=None)`), because it needs the key
@@ -1688,7 +1731,12 @@ its derivative jumps where one more whole stage is needed, and `dN/dR`
 depends on the convention, so state it with the answer. The optimal-feed
 switch is a sigmoid in `x` of width `feed_width`. A reboiler is the last stage;
 with `partial_condenser=True` the first stage is the condenser and
-`N_column = N - 1`. With open steam, build the bottom line with
+`N_column = N - 1`. With a Murphree efficiency on the curve,
+`reboiler_equilibrium=True` steps the trays to the pseudo-equilibrium curve
+but draws the last step (the reboiler) to the true curve, the textbook
+convention and the one `DistillationColumn` uses (its reboiler is always an
+equilibrium stage); the default applies $E$ to every step. `N` can jump by a
+fraction of a stage where the reboiler changes index. With open steam, build the bottom line with
 `stripping_line(..., open_steam=True)` (through `(x_B, 0)`). A subcooled feed
 is `q > 1`. Specifying a feed stage *earlier* than the optimal one
 extends the stripping line into a region where it lies above the curve; the
@@ -3233,18 +3281,23 @@ too coarse for a steam economy.
 | `colligative` | `dT = R Tw^2 i m / lambda`, the dilute limit | exact in the limit |
 | `duhring` | your own lines `T_soln = a(x) + b(x) T_water` (`duhring_x/a/b`) | your data |
 | `polynomial` | BPR in K as a polynomial in `x` (`bpr_coeffs`) | your data |
-| `naoh`, `nacl` | built-in 1 atm tables turned into Duhring lines | **unverified, see below** |
-| `sucrose` | `1.78 x + 6.22 x^2` K (Geankoplis Ex. 8.4-1) | **recalled, unverified** |
+| `naoh` | built-in 1 atm table turned into Duhring lines nearly parallel to the water line | 30 and 50 wt % checked against Geankoplis Ex. 8.4-2/8.4-3 and McCabe Ex. 16.1; other points unverified |
+| `nacl` | built-in 1 atm table turned into Duhring lines (colligative slope) | **unverified, see below** |
+| `sucrose` | `1.78 x + 6.22 x^2` K (Geankoplis 4e Ex. 8.5-1) | the book's correlation |
 | callable | `Evaporator(params, bpr_fn=f)`, `f(x, T_water, P) -> K` | yours |
 
 ```{warning}
-The built-in `naoh`, `nacl` and `sucrose` data are **approximate recollections,
-not transcriptions of the Duhring chart** (McCabe/Perry). Only a couple of
-anchor points per table are firm (NaOH 50 wt % boiling near 143 C at 1 atm; the
-saturated NaCl solution near 108.7 C). Selecting one raises
-`UnverifiedDataWarning`. The acceptance criterion "NaOH BPR matches the cited
-chart values" is therefore **not met**: read your chart and pass it through
-`duhring=` or `bpr_fn`. The tabulated models are piecewise linear in `x`.
+The built-in `naoh` and `nacl` tables are only partly verified, and selecting
+one raises `UnverifiedDataWarning`. For NaOH the 50 wt % line is anchored on
+cited values (141.7 C at 1 atm; 89.5 C over water at 48.9 C, Geankoplis 4e
+Ex. 8.4-3; 197 F over water at 124 F, McCabe-Smith-Harriott 7e Ex. 16.1) and
+the 30 % line reproduces Geankoplis Ex. 8.4-2 (79.5 C over 65.6 C) within
+0.4 K. The NaOH lines use an empirical slope `b = 1 + k BPR` fitted to the 50 %
+line (`DUHRING_SLOPE_COEFF`); the colligative slope used before put the 50 %
+line 12 K low at 49 C. The other NaOH points, and all of NaCl except the
+saturated solution near 108.7 C, are recollections: read your chart and pass
+it through `duhring=` or `bpr_fn` when the number matters. The tabulated
+models are piecewise linear in `x`.
 ```
 
 **Solution enthalpy** is a Cp mixing rule by default
@@ -3371,8 +3424,10 @@ efficiency `eta`, ratio `gamma`) until it condenses `dT_drive` above the boiling
 solution and heats the same surface. Design mode (`x_product` given). `info`
 reports the compressor work `W_compressor` against the steam it saves
 (`steam_without_mvr`, `steam_makeup`, `steam_saved` when `steam_P` is given). The
-compression is an ideal-gas calculation, not the EOS `Compressor`; real-gas
-steam deviates by a few percent of the work at these pressures.
+compression is an ideal-gas calculation, not the EOS `Compressor`, with the
+heat capacity that belongs to `gamma` (`cp = gamma R/(gamma - 1)`, 2000 J/kg/K
+at 1.3). Compressing saturated steam from 100 C to 200 kPa it gives
+127 kJ/kg against the steam table's 126.2 kJ/kg.
 
 ```python
 from difflow.units import MechanicalVaporRecompression, MVRParams
@@ -3399,12 +3454,18 @@ print("steam saved (kg/s):", round(float(m["steam_saved"]), 2))
 * **Steam properties**: `Psat`/`Tsat` are the IAPWS-IF97 equations; `h_f` and
   `h_fg` are fits to eight steam-table points recalled from a standard table
   (not regenerated from IAPWS), within about 0.1 % over 20-200 C.
-* **NOT verified**: no textbook worked example is claimed to be reproduced to
-  2-3 %. The Geankoplis Example 8.4-1 inputs (as recalled) run, and
-  `tests/test_evaporator.py` pins them as a regression value, but the book's
-  printed answers were not available to compare with. The NaOH, NaCl and
-  sucrose BPR data are unverified (above). Nothing here models fouling,
-  hydraulics, entrainment, or crystallization.
+* **Published examples** (`TestPublishedExamples`, issue #421): Geankoplis
+  4e Ex. 8.4-1 (single effect, steam 4108 kg/h, area 149.3 m^2, within 0.5 %),
+  Ex. 8.4-3 (50 % NaOH: steam 3255 kg/h, economy 0.836, area 49.2 m^2, with the
+  book's chart enthalpies passed as `enthalpy_fn`), Ex. 8.5-1 (triple effect,
+  forward feed, equal areas: steam 8936 kg/h and economy 2.03 within 1 %,
+  liquid flows within 2 %), McCabe-Smith-Harriott 7e Ex. 16.1 (steam
+  15 340 lb/h, area 930 ft^2 within 3 %), and the `h_f`/`h_fg` fits against
+  Geankoplis Appendix A.2-9 within 0.1 %.
+* **NOT verified**: the NaOH table away from 30 and 50 wt %, the NaCl table,
+  and any NaOH enthalpy-concentration data (difflow has none built in; pass the
+  chart through `enthalpy_fn`). Nothing here models fouling, hydraulics,
+  entrainment, or crystallization.
 
 For an economics pass use `heat_exchanger_cost(area)` and
 `steam_cost_from_duty`; the optimal-number-of-effects study is in
@@ -5436,6 +5497,29 @@ The old `column_diameter(V, rho_V, rho_L, sigma=0.02, tray_spacing=0.6)` in
 the flow parameter, $C_{SB}$ and ignored `sigma` and `tray_spacing`; it is now a
 deprecated wrapper (`DeprecationWarning`) that calls `tray_column_diameter`
 and requires `MW_V`, `L` and `MW_L` as keywords and `sigma` positionally.
+
+(op-flash-drum-size)=
+### Flash Drum Sizing (Souders-Brown)
+
+`flash_drum_size(Q_V, Q_L, rho_L, rho_V, k=0.107, holdup_time=300.0,
+fill_fraction=0.5, L_over_D=3.0)` sizes a vertical vapor-liquid separator. The
+vapor sets one diameter through the Souders-Brown velocity
+$u_{max} = k\sqrt{(\rho_L-\rho_V)/\rho_V}$, $D_V = \sqrt{4Q_V/(\pi u_{max})}$.
+The liquid sets another: the drum holds $Q_L t_{hold}$ in `fill_fraction` of a
+volume with $H = (L/D)\,D$. The drum takes the larger. The defaults are Walas's
+rules of thumb (*Chemical Process Equipment*, 1988): $k = 0.35$ ft/s with a
+wire-mesh deentrainer (0.1 ft/s without), $L/D = 3$, 5 min of holdup with the
+drum half full. It returns `(D, info)` with `u_max`, `D_vapor`, `D_liquid`,
+`height`, `volume`, `liquid_volume`, `u_vapor` and `fraction_of_u_max`, all
+differentiable.
+
+```python
+from difflow.units.column_design import flash_drum_size
+
+D, info = flash_drum_size(Q_V=0.5, Q_L=0.002, rho_L=600.0, rho_V=20.0)
+print(f"D = {float(D):.2f} m, H = {float(info['height']):.2f} m, "
+      f"u_max = {float(info['u_max']):.3f} m/s")
+```
 
 (op-tray-hydraulics)=
 ### Tray Hydraulics

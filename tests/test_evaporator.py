@@ -9,10 +9,13 @@ What is and is not verified here, plainly:
 * Steam properties: Psat/Tsat are IAPWS-IF97 (checked by round trip and the
   normal boiling point); h_f and h_fg are fits to steam-table points recalled
   from a standard table, checked here against the same recalled points.
-* NOT VERIFIED: any textbook worked example to 2-3 %. The Geankoplis Ex.
-  8.4-1 inputs are run as a *regression* pin (values this code produced), NOT
-  as agreement with the book, whose printed answers were not at hand. The
-  NaOH / NaCl / sucrose BPR data are unverified recollections.
+* PUBLISHED EXAMPLES (``TestPublishedExamples``, issue #421): Geankoplis 4e
+  Ex. 8.4-1 (single effect, no BPR), Ex. 8.4-2 and 8.4-3 (NaOH Dühring line,
+  steam, area and economy with the book's chart enthalpies), Ex. 8.5-1
+  (triple effect, forward feed, equal areas), McCabe-Smith-Harriott 7e
+  Ex. 16.1 (single-effect NaOH), and the steam-table fits against Geankoplis
+  Appendix A.2-9. The sucrose BPR polynomial is the one Ex. 8.5-1 gives.
+* NOT VERIFIED: the NaOH table away from 30 and 50 wt %, and the NaCl table.
 """
 
 import warnings
@@ -66,8 +69,8 @@ def sugar_feed(xF, F=22680 / 3600, T=299.85):
 
 NAOH = dict(solute_species=["NaOH"], solute_MW=[MW_NAOH], bpr_model="ideal",
             vant_hoff_i=2.0)
-#: Geankoplis Ex. 8.4-1 inputs as recalled (sugar, BPR = 1.78 x + 6.22 x^2,
-#: cp = 4.19 - 2.35 x kJ/kg/K): a regression pin only, see the module docstring.
+#: Geankoplis 4e Ex. 8.5-1 property inputs (sugar, BPR = 1.78 x + 6.22 x^2,
+#: cp = 4.19 - 2.35 x kJ/kg/K).
 GEANKOPLIS = dict(solute_species=["sucrose"], solute_MW=[MW_SUC],
                   bpr_model="polynomial", bpr_coeffs=[0.0, 1.78, 6.22],
                   cp_coeffs=[4190.0, -2350.0])
@@ -152,7 +155,9 @@ class TestBoilingPointRise:
     def test_polynomial_and_sucrose(self):
         got = float(boiling_point_rise(0.5, 1e5, "polynomial", coeffs=[0.0, 1.78, 6.22]))
         assert got == pytest.approx(1.78 * 0.5 + 6.22 * 0.25)
-        with pytest.warns(UnverifiedDataWarning):
+        # the sucrose polynomial is Geankoplis Ex. 8.5-1's, so it no longer warns
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UnverifiedDataWarning)
             pass_ = Evaporator(EvaporatorParams(
                 solute_species=["s"], solute_MW=[342.3], x_product=0.3,
                 bpr_model="sucrose", steam_P=2e5))
@@ -173,7 +178,7 @@ class TestBoilingPointRise:
                     bpr_model=m, steam_P=2e5))
         # the table is the pinned approximation, NOT a claim about the chart
         v = float(boiling_point_rise(0.5, 101325.0, "naoh"))
-        assert v == pytest.approx(43.0, abs=1.0)
+        assert v == pytest.approx(41.7, abs=0.1)
 
     def test_callable_and_errors(self):
         f = lambda x, Tw, P: 10.0 * x
@@ -472,21 +477,6 @@ class TestMultiEffect:
         assert ier == 1, msg
         np.testing.assert_allclose(sol, u_mod, rtol=1e-6)
 
-    def test_geankoplis_8_4_1_inputs_regression_pin(self):
-        """NOT a textbook-agreement claim: the values this code returned for the
-        recalled Geankoplis Ex. 8.4-1 inputs, pinned against silent change.
-        """
-        m = multi(3, "forward", U=[3123.0, 1987.0, 1136.0], x_product=0.5,
-                  P_vapor_space=13.4e3, steam_P=205.5e3, solute_species=["sucrose"],
-                  solute_MW=[MW_SUC], bpr_model="polynomial",
-                  bpr_coeffs=[0.0, 1.78, 6.22], cp_coeffs=[4190.0, -2350.0],
-                  vant_hoff_i=1.0)
-        _, _, info = m(sugar_feed(0.10))
-        assert float(info["steam"]) == pytest.approx(2.4886358721, rel=1e-6)
-        assert float(info["A"][0]) == pytest.approx(105.0124441616, rel=1e-6)
-        assert float(info["steam_economy"]) == pytest.approx(2.0252058794, rel=1e-6)
-        assert float(info["steam_economy"]) < 3.0
-
     @pytest.mark.slow
     def test_steam_economy_rises_with_n(self):
         """About N x 0.8-1.0 for a water-like solution with a preheated feed.
@@ -607,8 +597,23 @@ class TestMVR:
     def test_isentropic_work_matches_ideal_gas_formula(self):
         _, _, info = self.make()(naoh_feed())
         T1, r = float(info["T_soln"]), float(info["compression_ratio"])
-        w_is = 1880.0 * T1 * (r ** (0.3 / 1.3) - 1.0)
+        w_is = 1.3 / 0.3 * 461.5 * T1 * (r ** (0.3 / 1.3) - 1.0)
         assert float(info["specific_work"]) == pytest.approx(w_is / 0.75)
+
+    def test_isentropic_work_against_steam_tables(self):
+        """Saturated steam at 100 C (101.42 kPa, h = 2675.6 kJ/kg,
+        s = 7.3542 kJ/kg/K) compressed isentropically to 200 kPa: the steam
+        table (Cengel & Boles, Tables A-4/A-6: 200 kPa, h = 2769.1 / 2870.7 and
+        s = 7.2810 / 7.5081 at 150 / 200 C) gives h = 2801.8 kJ/kg, a rise of
+        126.2 kJ/kg. Before the fix (Cp_vapor with gamma) it was 119 kJ/kg."""
+        Tc = float(water_saturation_temperature(200e3))
+        m = MechanicalVaporRecompression(MVRParams(
+            solute_species=["NaOH"], solute_MW=[MW_NAOH], x_product=0.2,
+            P_vapor_space=101.42e3, dT_drive=Tc - float(water_saturation_temperature(101.42e3)),
+            eta=1.0, bpr_model="none"))
+        info = m(naoh_feed())[2]
+        assert float(info["P_discharge"]) == pytest.approx(200e3, rel=1e-6)
+        assert float(info["specific_work"]) / 1e3 == pytest.approx(126.2, rel=0.01)
 
     def test_work_grows_with_drive_and_falls_with_efficiency(self):
         feed = naoh_feed()
@@ -724,3 +729,123 @@ def test_no_unverified_warning_for_ideal_model():
     with warnings.catch_warnings():
         warnings.simplefilter("error", UnverifiedDataWarning)
         single(x_product=0.3)(naoh_feed())
+
+
+# =============================================================================
+# Published worked examples (issue #421)
+# =============================================================================
+
+LB = 0.45359237           # kg
+BTU_LB = 2326.0           # J/kg per Btu/lb
+PSI = 6894.757            # Pa
+
+
+def _f_to_k(t):
+    return (t - 32.0) / 1.8 + 273.15
+
+
+def _naoh_single(F, xF, TF, xL, Pv, Ps, U, hF, hL, **bpr):
+    """Single-effect NaOH evaporator with the textbook's chart enthalpies.
+
+    The enthalpy-concentration chart readings at the feed and product states
+    are carried by a straight line in x through the two readings (design mode
+    evaluates the solution enthalpy only at those two states).
+    """
+    feed = make_stream({"water": F * (1 - xF) * 1000 / 18.015,
+                        "NaOH": F * xF * 1000 / MW_NAOH}, T=TF, P=2e5)
+    h = lambda T, x: hF + (x - xF) / (xL - xF) * (hL - hF)
+    p = EvaporatorParams(solute_species=["NaOH"], solute_MW=[MW_NAOH], U=U,
+                         x_product=xL, P_vapor_space=Pv, steam_P=Ps, **bpr)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UnverifiedDataWarning)
+        return Evaporator(p, enthalpy_fn=h)(feed)[2]
+
+
+class TestPublishedExamples:
+    """Textbook worked examples, reproduced to the stated tolerance."""
+
+    @pytest.mark.parametrize("t, h, lam", [
+        (50, 209.3, 2382.9), (70, 293.0, 2334.0), (90, 376.9, 2283.2),
+        (100, 419.1, 2256.9), (110, 461.3, 2230.0), (120, 503.7, 2202.2),
+        (126, 529.2, 2185.2)])
+    def test_steam_table_geankoplis_a2_9(self, t, h, lam):
+        """Geankoplis 4e Appendix A.2-9 (saturated steam), kJ/kg, to 0.1 %."""
+        T = t + 273.15
+        assert float(water_liquid_enthalpy(T)) / 1e3 == pytest.approx(h, rel=1e-3)
+        assert float(water_latent_heat(T)) / 1e3 == pytest.approx(lam, rel=1e-3)
+
+    def test_geankoplis_8_4_1_single_effect(self):
+        """9072 kg/h of 1 % salt at 311 K to 1.5 %, 1 atm, steam 143.3 kPa,
+        U = 1704: L = 6048, V = 3024 kg/h, S = 4108 kg/h, A = 149.3 m^2."""
+        F = 9072 / 3600
+        feed = make_stream({"water": F * 0.99 * 1000 / 18.015,
+                            "NaCl": F * 0.01 * 1000 / 58.44}, T=311.0, P=101325.0)
+        p = EvaporatorParams(solute_species=["NaCl"], solute_MW=[58.44], U=1704.0,
+                             x_product=0.015, P_vapor_space=101325.0,
+                             steam_P=143.3e3, bpr_model="none")
+        info = Evaporator(p)(feed)[2]
+        assert float(info["L"]) * 3600 == pytest.approx(6048.0, rel=1e-6)
+        assert float(info["V"]) * 3600 == pytest.approx(3024.0, rel=1e-6)
+        assert float(info["steam"]) * 3600 == pytest.approx(4108.0, rel=0.005)
+        assert float(info["A"]) == pytest.approx(149.3, rel=0.005)
+
+    @pytest.mark.parametrize("x, Tw, Tsoln", [
+        (0.30, 65.6, 79.5),               # Geankoplis 4e Ex. 8.4-2
+        (0.50, 48.9, 89.5),               # Geankoplis 4e Ex. 8.4-3
+        (0.50, (124 - 32) / 1.8, (197 - 32) / 1.8),   # MSH 7e Ex. 16.1
+    ])
+    def test_naoh_duhring_matches_textbook_readings(self, x, Tw, Tsoln):
+        """The built-in NaOH lines reproduce the textbook Dühring readings.
+
+        Before #421 the lines used the colligative slope and the 50 % BPR at
+        49 C came out 28.2 K instead of 40.6 K.
+        """
+        P = float(water_saturation_pressure(Tw + 273.15))
+        got = float(boiling_point_rise(x, P, "naoh"))
+        assert got == pytest.approx(Tsoln - Tw, abs=0.4)
+
+    def test_geankoplis_8_4_3_naoh(self):
+        """4536 kg/h of 20 % NaOH at 60 C to 50 %, 11.7 kPa, steam 172.4 kPa,
+        U = 1560, chart enthalpies 214 and 505 kJ/kg: S = 3255 kg/h,
+        economy 0.836, A = 49.2 m^2 (book's Dühring reading 89.5 C)."""
+        info = _naoh_single(4536 / 3600, 0.2, 333.15, 0.5, 11.7e3, 172.4e3, 1560.0,
+                            214e3, 505e3, bpr_model="naoh")
+        assert float(info["T_soln"]) - 273.15 == pytest.approx(89.5, abs=0.4)
+        assert float(info["steam"]) * 3600 == pytest.approx(3255.0, rel=0.01)
+        assert float(info["steam_economy"]) == pytest.approx(0.836, rel=0.01)
+        assert float(info["A"]) == pytest.approx(49.2, rel=0.02)
+
+    def test_mccabe_16_1_naoh(self):
+        """MSH 7e Ex. 16.1: 20 000 lb/h of 20 % NaOH at 100 F to 50 %,
+        100 mmHg, steam 20 lbf/in^2 gauge, U = 250 Btu/ft^2 h F, chart
+        enthalpies 55 and 221 Btu/lb: steam 15 340 lb/h, economy 0.78,
+        area 930 ft^2. The book takes water at 100 mmHg to boil at 124 F;
+        IAPWS gives 124.9 F, which narrows the driving force by 0.9 F (the
+        area is 2 % high for that reason alone)."""
+        info = _naoh_single(20000 * LB / 3600, 0.2, _f_to_k(100.0), 0.5,
+                            100 * 133.322, (20 + 14.696) * PSI, 250 * 5.678263,
+                            55 * BTU_LB, 221 * BTU_LB, bpr_model="naoh")
+        assert float(info["steam"]) * 3600 / LB == pytest.approx(15340.0, rel=0.01)
+        assert float(info["steam_economy"]) == pytest.approx(0.78, rel=0.01)
+        assert float(info["A"]) / 0.09290304 == pytest.approx(930.0, rel=0.03)
+
+    @pytest.mark.slow
+    def test_geankoplis_8_5_1_triple_effect(self):
+        """Geankoplis 4e Ex. 8.5-1: 22 680 kg/h of 10 % sugar at 26.7 C to
+        50 %, forward feed, steam 205.5 kPa, 13.4 kPa in effect 3,
+        U = 3123/1987/1136, equal areas. Book (second trial): L1 = 17 078,
+        L2 = 11 068 kg/h, S = 8936 kg/h, economy 2.03. The book's hand
+        iteration stops when the areas agree within a few percent, so the
+        liquid flows are compared at 2 %."""
+        m = multi(3, "forward", U=[3123.0, 1987.0, 1136.0], x_product=0.5,
+                  P_vapor_space=13.4e3, steam_P=205.5e3, **GEANKOPLIS)
+        info = m(sugar_feed(0.10))[2]
+        assert bool(info["converged"])
+        F = 22680.0
+        V = np.asarray(info["V"]) * 3600
+        assert F - V[0] == pytest.approx(17078.0, rel=0.02)
+        assert F - V[0] - V[1] == pytest.approx(11068.0, rel=0.02)
+        assert float(info["steam"]) * 3600 == pytest.approx(8936.0, rel=0.01)
+        assert float(info["steam_economy"]) == pytest.approx(2.03, rel=0.01)
+        A = np.asarray(info["A"])
+        np.testing.assert_allclose(A, A[0], rtol=1e-8)
