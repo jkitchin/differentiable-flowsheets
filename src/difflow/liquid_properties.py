@@ -11,7 +11,9 @@ neither `chemicals` nor CoolProp is needed at runtime. See issue #406 for how
 the sources were chosen and how well each agrees with CoolProp.
 
 Units: temperature K; density kg/m^3 (``liquid_density``) or mol/m^3
-(``liquid_molar_density``); viscosity Pa s; thermal conductivity W/m/K.
+(``liquid_molar_density``); viscosity Pa s; thermal conductivity W/m/K;
+surface tension N/m (``surface_tension``: IAPWS for water, Brock-Bird
+corresponding states for the rest).
 
 Correlation forms (``LiquidCorrelation.form``):
 
@@ -72,6 +74,9 @@ __all__ = [
     "mixture_liquid_viscosity",
     "mixture_liquid_thermal_conductivity",
     "stream_liquid_properties",
+    "SurfaceTensionWarning",
+    "surface_tension",
+    "mixture_surface_tension",
 ]
 
 #: Property keys and their names in messages.
@@ -554,3 +559,99 @@ def stream_liquid_properties(stream: Mapping[str, Array]) -> dict[str, Array]:
         "k": mixture_liquid_thermal_conductivity(flows, T),
         "Q": F / rho_molar,
     }
+
+
+# =============================================================================
+# Surface tension
+# =============================================================================
+
+
+class SurfaceTensionWarning(UserWarning):
+    """Surface tension from a correlation known to be poor for this species."""
+
+
+#: Hydrogen-bonding species for which Brock-Bird overpredicts badly (about
+#: +80 % for ethanol, +100 % for methanol at 20 C).
+_BROCK_BIRD_POOR = frozenset({
+    "methanol", "ethanol", "1_propanol", "2_propanol", "1_butanol",
+    "acetic_acid", "formic_acid", "ammonia", "heavy_water",
+})
+
+
+def _water_surface_tension(T):
+    """IAPWS R1-76(2014): ``sigma = 235.8e-3 tau^1.256 (1 - 0.625 tau)`` N/m."""
+    tau = _tau(T, 647.096)
+    return 235.8e-3 * tau ** 1.256 * (1.0 - 0.625 * tau)
+
+
+def surface_tension(species: str, T: Array | float) -> Array:
+    """Liquid surface tension against its vapor or air (N/m).
+
+    * ``water``: the IAPWS R1-76(2014) release,
+      ``sigma = 235.8 tau^1.256 (1 - 0.625 tau)`` mN/m, ``tau = 1 - T/647.096``
+      (0.0728 N/m at 20 C; good to about 0.5 % from 0 to 370 C).
+    * everything else: the Brock-Bird corresponding-states method (Poling,
+      Prausnitz and O'Connell, *The Properties of Gases and Liquids*, 5th ed.,
+      Eq. 12-3.3 with 12-3.4):
+      ``sigma = Pc^(2/3) Tc^(1/3) Q (1 - Tr)^(11/9)`` in dyn/cm with ``Pc`` in
+      bar, ``Q = 0.1196 [1 + Tbr ln(Pc/1.01325)/(1 - Tbr)] - 0.279``. ``Tc``,
+      ``Pc`` come from :func:`difflow.database.get_critical_props`, the normal
+      boiling point ``Tb`` from the species' Antoine equation at 101325 Pa.
+
+    Brock-Bird is good to about 5 % for nonpolar and weakly polar liquids
+    (benzene 28.0 vs 28.9, toluene 28.5 vs 28.5, n-hexane 18.3 vs 17.9 mN/m at
+    20 C, the measured values recalled from the CRC Handbook) but fails for
+    hydrogen-bonding liquids (ethanol about +80 %, methanol +100 %): those
+    raise :class:`SurfaceTensionWarning`.
+
+    Args:
+        species: A difflow database species name.
+        T: Temperature (K); differentiable.
+
+    Returns:
+        Surface tension (N/m).
+
+    Example:
+        >>> round(float(surface_tension("water", 293.15)) * 1000, 1)
+        72.7
+    """
+    T = jnp.asarray(T, dtype=jnp.float64)
+    if species == "water":
+        return _water_surface_tension(T)
+    from difflow.database import get_critical_props, get_species_data
+
+    crit = get_critical_props(species)
+    A, B, C = get_species_data(species).antoine_coeffs[:3]
+    Tb = B / (A - np.log10(101325.0)) - C
+    Tc, Pc = float(crit.Tc), float(crit.Pc) / 1e5
+    Tbr = Tb / Tc
+    Q = 0.1196 * (1.0 + Tbr * np.log(Pc / 1.01325) / (1.0 - Tbr)) - 0.279
+    if species in _BROCK_BIRD_POOR:
+        warnings.warn(
+            f"Brock-Bird surface tension is poor for the hydrogen-bonding liquid "
+            f"{species!r} (it overpredicts, e.g. +80 % for ethanol); pass a measured value.",
+            SurfaceTensionWarning, stacklevel=2)
+    return 1e-3 * Pc ** (2.0 / 3.0) * Tc ** (1.0 / 3.0) * Q * _tau(T, Tc) ** (11.0 / 9.0)
+
+
+def mixture_surface_tension(mole_fractions: Mapping[str, Array | float],
+                            T: Array | float) -> Array:
+    """Liquid-mixture surface tension by the mole-fraction average (N/m).
+
+    ``sigma_mix = sum_i x_i sigma_i`` with :func:`surface_tension`. Adequate
+    for similar nonpolar liquids (benzene-toluene); for aqueous mixtures with
+    organics the surface is enriched in the organic and the true value is far
+    below the average (Poling et al. 5th ed., Sec. 12-5).
+
+    Args:
+        mole_fractions: ``{species: x_i}``; normalized here.
+        T: Temperature (K).
+
+    Returns:
+        Surface tension, N/m.
+    """
+    names = list(mole_fractions)
+    x = jnp.stack([jnp.asarray(mole_fractions[n], dtype=jnp.float64) for n in names])
+    x = x / jnp.sum(x, axis=0)
+    sig = jnp.stack([jnp.broadcast_to(surface_tension(n, T), jnp.shape(x[0])) for n in names])
+    return jnp.sum(x * sig, axis=0)

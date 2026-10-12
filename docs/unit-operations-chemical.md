@@ -5881,16 +5881,22 @@ tray spacing, packing factor, rates and surface tension. Properties are inputs:
 the surface tension, densities and viscosity are required arguments (there is no
 silent `sigma = 0.02`).
 
-**What was and was not verified.** The correlation constants were **written from
-memory with no book at hand and are unverified**; each is marked so in its
-docstring with the source it is believed to come from. They are fits of
-*charts*: expect 10-20 % on a diameter or a flooding velocity, and worse on a
-pressure drop. The tests check hand calculations, independent re-implementations,
-scaling laws ($D \propto f_{\rm flood}^{-1/2}$, $D \propto (V\,MW/\rho_V)^{1/2}$),
-sign changes of margins and gradients. **No published textbook worked example is
-reproduced** (the issue's example numbers could not be checked), and two pieces
-are placeholders rather than fits: the entrainment function and the GPDC
-pressure-drop shape (below).
+**What was and was not verified.** The correlation constants were first
+**written from memory**; each docstring says which are still unverified. They are
+fits of *charts*: expect 10-20 % on a diameter or a flooding velocity, and worse
+on a pressure drop. Printed worked examples are reproduced in
+`tests/test_column_design.py::TestPublishedExamples`:
+
+| Check | Source | Printed | difflow |
+|---|---|---|---|
+| Fair $C_{SB}$ ($F_{LV} = 0.036$, 18-in spacing, 20.5 mN/m) | Dutta (2007) Ex. 5.1 | 0.285 ft/s | 0.314 ft/s (+10 %) |
+| Dry-plate drop ($u_h = 39.1$ ft/s, $C_0 = 0.73$) | Dutta Ex. 5.1 | 1.75 in liquid | 1.75 in |
+| Weir crest | Dutta Ex. 5.1, $0.48\,(q/l_w)^{2/3}$ | same formula | same (Francis) |
+| Eckert flood line ($X = 0.90$) | Dutta Ex. 5.2 | $Y = 0.021$, $D = 0.90$ m | $Y = 0.024$, $D = 0.87$ m |
+| Packed $\Delta P$ (2-in metal Pall, air-water) | Perry's 8e Sec. 14 Ex. 13 | 0.38 (GPDC), 0.40 (Robbins chart) in H$_2$O/ft | 0.38 in H$_2$O/ft (Robbins) |
+
+The weep constant $K_2$ and the entrainment function are still unverified
+placeholders (below).
 
 (op-tray-flooding)=
 ### Tray Flooding and Column Diameter
@@ -6014,28 +6020,43 @@ softplus clip that stays differentiable. The number of actual trays is
 ### Packed-Column Flooding and Pressure Drop
 
 `gpdc_flood(F_LV, F_p, rho_L, rho_V, mu_L)` is the gas mass flux at flood on
-the Eckert / generalized pressure-drop chart: abscissa
-$X = (L/G)\sqrt{\rho_V/(\rho_L-\rho_V)}$, ordinate
+the Eckert chart: abscissa $X = (L/G)\sqrt{\rho_V/(\rho_L-\rho_V)}$, ordinate
 $Y = G^2 F_p \mu_L^{0.2}/(\rho_V(\rho_L-\rho_V)g)$ ($F_p$ in 1/m, $\mu_L$ in cP
 inside the power), and the flood line
-$\ln Y = -3.5021 - 1.028\ln X - 0.11093(\ln X)^2$ (a literature fit recalled
-without its source: **from memory, unverified**; chart-reading accuracy,
-**about 10-20 %** on $G$). `kister_gill_flood_dp(F_p)` is the pressure drop at
-flood, $0.115\,F_p^{0.7}$ in H$_2$O/ft with $F_p$ in 1/ft (Kister & Gill, 1991;
-**from memory, unverified**), in Pa/m. `gpdc_pressure_drop` is **not a fit of
-the GPDC lines** (they could not be recalled): it anchors the flood value,
-$\Delta P = \Delta P_{flood}(Y/Y_{flood})^{n}$ at fixed $L/G$, with an assumed
-$n = 1.7$ chosen so that 70 % of flood gives about 30 % of the flood drop (the
-common 0.25-0.5 in H$_2$O/ft design rule); expect $\pm 30$-50 % away from flood.
-`packed_column_diameter(..., packing=, fraction_flood=0.7)` returns `(D, info)`
-with the flooding and operating velocities, the pressure drop per metre and the
-wetting rate against a minimum (2.2e-5 m$^2$/s, about 0.08 m$^3$/m/h; **from
-memory, unverified**). `hetp` has the rules of thumb $18\,d_p$ (random packing)
-and $100/a_p + 0.1$ m (structured), both **from memory, unverified**, and
-`method="htu"` for `hetp_from_htu` of the mass-transfer section. `size_column`
-turns stages, efficiency (or HETP), diameter and spacing into height, shell
-volume, tray area and tray count; `column_hardware_cost` feeds them to
-`column_cost`.
+$\log_{10} Y = -1.6678 - 1.085\log_{10} X - 0.29655(\log_{10} X)^2$ (the
+Kessler-Wankat fit quoted by Wankat, recalled from memory; it reproduces Dutta's
+chart reading to 15 % in $Y$, 7 % in $G$; the earlier natural-log fit was 60 %
+high in $Y$ there). Perry's 8e restricts the Eckert flood line to
+$F_p > 60$ ft$^{-1}$ (about 200 m$^{-1}$).
+
+For modern packings the flood point comes from the pressure drop.
+`robbins_pressure_drop(G, L, rho_V, rho_L, mu_L, F_pd)` is the Robbins (1991)
+correlation, Perry's 8e Eqs. (14-145) to (14-151), with the dry packing factor
+$F_{pd}$ (`DRY_PACKING_FACTORS` has Perry's values for the listed packings).
+`kister_gill_flood_dp(F_p)` is the flood pressure drop $0.115\,F_p^{0.7}$
+in H$_2$O/ft with $F_p$ in 1/ft (Kister & Gill, 1991; Perry's Eq. 14-142 rounds
+it to 0.12), in Pa/m, and `robbins_flood(L_over_G, rho_V, rho_L, mu_L, F_p,
+F_pd)` solves for the gas flux at which Robbins reaches it, Robbins' own
+recommendation (a bisection with an implicit-function gradient, so it is
+differentiable). `gpdc_pressure_drop(..., method="robbins")` (the default)
+is Robbins; `method="anchored"` keeps the old flood-anchored power law, which
+gave a third of Perry's Example 13 answer.
+`packed_column_diameter(..., packing=, fraction_flood=0.7, flood="eckert")`
+returns `(D, info)` with the flooding and operating velocities, the Robbins
+pressure drop per metre and the wetting rate against a minimum (2.2e-5 m$^2$/s,
+about 0.08 m$^3$/m/h; **from memory, unverified**); `flood="robbins"` uses
+`robbins_flood` instead of the Eckert line. `hetp` has Perry's rules of thumb,
+$18\,d_p$ (random packing, Eq. 14-156a) and $100\,C_{XY}/a_p + 0.1$ m
+(structured, Eq. 14-159; `C_XY=1.45` for X-type packing below 300 m$^2$/m$^3$),
+both for organic systems below 25 mN/m, and `method="htu"` for
+`hetp_from_htu` of the mass-transfer section. `size_column` turns stages,
+efficiency (or HETP), diameter and spacing into height, shell volume, tray
+area and tray count; `column_hardware_cost` feeds them to `column_cost`.
+
+The Fair chart needs a surface tension: `difflow.liquid_properties.surface_tension(species, T)`
+(IAPWS for water, Brock-Bird for the rest, with a `SurfaceTensionWarning` for
+alcohols and acids, where it fails) and `mixture_surface_tension` (mole-fraction
+average) supply it.
 
 ```python
 import jax
@@ -6050,6 +6071,8 @@ air = dict(V_molar=100.0, MW_V=29.0, rho_V=1.2, L_molar=500.0, MW_L=18.0,
 D, info = packed_column_diameter(**air, packing=pk, fraction_flood=0.7)
 print(f"D = {float(D):.2f} m, dP = {float(info['dP_per_m']):.0f} Pa/m "
       f"(flood {float(info['dP_flood_per_m']):.0f}), wetting margin {float(info['wetting_margin']):+.2f}")
+D_r, _ = packed_column_diameter(**air, packing=pk, fraction_flood=0.7, flood="robbins")
+print(f"Robbins/Kister-Gill flood: D = {float(D_r):.2f} m")
 
 def cost(ff):
     D, _ = packed_column_diameter(**air, packing=pk, fraction_flood=ff)
@@ -6069,7 +6092,9 @@ rings in metal (25, 38, 50 mm) and plastic (25 mm), ceramic Intalox saddles (25,
 functions do not apply to it). **Every value is from memory and unverified**
 (`PackingData.source` says so): packing factors after Treybal / Perry, areas
 after Billet and Schultes. Build your own `PackingData` from a vendor data sheet
-for a real design.
+for a real design. `difflow.units.column_design.DRY_PACKING_FACTORS` holds
+the Robbins dry packing factors $F_{pd}$ from Perry's 8e Tables 14-13/14-14 for
+the metal Pall rings and the ceramic Raschig, Berl and Intalox packings.
 
 ---
 
