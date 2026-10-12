@@ -255,6 +255,7 @@ class TestInnerProblem:
             v = float(smooth_max(f, tau))
             assert 0.5 <= v <= 0.5 + tau * np.log(3) + 1e-12
 
+    @pytest.mark.slow
     def test_minimax_lands_on_the_kink(self):
         # min_u max(u - 1, -u - 3):  balanced at u = -1, value -2.
         spec = ControlSpec(lower=[-5.0], upper=[5.0])
@@ -263,6 +264,7 @@ class TestInnerProblem:
         assert abs(float(v) + 2.0) < 1e-4
         assert abs(float(u[0]) + 1.0) < 1e-4
 
+    @pytest.mark.slow
     def test_reported_value_is_the_exact_max_not_the_smoothed_one(self):
         # A smoothed value would sit strictly *below* the true max and so make
         # an infeasible design look feasible.  Here the true max at u* is 0.
@@ -279,6 +281,7 @@ class TestInnerProblem:
         assert abs(float(u[0]) - 2.0) < 1e-6
         assert abs(float(v) - 1.0) < 1e-6
 
+    @pytest.mark.slow
     def test_gradient_is_the_multiplier_weighted_one(self):
         # d/dtheta min_u max(u - 2, theta - u) = 1/2.  Differentiating
         # whichever row jnp.max selected would give 1 or 0.
@@ -309,7 +312,9 @@ class TestInnerProblem:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 class TestFeasibilityFunction:
+    @pytest.mark.slow
     def test_matches_hand_arithmetic(self):
         for d in (1.0, 1.5, 2.0, 3.0):
             psi = float(feasibility_value(linear_model, [d], LINEAR_SET,
@@ -322,6 +327,7 @@ class TestFeasibilityFunction:
                                           LINEAR_CONTROLS, scale=delta))
             assert abs(psi - linear_psi(2.0, delta)) < 1e-4, delta
 
+    @pytest.mark.slow
     def test_psi_sign_tracks_feasibility(self):
         # Feasible exactly when d >= 1.5 (the design must cover the richest
         # feed the envelope allows).  Designs within 0.05 of the boundary are
@@ -348,6 +354,7 @@ class TestFeasibilityFunction:
                                                          "coverage"}
         assert abs(float(res.controls[0]) - 1.75) < 1e-4
 
+    @pytest.mark.slow
     def test_critical_realization_is_the_true_argmax(self):
         """The reported critical point beats a 31^3 x 4001 brute-force grid."""
         res = feasibility_function(curved_model, [1.0], CURVED_SET,
@@ -405,6 +412,7 @@ class TestFeasibilityFunction:
         assert abs(float(rc.critical_theta[0])) < 0.05
         assert "interior point" in rc.summary()
 
+    @pytest.mark.slow
     def test_continuous_never_reports_less_than_vertex(self):
         rv = feasibility_function(curved_model, [1.0], CURVED_SET,
                                   CURVED_CONTROLS, method="vertex")
@@ -452,6 +460,7 @@ class TestFeasibilityFunction:
 
 
 class TestDerivatives:
+    @pytest.mark.slow
     def test_gradient_is_the_multiplier_weighted_one(self):
         # psi(d) = (1.5 - d)/2, so dpsi/dd = -0.5 exactly.  The two ways of
         # getting this wrong -- taking the derivative of whichever constraint
@@ -462,6 +471,7 @@ class TestDerivatives:
         assert np.all(np.isfinite(np.asarray(g)))
         assert abs(float(g[0]) + 0.5) < 5e-3, float(g[0])
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_gradient_matches_a_central_difference(self):
         d0 = jnp.array([1.0])
@@ -502,6 +512,7 @@ class TestDerivatives:
         assert np.all(np.isfinite(np.asarray(g)))
         assert abs(float(g[0]) + 0.5) < 5e-3
 
+    @pytest.mark.slow
     def test_vmap_over_designs(self):
         ds = jnp.array([[1.5], [2.0], [2.5]])
         got = jax.vmap(lambda d: feasibility_value(
@@ -522,6 +533,7 @@ class TestDerivatives:
 
 
 class TestFlexibilityIndex:
+    @pytest.mark.slow
     def test_matches_hand_arithmetic(self):
         # psi(d, delta) = (1 + 0.5 delta - d)/2 = 0  =>  F = (d - 1)/0.5
         for d in (1.25, 1.5, 2.0, 2.5):
@@ -551,6 +563,7 @@ class TestFlexibilityIndex:
         assert res.slack_vertices(factor=1.5) == [0, 1, 2]
         assert res.nominal_feasible and not res.saturated
 
+    @pytest.mark.slow
     def test_index_is_the_largest_feasible_scaling(self):
         res = flexibility_index(linear_model, [2.0], LINEAR_SET,
                                 LINEAR_CONTROLS)
@@ -561,6 +574,7 @@ class TestFlexibilityIndex:
                                           LINEAR_CONTROLS, scale=1.02 * F))
         assert inside <= 0.0 < outside
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_index_agrees_with_bisecting_psi_directly(self):
         # An independent route to the same number: bisect the feasibility
@@ -620,6 +634,7 @@ class TestFlexibilityIndex:
 
 
 class TestExpectedFeasibility:
+    @pytest.mark.slow
     @pytest.mark.release
     def test_probability_matches_the_analytic_one(self):
         # psi_sample = (theta - d)/2 <= 0 iff theta <= d, and theta is uniform
@@ -631,6 +646,7 @@ class TestExpectedFeasibility:
                 d, res.probability, want)
             assert res.n_samples == 1500
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_standard_error_shrinks_with_the_sample_size(self):
         small = expected_feasibility(linear_model, [1.0], LINEAR_SET,
@@ -639,6 +655,7 @@ class TestExpectedFeasibility:
                                    LINEAR_CONTROLS, n_samples=1600, key=1)
         assert big.standard_error < 0.35 * small.standard_error
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_worst_case_bounds_the_samples(self):
         res = expected_feasibility(linear_model, [2.0], LINEAR_SET,
@@ -681,6 +698,7 @@ class TestExpectedFeasibility:
         assert res.values[int(np.argmax(res.values))] == pytest.approx(
             res.worst)
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_sampling_is_reproducible(self):
         kw = dict(n_samples=64, key=11)
@@ -718,6 +736,7 @@ class TestExpectedFeasibility:
         with pytest.raises(ValueError, match="distribution must be one of"):
             sample_set({"a": (1.0, 0.5)}, 4, 0, distribution="beta")
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_result_type_and_repr(self):
         res = expected_feasibility(linear_model, [2.0], LINEAR_SET,
@@ -924,6 +943,7 @@ class TestDocumentedExample:
                                    {"S": (22.309, 22.309)})
         assert frozen.index == pytest.approx(0.5515, abs=1e-3)
 
+    @pytest.mark.slow
     def test_backoff_can_sink_a_design_the_index_passes(self):
         """The headline of the documentation, asserted.
 
@@ -991,6 +1011,7 @@ class TestDiagrams:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.release
 def test_module_doctests():
     import doctest

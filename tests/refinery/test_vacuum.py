@@ -277,6 +277,7 @@ def _quantities(char, feed, params):
 class TestGradients:
     """Implicit gradients against central differences (about 1e-5 relative)."""
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("field,x0,h", [
         ("furnace_T", 400.0 + C_TO_K, 0.02),
         ("flash_zone_P", 4000.0, 1.0),
@@ -292,6 +293,7 @@ class TestGradients:
         fd = (q(x0 + h) - q(x0 - h)) / (2 * h)
         np.testing.assert_allclose(g, fd, rtol=1e-5, atol=1e-12)
 
+    @pytest.mark.slow
     def test_a_tbp_point_of_the_assay(self):
         crude = heavy_crude()
 

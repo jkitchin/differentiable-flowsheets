@@ -95,6 +95,7 @@ class TestNoCaseIsRigged:
     free passes on a case it had not solved.
     """
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("case", CORPUS, ids=lambda c: c.name)
     def test_the_feed_guess_is_not_already_the_answer(self, case):
         fs = case.build()
@@ -206,6 +207,7 @@ class TestOutcomeVerdict:
 
 class TestRunCase:
 
+    @pytest.mark.slow
     def test_the_control_case_passes(self):
         outcome = run_case(get_case("two_phase_flash"), acceleration="anderson")
         assert outcome.passed, outcome
@@ -235,6 +237,7 @@ class TestRunCase:
         assert not outcome.passed
         assert outcome.verdict == "raised"
 
+    @pytest.mark.slow
     def test_a_check_that_raises_makes_the_answer_wrong(self):
         def bad_check(fs, streams):
             raise ValueError("cannot audit")
@@ -258,6 +261,7 @@ class TestRunCase:
         with pytest.raises(ValueError, match="unknown initialization"):
             run_case(get_case("two_phase_flash"), initialization="telepathy")
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("initialization", INITIALIZATIONS)
     def test_every_initialization_strategy_runs(self, initialization):
         outcome = run_case(get_case("two_phase_flash"),
@@ -357,8 +361,10 @@ class TestReport:
         assert "passed" in rows[0]
 
 
+@pytest.mark.slow
 class TestRunBenchmark:
 
+    @pytest.mark.slow
     def test_it_covers_the_whole_grid(self):
         report = run_benchmark(cases=["two_phase_flash"],
                                accelerations=("anderson", "wegstein"),
@@ -367,6 +373,7 @@ class TestRunBenchmark:
         assert {o.acceleration for o in report.outcomes} == {"anderson", "wegstein"}
         assert {o.initialization for o in report.outcomes} == {"unit", "default"}
 
+    @pytest.mark.slow
     def test_it_accepts_case_objects_as_well_as_names(self):
         report = run_benchmark(cases=[get_case("two_phase_flash")],
                                accelerations=("anderson",),
@@ -386,6 +393,7 @@ class TestRunBenchmark:
 # The measurements the corpus was built to make
 # =============================================================================
 
+@pytest.mark.slow
 class TestTheFindings:
     """These pin *why* each hard case is in the corpus.
 
@@ -399,6 +407,7 @@ class TestTheFindings:
         assert not divergent.passed
         assert accelerated.passed
 
+    @pytest.mark.slow
     def test_anderson_is_not_a_free_win(self):
         """phase_coupled_flash is in the corpus precisely because it isn't."""
         anderson = run_case(get_case("phase_coupled_flash"),
@@ -419,6 +428,7 @@ class TestTheFindings:
         assert run_case(get_case("regime_switch"),
                         acceleration="anderson").passed
 
+    @pytest.mark.slow
     def test_a_signed_tear_beats_both_accelerated_methods(self):
         """The one case that inverts the corpus ranking.
 
@@ -449,6 +459,7 @@ class TestTheFindings:
         assert unclipped.passed
         assert unclipped.iterations < 30
 
+    @pytest.mark.slow
     def test_a_rigorous_column_in_a_recycle_is_not_the_hard_part(self):
         """#251 names near-pinch columns; every setting solves this one."""
         for acceleration in ACCELERATIONS:

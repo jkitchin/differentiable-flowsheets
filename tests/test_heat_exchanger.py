@@ -678,6 +678,7 @@ class TestEnthalpyCounterCurrentHX:
         cold = make_stream({"propane": 1.0, "butane": 1.0}, T=300.0, P=3e5)
         return hot, cold
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_energy_balance_closes(self):
         """Q from the solve equals the enthalpy change on each side."""
@@ -707,6 +708,7 @@ class TestEnthalpyCounterCurrentHX:
         assert float(hot_out["T"]) > float(cold["T"])
         assert float(cold_out["T"]) < float(hot["T"])
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_differentiable_wrt_UA(self):
         """Duty is differentiable through the coupled solve; more UA -> more duty."""
@@ -727,6 +729,7 @@ class TestCubicThermoAbsentSpecies:
     """A stream need not list every EOS species (a condenser's vapour has no
     coolant); it used to raise a bare KeyError from stream_enthalpy_flash."""
 
+    @pytest.mark.slow
     def test_absent_species_is_zero_flow(self):
         thermo = _propane_butane_cubic_thermo()
         for f in (thermo.stream_enthalpy_flash, thermo.stream_entropy_flash):
@@ -768,6 +771,7 @@ class TestDefaultCpWarning:
             warnings.simplefilter("error", DefaultCpWarning)
             Heater(HeaterParams(T_out=350.0, Cp=75.0))(stream)
 
+    @pytest.mark.slow
     def test_no_warning_when_thermo_given(self):
         thermo = _propane_butane_cubic_thermo()
         stream = make_stream({"propane": 1.0, "butane": 1.0}, T=300.0, P=3e5)
@@ -792,6 +796,7 @@ class TestUtilityExchangerThermo:
         # crosses the phase envelope and the duty carries latent heat.
         return make_stream({"propane": 1.0, "butane": 1.0}, T=300.0, P=10e5)
 
+    @pytest.mark.slow
     def test_duty_is_the_enthalpy_difference(self):
         thermo = _propane_butane_cubic_thermo()
         feed = self._liquid_feed()
@@ -802,6 +807,7 @@ class TestUtilityExchangerThermo:
         H_out = thermo.stream_enthalpy_flash(flows, 400.0, feed["P"])
         assert float(info["Q"]) == pytest.approx(float(H_out - H_in), rel=1e-6)
 
+    @pytest.mark.slow
     def test_constant_Cp_understates_a_vaporizing_duty(self):
         """The failure in issue #226: 75 J/mol/K carries no latent heat."""
         thermo = _propane_butane_cubic_thermo()
@@ -816,6 +822,7 @@ class TestUtilityExchangerThermo:
         assert float(info_const["Q"]) == pytest.approx(15000.0)
         assert float(info_thermo["Q"]) > 2.0 * float(info_const["Q"])
 
+    @pytest.mark.slow
     def test_cooler_reverses_the_heater(self):
         thermo = _propane_butane_cubic_thermo()
         feed = self._liquid_feed()
@@ -841,6 +848,7 @@ class TestUtilityExchangerThermo:
         H_out = thermo.stream_enthalpy(flows, 400.0, phase="vapor", P=feed["P"])
         assert float(info["Q"]) == pytest.approx(float(H_out - H_in), rel=1e-6)
 
+    @pytest.mark.slow
     def test_eo_residuals_vanish_at_the_thermo_solution(self):
         thermo = _propane_butane_cubic_thermo()
         feed = self._liquid_feed()
@@ -865,6 +873,7 @@ class TestUtilityExchangerThermoHeavy:
     not the assertions.
     """
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_rating_mode_closes_Q_equals_UA_LMTD(self):
         thermo = _propane_butane_cubic_thermo()
@@ -894,6 +903,7 @@ class TestUtilityExchangerThermoHeavy:
         assert float(outlet["T"]) == pytest.approx(400.0, rel=1e-6)
         assert float(info2["Q"]) == pytest.approx(float(info["Q"]))
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_differentiable(self):
         """Duty is differentiable through the flash-based enthalpy."""
@@ -962,6 +972,7 @@ class TestEnthalpyHXThroughBoiling:
             assert float(H - H0) == pytest.approx(Q, rel=1e-8), Q
             assert float(T) > 300.0
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_gradient_matches_finite_difference(self):
         thermo, hot, cold = self._case()

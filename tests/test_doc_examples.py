@@ -75,6 +75,7 @@ def _case(path: Path):
     return pytest.param(path, id=rel, marks=marks)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("path", [_case(f) for f in FILES])
 def test_doc_python_blocks_run(path, tmp_path, monkeypatch):
     import matplotlib

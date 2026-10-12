@@ -403,6 +403,7 @@ class TestLP:
 
 class TestTrustRegion:
 
+    @pytest.mark.slow
     def test_trust_region_converges_to_known_optimum(self):
         """Acceptance criterion 2, first half: it converges from a cold start."""
         net = Network([quadratic_block(peak=(0.3, 0.7))])
@@ -501,12 +502,14 @@ class TestTrustRegion:
         assert result.n_starts == 2
         npt.assert_allclose(result.decisions, [0.9, 0.1], atol=1e-5)
 
+    @pytest.mark.slow
     def test_minimisation_sense(self):
         net = Network([quadratic_block(peak=(0.3, 0.7))])
         result = DeltaBasePlanner(net, prices={"q.f": -1.0}, radius=0.3,
                                   sense="min").solve()
         npt.assert_allclose(result.decisions, [0.3, 0.7], atol=1e-5)
 
+    @pytest.mark.slow
     def test_result_reports_delta_vectors_and_summary(self):
         net = Network([smooth_block()])
         result = DeltaBasePlanner(net, prices={"s.p": 1.0}, radius=0.2).solve()
@@ -527,6 +530,7 @@ class TestPlanSensitivity:
                      u_names=["a"], y_names=["lin", "quad"],
                      lb=[0.0], ub=[5.0])
 
+    @pytest.mark.slow
     def test_price_sensitivity_matches_the_analytic_answer(self):
         planner = DeltaBasePlanner(Network([self._priced_block()]),
                                    prices={"q.lin": 2.0, "q.quad": 1.0},
@@ -645,6 +649,7 @@ class TestModifiers:
         return DeltaBasePlanner(Network([blk]), prices={"r.f": 1.0},
                                 radius=0.3, vertex_seeding=False)
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_gradient_modifiers_reach_the_plant_optimum(self):
         result = run_modifier_adaptation(
@@ -795,6 +800,7 @@ class TestScaling:
         return (planner_objective(problem.planner()),
                 problem.network.decision_start())
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_gradient_cost_ratio_scaling(self):
         """Acceptance criterion 1: AD gradient cost stays under 3x one eval.
@@ -887,6 +893,7 @@ class TestScaling:
         assert best.ad_ratio == pytest.approx(4.0)
         assert len(seen) == 4, "over the limit on every draw is a real failure"
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_gradient_agrees_with_finite_differences(self):
         fn, x0 = self._make(5)
@@ -942,6 +949,7 @@ class TestScaling:
 # The reference chain  (acceptance criterion 5's claim)
 # --------------------------------------------------------------------------
 
+@pytest.mark.slow
 class TestChain:
 
     def test_chain_structure(self, chain_problem):
@@ -953,12 +961,14 @@ class TestChain:
     def test_horizon_scales_decisions(self):
         assert chain_mod.two_plant_chain(horizon=4).n_decisions == 20
 
+    @pytest.mark.slow
     def test_plan_respects_the_spec(self, chain_problem):
         result = chain_problem.planner(radius=0.25).solve()
         assert result.converged
         assert result.total_violation < 1e-6
         assert result.values["ngl.T_colfeed"] <= 236.0 + 1e-6
 
+    @pytest.mark.slow
     def test_chain_allocation_lever_switches_with_prices(self, chain_problem):
         """The worked example's claim: the lever flips corner with price."""
         cheap = chain_problem.planner(radius=0.25)
@@ -1010,6 +1020,7 @@ class TestProblemStatement:
         planner = chain_problem.planner(radius=0.25, accept_test=False)
         assert "WARNING" in planner.describe()
 
+    @pytest.mark.slow
     def test_lp_as_text_covers_every_row_and_column(self, chain_problem):
         result = chain_problem.planner(radius=0.25).solve()
         model = result.lp_model
@@ -1206,6 +1217,7 @@ class TestDeltaHealth:
         assert spread, report.summary()
         assert spread[0].value > SPREAD_TOL
 
+    @pytest.mark.slow
     def test_composed_relative_sensitivity_survives_extreme_depth(self):
         """Absolute smallness is physics; relative smallness would be loss.
 

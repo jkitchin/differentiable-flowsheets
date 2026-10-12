@@ -499,10 +499,12 @@ class TestGradients:
         d = st.ShellAndTubeDesign(make_params(tube_length=None, tube_velocity=1.2, baffle_spacing=0.25, tol=1e-13))
         return d(HOT, COLD, T_hot_out=373.0, baffle_spacing=lB, tube_velocity=v, warn=False)["area"]
 
+    @pytest.mark.slow
     def test_check_grads_area_wrt_baffle_spacing_and_tube_velocity(self):
         # rev-mode (implicit adjoint through optx.fixed_point); fwd is checked below by finite differences
         check_grads(self.area, (0.25, 1.2), order=1, modes=["rev"], rtol=1e-4, atol=1e-6)
 
+    @pytest.mark.slow
     def test_grad_vs_central_finite_differences(self):
         g = jax.grad(self.area, argnums=(0, 1))(0.25, 1.2)
         h = 1e-5
@@ -511,6 +513,7 @@ class TestGradients:
         assert float(g[0]) == pytest.approx(fd_l, rel=1e-5)
         assert float(g[1]) == pytest.approx(fd_v, rel=1e-5)
 
+    @pytest.mark.slow
     def test_gradient_in_length_mode_and_fouling(self):
         d = st.ShellAndTubeDesign(make_params(tol=1e-13))
         f = lambda lB, Rfo: d(HOT, COLD, T_hot_out=373.0, baffle_spacing=lB, R_fo=Rfo, warn=False)["area"]
@@ -522,6 +525,7 @@ class TestGradients:
         assert float(g[1]) == pytest.approx(fd_r, rel=1e-4)
         assert float(g[1]) > 0  # more fouling, more area
 
+    @pytest.mark.slow
     def test_gradient_wrt_passes_and_flow(self):
         d = st.ShellAndTubeDesign(make_params(tube_length=None, tube_velocity=1.2, tol=1e-13))
         f = lambda n, m: d(HOT, {"T": 303.0, "m_dot": m}, T_hot_out=373.0, n_tube_passes=n, warn=False)["dP_tube"]
@@ -609,6 +613,7 @@ class TestPhaseChangeAndWarnings:
         rt = d.rate({"T": 400.0, "m_dot": 1.0}, COLD, r["n_tubes"], r["tube_length"], r["shell_ID"], r["baffle_spacing"])
         assert float(rt["Q"]) == pytest.approx(Q, rel=1e-8)
 
+    @pytest.mark.slow
     def test_condensing_shell_nusselt_callable(self):
         """Shell h from heat_transfer.nusselt_film_condensation as a function of geometry."""
         def shell_h(g):

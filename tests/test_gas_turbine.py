@@ -234,11 +234,13 @@ class TestBraytonCycle:
         assert float(r["eta_thermal"]) == pytest.approx(0.568, abs=0.02)
         assert float(r["eta_thermal"]) > float(r["eta_gt_only"])
 
+    @pytest.mark.slow
     def test_higher_TIT_raises_efficiency(self):
         cool = brayton_cycle(self.FUEL, BraytonCycleParams(TIT_K=1500.0))
         hot = brayton_cycle(self.FUEL, BraytonCycleParams(TIT_K=1700.0))
         assert float(hot["eta_thermal"]) > float(cool["eta_thermal"])
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_efficiency_differentiable_wrt_pressure_ratio(self):
         def eta(rp):

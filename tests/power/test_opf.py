@@ -44,6 +44,7 @@ def opf5():
     return dp.solve_acopf(dp.cases.case5())
 
 
+@pytest.mark.slow
 @pytest.mark.release
 def test_case9_matches_the_matpower_optimum(opf9):
     assert opf9.converged
@@ -53,6 +54,7 @@ def test_case9_matches_the_matpower_optimum(opf9):
     assert opf9.pg_mw["g3"] == pytest.approx(94.19, abs=0.02)
 
 
+@pytest.mark.slow
 @pytest.mark.release
 def test_case5_matches_the_matpower_optimum(opf5):
     assert opf5.converged
@@ -67,6 +69,7 @@ def test_case14_matches_the_matpower_optimum():
     assert result.cost == pytest.approx(8081.53, abs=0.01)
 
 
+@pytest.mark.slow
 def test_the_opf_beats_the_power_flow_dispatch(opf9):
     """Optimising has to cost less than the scheduled operating point."""
     net = dp.cases.case9()
@@ -75,6 +78,7 @@ def test_the_opf_beats_the_power_flow_dispatch(opf9):
     assert opf9.cost < float(generation_cost(pf.x, net, layout))
 
 
+@pytest.mark.slow
 def test_the_solution_is_feasible(opf9):
     """Every limit the OPF carried must hold at its answer."""
     report = dp.operating_report(opf9.x, opf9.network, opf9.layout)
@@ -82,6 +86,7 @@ def test_the_solution_is_feasible(opf9):
     assert report.feasible
 
 
+@pytest.mark.slow
 def test_case5_congestion_separates_the_prices(opf5):
     """The 4-5 rating binds; without it every LMP would be the cheapest
     unit's marginal cost."""
@@ -93,6 +98,7 @@ def test_case5_congestion_separates_the_prices(opf5):
     assert lmp["5"] == pytest.approx(10.0, abs=0.05)
 
 
+@pytest.mark.slow
 def test_removing_the_ratings_collapses_the_price_spread():
     """The complement of the test above: no congestion, no spread."""
     result = dp.solve_acopf(dp.cases.case5(), enforce_ratings=False)
@@ -102,6 +108,7 @@ def test_removing_the_ratings_collapses_the_price_spread():
     assert result.cost < 17551.89
 
 
+@pytest.mark.slow
 def test_prices_from_multipliers_equal_prices_from_autodiff(opf9):
     """Two independent routes to the LMP must agree."""
     errors = opf9.check_prices()
@@ -115,6 +122,7 @@ def test_prices_from_multipliers_equal_prices_from_autodiff_congested(opf5):
     assert max(errors.values()) < 1e-4
 
 
+@pytest.mark.slow
 @pytest.mark.release
 def test_solution_sensitivity_matches_finite_differences():
     """d(dispatch)/d(load), by implicit differentiation of the KKT system."""
@@ -137,6 +145,7 @@ def test_solution_sensitivity_matches_finite_differences():
     )
 
 
+@pytest.mark.slow
 def test_lmp_predicts_the_cost_of_another_megawatt(opf9):
     """The economic meaning of the price, checked by re-solving.
 
@@ -170,6 +179,7 @@ def test_structure_drops_constraints_that_cannot_bind():
     assert s9.n_thermal == 2 * rated.n_branch
 
 
+@pytest.mark.slow
 def test_constraint_names_line_up_with_the_rows():
     net = dp.cases.case9()
     layout = power_state_layout(net)
@@ -199,6 +209,7 @@ def test_fixed_bounds_become_equalities_not_opposing_inequalities():
     assert "pg_g3_max" not in structure.bound_names
 
 
+@pytest.mark.slow
 def test_a_pinned_unit_is_dispatched_at_its_pin():
     net = dp.cases.case9()
     net.generators["g3"].p_min_mw = 120.0
@@ -220,12 +231,14 @@ def test_a_controllable_tap_is_used_and_stays_in_range():
     assert result.cost <= dp.solve_acopf(net).cost + 1e-6
 
 
+@pytest.mark.slow
 def test_flat_start_reaches_the_same_optimum_as_the_warm_start(opf9):
     cold = dp.solve_acopf(dp.cases.case9(), warm_start=False)
     assert cold.converged
     assert cold.cost == pytest.approx(opf9.cost, abs=1e-4)
 
 
+@pytest.mark.slow
 def test_summary_names_the_binding_constraints(opf5):
     text = opf5.summary()
     assert "binding constraints" in text

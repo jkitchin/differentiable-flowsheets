@@ -51,6 +51,7 @@ class TestDiscovery:
         ops = Workbench().list_operations(plugin="gas")["operations"]
         assert ops and all(op["plugin"] == "difflow_gas" for op in ops)
 
+    @pytest.mark.slow
     def test_describe_says_what_is_missing_and_how_to_supply_it(self):
         """In an empty session a CSTR cannot be built: it needs a rate law."""
         spec = Workbench().describe_operation("CSTR")
@@ -126,6 +127,7 @@ class TestBuildFromScratch:
         assert_same(mine["flash_out"], ref["liquid"])
         assert_same(mine["flash_out2"], ref["vapor"])
 
+    @pytest.mark.slow
     def test_the_reactor_and_flash(self):
         wb = Workbench()
         assert wb.set_code_context(context_of("02_reactor_flash"))["ok"]
@@ -145,6 +147,7 @@ class TestBuildFromScratch:
         assert_same(mine["flash_out2"], ref["vapor"])
         assert_same(mine["flash_out"], ref["liquid"])
 
+    @pytest.mark.slow
     def test_the_reactor_recycle(self):
         wb = Workbench()
         assert wb.set_code_context(context_of("03_reactor_recycle"))["ok"]
@@ -222,6 +225,7 @@ class TestGuardRails:
         assert "disabled" in wb.set_code_context("x = 1")["error"]
         assert "disabled" in wb.open_file("plant.py")["error"]
 
+    @pytest.mark.slow
     def test_a_cell_past_its_timeout_returns_and_the_session_waits(self):
         wb = Workbench()
         wb.open_example("01_flash_drum")

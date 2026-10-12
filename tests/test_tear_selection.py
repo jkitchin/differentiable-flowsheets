@@ -339,6 +339,7 @@ def _loop_flowsheet(explicit: bool) -> Flowsheet:
 class TestSolveWithAutomaticTears:
     """``solve(tears="auto")`` on a loop nobody declared."""
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("method", ["auto", "heuristic", "minimum"])
     def test_it_finds_the_same_fixed_point_as_tearing_by_hand(self, method):
         auto = _loop_flowsheet(explicit=False).solve(tears=method, tol=1e-10)

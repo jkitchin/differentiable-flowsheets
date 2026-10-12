@@ -78,7 +78,9 @@ def _ss_bubble_P(eos, x, T, P0, n=3000):
 # EOS bubble/dew
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 class TestEOSBubbleDew:
+    @pytest.mark.slow
     def test_bubble_P_matches_independent_successive_substitution(self):
         eos = _c1c3()
         x = jnp.array([0.2, 0.8])
@@ -89,6 +91,7 @@ class TestEOSBubbleDew:
         np.testing.assert_allclose(np.asarray(r["y"]), y_ref, rtol=1e-6)
         assert float(r["P"]) / 1e5 == pytest.approx(33.41, abs=0.05)
 
+    @pytest.mark.slow
     def test_bubble_P_brackets_the_tp_flash(self):
         eos = _c1c3()
         z = jnp.array([0.2, 0.8])
@@ -100,6 +103,7 @@ class TestEOSBubbleDew:
         two_phase, _ = _phase_stability(eos, z, 277.6, 1.03 * Pb)
         assert not bool(two_phase)
 
+    @pytest.mark.slow
     def test_dew_P_brackets_the_tp_flash(self):
         eos = SRK({s: get_critical_props(s) for s in ("propane", "n_butane", "n_pentane")})
         z = jnp.array([0.3, 0.4, 0.3])
@@ -112,6 +116,7 @@ class TestEOSBubbleDew:
         assert 0.9 < float(V_above) < 1.0
         assert float(V_below) == 1.0
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("kind", ["bubble", "dew"])
     def test_T_and_P_forms_are_inverse(self, kind):
         eos = SRK({s: get_critical_props(s) for s in ("propane", "n_butane", "n_pentane")})
@@ -122,6 +127,7 @@ class TestEOSBubbleDew:
         assert bool(r["converged"])
         assert float(r["T"]) == pytest.approx(290.0, abs=1e-6)
 
+    @pytest.mark.slow
     def test_gradients_bubble_P(self):
         eos = _c1c3()
         x = jnp.array([0.2, 0.8])
@@ -130,18 +136,21 @@ class TestEOSBubbleDew:
         check_grads(lambda x1: eos_bubble_P(eos, jnp.stack([x1, 1 - x1]), 277.6)["P"] / 1e5,
                     (0.2,), order=1, modes=["rev"], atol=1e-4, rtol=1e-4)
 
+    @pytest.mark.slow
     def test_gradients_dew_T(self):
         eos = SRK({s: get_critical_props(s) for s in ("propane", "n_butane", "n_pentane")})
         z = jnp.array([0.3, 0.4, 0.3])
         check_grads(lambda lp: eos_dew_T(eos, z, jnp.exp(lp))["T"], (jnp.log(101325.0),),
                     order=1, modes=["rev"], atol=1e-4, rtol=1e-4)
 
+    @pytest.mark.slow
     def test_clausius_clapeyron_sign(self):
         # dP_bubble/dT > 0
         eos = _c1c3()
         g = jax.grad(lambda T: eos_bubble_P(eos, jnp.array([0.2, 0.8]), T)["P"])(277.6)
         assert float(g) > 0
 
+    @pytest.mark.slow
     def test_near_critical_bubble_point_avoids_the_trivial_root(self):
         # x = 0.3 at 300 K: two-phase up to ~57 bar (stability test). Plain
         # substitution from the Wilson pressure (107 bar) slides onto K = 1 at
@@ -154,6 +163,7 @@ class TestEOSBubbleDew:
         two_hi, _ = _phase_stability(eos, jnp.array([0.3, 0.7]), 300.0, 1.01 * r["P"])
         assert bool(two_lo) and not bool(two_hi)
 
+    @pytest.mark.slow
     def test_near_critical_bubble_T_heavy_liquid(self):
         # A 25/75 heptane/octane liquid at 20 bar bubbles at ~543 K, 25 K
         # from octane's Tc. The 0.95-of-Wilson start alone fails here
@@ -169,6 +179,7 @@ class TestEOSBubbleDew:
         two_hi, _ = _phase_stability(eos, x, 1.002 * r["T"], 20e5)
         assert not bool(two_lo) and bool(two_hi)
 
+    @pytest.mark.slow
     def test_upper_saturation_point_of_equimolar_mixture(self):
         # x = 0.5 at 300 K is on the liquid side of the CH4/C3H8 critical
         # composition (~0.65 at 300 K): it saturates at ~86.6 bar against a
@@ -192,6 +203,7 @@ class TestEOSBubbleDew:
             r = eos_bubble_P(eos, jnp.array([0.5, 0.5]), 300.0, P_guess=150e5)
         assert bool(r["trivial"])
 
+    @pytest.mark.slow
     def test_no_saturation_point_is_flagged(self):
         # x = 0.9 at 300 K never splits (stability test over 5-150 bar): there
         # is no bubble point, and the solve says so instead of returning one.
@@ -274,6 +286,7 @@ class TestModifiedRaoult:
         ref = 1.0 / np.sum(y / _psat(th, 360.0))
         assert float(dew_P(th, SP_EW, y, 360.0)) == pytest.approx(ref, rel=1e-12)
 
+    @pytest.mark.slow
     def test_dew_T_gradient(self):
         th, nrtl = _ethanol_water()
         check_grads(lambda P: dew_T(th, SP_EW, jnp.array([0.4, 0.6]), P * 1e5, nrtl),
@@ -307,12 +320,14 @@ class TestFlashHelpers:
         x = np.array([0.3, 0.7])
         assert np.sum(x * _gamma(nrtl, x, T) * _psat(th, T)) == pytest.approx(101325.0, rel=1e-8)
 
+    @pytest.mark.slow
     def test_dew_point_temperature_uses_activity_model(self):
         fl, th, nrtl = self._flash()
         feed = make_stream({"ethanol": 40.0, "water": 60.0}, T=350.0, P=101325.0)
         T = float(fl.dew_point_temperature(feed))
         assert T == pytest.approx(_dew_T_reference(th, nrtl, [0.4, 0.6], 101325.0), abs=1e-6)
 
+    @pytest.mark.slow
     def test_eos_flash_helpers_delegate(self):
         eos = _c1c3()
         th = IdealThermo({s: get_species_data(s) for s in ("methane", "propane")})
@@ -399,6 +414,7 @@ class TestAntoineRangeWarning:
         assert th.Psat_with_info("benzene", 350.0)[1]["antoine_in_range"] is True
 
 
+@pytest.mark.slow
 def test_pure_component_is_not_flagged_trivial():
     """K = 1 is the answer for a pure species; no trivial flag, no warning."""
     import warnings as _w

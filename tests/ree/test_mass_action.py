@@ -153,6 +153,7 @@ def test_network_dispatch_follows_the_extractant_record():
     assert network_for_extractant("TBP") == "solvating_nitrate"
 
 
+@pytest.mark.slow
 def test_section_residual_is_square():
     """One unknown and one balance per component, per stage."""
     net = build_network(
@@ -237,6 +238,7 @@ def test_counter_ion_is_a_conserved_component_in_every_shipped_network():
         assert net.components[net.counter_ion_index].charge == 1
 
 
+@pytest.mark.slow
 def test_counter_ion_becomes_a_partitioning_component_with_one_table_row():
     """Saponification (#197) is one added row and no code change at all.
 
@@ -290,6 +292,7 @@ def test_counter_ion_becomes_a_partitioning_component_with_one_table_row():
 # A different mechanism is a different row, not a different code path
 # =============================================================================
 
+@pytest.mark.slow
 def test_solvating_extraction_runs_through_the_same_closure():
     """TBP goes through ``solve_section`` unchanged, and behaves differently.
 
@@ -434,6 +437,7 @@ DILUTE_RE_TO_ACID = 1e-7
 DILUTE_TOL = 2e-5
 
 
+@pytest.mark.slow
 def test_dilute_limit_reduces_to_correlation():
     """The closed model reproduces the correlation where it should (#196).
 
@@ -465,6 +469,7 @@ def test_dilute_limit_reduces_to_correlation():
         assert D_closed == pytest.approx(D_corr, rel=DILUTE_TOL)
 
 
+@pytest.mark.slow
 def test_dilute_limit_discrepancy_is_the_released_protons():
     """What is left of the disagreement is physics, and it scales as such.
 
@@ -493,6 +498,7 @@ def test_dilute_limit_discrepancy_is_the_released_protons():
     assert errors[2] == pytest.approx(errors[1] / 10.0, rel=0.05)
 
 
+@pytest.mark.slow
 def test_departure_from_the_correlation_is_the_predicted_ph_slope():
     """Away from the calibration pH the two levels differ by a known amount.
 
@@ -530,6 +536,7 @@ def test_departure_from_the_correlation_is_the_predicted_ph_slope():
         assert observed == pytest.approx(predicted, abs=1e-7)
 
 
+@pytest.mark.slow
 def test_extractant_concentration_dependence_of_closure_and_correlation():
     """Two independently written paths to D's [HA] dependence, and their gap.
 
@@ -596,6 +603,7 @@ def test_extractant_concentration_dependence_of_closure_and_correlation():
 # Validation 2: every component conserved to machine precision
 # =============================================================================
 
+@pytest.mark.slow
 def test_every_component_conserved_to_machine_precision():
     """Not "to the solver tolerance": to floating-point round-off (#196)."""
     elements = ("La", "Nd", "Dy")
@@ -635,6 +643,7 @@ def test_every_component_conserved_to_machine_precision():
     )
 
 
+@pytest.mark.slow
 def test_conservation_survives_a_deliberately_crippled_solve():
     """Conservation is structural, so it holds even when equilibrium does not.
 
@@ -671,6 +680,7 @@ def test_conservation_survives_a_deliberately_crippled_solve():
     assert np.max(np.abs(out - into)) < 1e-15 * scale
 
 
+@pytest.mark.slow
 def test_charge_imbalance_is_zero_for_an_electroneutral_feed():
     """Charge balance is implied by the component balances, and reported."""
     section = make_section(elements=("Nd", "Dy"), n_stages=3)
@@ -683,6 +693,7 @@ def test_charge_imbalance_is_zero_for_an_electroneutral_feed():
     assert np.max(np.abs(np.asarray(direct))) < 1e-15
 
 
+@pytest.mark.slow
 def test_charge_imbalance_reports_a_non_electroneutral_feed():
     """An impossible feed is visible rather than absorbed into the pH."""
     section = make_section(elements=("Nd",), n_stages=2)
@@ -694,6 +705,7 @@ def test_charge_imbalance_reports_a_non_electroneutral_feed():
     assert np.max(np.abs(np.asarray(info["charge_imbalance"]))) > 1e-3
 
 
+@pytest.mark.slow
 def test_anion_closure_by_charge_balance_is_available():
     """The alternative closure agrees when the feed is electroneutral."""
     assert set(ANION_CLOSURES) == {"total", "charge"}
@@ -792,6 +804,7 @@ def test_gradient_with_respect_to_equilibrium_constants():
 # pH is an output (#196)
 # =============================================================================
 
+@pytest.mark.slow
 def test_ph_is_an_output_and_falls_as_rare_earth_is_extracted():
     """The profile is solved for; it is not the number that was handed in."""
     section = make_section(elements=("Nd", "Dy"), n_stages=4,
@@ -807,6 +820,7 @@ def test_ph_is_an_output_and_falls_as_rare_earth_is_extracted():
     assert np.all(np.diff(profile) < 0.0)
 
 
+@pytest.mark.slow
 def test_three_protons_are_released_per_trivalent_ion():
     """The quantitative statement behind the profile, checked as such.
 
@@ -827,6 +841,7 @@ def test_three_protons_are_released_per_trivalent_ion():
     assert extracted > 0.0
 
 
+@pytest.mark.slow
 def test_more_rare_earth_means_more_acid_released():
     """Doubling the feed doubles the protons released, ion for ion."""
     released = []
@@ -847,6 +862,7 @@ def test_more_rare_earth_means_more_acid_released():
 # Competitive loading is an outcome of one shared balance (#189, #190, #191)
 # =============================================================================
 
+@pytest.mark.slow
 def test_competition_emerges_from_the_shared_extractant_balance():
     """A second element depresses the first without any correction factor.
 
@@ -920,6 +936,7 @@ def test_log_space_stays_conditioned_across_ten_orders_of_magnitude():
         assert float(extract[f"F_{el}"]) >= floor
 
 
+@pytest.mark.slow
 def test_jit_gives_the_same_answer():
     """The whole section is traceable end to end."""
     eager = float(_nd_extracted(0.02))
@@ -944,6 +961,7 @@ def test_vmap_returns_soft_failures_rather_than_raising():
     assert not bool(jnp.any(feasible))   # crippled on purpose
 
 
+@pytest.mark.slow
 def test_vmap_over_a_healthy_batch_converges():
     """The same batching path with the solver left alone."""
     section = make_section(elements=("Nd", "Dy"), n_stages=3)
@@ -959,6 +977,7 @@ def test_vmap_over_a_healthy_batch_converges():
     assert np.all(np.diff(np.asarray(pH)) < 0.0)
 
 
+@pytest.mark.slow
 def test_solution_is_a_pytree():
     """MassActionSolution has to survive jit/vmap boundaries."""
     section = make_section(elements=("Nd",), n_stages=2)
@@ -990,6 +1009,7 @@ def test_continuation_path_reaches_the_same_answer():
     assert np.allclose(np.asarray(a.u), np.asarray(b.u), rtol=1e-10, atol=1e-12)
 
 
+@pytest.mark.slow
 def test_solve_stage_is_a_section_of_one():
     """The stage operator is the same object with n_stages = 1."""
     section = make_section(elements=("Nd",), n_stages=1)
@@ -1085,6 +1105,7 @@ def test_unreachable_ph_target_is_a_soft_failure():
 # The shared interface, and the two things it does not hide
 # =============================================================================
 
+@pytest.mark.slow
 def test_extractor_dispatches_to_either_level():
     """Cascade code calls one class and gets (raffinate, extract, info)."""
     assert set(EXTRACTOR_MODELS) == {"correlation", "mass_action"}

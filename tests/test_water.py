@@ -126,6 +126,7 @@ class TestVaporPressure:
         assert float(water_vapor_pressure(T, over_ice=False)) == float(water_saturation_pressure(T))
         assert float(water_vapor_pressure(T + 20.0, over_ice=True)) == float(water_sublimation_pressure(T + 20.0))
 
+    @pytest.mark.slow
     def test_blend_is_continuous_and_has_continuous_slope(self):
         f = lambda T: jnp.log(water_vapor_pressure(T))
         T = jnp.linspace(272.5, 274.0, 601)

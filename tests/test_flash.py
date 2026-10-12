@@ -257,6 +257,7 @@ class TestFlashGradient:
         V_high_P = float(vapor_fraction(100000.0))
         assert V_low_P >= V_high_P
 
+    @pytest.mark.slow
     def test_gradient_smooth_at_boundaries(self, binary_thermo, flash_params):
         """Test that gradients are finite near phase boundaries."""
         flash = Flash(flash_params, binary_thermo)
@@ -686,6 +687,7 @@ def ternary_params():
     return FlashParams(species_order=["Light", "Medium", "Heavy"])
 
 
+@pytest.mark.slow
 class TestTernaryFlash:
     """Tests for three-component flash calculations."""
 
@@ -797,6 +799,7 @@ def eos_flash_params():
 class TestEOSFlash:
     """Tests for EOS-based flash calculations."""
 
+    @pytest.mark.slow
     def test_eos_flash_basic(self, hydrocarbon_eos, eos_flash_params):
         """Test basic EOS flash calculation."""
         feed = make_stream(
@@ -823,6 +826,7 @@ class TestEOSFlash:
             rtol=1e-6,
         )
 
+    @pytest.mark.slow
     def test_eos_flash_mass_balance(self, hydrocarbon_eos, eos_flash_params):
         """Test component mass balance for EOS flash."""
         feed = make_stream(

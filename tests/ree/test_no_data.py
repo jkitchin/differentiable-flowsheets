@@ -98,6 +98,7 @@ def _feed(els):
     return make_stream({"H2O": 100.0, **{e: 1.0 for e in els}}, 298.15, 101325.0)
 
 
+@pytest.mark.slow
 def test_nan_is_not_ignored_by_a_calculation_that_uses_it():
     """If a NaN reaches the calculation, the result says so: for every element
     that shares a limiter with it, not only the one with no data."""

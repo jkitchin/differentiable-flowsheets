@@ -48,6 +48,7 @@ def triangle_solved():
     return net, fs, dec, streams
 
 
+@pytest.mark.slow
 def test_anderson_solve_matches_closed_form(triangle_solved):
     net, fs, dec, streams = triangle_solved
     q = dg.verify.arc_flows_kg_s(streams, dec)
@@ -55,6 +56,7 @@ def test_anderson_solve_matches_closed_form(triangle_solved):
         assert q[aid] == pytest.approx(ref, abs=1e-7)
 
 
+@pytest.mark.slow
 def test_residual_report_ok(triangle_solved):
     net, fs, dec, streams = triangle_solved
     rep = dg.residual_report(streams, net, dec)
