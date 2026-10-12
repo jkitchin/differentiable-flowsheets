@@ -512,6 +512,16 @@ class TestCrystallizerUnit:
         _, _, info = Crystallizer(p)(feed)
         assert float(info["tau"]) == pytest.approx(900.0, rel=1e-12)
 
+    def test_volume_uses_the_product_flow_in_evaporative_mode(self):
+        """MSMPR tau = V / Q_product: the evaporated solvent does not pass through the magma."""
+        feed = feed_stream()
+        E = 0.4
+        Q_product = (0.60 + 1.0 - E) / RHO_L
+        p = params(kinetics=list(KIN), volume=900.0 * Q_product, crystal_density=RHO_C, liquor_density=RHO_L,
+                   mode="cooling_evaporative", water_evaporated=E)
+        _, _, info = Crystallizer(p)(feed)
+        assert float(info["tau"]) == pytest.approx(900.0, rel=1e-12)
+
     def test_unit_is_differentiable_in_T_and_residence_time(self):
         def yield_T(T):
             return Crystallizer(params(T=T))(feed_stream())[2]["yield_kg_s"]
@@ -537,6 +547,8 @@ class TestCrystallizerUnit:
         dict(mode="cooling", T=None),
         dict(water_evaporated=0.1, evaporation_fraction=0.1, mode="evaporative"),
         dict(kinetics=[1, 1, 1, 1, 1]),
+        dict(mode="adiabatic", water_evaporated=0.1),
+        dict(mode="adiabatic", T=None),
         dict(kinetics=[1, 1, 1, 1, 2.0], residence_time=1.0),
         dict(transition_T=None, upper_solubility_coeffs=[0.4]),
     ])
@@ -621,3 +633,99 @@ class TestEvaporatorToCrystallizer:
         # the water leaves with the evaporator vapor, apart from the water of crystallization
         w_out = float(out["vap"]["F_water"] + out["crystals"]["F_water"])
         assert w_out == pytest.approx(float(fresh["F_water"]), rel=1e-6)
+
+
+# =============================================================================
+# Adiabatic (vacuum) crystallizer
+# =============================================================================
+
+
+class TestAdiabatic:
+    def unit(self, **kw):
+        return Crystallizer(params(mode="adiabatic", T=K0 + 30.0, cp_solution=3200.0, **kw))
+
+    def test_heat_balance_closes_at_the_duty(self):
+        for dH, duty in ((0.0, 0.0), (2.0e5, 0.0), (2.0e5, -5.0e4)):
+            _, _, info = self.unit(heat_of_crystallization=dH, duty=duty)(feed_stream())
+            assert float(info["water_evaporated"]) > 0.0
+            assert float(info["Q"]) == pytest.approx(duty, abs=1e-6)
+
+    def test_hand_flash(self):
+        """With dH_c = 0: E = m_F cp (T_F - T) / h_fg(T)."""
+        from difflow.water import water_latent_heat
+
+        _, _, info = self.unit()(feed_stream())
+        E = 1.6 * 3200.0 * 30.0 / float(water_latent_heat(K0 + 30.0))
+        assert float(info["water_evaporated"]) == pytest.approx(E, rel=1e-12)
+
+    def test_flashing_beats_cooling_alone(self):
+        cool = Crystallizer(params(T=K0 + 30.0))(feed_stream())[2]["crystal_mass"]
+        flash = self.unit()(feed_stream())[2]["crystal_mass"]
+        assert float(flash) > float(cool)
+
+    def test_balances_and_gradient(self):
+        feed = feed_stream()
+        cry, liq, info = self.unit(heat_of_crystallization=2.0e5)(feed)
+        w_vap = float(info["water_evaporated"]) * 1000.0 / M_W
+        assert float(cry["F_H2O"] + liq["F_H2O"]) + w_vap == pytest.approx(float(feed["F_H2O"]), rel=1e-12)
+
+        def crystals(T):
+            return Crystallizer(params(mode="adiabatic", T=T, cp_solution=3200.0,
+                                       heat_of_crystallization=2.0e5))(feed)[2]["crystal_mass"]
+
+        check_grads(crystals, (K0 + 30.0,), order=1, modes=["rev"])
+
+
+# =============================================================================
+# Screen analysis -> population density
+# =============================================================================
+
+
+class TestSieve:
+    def test_formula(self):
+        from difflow import sieve_population_density
+
+        L, n = sieve_population_density([0.2], [1.0e-3], [0.5e-3], 120.0, 1600.0, 1.0)
+        assert float(L[0]) == pytest.approx(0.75e-3)
+        assert float(n[0]) == pytest.approx(120.0 * 0.2 / (1600.0 * 0.75e-3 ** 3 * 0.5e-3), rel=1e-14)
+
+    def test_msmpr_screen_analysis_recovers_G_tau(self):
+        """Mass on each screen from the exact MSMPR mass law; the fit recovers G tau to a few %."""
+        from difflow import sieve_population_density
+
+        Gt, n0, rho, kv = 2.0e-4, 1.0e12, 1600.0, 0.6
+        edges = np.array([0.1, 0.15, 0.2, 0.3, 0.42, 0.6, 0.85, 1.18, 1.7]) * 1e-3
+
+        def cum_mass(L):            # int_0^L rho kv L^3 n dL
+            x = L / Gt
+            return 6 * rho * kv * n0 * Gt ** 4 * (1 - np.exp(-x) * (1 + x + x ** 2 / 2 + x ** 3 / 6))
+
+        M_T = 6 * rho * kv * n0 * Gt ** 4
+        w = (cum_mass(edges[1:]) - cum_mass(edges[:-1])) / M_T
+        L, n = sieve_population_density(w, edges[1:], edges[:-1], M_T, rho, kv)
+        Gt_fit, n0_fit = fit_msmpr(L, n)
+        assert float(Gt_fit) == pytest.approx(Gt, rel=0.05)
+        assert float(n0_fit) == pytest.approx(n0, rel=0.2)
+
+
+# =============================================================================
+# Published worked examples (values recalled; see the docstring of the class)
+# =============================================================================
+
+
+class TestPublishedExamples:
+    """Geankoplis, Transport Processes and Separation Process Principles, 4e/5e, Example 12.11-1.
+
+    10 000 kg of a 30 wt% Na2CO3 solution is cooled to 293 K; the salt crystallizes as
+    Na2CO3.10H2O and the solubility is 21.5 kg Na2CO3 per 100 kg water. Printed answers
+    (recalled, not checked against the book): (a) no evaporation, 6370 kg of crystals;
+    (b) 3 % of the solution (300 kg water) evaporated, 6630 kg. Geankoplis rounds the
+    molar masses to 106.0 and 286.2, which accounts for the last digit.
+    """
+
+    sol = Solubility.polynomial([0.215], hydrate_waters=10.0, solute_MW=105.99, solvent_MW=18.015)
+
+    @pytest.mark.parametrize("E, printed", [(0.0, 6370.0), (300.0, 6630.0)])
+    def test_geankoplis_12_11_1(self, E, printed):
+        C = float(crystal_yield(3000.0, 7000.0, 293.15, self.sol, water_evaporated=E))
+        assert C == pytest.approx(printed, rel=3e-3)

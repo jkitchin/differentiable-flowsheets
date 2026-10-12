@@ -8,6 +8,13 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Unit-ops book Ch 20 (crystallization) gaps.** `Crystallizer(mode="adiabatic")`, a vacuum
+  crystallizer: the evaporation is solved from the heat balance (feed sensible heat plus heat of
+  crystallization, `duty=` for any jacket heat) in closed form, differentiable.
+  `sieve_population_density` converts a screen analysis into the MSMPR population density for
+  `fit_msmpr`. `TestPublishedExamples` reproduces Geankoplis Example 12.11-1 (Na2CO3.10H2O
+  yield, with and without evaporation).
+
 - **Unit-ops book Parts I-II gaps (issue 442).**
   *Fixes.* `phase_identification_parameter` uses closed-form derivatives of the cubic (cheaper to compile inside
   every TP flash); `eos_pressure_TV` gives the cubic's P(T, v). `eos_bubble_*`/`eos_dew_*` fall back to continuation (from 0.75 T or P/4) when no Wilson start converges
@@ -908,6 +915,10 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Fixed
+
+- **`Crystallizer` residence time from `volume`** now divides by the product slurry flow
+  `(m_F - E)/rho_L` (the MSMPR definition), not the feed flow; an evaporative crystallizer that
+  boils off half its feed water had half the true `tau`.
 
 - **Le Bas oxygen increment for ethers (book Ch. 14).** `LE_BAS_INCREMENTS["O_ether"]` was 9.1, which is the
   methyl-ester value; it is now 9.9 (methyl ethers), and the table gains `O_methyl_ester` (9.1), `O_methyl_ether`

@@ -6707,11 +6707,11 @@ precipitation version (a solubility-product-driven conversion, no size distribut
 the `Crystallizer` is the generic solubility-driven one.
 
 **No solubility data, kinetic constant or hydrate transition temperature is built in.**
-Every curve and constant in this section is synthetic and labelled illustrative; the
-published worked examples (Geankoplis Sec. 12.11, McCabe, Smith & Harriott Ch. 27,
-Wankat Ch. 17) were **not reproduced**, because their inputs and printed answers could not be
-recalled with confidence. The tests check the closed forms against independent
-oracles instead.
+Every curve and constant in this section is synthetic and labelled illustrative. The tests
+check the closed forms against independent oracles, and the yield balance against
+Geankoplis Example 12.11-1 (Na2CO3.10H2O from a cooled 30 wt% solution: 6360 and 6635 kg vs
+the printed 6370 and 6630 kg; the printed values are recalled, see
+`TestPublishedExamples`).
 
 (op-crystallizer)=
 ### Crystallizer
@@ -6795,7 +6795,7 @@ print(float(crystal_yield(0.1, 1.0, 278.15, sol)), float(jax.grad(crystal_yield,
 class CrystallizerParams:
     solute: str                         # stream key F_<solute>
     solute_MW: float                    # g/mol, anhydrous
-    mode: str = "cooling"               # "cooling" | "evaporative" | "cooling_evaporative"
+    mode: str = "cooling"               # "cooling" | "evaporative" | "cooling_evaporative" | "adiabatic"
     T: float = None                     # K (evaporative: defaults to the feed T)
     water_evaporated: float = None      # kg/s ...
     evaporation_fraction: float = None  # ... or a fraction of the feed solvent
@@ -6816,13 +6816,14 @@ class CrystallizerParams:
     transition_width: float = 0.5          # K, smooth blend
     kinetics: list = None                  # [k_g, g, k_b, b, j] -> MSMPR kinetic mode
     residence_time: float = None           # s
-    volume: float = None                   # m^3 (tau = volume / feed liquor flow)
+    volume: float = None                   # m^3 (tau = volume / product slurry flow, (m_F - E)/rho_L)
     crystal_density: float = 2000.0        # kg/m^3
     shape_factor: float = 0.5236           # k_v, pi/6
     liquor_density: float = 1000.0
     cp_solution: float = 4186.0            # J/kg/K
     heat_of_crystallization: float = 0.0   # J per kg of crystal, released
     soft: float = 1e-6
+    duty: float = 0.0                      # W, heat added in "adiabatic" mode
 ```
 
 #### Equations and Assumptions
@@ -6833,8 +6834,13 @@ class CrystallizerParams:
   with constant $c_p$ and a user-supplied heat of crystallization (default 0).
 - Constant liquor density converts the liquor flow to a volume flow; no fines destruction,
   classification, agglomeration, breakage, size-dependent growth or polymorph kinetics.
-- Not implemented: an adiabatic (vacuum flash) mode that solves the evaporation from the
-  heat balance; the evaporation is a specification.
+- `mode="adiabatic"` is a vacuum crystallizer: the feed flashes to `T` (set by the
+  vapor-space pressure) and the solvent evaporated is solved from the same heat balance with
+  $Q$ = `duty` (0 by default): $E = [Q - m_F c_p (T - T_F) + \Delta H_c (S_0 - c W_0)/d]/
+  [h_{fg} - \Delta H_c c/d]$, $d = f_s - c f_w$, closed form because $C$ is linear in $E$.
+  With $\Delta H_c = 0$ it is the textbook flash $E = m_F c_p (T_F - T)/h_{fg}$.
+- In kinetic mode `volume` sets $\tau = V/Q_P$ with $Q_P = (m_F - E)/\rho_L$, the product
+  slurry flow: the evaporated solvent does not pass through the magma.
 
 ```python
 import jax
@@ -6890,8 +6896,8 @@ print("crystals / fresh solute =", float(out["crystals"]["F_Na2SO4"] / fresh["F_
 **Location**: `difflow/units/crystallizer.py`
 
 **Functions**: `msmpr_distribution`, `msmpr_moments`, `msmpr_dominant_size`,
-`msmpr_mass_median_size`, `msmpr_mass_cv`, `msmpr_from_magma`, `fit_msmpr`, `growth_rate`,
-`nucleation_rate`, `msmpr_steady_state`
+`msmpr_mass_median_size`, `msmpr_mass_cv`, `msmpr_from_magma`, `fit_msmpr`,
+`sieve_population_density`, `growth_rate`, `nucleation_rate`, `msmpr_steady_state`
 
 For a steady mixed-suspension, mixed-product-removal crystallizer with residence time
 $\tau$, size-independent growth rate $G$ and nuclei density $n_0$ (Randolph & Larson):
@@ -6905,7 +6911,10 @@ fraction of the gamma(4) law at one half; `msmpr_mass_median_size` computes it (
 the gamma(4) law), it is not typed in. The coefficient of variation of the mass
 distribution is $1/\sqrt{4} = 50\%$. `msmpr_from_magma(M_T, rho_c, k_v, G, tau)` gives
 $n_0$ from a measured magma density and `fit_msmpr(L, n)` is the "$\ln n$ vs. $L$" line
-(slope $-1/(G\tau)$, intercept $\ln n_0$).
+(slope $-1/(G\tau)$, intercept $\ln n_0$). A measured product is usually a screen analysis:
+`sieve_population_density(w, L_upper, L_lower, M_T, rho_c, k_v)` turns the mass fraction $w_i$
+on each screen into $n_i = M_T w_i/(\rho_c k_v \bar L_i^3 \Delta L_i)$ at the mean size
+$\bar L_i$ of the cut, ready for `fit_msmpr` (McCabe, Smith & Harriott Ch. 27).
 
 **Kinetics.** With the absolute supersaturation $\Delta C = c - c_{sat}$ (kg solute per kg
 solvent), $G = k_g\,\Delta C^{g}$ (`growth_rate`) and $B_0 = k_b\,M_T^{\,j}\,\Delta C^{b}$
