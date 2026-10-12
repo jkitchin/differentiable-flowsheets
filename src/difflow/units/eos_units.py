@@ -344,10 +344,18 @@ def _warn_unconverged(unit: str, info: dict) -> None:
     except Exception:  # traced under jit/grad: no concrete flag to report
         return
     if not ok:
+        # Under jax.grad the flag is concrete but T and the residual carry
+        # tangents, so float() on them raises; report them only when concrete.
+        def fmt(x, spec):
+            try:
+                return format(float(x), spec)
+            except Exception:
+                return "(traced)"
+
         warnings.warn(
             f"{unit}: the (P, H)/(P, S) temperature solve did not converge "
-            f"(T = {float(info['T_out']):.2f} K, balance residual "
-            f"{float(info['residual']):.3g}). The target is probably outside "
+            f"(T = {fmt(info['T_out'], '.2f')} K, balance residual "
+            f"{fmt(info['residual'], '.3g')}). The target is probably outside "
             "T_bounds; widen them. The outlet is not a solution.",
             EOSUnitConvergenceWarning,
             stacklevel=3,
