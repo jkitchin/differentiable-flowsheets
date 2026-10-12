@@ -4,8 +4,9 @@ Demonstrates that with an NRTL liquid model the flash reproduces
 non-ideal VLE, including the ethanol-water azeotrope, which the ideal
 Raoult's-law path cannot.
 
-NRTL ethanol(1)-water(2) parameters (tau_ij = a_ij + b_ij/T, alpha = 0.3)
-are the widely used Aspen/DECHEMA set (Gmehling, J., Onken, U.,
+NRTL ethanol(1)-water(2) parameters (tau_ij = a_ij + b_ij/T, alpha = 0.3,
+in the ``NRTLParams`` orientation: a[0, 1] = a_12 = -0.8009) are the widely
+used Aspen/DECHEMA set (Gmehling, J., Onken, U.,
 Vapor-Liquid Equilibrium Data Collection, DECHEMA, 1977). Antoine
 coefficients are the NIST log10(P[bar]) form shifted by +5 to give Pa.
 """
@@ -37,8 +38,8 @@ def _thermo():
 def _nrtl():
     return NRTLParams(
         species=("ethanol", "water"),
-        a=jnp.array([[0.0, 3.4578], [-0.8009, 0.0]]),
-        b=jnp.array([[0.0, -586.0809], [246.18, 0.0]]),
+        a=jnp.array([[0.0, -0.8009], [3.4578, 0.0]]),
+        b=jnp.array([[0.0, 246.18], [-586.0809, 0.0]]),
         alpha=jnp.array([[0.0, 0.3], [0.3, 0.0]]),
     )
 
@@ -63,6 +64,29 @@ class TestNRTLRelativeVolatility:
         # Ideal relative volatility is constant and never crosses 1
         ideal_alpha = float(K_ideal[0] / K_ideal[1])
         assert ideal_alpha > 1.0
+
+
+class TestNRTLOrientation:
+    """``_nrtl()`` is in the ``NRTLParams`` orientation (issue #444): the
+    transposed matrices put the 5 mol% ethanol bubble point near 95 C and
+    the azeotrope at 76.7 C."""
+
+    @pytest.mark.parametrize("x1, T_meas_C, tol", [
+        (0.05, 90.2, 1.0),     # dilute ethanol (about 90.2 C measured)
+        (0.894, 78.15, 0.2),   # azeotrope at 1 atm
+    ])
+    def test_bubble_point(self, x1, T_meas_C, tol):
+        from scipy.optimize import brentq
+
+        th, nrtl = _thermo(), _nrtl()
+        x = jnp.array([x1, 1 - x1])
+
+        def resid(T):
+            psat = jnp.array([th.Psat("ethanol", T), th.Psat("water", T)])
+            return float(jnp.sum(x * nrtl_activity_coefficients(x, T, nrtl) * psat)) - 101325.0
+
+        T_b = brentq(resid, 330.0, 380.0)
+        assert T_b - 273.15 == pytest.approx(T_meas_C, abs=tol)
 
 
 @pytest.mark.slow

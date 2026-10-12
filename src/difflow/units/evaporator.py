@@ -1055,6 +1055,8 @@ class MVRParams(ParamsMixin):
             work (about 1.3).
         steam_P: Pressure of make-up saturated steam (Pa), used only to
             report the steam an MVR-less effect would need.
+        steam_T: Saturation temperature of the make-up steam (K), instead of
+            ``steam_P`` (as on the other evaporator params).
         bpr_model: Boiling-point-rise model.
         vant_hoff_i: Particles per solute formula unit.
         bpr_coeffs: Polynomial BPR coefficients.
@@ -1077,6 +1079,7 @@ class MVRParams(ParamsMixin):
     eta: float = 0.75
     gamma: float = 1.3
     steam_P: float | None = None
+    steam_T: float | None = None
     bpr_model: str = "ideal"
     vant_hoff_i: float = 1.0
     bpr_coeffs: list[float] | None = None
@@ -1153,9 +1156,9 @@ class MechanicalVaporRecompression:
                 ``W_compressor`` (W), ``compression_ratio``, ``P_discharge``
                 (Pa), ``T_condensing`` (K), ``Q_makeup`` (W, signed: negative
                 means the compressed vapor over-supplies the duty),
-                ``steam_makeup`` (kg/s, at ``steam_P`` when given),
-                ``steam_without_mvr`` and ``steam_saved`` (kg/s, if
-                ``steam_P`` is given), ``steam_economy`` (V / equivalent
+                ``steam_makeup`` (kg/s, at ``steam_P`` / ``steam_T`` when
+                given), ``steam_without_mvr`` and ``steam_saved`` (kg/s, if
+                ``steam_P`` or ``steam_T`` is given), ``steam_economy`` (V / equivalent
                 live steam) and ``specific_work`` (J per kg evaporated).
         """
         sol, p = self._sol, self.params
@@ -1190,8 +1193,8 @@ class MechanicalVaporRecompression:
             "compression_ratio": ratio, "W_compressor": V * w,
             "specific_work": w, "Q_compressor_heat": Q_comp, "Q_makeup": Q_makeup,
         }
-        if p.steam_P is not None:
-            Ts = water_saturation_temperature(p.steam_P)
+        if p.steam_P is not None or p.steam_T is not None:
+            Ts = _steam_temperature(p, None)
             lam_s = water_latent_heat(Ts)
             info["steam_without_mvr"] = Q / lam_s
             info["steam_makeup"] = Q_makeup / lam_s

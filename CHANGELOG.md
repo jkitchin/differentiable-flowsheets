@@ -8,6 +8,16 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Unit-ops book Ch. 10-13 gaps (#444).** (1) `DistillationColumn.solve_specs(feed, specs)` solves for `R` and
+  `D` from any two of `x_D`/`x_B` purities, `recovery_D`/`recovery_B`, `R`, `D`, `B` (damped Newton, implicit
+  derivative; an infeasible pair ends with `spec_converged` False). (2) `underwood_class2`: Underwood's general
+  method with distributing non-keys (one root per volatility gap, linear solve for `V_min` and their distillate
+  flows). (3) `staged.mccabe_thiele(..., lines=[...], switch_x=[...] | switch_stages=[...])` steps any number of
+  operating lines, for side draws, side feeds and several feeds; returns `switch_stage` and `N_sections`.
+  (4) `EVAPORATOR_COSTS` / `evaporator_cost` (Turton Table A.1 evaporator rows). (5) `MVRParams.steam_T`.
+  (6) The CMO path of `DistillationColumn` reports `L_profile`/`V_profile`. Tests in
+  `tests/test_distillation.py`, `test_staged.py`, `test_economics.py`, `test_evaporator.py`.
+
 - **Dryer: rotary sizing and textbook checks (unit-ops book Ch 19).** `rotary_dryer_ua` (MSH Ch. 24
   `Ua = 237 G^0.67 / D`, SI, recalled from memory) and `heat_transfer_units` (`N_t`); a continuous (countercurrent or
   cocurrent) `Dryer` with `diameter=` sizes the shell by the three-zone method (preheat, constant rate at the wet bulb,
@@ -926,6 +936,18 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Fixed
+
+- **Flash derivatives and near-boundary values (#444).** (1) `flash_TP_eos` second derivatives were wrong (the
+  Hessian of a two-flash PR train had the wrong sign): derivatives came from unrolling 50 damped substitution steps.
+  The substitution now runs under `stop_gradient`, Newton finishes the split, and two chord steps on `[ln K, V]`
+  carry derivatives exact through second order; `_solve_rachford_rice` takes two Newton steps. (2) Near the
+  critical region (0.8 CH4 / 0.2 C3H8, 250 K) the split stopped at 0.993 of the bubble pressure and V was off by
+  60 %; a converged split that lowers the Gibbs energy now counts as two-phase. (3) `Flash` (Raoult / gamma-phi)
+  returns the exact Rachford-Rice root: the `PHASE_TRANSITION_WIDTH` sigmoid biased V by 10-30 % within a few per
+  cent of the bubble and dew points and did nothing outside them. (4) The ideal `PHFlash` took every inlet's
+  enthalpy as liquid; it now flashes the inlet at its own (T, P) (`inlet_phase=` to name it). (5) The ethanol-water
+  NRTL set in `tests/test_flash_azeotrope.py` and `tests/test_bubble_dew.py` was transposed relative to
+  `NRTLParams`; a bubble-point test now pins the orientation.
 
 - **`cool_dehumidify` no longer delivers supersaturated air (book Ch. 18).** With a cold coil and a small bypass
   factor the straight line to the apparatus dew point crosses the saturation curve: 30 C / 60 % air on a 2 C coil

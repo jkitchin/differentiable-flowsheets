@@ -210,6 +210,45 @@ class TestFlashCalculation:
         assert float(info["K"]["Light"]) > float(info["K"]["Heavy"])
 
 
+class TestFlashNearPhaseBoundaries:
+    """V near the bubble and dew points is the exact Rachford-Rice root
+    (issue #444): the old sigmoid blend biased it by 10-30%."""
+
+    @pytest.mark.parametrize("side", ["bubble", "dew"])
+    def test_matches_exact_rachford_rice(self, binary_thermo, flash_params, side):
+        from scipy.optimize import brentq
+
+        flash = Flash(flash_params, binary_thermo)
+        z = jnp.array([0.5, 0.5])
+        P = 80000.0
+
+        def K_at(T):
+            return jnp.asarray(binary_thermo.K_values_array(T, P))
+
+        if side == "bubble":
+            T_b = brentq(lambda T: float(jnp.sum(z * K_at(T))) - 1.0, 250.0, 450.0)
+            T = T_b + 1.0
+        else:
+            T_b = brentq(lambda T: float(jnp.sum(z / K_at(T))) - 1.0, 250.0, 450.0)
+            T = T_b - 1.0
+        K = K_at(T)
+        V_exact = brentq(
+            lambda V: float(jnp.sum(z * (K - 1) / (1 + V * (K - 1)))), 0.0, 1.0,
+            xtol=1e-14)
+        assert 0.0 < V_exact < 1.0
+
+        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=T, P=P)
+        _, _, info = flash(feed)
+        npt.assert_allclose(float(info["V_frac"]), V_exact, atol=1e-9)
+
+    def test_single_phase_exact(self, binary_thermo, flash_params):
+        flash = Flash(flash_params, binary_thermo)
+        for T, V in [(250.0, 0.0), (450.0, 1.0)]:
+            feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=T, P=80000.0)
+            _, _, info = flash(feed)
+            assert float(info["V_frac"]) == V
+
+
 class TestFlashGradient:
     """Tests for Flash gradient compatibility."""
 
@@ -860,6 +899,39 @@ class TestEOSFlash:
 # =============================================================================
 # PH (isenthalpic) flash tests
 # =============================================================================
+
+class TestPHFlashInletPhase:
+    """The ideal PH flash takes the inlet's own phase state (issue #444); it
+    used to take every inlet as liquid."""
+
+    def test_vapor_feed_let_down_keeps_T(self, binary_thermo, flash_params):
+        # Ideal-gas enthalpy does not depend on P: a superheated vapour let
+        # down through a valve leaves at its own T, still all vapour.
+        ph = PHFlash(flash_params, binary_thermo)
+        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=450.0, P=80000.0)
+        _, _, info = ph(feed, P=40000.0)
+        npt.assert_allclose(float(info["T_flash"]), 450.0, atol=1e-4)
+        assert float(info["V_frac"]) == 1.0
+
+    def test_two_phase_feed_at_own_P(self, binary_thermo, flash_params):
+        tp = Flash(flash_params, binary_thermo)
+        ph = PHFlash(flash_params, binary_thermo)
+        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=350.0, P=30000.0)
+        _, _, info_tp = tp(feed)
+        assert 0.05 < float(info_tp["V_frac"]) < 0.95
+        _, _, info = ph(feed)
+        npt.assert_allclose(float(info["T_flash"]), 350.0, atol=1e-4)
+        npt.assert_allclose(float(info["V_frac"]), float(info_tp["V_frac"]), atol=1e-6)
+
+    def test_named_phase(self, binary_thermo, flash_params):
+        ph = PHFlash(flash_params, binary_thermo)
+        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=300.0, P=200000.0)
+        _, _, auto = ph(feed, P=30000.0)
+        _, _, liq = ph(feed, P=30000.0, inlet_phase="liquid")
+        npt.assert_allclose(float(auto["T_flash"]), float(liq["T_flash"]), atol=1e-6)
+        with pytest.raises(ValueError, match="inlet_phase"):
+            ph(feed, inlet_phase="gas")
+
 
 class TestPHFlash:
     """Tests for PH (isenthalpic) flash calculations."""

@@ -23,7 +23,7 @@ from jax import Array
 from difflow.streams import Stream, get_flows, get_species, make_stream
 from difflow.thermo import IdealThermo
 from difflow.params_mixin import ParamsMixin
-from difflow.constants import K_MIN, K_MAX, PHASE_TRANSITION_WIDTH
+from difflow.constants import K_MIN, K_MAX
 from difflow.numerics import safe_divide
 from difflow.eos import PengRobinson, SRK, flash_TP_eos
 import optimistix as optx
@@ -317,37 +317,20 @@ class Flash:
         sol = optx.root_find(rr_func, solver, V0, args=args, max_steps=50, throw=False)
         V_two_phase = jnp.clip(sol.value, 0.0, 1.0)
 
-        # Handle edge cases with smooth transitions using sigmoid blending.
-        # The original jnp.where approach creates discontinuous derivatives at
-        # phase boundaries (bubble_check = 1, dew_check = 1), which breaks
-        # gradient-based optimization. Sigmoid blending provides smooth gradients
-        # while maintaining correct limiting behavior:
-        # - bubble_check < 1: subcooled liquid (V → 0)
-        # - dew_check < 1: superheated vapor (V → 1)
-        # - otherwise: two-phase region (V = V_two_phase)
-        #
-        # The transition width (PHASE_TRANSITION_WIDTH) controls the sharpness:
-        # smaller values → sharper transitions (closer to discontinuous)
-        # larger values → smoother gradients but less accurate phase detection
-
-        # Sigmoid functions for smooth blending
-        # subcooled_weight → 1 when bubble_check < 1, → 0 when bubble_check > 1
-        subcooled_weight = jax.nn.sigmoid(
-            (1.0 - bubble_check) / PHASE_TRANSITION_WIDTH
+        # Single-phase feeds. On [0, 1] the clipped root is already continuous
+        # in T and P: at the bubble point g(0) = bubble_check - 1 = 0 and at
+        # the dew point g(1) = 1 - dew_check = 0, so V meets 0 and 1 there
+        # with a kink (the physical one) and the clip's derivative is zero
+        # outside. The explicit selects only guard against a Newton polish
+        # that left the bracket. An earlier sigmoid blend of width
+        # PHASE_TRANSITION_WIDTH did nothing outside the two-phase region but
+        # biased V inside it by 10-30% within a few percent of either
+        # boundary (benzene/toluene 50/50 at 1 atm, 366.9 K: 0.230 against the
+        # exact 0.2499; issue #444), so V is now the exact root.
+        V_frac = jnp.where(
+            bubble_check <= 1.0, 0.0,
+            jnp.where(dew_check <= 1.0, 1.0, V_two_phase),
         )
-        # superheated_weight → 1 when dew_check < 1, → 0 when dew_check > 1
-        superheated_weight = jax.nn.sigmoid(
-            (1.0 - dew_check) / PHASE_TRANSITION_WIDTH
-        )
-
-        # Blend: subcooled pulls toward 0, superheated pulls toward 1
-        # In two-phase region, both weights are ~0, so V_frac ≈ V_two_phase
-        V_frac = (
-            subcooled_weight * 0.0
-            + superheated_weight * (1.0 - subcooled_weight) * 1.0
-            + (1.0 - subcooled_weight) * (1.0 - superheated_weight) * V_two_phase
-        )
-
         return V_frac
 
     # =========================================================================
@@ -1372,7 +1355,8 @@ class PHFlash:
     Two thermodynamic paths:
 
     - :class:`~difflow.thermo.IdealThermo`: ideal-K (Raoult) inner flash, the
-      inlet enthalpy taken as liquid at the inlet T, and a bracketed bisection
+      inlet enthalpy from the inlet's own split at its (T, P) (or the phase
+      named by ``inlet_phase``), and a bracketed bisection
       on ``T_bounds`` for the outlet T. A pure component that lands inside its
       two-phase region comes back at its boiling point with the lever-rule
       vapour fraction (the old Newton on T could not land there: it returned
@@ -1423,6 +1407,7 @@ class PHFlash:
         P: Array | float | None = None,
         T_guess: float = 300.0,
         T_bounds: tuple[float, float] = (100.0, 1000.0),
+        inlet_phase: str = "auto",
     ) -> tuple[Stream, Stream, dict[str, Array]]:
         """Perform PH (isenthalpic) flash calculation.
 
@@ -1432,12 +1417,20 @@ class PHFlash:
             T_guess: Ignored (kept for backward compatibility); both paths
                 bracket the temperature with ``T_bounds``.
             T_bounds: (T_min, T_max) bracket (K) of the temperature search.
+            inlet_phase: Phase state of the inlet for its enthalpy (ideal
+                path). ``"auto"`` (default) flashes the inlet at its own
+                (T, P); ``"liquid"`` or ``"vapor"`` takes the whole feed in
+                that phase (needed for a pure feed exactly at its boiling
+                point). The cubic-EOS path always flashes the inlet.
 
         Returns:
             liquid: Liquid outlet stream
             vapor: Vapor outlet stream
             info: Dictionary with additional information including T_flash
         """
+        if inlet_phase not in ("auto", "liquid", "vapor"):
+            raise ValueError(
+                f"inlet_phase must be 'auto', 'liquid' or 'vapor', got {inlet_phase!r}")
         p = self.params
 
         # Use inlet P if not specified
@@ -1447,17 +1440,16 @@ class PHFlash:
         if isinstance(self.thermo, CubicThermo):
             return self._eos_ph_flash(inlet, P_flash, T_bounds)
 
-        return self._ideal_ph_flash(inlet, P_flash, T_bounds)
+        return self._ideal_ph_flash(inlet, P_flash, T_bounds, inlet_phase)
 
     def _exact_split(self, z, T, P):
         """Unsmoothed Raoult TP split ``(V, x, y)`` at (T, P).
 
         Single phase where ``sum z K <= 1`` (liquid) or ``sum z / K <= 1``
         (vapour), otherwise the Rachford-Rice root found by bisection on
-        [0, 1] with its implicit derivative attached. Unlike
-        :meth:`Flash._solve_flash` there is no sigmoid blend at the phase
-        boundaries, so a pure component's split jumps exactly at its boiling
-        point, which the (P, H) bisection needs to see.
+        [0, 1] with its implicit derivative attached. A pure component's
+        split jumps exactly at its boiling point, which the (P, H) bisection
+        needs to see.
         """
         sg = jax.lax.stop_gradient
         K = jnp.clip(jnp.array([self.thermo.K_value(s, T, P) for s in self.params.species_order]),
@@ -1498,7 +1490,7 @@ class PHFlash:
             {s: F_tot * V * y[i] for i, s in enumerate(order)}, T, phase="vapor")
         return H_L + H_V, (V, x, y)
 
-    def _ideal_ph_flash(self, inlet, P_flash, T_bounds):
+    def _ideal_ph_flash(self, inlet, P_flash, T_bounds, inlet_phase="auto"):
         """Ideal-K (P, H) flash: bracketed bisection plus the lever rule.
 
         At fixed P the outlet enthalpy of the Raoult split rises monotonically
@@ -1511,9 +1503,13 @@ class PHFlash:
         attached by the implicit function theorem on the energy balance, or on
         the bubble condition ``ln sum z_i K_i = 0`` at a jump (so ``dT/dP``
         inside a pure fluid's two-phase region is the Clausius-Clapeyron slope).
-        The split is the exact Rachford-Rice one, without the sigmoid blend
-        :class:`Flash` applies within a few per cent of the bubble and dew
-        points.
+        The split is the exact Rachford-Rice one.
+
+        The inlet enthalpy is that of the inlet's own exact split at its
+        (T, P) with ``inlet_phase="auto"`` (a subcooled liquid, a two-phase
+        feed and a superheated vapour all come out right), or of the whole
+        feed in the named phase with ``"liquid"`` / ``"vapor"``. A pure feed
+        exactly at its boiling point is ambiguous; name its phase.
         """
         p = self.params
         order = p.species_order
@@ -1521,12 +1517,16 @@ class PHFlash:
         inlet_flows = get_flows(inlet)
         flows = {s: inlet_flows[s] for s in order}
         T_in = inlet["T"]
-        # Inlet enthalpy: the feed is taken as liquid at its own T (a
-        # pressurized liquid let down through a valve, the usual PH flash).
-        H_inlet = self.thermo.stream_enthalpy(flows, T_in, phase="liquid")
         F_vec = jnp.array([flows[s] for s in order])
         F_tot = jnp.sum(F_vec)
         z = F_vec / jnp.maximum(F_tot, 1e-30)
+        # Inlet enthalpy from the inlet's phase state at its own (T, P). It
+        # used to be the liquid's whatever the inlet was, so a vapour feed
+        # entered the balance short by its latent heat (issue #444).
+        if inlet_phase == "auto":
+            H_inlet = self._split_enthalpy(F_tot, z, T_in, inlet["P"])[0]
+        else:
+            H_inlet = self.thermo.stream_enthalpy(flows, T_in, phase=inlet_phase)
 
         F_c, z_c = sg(F_tot), sg(z)
         P_c, H_c = sg(jnp.asarray(P_flash, dtype=float)), sg(H_inlet)

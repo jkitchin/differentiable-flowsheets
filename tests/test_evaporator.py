@@ -615,6 +615,15 @@ class TestMVR:
         assert float(info["P_discharge"]) == pytest.approx(200e3, rel=1e-6)
         assert float(info["specific_work"]) / 1e3 == pytest.approx(126.2, rel=0.01)
 
+    def test_steam_T_matches_steam_P(self):
+        """``steam_T`` is accepted as on the other evaporator params (#444)."""
+        Ts = float(water_saturation_temperature(300e3))
+        by_P = self.make()(naoh_feed())[2]
+        by_T = self.make(steam_P=None, steam_T=Ts)(naoh_feed())[2]
+        for k in ("steam_without_mvr", "steam_makeup", "steam_saved"):
+            assert float(by_T[k]) == pytest.approx(float(by_P[k]), rel=1e-9)
+        assert "steam_saved" not in self.make(steam_P=None)(naoh_feed())[2]
+
     def test_work_grows_with_drive_and_falls_with_efficiency(self):
         feed = naoh_feed()
         w = lambda **kw: float(self.make(**kw)(feed)[2]["W_compressor"])

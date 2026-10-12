@@ -684,6 +684,25 @@ class TestDistillationColumn:
         assert float(info["Q_condenser"]) < 0.0
 
 
+class TestCMOProfiles:
+    """The CMO path reports ``L_profile``/``V_profile`` too (issue #444)."""
+
+    def test_cmo_profiles(self, benzene_toluene_thermo):
+        n, fs, R, F, D, q = 10, 4, 2.0, 100.0, 50.0, 1.0
+        column = DistillationColumn(DistillationColumnParams(
+            species_order=["benzene", "toluene"], n_stages=n, feed_stage=fs,
+            P=101325.0), benzene_toluene_thermo)
+        feed = make_stream({"benzene": 50.0, "toluene": 50.0}, T=370.0, P=101325.0)
+        _, _, info = column(feed, R=R, D_spec=D, use_mesh=False)
+        L, V = np.asarray(info["L_profile"]), np.asarray(info["V_profile"])
+        assert L.shape == V.shape == (n,)
+        np.testing.assert_allclose(L[-1], R * D)              # top: reflux
+        np.testing.assert_allclose(V[-1], (R + 1) * D)
+        np.testing.assert_allclose(L[0], F - D)               # bottoms
+        np.testing.assert_allclose(L[1:fs], R * D + q * F)    # stripping
+        np.testing.assert_allclose(float(info["L_rect"]), R * D)
+
+
 class TestFeedStageConvention:
     """The feed stage belongs to one section on each of its two sides.
 
@@ -2178,3 +2197,111 @@ class TestShortcutColumnMulticomponentFenske:
             float(info["N"]))
         # theta lies between the keys
         assert 1.0 < float(info["theta"]) < float(a)
+
+
+class TestUnderwoodClass2:
+    """Underwood's general method with distributing non-keys (issue #444)."""
+
+    alpha = jnp.array([11.14, 4.93, 2.14, 1.0])
+    f = jnp.array([40.0, 25.0, 20.0, 15.0])
+
+    def test_class1_limit_matches_single_root(self):
+        from difflow.units.distillation import underwood_class2, underwood_minimum_reflux
+        R2, d, th = underwood_class2(self.alpha, self.f, 22.5, 2.0, 1, 2)
+        assert th.shape == (1,)
+        np.testing.assert_allclose(np.asarray(d), [40.0, 22.5, 2.0, 0.0])
+        R1, theta = underwood_minimum_reflux(self.alpha, self.f / 100.0, d / jnp.sum(d),
+                                             1.0, 2.14)
+        assert float(R2) == pytest.approx(float(R1), rel=1e-10)
+        assert float(th[0]) == pytest.approx(float(theta), rel=1e-10)
+
+    def test_intermediate_distributes(self):
+        from difflow.units.distillation import underwood_class2
+        alpha = jnp.array([4.0, 2.0, 1.5, 1.0])
+        f = jnp.array([30.0, 30.0, 10.0, 30.0])
+        R, d, th = underwood_class2(alpha, f, 29.0, 1.0, light_key=1, heavy_key=3, q=1.0)
+        assert th.shape == (2,)
+        assert 1.0 < float(th[0]) < 1.5 < float(th[1]) < 2.0
+        assert 0.0 < float(d[2]) < 10.0           # the intermediate splits
+        assert float(d[0]) == 30.0 and float(d[3]) == 1.0
+        # Underwood's first and second equations hold at every root
+        V = (float(R) + 1.0) * float(jnp.sum(d))
+        for t in np.asarray(th):
+            assert float(jnp.sum(alpha * f / (alpha - t))) == pytest.approx(0.0, abs=1e-8)
+            assert float(jnp.sum(alpha * d / (alpha - t))) == pytest.approx(V, rel=1e-10)
+        g = jax.grad(lambda q: underwood_class2(alpha, f, 29.0, 1.0, 1, 3, q=q)[0])(1.0)
+        assert np.isfinite(float(g)) and float(g) < 0.0   # vapour feed needs more reflux
+
+    def test_stray_species_rejected(self):
+        from difflow.units.distillation import underwood_class2
+        with pytest.raises(ValueError, match="distributing"):
+            underwood_class2(self.alpha, self.f, 22.5, 2.0, 0, 2, distributing=[])
+
+
+@pytest.fixture(scope="module")
+def db_thermo():
+    """Benzene-toluene from the species database."""
+    from difflow.database import get_species_data
+    return IdealThermo({s: get_species_data(s) for s in ("benzene", "toluene")})
+
+
+class TestSolveSpecs:
+    """``DistillationColumn.solve_specs``: two specifications in place of R
+    and D (issue #444)."""
+
+    def _column(self, thermo):
+        return DistillationColumn(DistillationColumnParams(
+            species_order=["benzene", "toluene"], n_stages=15, feed_stage=7,
+            P=101325.0), thermo)
+
+    def _feed(self):
+        return make_stream({"benzene": 50.0, "toluene": 50.0}, T=370.0, P=101325.0)
+
+    def test_purities(self, db_thermo):
+        col = self._column(db_thermo)
+        d, b, info = col.solve_specs(self._feed(), [("x_D", "benzene", 0.95),
+                                                    ("x_B", "toluene", 0.95)],
+                                     use_mesh=False)
+        assert bool(info["spec_converged"])
+        fd, fb = get_flows(d), get_flows(b)
+        assert float(fd["benzene"] / info["D"]) == pytest.approx(0.95, abs=1e-8)
+        assert float(fb["toluene"] / info["B"]) == pytest.approx(0.95, abs=1e-8)
+        # the same column run forward at the solved (R, D) gives the same answer
+        d2, _, _ = col(self._feed(), info["R"], D_spec=info["D"], use_mesh=False)
+        assert float(get_flows(d2)["benzene"]) == pytest.approx(float(fd["benzene"]), rel=1e-10)
+
+    def test_recovery_and_flow_specs(self, db_thermo):
+        col = self._column(db_thermo)
+        d, _, info = col.solve_specs(self._feed(), [("recovery_D", "benzene", 0.95),
+                                                    ("B", 52.0)], use_mesh=False)
+        assert bool(info["spec_converged"])
+        assert float(info["B"]) == pytest.approx(52.0, rel=1e-10)
+        assert float(get_flows(d)["benzene"]) / 50.0 == pytest.approx(0.95, abs=1e-8)
+
+    def test_infeasible_spec_reports_unconverged(self, db_thermo):
+        # 97 % of 50 mol/s benzene is 48.5 mol/s, more than D = 48 can hold
+        col = self._column(db_thermo)
+        _, _, info = col.solve_specs(self._feed(), [("recovery_D", "benzene", 0.97),
+                                                    ("B", 52.0)], use_mesh=False)
+        assert not bool(info["spec_converged"])
+
+    @pytest.mark.slow
+    def test_gradient_of_reflux_wrt_purity(self, db_thermo):
+        col = self._column(db_thermo)
+
+        def R_of(xd):
+            return col.solve_specs(self._feed(), [("x_D", "benzene", xd), ("D", 50.0)],
+                                   use_mesh=False)[2]["R"]
+
+        g = float(jax.grad(R_of)(0.95))
+        fd = (float(R_of(0.951)) - float(R_of(0.949))) / 0.002
+        assert g > 0.0 and g == pytest.approx(fd, rel=1e-3)
+
+    def test_bad_specs(self, db_thermo):
+        col = self._column(db_thermo)
+        with pytest.raises(ValueError, match="exactly two"):
+            col.solve_specs(self._feed(), [("R", 2.0)])
+        with pytest.raises(ValueError, match="unknown specification"):
+            col.solve_specs(self._feed(), [("R", 2.0), ("purity", "benzene", 0.9)])
+        with pytest.raises(ValueError, match="species"):
+            col.solve_specs(self._feed(), [("R", 2.0), ("x_D", "xylene", 0.9)])

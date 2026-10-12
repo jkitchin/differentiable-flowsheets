@@ -1149,6 +1149,20 @@ N = gilliland_stages(1.5 * R_min, R_min, N_min, method="molokanov")
 N_R, N_S = kirkbride_feed_stage(11.0, z[1], z[2], x_B[1], x_D[2], 35.52, 64.48)  # 5.96, 5.04
 ```
 
+`underwood_minimum_reflux` is the one-root (class 1) form. When non-keys
+distribute at minimum reflux, as a species boiling between the keys always
+does, use `underwood_class2`. It finds one root per volatility gap spanned by the keys and
+the distributing species, and solves Underwood's second equation for
+`V_min` and their distillate flows:
+
+```python
+from difflow import underwood_class2
+R_min, d, thetas = underwood_class2(jnp.array([4.0, 2.0, 1.5, 1.0]),   # alpha
+                                    jnp.array([30.0, 30.0, 10.0, 30.0]),  # feed flows
+                                    d_LK=29.0, d_HK=1.0, light_key=1, heavy_key=3)
+# d[2] = 4.31 of 10: the intermediate splits; R_min = 1.00
+```
+
 `gilliland_stages` defaults to Eduljee's fit; `method="molokanov"` is the fit
 `ShortcutColumn` uses. `fenske_stages` (above) is the pseudo-binary form, right
 only for a binary.
@@ -1335,6 +1349,22 @@ parameters — give exactly one of `D_spec` or `B_spec`:
 <!-- doc-test: skip: call fragment; the column is built in the examples below -->
 ```python
 distillate, bottoms, info = column(feed, R=2.0, B_spec=40.0)
+```
+
+To design to product specifications instead, `column.solve_specs(feed,
+specs)` solves for `R` and `D` from any two of `("x_D", species, value)`,
+`("x_B", species, value)`, `("recovery_D", species, value)`,
+`("recovery_B", species, value)`, `("R", value)`, `("D", value)` and
+`("B", value)`. It runs a damped Newton iteration and attaches the
+implicit-function derivative, so `jax.grad` of, say, `info["R"]` with respect to
+a purity specification is the design sensitivity. `info["spec_converged"]`
+is False for an infeasible pair:
+
+<!-- doc-test: skip: call fragment; the column is built in the examples below -->
+```python
+distillate, bottoms, info = column.solve_specs(
+    feed, [("x_D", "benzene", 0.95), ("x_B", "toluene", 0.95)])
+R, D = info["R"], info["D"]
 ```
 
 #### Governing Equations (MESH)
@@ -1748,6 +1778,18 @@ fraction of a stage where the reboiler changes index. With open steam, build the
 is `q > 1`. Specifying a feed stage *earlier* than the optimal one
 extends the stripping line into a region where it lies above the curve; the
 stepper does not guard against that.
+
+**Side draws, side feeds and several feeds.** Pass the operating lines of
+every section, from the top down, as `lines=[...]` (with `top_line=None`
+and `bottom_line=None`). Give one switch per pair of adjacent lines:
+`switch_x` (the composition where the two lines meet, or a feed's q-line
+crossing; a sigmoid like the optimal feed) or `switch_stages` (stage
+numbers). Build each line from its section balance with
+`operating_line(L, V, x_out, y_in)` or as `(L, -V, c)` directly. For a liquid
+side draw `S` at `x_S` from the rectifying section, the line below it is
+`V y = (L - S) x + D x_D + S x_S`, and it meets the top line at `x_S`. The
+result adds `switch_stage` (fractional stage of each switch) and
+`N_sections` (stages on each line).
 
 **Pinches.** `minimum_reflux` takes the largest chord slope
 `(x_D - y*(x))/(x_D - x)` from `(x_D, x_D)` to the curve over

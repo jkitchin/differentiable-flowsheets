@@ -2367,8 +2367,11 @@ class DistillationColumn(ValueKeyed):
                 - 'y_profile': Vapor composition profiles
                 - 'T_condenser': Condenser temperature (K), = distillate T
                 - 'T_reboiler': Reboiler temperature (K), = bottoms T
-                - 'L_rect': Rectifying liquid flow rate (CMO) or 'L_profile'
-                - 'V_rect': Rectifying vapor flow rate (CMO) or 'V_profile'
+                - 'L_profile': (n,) liquid flows leaving each stage (mol/s);
+                  on the CMO path the constant-molar-overflow profile
+                - 'V_profile': (n,) vapor flows leaving each stage (mol/s)
+                - 'L_rect', 'V_rect': rectifying liquid and vapor flows (CMO
+                  path only)
                 - 'D': Distillate flow rate
                 - 'B': Bottoms flow rate
                 - 'balance_error': (n_species,) component balance residual
@@ -2392,9 +2395,6 @@ class DistillationColumn(ValueKeyed):
                   ``Q_condenser`` the duty on the partial basis (reflux latent
                   heat only). The distillate stream is that vapour at
                   ``T_condenser``.
-                When use_mesh=True, also includes:
-                - 'L_profile': (n,) liquid flows leaving each stage (mol/s)
-                - 'V_profile': (n,) vapor flows leaving each stage (mol/s)
         """
         # Jitted body, plain-function wrapper: see :meth:`ShortcutColumn._solve`.
         # By keyword, not positionally: `static_argnames` only marks an
@@ -2402,6 +2402,179 @@ class DistillationColumn(ValueKeyed):
         # `use_mesh` fails on the first `if` that reads it.
         return self._solve(feed, R, D_spec, B_spec, use_mesh=use_mesh,
                            mesh_iter=mesh_iter, cmo_iter=cmo_iter)
+
+    _SPEC_KINDS = ("x_D", "x_B", "recovery_D", "recovery_B", "R", "D", "B")
+
+    def solve_specs(
+        self,
+        feed: Stream,
+        specs: list[tuple],
+        R_guess: float = 2.0,
+        D_guess: float | None = None,
+        use_mesh: bool = True,
+        mesh_iter: int = 20,
+        cmo_iter: int = 30,
+        max_steps: int = 40,
+        rtol: float = 1e-8,
+    ) -> tuple[Stream, Stream, dict[str, Array]]:
+        """Solve the column for two specifications instead of ``R`` and ``D``.
+
+        The unknowns are the reflux ratio and the distillate rate, written as
+        ``R = exp(u_0)`` and ``D = F sigmoid(u_1)`` so that every Newton
+        iterate is a column that can run. A damped Newton iteration (Python
+        loop on concrete values) drives the two specification residuals to
+        zero, and the derivative is attached by the implicit function
+        theorem, so ``jax.grad`` of anything in the result with respect to
+        the feed or the specification values is the derivative of the
+        specified design (issue #444). Not traceable under ``jax.jit`` (the
+        loop reads concrete values); differentiate it, don't jit it.
+
+        Args:
+            feed: Feed stream.
+            specs: Exactly two specifications, each a tuple:
+                ``("x_D", species, value)`` / ``("x_B", species, value)``:
+                mole fraction of ``species`` in the distillate / bottoms;
+                ``("recovery_D", species, value)`` /
+                ``("recovery_B", species, value)``: fraction of the feed's
+                ``species`` recovered in the distillate / bottoms;
+                ``("R", value)``, ``("D", value)``, ``("B", value)`` (mol/s).
+            R_guess: Initial reflux ratio.
+            D_guess: Initial distillate rate (mol/s); default half the feed,
+                or the ``D``/``B`` specification when one is given.
+            use_mesh, mesh_iter, cmo_iter: As for :meth:`__call__`.
+            max_steps: Newton step limit.
+            rtol: Tolerance on the largest specification residual (mole
+                fractions and recoveries as they are; ``R`` on its log;
+                ``D``/``B`` divided by the feed rate).
+
+        Returns:
+            ``(distillate, bottoms, info)`` as :meth:`__call__`, with ``info``
+            also holding ``R``, ``spec_residuals`` (one per specification, in
+            its own units), ``spec_converged`` and ``spec_steps``. An
+            infeasible specification (e.g. a recovery the distillate rate
+            cannot hold) ends with ``spec_converged`` False.
+
+        Raises:
+            ValueError: Not exactly two specifications, an unknown kind, or
+                an unknown species.
+
+        Example:
+            >>> d, b, info = column.solve_specs(feed, [("x_D", "benzene", 0.95),
+            ...                                        ("x_B", "toluene", 0.95)])
+        """
+        p = self.params
+        if len(specs) != 2:
+            raise ValueError(f"solve_specs needs exactly two specifications, got {len(specs)}")
+        for sp in specs:
+            if sp[0] not in self._SPEC_KINDS:
+                raise ValueError(f"unknown specification {sp[0]!r}; use one of {self._SPEC_KINDS}")
+            if sp[0] in ("R", "D", "B"):
+                if len(sp) != 2:
+                    raise ValueError(f"specification {sp[0]!r} is (kind, value)")
+            elif len(sp) != 3 or sp[1] not in p.species_order:
+                raise ValueError(f"specification {sp!r} needs (kind, species, value) "
+                                 f"with species in {p.species_order}")
+        flows_in = get_flows(feed)
+        F = sum(flows_in[s] for s in p.species_order)
+
+        def run(u):
+            R = jnp.exp(u[0])
+            D = F * jax.nn.sigmoid(u[1])
+            return self(feed, R, D_spec=D, use_mesh=use_mesh, mesh_iter=mesh_iter,
+                        cmo_iter=cmo_iter), R, D
+
+        def residuals(u, args):
+            (dist, bot, info), R, D = run(u)
+            fd, fb = get_flows(dist), get_flows(bot)
+            Dt = sum(fd[s] for s in p.species_order)
+            Bt = sum(fb[s] for s in p.species_order)
+            out = []
+            for sp in specs:
+                kind, val = sp[0], sp[-1]
+                if kind == "x_D":
+                    out.append(fd[sp[1]] / Dt - val)
+                elif kind == "x_B":
+                    out.append(fb[sp[1]] / Bt - val)
+                elif kind == "recovery_D":
+                    out.append(fd[sp[1]] / flows_in[sp[1]] - val)
+                elif kind == "recovery_B":
+                    out.append(fb[sp[1]] / flows_in[sp[1]] - val)
+                elif kind == "R":
+                    out.append(safe_log(R) - jnp.log(val))
+                elif kind == "D":
+                    out.append((D - val) / F)
+                else:
+                    out.append((F - D - val) / F)
+            return jnp.stack(out)
+
+        D0 = 0.5 * F if D_guess is None else jnp.asarray(D_guess, float)
+        R0 = jnp.asarray(R_guess, float)
+        for sp in specs:
+            if sp[0] == "D":
+                D0 = jnp.asarray(sp[1], float)
+            elif sp[0] == "B":
+                D0 = F - sp[1]
+            elif sp[0] == "R":
+                R0 = jnp.asarray(sp[1], float)
+        frac = jnp.clip(D0 / F, 1e-6, 1.0 - 1e-6)
+        u0 = jnp.stack([jnp.log(R0), jnp.log(frac / (1.0 - frac))])
+        # Damped Newton on stopped values: a step is capped at 2 in (log R,
+        # logit D/F), halved up to 6 times until the residual falls, and
+        # refused if every trial is non-finite (an infeasible specification
+        # then ends unconverged instead of raising).
+        sg = lax.stop_gradient
+
+        def res(u):
+            return residuals(u, None)
+
+        def res_c(u):
+            return sg(res(u))
+
+        def jac(u):
+            return sg(jax.jacfwd(res)(sg(u)))
+
+        def norm(r):
+            return jnp.where(jnp.all(jnp.isfinite(r)), jnp.max(jnp.abs(r)), jnp.inf)
+
+        u = sg(u0)
+        r = res_c(u)
+        steps = 0
+        for steps in range(1, max_steps + 1):
+            if not float(norm(r)) > rtol:
+                steps -= 1
+                break
+            J = jac(u)
+            du = jnp.linalg.solve(J, r) if bool(jnp.all(jnp.isfinite(J))) else jnp.full(2, jnp.nan)
+            if not bool(jnp.all(jnp.isfinite(du))):
+                break
+            du = du / max(1.0, float(jnp.max(jnp.abs(du))) / 2.0)
+            lam, moved = 1.0, False
+            for _ in range(7):
+                u_try = u - lam * du
+                r_try = res_c(u_try)
+                if float(norm(r_try)) < float(norm(r)):
+                    u, r, moved = u_try, r_try, True
+                    break
+                lam *= 0.5
+            if not moved:
+                break
+
+        # Implicit-function derivative: one Newton step from the stopped
+        # solution carries du/dp = -J^-1 dr/dp without moving the value.
+        J = jac(u)
+        ok_J = (bool(jnp.all(jnp.isfinite(J))) and bool(jnp.all(jnp.isfinite(r)))
+                and abs(float(jnp.linalg.det(J))) > 0.0)
+        if ok_J:
+            r_live = res(u)
+            u = u - jnp.linalg.solve(J, r_live - sg(r_live))
+        (dist, bot, info), R, D = run(u)
+        r = residuals(u, None)
+        info = dict(info)
+        info["R"] = R
+        info["spec_residuals"] = r
+        info["spec_converged"] = jnp.asarray(ok_J and float(norm(sg(r))) < 1e-6)
+        info["spec_steps"] = steps
+        return dist, bot, info
 
     @partial(jax.jit, static_argnums=(0,),
              static_argnames=("use_mesh", "mesh_iter", "cmo_iter"))
@@ -2526,6 +2699,9 @@ class DistillationColumn(ValueKeyed):
         else:
             info["L_rect"] = R * D
             info["V_rect"] = (R + 1) * D
+            # The frozen CMO profiles the solve used (issue #444), so code
+            # that reads L_profile/V_profile works on either path.
+            info["L_profile"], info["V_profile"] = self._cmo_flows(F_total, R, D)
         if partial_cond:
             info["y_D"] = y_D
             info["x_R"] = x_R
@@ -2866,6 +3042,115 @@ def underwood_minimum_reflux(
     theta = underwood_theta(alpha, z, q, alpha_HK)
     R_min = jnp.sum(alpha * jnp.asarray(x_D, dtype=float) / (alpha - theta)) - 1.0
     return R_min, theta
+
+
+def underwood_class2(
+    alpha: Array,
+    f: Array,
+    d_LK: Array,
+    d_HK: Array,
+    light_key: int,
+    heavy_key: int,
+    q: Array = 1.0,
+    distributing: tuple[int, ...] | list[int] | None = None,
+) -> tuple[Array, Array, Array]:
+    """Minimum reflux by Underwood's general method (class 2: distributing non-keys).
+
+    When non-key species distribute between the products at minimum reflux
+    (always for species boiling between the keys, sometimes for a non-key
+    just outside them), the single-root form :func:`underwood_minimum_reflux`
+    does not apply. Each root ``theta_k`` of
+    ``sum_i alpha_i f_i / (alpha_i - theta) = (1 - q) F`` in the volatility
+    gaps spanned by the keys and the distributing species gives one equation
+
+        ``sum_i alpha_i d_i / (alpha_i - theta_k) = V_min``
+
+    in the unknowns ``V_min = D (R_min + 1)`` and the distillate flows of the
+    distributing species; there is one root more than distributing species,
+    so the linear system is square (Shiras, Hanson and Gibson, *Ind. Eng.
+    Chem.* 42 (1950) 871; Seader and Henley, Sec. 9.2). Species lighter than
+    the span go wholly to the distillate and heavier ones wholly to the
+    bottoms.
+
+    Args:
+        alpha: Relative volatilities, shape ``(n,)`` (any reference species).
+        f: Feed molar flows, shape ``(n,)``.
+        d_LK: Distillate flow of the light key (same basis as ``f``).
+        d_HK: Distillate flow of the heavy key.
+        light_key: Index of the light key.
+        heavy_key: Index of the heavy key.
+        q: Feed thermal condition (1 saturated liquid, 0 saturated vapour).
+        distributing: Indices of the distributing non-keys. Default: every
+            species with a volatility strictly between the keys. Every
+            species inside the span of keys and distributing species must be
+            listed (a species cannot sit inside the span and not distribute).
+
+    Returns:
+        ``(R_min, d, thetas)``: the minimum reflux ratio, the distillate
+        flows of every species at minimum reflux (shape ``(n,)``), and the
+        roots used, in increasing order. A distributing species whose ``d``
+        comes out below 0 or above its feed does not in fact distribute;
+        drop it from ``distributing`` and solve again.
+
+    Example:
+        >>> R_min, d, th = underwood_class2(
+        ...     jnp.array([4.0, 2.0, 1.5, 1.0]), jnp.array([30.0, 30.0, 10.0, 30.0]),
+        ...     d_LK=29.0, d_HK=1.0, light_key=1, heavy_key=3)
+    """
+    from difflow.staged import _solve_monotone
+
+    alpha = jnp.asarray(alpha, dtype=float)
+    f = jnp.asarray(f, dtype=float)
+    n = int(alpha.shape[0])
+    a_np = np.asarray(lax.stop_gradient(alpha))
+    if not a_np[light_key] > a_np[heavy_key]:
+        raise ValueError("the light key must be more volatile than the heavy key")
+    if distributing is None:
+        distributing = [i for i in range(n)
+                        if a_np[heavy_key] < a_np[i] < a_np[light_key]]
+    distributing = sorted(set(int(i) for i in distributing) - {light_key, heavy_key})
+    span = [light_key, heavy_key, *distributing]
+    a_lo, a_hi = min(a_np[i] for i in span), max(a_np[i] for i in span)
+    inside = [i for i in range(n) if a_lo <= a_np[i] <= a_hi]
+    stray = sorted(set(inside) - set(span))
+    if stray:
+        raise ValueError(
+            f"species {stray} lie inside the span of the keys and distributing "
+            "species; list them in `distributing`")
+    order = sorted(span, key=lambda i: a_np[i])
+    F = jnp.sum(f)
+
+    def underwood(theta):
+        return jnp.sum(alpha * f / (alpha - theta)) - (1.0 - q) * F
+
+    thetas = []
+    for lo_i, hi_i in zip(order[:-1], order[1:]):
+        a, b = alpha[lo_i], alpha[hi_i]
+        gap = lax.stop_gradient(b - a)
+        thetas.append(_solve_monotone(underwood, lax.stop_gradient(a) + 1e-10 * gap,
+                                      lax.stop_gradient(b) - 1e-10 * gap, n_iter=80))
+    thetas = jnp.stack(thetas)
+
+    # Known distillate flows: keys as given, lighter than the span all up,
+    # heavier all down.
+    idx = jnp.arange(n)
+    d_known = jnp.where(alpha > a_hi, f, 0.0)
+    d_known = jnp.where(idx == light_key, d_LK, d_known)
+    d_known = jnp.where(idx == heavy_key, d_HK, d_known)
+    m = len(distributing)
+    # Rows k: sum_j alpha_j/(alpha_j - th_k) d_j - V = -sum_known alpha_i d_i/(alpha_i - th_k)
+    W = alpha[None, :] / (alpha[None, :] - thetas[:, None])          # (m+1, n)
+    known_mask = jnp.ones(n).at[jnp.asarray(distributing, dtype=int)].set(0.0) \
+        if m else jnp.ones(n)
+    rhs = -jnp.sum(W * (d_known * known_mask)[None, :], axis=1)
+    cols = [W[:, j] for j in distributing] + [-jnp.ones(m + 1)]
+    sol = jnp.linalg.solve(jnp.stack(cols, axis=1), rhs)
+    d = d_known * known_mask
+    if m:
+        d = d.at[jnp.asarray(distributing, dtype=int)].set(sol[:m])
+    V_min = sol[m]
+    D = jnp.sum(d)
+    return V_min / D - 1.0, d, thetas
 
 
 def kirkbride_feed_stage(

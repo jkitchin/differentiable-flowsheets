@@ -472,6 +472,9 @@ def mccabe_thiele(
     fraction: str = "linear",
     partial_condenser: bool = False,
     reboiler_equilibrium: bool = False,
+    lines: list | None = None,
+    switch_x: list | None = None,
+    switch_stages: list | None = None,
 ) -> dict:
     """Smooth McCabe-Thiele stepping with a fractional, differentiable ``N``.
 
@@ -511,6 +514,18 @@ def mccabe_thiele(
             reboiler stage changes index (the trays and the reboiler take
             different-sized steps), so prefer the default for gradients
             across that point.
+        lines: Any number of operating lines ``[(a, b, c), ...]`` from the
+            top down, for columns with side draws, side feeds or several
+            feeds (one line per section). Pass ``top_line=None`` and
+            ``bottom_line=None`` with it. The switch from line ``j`` to line
+            ``j + 1`` is given by ``switch_x[j]`` (the composition where it
+            happens, usually the intersection of the two lines or of a
+            q-line; a sigmoid of width ``feed_width``, as the
+            ``optimal_feed`` mode) or by ``switch_stages[j]`` (a stage
+            number, as the ``specified`` mode). ``mode``, ``q_line``,
+            ``feed_stage`` and ``reboiler_equilibrium`` are then ignored.
+        switch_x: Switch compositions, one per pair of adjacent lines.
+        switch_stages: Switch stage numbers, one per pair of adjacent lines.
 
     Returns:
         dict with ``N`` (fractional equilibrium stages stepped, including
@@ -521,8 +536,15 @@ def mccabe_thiele(
         ``y`` (``y_1..y_n``), ``credit`` (``c_1..c_n``), ``x_vertices`` /
         ``y_vertices`` (staircase for plotting; trim with ``credit > 0``),
         ``x_feed`` (the switch composition) and ``pinched`` (soft flag in
-        [0, 1]: the cascade stalled short of ``x_bottom``).
+        [0, 1]: the cascade stalled short of ``x_bottom``). With ``lines``,
+        also ``switch_stage`` (fractional stage number of each switch, the
+        stage on which line ``j + 1`` first applies) and ``N_sections``
+        (stages stepped on each line); ``feed_stage`` is the first switch.
     """
+    if lines is not None:
+        return _mccabe_thiele_sections(
+            curve, lines, x_top, x_bottom, switch_x, switch_stages, n_max,
+            feed_width, fraction, partial_condenser)
     if fraction not in ("linear", "log", "log_ratio"):
         raise ValueError("fraction must be 'linear', 'log' or 'log_ratio'")
     if mode not in ("optimal_feed", "specified"):
@@ -622,6 +644,87 @@ def mccabe_thiele(
         "x_vertices": xv,
         "y_vertices": yv,
         "x_feed": x_f,
+        "pinched": jnp.tanh(rem / 1e-3),
+    }
+
+
+def _mccabe_thiele_sections(curve, lines, x_top, x_bottom, switch_x,
+                            switch_stages, n_max, feed_width, fraction,
+                            partial_condenser):
+    """:func:`mccabe_thiele` with a list of operating lines (side streams)."""
+    lines = [jnp.asarray(L, float) for L in lines]
+    m = len(lines) - 1
+    if m < 1:
+        raise ValueError("lines needs at least two operating lines")
+    if (switch_x is None) == (switch_stages is None):
+        raise ValueError("give exactly one of switch_x or switch_stages")
+    sw = switch_x if switch_x is not None else switch_stages
+    if len(sw) != m:
+        raise ValueError(f"{len(lines)} lines need {m} switches, got {len(sw)}")
+    sw = [jnp.asarray(v, float) for v in sw]
+    x_top = jnp.asarray(x_top, float)
+    x_bottom = jnp.asarray(x_bottom, float)
+    sgn = jnp.where(x_bottom >= x_top, 1.0, -1.0)
+
+    def weights(x, k):
+        """Weight of line j+1 over line j for the drop from stage ``k``."""
+        if switch_x is not None:
+            return jnp.stack([jax.nn.sigmoid(sgn * (x - s_) / feed_width) for s_ in sw])
+        return jnp.stack([jnp.clip(k - s_ + 1.0, 0.0, 1.0) for s_ in sw])
+
+    def op_y(x, k):
+        y = line_y(lines[0], x)
+        for w, L in zip(weights(x, k), lines[1:]):
+            y = (1.0 - w) * y + w * line_y(L, x)
+        return y
+
+    E = curve.efficiency
+    span = jnp.maximum(jnp.abs(x_top), jnp.abs(x_bottom))
+    lo = jnp.zeros(())
+    hi = jnp.maximum(1.0, 4.0 * span)
+
+    def next_x(y_k, k):
+        if E is None:
+            return curve.inverse(y_k)
+        ideal = curve.ideal()
+
+        def f(x):
+            yo = op_y(x, k)
+            return yo + E * (ideal(x) - yo) - y_k
+
+        return _solve_monotone(f, lo, hi)
+
+    def step(x_prev, k):
+        y_k = op_y(x_prev, k - 1.0)
+        x_k = next_x(y_k, k)
+        return x_k, (x_k, y_k)
+
+    ks = jnp.arange(1.0, n_max + 1.0)
+    _, (xk, yk) = lax.scan(step, x_top, ks)
+    xs = jnp.concatenate([x_top[None], xk])
+    c = _credits(xs, x_bottom, sgn, fraction)
+    N = jnp.sum(c)
+    W = jax.vmap(weights)(xs[1:], ks)                      # (n_max, m)
+    switch_stage = 1.0 + jnp.sum(c[:, None] * (1.0 - W), axis=0)
+    bounds = jnp.concatenate([jnp.ones(1), switch_stage, (N + 1.0)[None]])
+    y_next = jax.vmap(op_y)(xs[1:], ks)
+    xv = jnp.stack([xs[:-1], xs[1:], xs[1:]], axis=1).reshape(-1)
+    yv = jnp.stack([yk, yk, y_next], axis=1).reshape(-1)
+    rem = jnp.maximum(0.0, sgn * (x_bottom - xs[-1])) / jnp.maximum(jnp.abs(x_bottom - x_top), _TINY)
+    return {
+        "N": N,
+        "N_column": N - 1.0 if partial_condenser else N,
+        "N_rect": switch_stage[0] - 1.0,
+        "N_strip": N - switch_stage[0] + 1.0,
+        "feed_stage": switch_stage[0],
+        "switch_stage": switch_stage,
+        "N_sections": jnp.diff(bounds),
+        "x": xs,
+        "y": yk,
+        "credit": c,
+        "x_vertices": xv,
+        "y_vertices": yv,
+        "x_feed": sw[0] if switch_x is not None else jnp.asarray(jnp.nan),
         "pinched": jnp.tanh(rem / 1e-3),
     }
 

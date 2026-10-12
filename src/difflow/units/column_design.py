@@ -182,7 +182,10 @@ def tray_column_diameter(
         L_molar: Liquid molar flow (mol/s).
         MW_L: Liquid molecular weight (g/mol).
         rho_L: Liquid density (kg/m^3).
-        sigma: Liquid surface tension (N/m); required.
+        sigma: Liquid surface tension (N/m); required. Estimate it with
+            :func:`difflow.liquid_properties.surface_tension` /
+            :func:`~difflow.liquid_properties.mixture_surface_tension` when
+            there are no data.
         tray_spacing: Tray spacing (m).
         fraction_flood: Fraction of flooding velocity (0.7-0.85 typical).
         downcomer_fraction: ``A_d / A_c`` (0.1 typical; 0.08-0.2).
