@@ -8,6 +8,12 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Packed `Absorber`/`Stripper` report the liquid-phase basis (book Ch. 15 gaps).** `info["N_OL"]` and
+  `info["H_OL"]` (per solute, `N_OL = N_OG/A`, `H_OL = A H_OG`, `N_OL H_OL = Z`) join `N_OG`/`H_OG`, so a
+  stripper can be read on the basis it is designed on (a TCE air stripper has `H_OG` of several metres and
+  `N_OG < 1`, which is correct but not what a textbook shows). Tests check `N_OL` against Colburn's
+  liquid-phase form and a packed acetone absorber against the log-mean hand method.
+
 - **`ActivityThermo` and an equilibrium reboiler in the McCabe-Thiele stepper (book Ch. 12 gaps).**
   (1) `difflow.ActivityThermo(ideal, activity_model)` gives modified-Raoult K-values
   `gamma_i(x, T) Psat_i / P` with the wrapped `IdealThermo`'s enthalpies, so `DistillationColumn` (CMO and MESH)
@@ -859,6 +865,12 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Fixed
+
+- **`Absorber` docs misattributed the geometric-mean absorption factor to Edmister.** The Kremser mode's
+  `A = sqrt(A_top A_bottom)` is the textbook simplification (Geankoplis 5e Sec. 10.6, Wankat 4e Ch. 12), not
+  Edmister's effective factor `A_e = sqrt(A_N (A_1 + 1) + 0.25) - 0.5`; the module docstring, the
+  `variable_flow` field, the catalog assumptions and `docs/unit-operations-chemical.md` now say so. No
+  numerical change.
 
 - **`MechanicalVaporRecompression` compressor work was 6 % low.** The
   isentropic work used `Cp_vapor` (1880 J/kg/K) with the exponent of

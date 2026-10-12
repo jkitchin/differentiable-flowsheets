@@ -30,7 +30,10 @@ and the inputs and printed answers could not be retrieved, so quoting a number
 would not be a validation. The TCE case below is a hand calculation with the
 (from-memory) Henry's constant of ``HENRY_WATER``, not the cited example. The
 Henry's constants and van 't Hoff coefficients are themselves unverified
-order-of-magnitude values.
+order-of-magnitude values. ``TestTextbookStyleChecks`` reruns a packed acetone
+absorber with inputs recalled from Geankoplis 5e Ex. 10.7-2/3 against the
+log-mean hand method; the recalled inputs still need checking against the
+printed book.
 """
 
 import jax
@@ -685,6 +688,49 @@ def _treated_acetone(L):
     fs, guess = _loop(L)
     streams = fs.solve(tear_initial=guess, tol=1e-12, max_iter=200)
     return streams["treated"]["F_acetone"]
+
+
+class TestTextbookStyleChecks:
+    """Cheap hand-calculation checks added with the unit-ops book, Ch 15."""
+
+    def test_liquid_basis_N_OL_H_OL_for_a_packed_stripper(self):
+        """N_OL H_OL = Z and N_OL is Colburn's liquid-phase form, S/(S-1) ln[(1-1/S)/phi + 1/S]."""
+        S, r = 3.0, 0.99
+        K = HENRY_WATER["TCE"].H298 / P0
+        L = 1000.0
+        gas = make_stream({"air": S * L / K}, T0, P0)
+        liq = make_stream({"H2O": L, "TCE": 1e-9}, T0, P0)
+        _, _, info = _stripper(model="packed", H_OG=0.8, recovery=r, variable_flow=False)(gas, liq)
+        N_OL = float(info["N_OL"]["TCE"])
+        H_OL = float(info["H_OL"]["TCE"])
+        assert N_OL * H_OL == pytest.approx(float(info["height"]), rel=1e-12)
+        assert H_OL == pytest.approx(0.8 / S, rel=1e-9)  # H_OL = A H_OG with A = 1/S
+        phi = 1.0 - r
+        expected = S / (S - 1.0) * np.log((1.0 - 1.0 / S) / phi + 1.0 / S)
+        assert N_OL == pytest.approx(expected, rel=1e-9)
+
+    def test_packed_acetone_height_matches_log_mean_hand_method(self):
+        """Geankoplis-style packed acetone absorber (inputs recalled from Geankoplis 5e Ex. 10.7-2/3).
+
+        y 0.026 -> 0.005 with pure water, V' = 13.65 and L' = 45.36 kmol/h,
+        y* = 1.186 x, H_OG = 0.9466 m. The hand log-mean driving-force method
+        (computed here) and difflow's numerical N_OG integral must agree.
+        """
+        m, Gs, Ls, H_OG = 1.186, 13.65 / 3.6, 45.36 / 3.6, 0.9466
+        y1, y2 = 0.026, 0.005
+        Y1, Y2 = y1 / (1 - y1), y2 / (1 - y2)
+        X1 = Gs / Ls * (Y1 - Y2)
+        x1 = X1 / (1 + X1)
+        d1, d2 = y1 - m * x1, y2
+        N_hand = (y1 - y2) / ((d1 - d2) / np.log(d1 / d2))
+        gas = make_stream({"air": Gs, "acetone": Gs * Y1}, T0, P0)
+        liq = make_stream({"H2O": Ls}, T0, P0)
+        ab = Absorber(AbsorptionParams(henry={"acetone": m * P0}, model="packed", H_OG=H_OG,
+                                       recovery=1.0 - Y2 / Y1, ntu_method="integral",
+                                       variable_flow=False))
+        _, _, info = ab(gas, liq)
+        assert float(info["N_OG_integral"]) == pytest.approx(N_hand, rel=5e-3)
+        assert float(info["height"]) == pytest.approx(H_OG * N_hand, rel=5e-3)
 
 
 class TestRecycleFlowsheet:

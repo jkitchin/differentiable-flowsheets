@@ -23,8 +23,11 @@ Models
 ``"kremser"``
     Closed form per solute. With ``A_i`` the effective absorption factor (the
     geometric mean of the top and bottom values, ``A = sqrt(L_in L_out /
-    (V_in V_out))/K``, Edmister's idea, iterated to consistency with the outlet
-    flows; or the inlet value if ``variable_flow=False``) and ``N_eq`` the
+    (V_in V_out))/K``, iterated to consistency with the outlet flows; or the
+    inlet value if ``variable_flow=False``. The geometric mean is the usual
+    textbook simplification, e.g. Geankoplis 5e Sec. 10.6, Wankat 4e Ch. 12;
+    it is *not* Edmister's effective factor ``A_e = sqrt(A_N (A_1 + 1) +
+    0.25) - 0.5``, a separate method) and ``N_eq`` the
     equivalent equilibrium stages (``N_eq = N ln(1+E(S-1))/ln S``, ``S = 1/A``, for a Murphree
     vapor efficiency ``E``)::
 
@@ -416,7 +419,7 @@ class AbsorptionParams(ParamsMixin):
         stage_efficiency: Murphree vapor efficiency of a stage (1 = equilibrium).
         P: Column pressure (Pa); ``None`` takes the gas inlet pressure.
         T: Column temperature (K, isothermal); ``None`` takes the gas inlet temperature.
-        variable_flow: Use the geometric-mean (Edmister) absorption factor from the
+        variable_flow: Use the geometric-mean absorption factor from the
             top and bottom flows (True), or the inlet flows (False).
         key_solute: The solute that sets ``recovery`` (design), ``L_min`` and the
             operating line; defaults to the first of ``henry``.
@@ -545,7 +548,9 @@ class _GasLiquidColumn:
             info: ``recovery`` and ``transferred`` per solute (mol/s gas to liquid),
                 ``A`` and ``S`` (effective absorption and stripping factors), ``K``,
                 ``n_stages`` / ``N_eq`` (kremser, stages; ``N_eq`` per solute) or ``N_OG``,
-                ``H_OG`` (per solute) and ``height`` (packed), ``L_min`` (absorber) or ``G_min`` (stripper)
+                ``H_OG`` (per solute), ``N_OL = N_OG / A`` and ``H_OL = A H_OG`` (per
+                solute, the liquid-phase basis a stripper is usually designed on) and
+                ``height`` (packed), ``L_min`` (absorber) or ``G_min`` (stripper)
                 for the key solute and the ratio to it, the solute-free operating
                 line and equilibrium curve (``X``, ``Y``, ``Y_eq``), ``Q_absorption``
                 (W) and ``delta_T_adiabatic`` (K, reported, not applied),
@@ -668,6 +673,8 @@ class _GasLiquidColumn:
             converged = resid < 1e-9 * (V_in + L_in)
             if packed:
                 extra.update(N_OG=dict(zip(solutes, aux["N_OG"])), H_OG=dict(zip(solutes, aux["H_OG"])),
+                             N_OL=dict(zip(solutes, aux["N_OG"] / A)),
+                             H_OL=dict(zip(solutes, aux["H_OG"] * A)),
                              height=aux["height"])
                 n_act = jnp.asarray(jnp.nan)
                 N_eq = aux["N_OG"]
@@ -741,7 +748,7 @@ _COMMON_ASSUMPTIONS = [
     "Isothermal at T; the heat of absorption is reported, not applied.",
     "Henry's law per solute, y = K x with K = H(T)/P; solutes do not interact.",
     "No solvent evaporation and no carrier dissolution: non-solute species stay on the side they enter.",
-    "Constant total flows per stage, corrected through the geometric-mean (Edmister) factor A.",
+    "Constant total flows per stage, corrected through the geometric mean of the end absorption factors.",
     "No reaction (use the difflow_cc amine units for reactive absorption).",
 ]
 _COMMON_EQUATIONS = [
