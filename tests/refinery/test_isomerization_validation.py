@@ -63,6 +63,7 @@ def mole_fraction_error(out, case):
     return max(abs(float(F[tc.idx(n)]) / tot - v / rtot) for n, v in case["flows"].items())
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("i", range(len(REF["c6_ring"])))
 def test_isothermal_ring_equilibrium(i):
     """Benzene saturation, ring contraction and ring opening at 30 bar."""
@@ -71,6 +72,7 @@ def test_isothermal_ring_equilibrium(i):
     assert mole_fraction_error(out, case) < 1e-10
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("kind", sorted(REF["adiabatic"]))
 def test_adiabatic_equilibrium(kind):
     """The adiabatic equilibrium temperature and composition of each

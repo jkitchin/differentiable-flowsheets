@@ -115,6 +115,7 @@ def test_acceleration_request_is_not_silently_dropped():
     assert box["fs"].last_solve_acceleration == "anderson"
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("acceleration", ["anderson", "wegstein", "none"])
 def test_jacobian_matches_the_analytic_and_plain_path(acceleration):
     def f(F):

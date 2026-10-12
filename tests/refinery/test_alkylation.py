@@ -45,6 +45,7 @@ class TestCorrelations:
         r = 0.13167 / (2 * 0.00667)
         assert corr.max_alkylate_yield() == pytest.approx(float(corr.alkylate_yield(r)), rel=1e-14)
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_process_gms_optimum(self):
         """The ``process`` model's published optimum, to the digits given."""
@@ -59,6 +60,7 @@ class TestCorrelations:
         assert v["isor"] == pytest.approx(16000.0, abs=1e-3)
         assert v["isom"] == pytest.approx(2000.0, abs=1e-3)
 
+    @pytest.mark.slow
     def test_ranged_model_is_a_relaxation(self):
         """``rproc`` relaxes ``process``, so its optimum is at least as good.
 
@@ -301,7 +303,9 @@ def solved():
 PRODUCTS = al.PRODUCTS
 
 
+@pytest.mark.slow
 class TestUnit:
+    @pytest.mark.slow
     @pytest.mark.parametrize("feed", ["c4", "c3c4"])
     def test_converges_from_default_initialization(self, solved, feed):
         _, res = solved[1][feed]
@@ -313,6 +317,7 @@ class TestUnit:
             assert float(st["dib_overhead"][f"F_{s}"]) == pytest.approx(
                 float(st["dib_recycle"][f"F_{s}"]), abs=1e-8)
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("feed", ["c4", "c3c4"])
     def test_balances_close(self, solved, feed):
         f, res = solved[1][feed]
@@ -377,6 +382,7 @@ def sweep():
 @pytest.mark.slow
 @pytest.mark.release
 class TestTrends:
+    @pytest.mark.slow
     def test_mon_rises_with_io(self, sweep):
         m = [float(sweep[("io", r)]["alkylate.MON"]) for r in (6.0, 8.0, 10.0)]
         assert m[0] < m[1] < m[2]
@@ -410,6 +416,7 @@ class TestColumn:
         eff, _ = al.AlkylationReactor()(fed)
         return unit.columns["dib"], eff
 
+    @pytest.mark.slow
     def test_keys_and_balance(self, dib):
         col, eff = dib
         D, B, info = col(eff)
@@ -433,6 +440,7 @@ class TestColumn:
         assert abs(float(jnp.sum(a * z / (a - th)))) < 1e-8
         assert 1.0 < float(th) < float(a[ALKYLATION_SPECIES.index(col.params.light_key)])
 
+    @pytest.mark.slow
     def test_column_gradient(self, dib):
         col, eff = dib
         F0 = al.flows_array(eff)
@@ -466,6 +474,7 @@ def test_fcc_outlets_feed_the_unit():
 @pytest.mark.slow
 @pytest.mark.release
 class TestGradients:
+    @pytest.mark.slow
     def test_implicit_gradients_match_central_differences(self):
         """d(yield, MON, DIB duty)/d(I/O, T, acid strength), AD through the recycle vs FD."""
         unit = al.AlkylationUnit()

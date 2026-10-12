@@ -116,6 +116,7 @@ class TestFlowAtHead:
         ref = brentq(lambda q: float(self.pipe().hydraulics_at_flow(q)["head_loss"]) - 15.0, 1e-4, 0.05, xtol=1e-14)
         assert Q == pytest.approx(ref, rel=1e-9)
 
+    @pytest.mark.slow
     def test_implicit_gradient(self):
         g = float(jax.grad(lambda e: self.pipe(e).flow_at_head(15.0))(4.6e-5))
         assert g == pytest.approx(-8.78, abs=0.01)
@@ -269,6 +270,7 @@ class TestMeters:
         with pytest.raises(ValueError):
             fluids.orifice_cd(0.5, 1e5, 0.1, "pipe")
 
+    @pytest.mark.slow
     def test_orifice_flow_iso5167(self):
         D, d, rho, mu, dP = 0.1023, 0.05, 998.0, 1e-3, 20e3
         Q = fluids.orifice_flow(dP, D, d, rho, Cd="iso5167", mu=mu)

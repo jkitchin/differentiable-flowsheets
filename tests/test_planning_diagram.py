@@ -130,6 +130,7 @@ class TestDrawTaylorModel:
 
 class TestDrawTrustRegion:
 
+    @pytest.mark.slow
     def test_shows_the_cycles_the_run_took(self):
         bowl = Block(name="q",
                      fn=lambda u: jnp.array([-(u[0] - 0.3) ** 2
@@ -147,6 +148,7 @@ class TestDrawTrustRegion:
         for rho in rhos:
             assert rho in text
 
+    @pytest.mark.slow
     def test_accepts_decisions_by_name(self, problem):
         # The cold box is two-phase across the whole NGL envelope (it bubbles
         # at ~196 K at 40 bar), so this run crosses no phase boundary; the

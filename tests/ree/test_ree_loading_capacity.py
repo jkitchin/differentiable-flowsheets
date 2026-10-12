@@ -659,6 +659,7 @@ class TestIssue193_SmoothCapacityLimiter:
                 break
         return 0.5 * (lo + hi)
 
+    @pytest.mark.slow
     def test_gradient_at_the_capacity_constraint(self):
         """check_grads on recovery w.r.t. solvent flow, at the switch point."""
         scale_star = self._solvent_scale_at_capacity()

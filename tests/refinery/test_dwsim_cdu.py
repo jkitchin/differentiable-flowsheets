@@ -186,6 +186,7 @@ class TestReferenceIsCurrent:
         assert INP["heat_path"] == json.loads(json.dumps(dc.HEAT_PATH)), REGENERATE
         assert INP["vacuum_flash"] == json.loads(json.dumps(dc.VACUUM_FLASH)), REGENERATE
 
+    @pytest.mark.slow
     def test_the_crude_constants_are_difflows(self):
         from .reference import case
 
@@ -198,6 +199,7 @@ class TestReferenceIsCurrent:
                                    err_msg=REGENERATE)
         np.testing.assert_allclose(flows, INP["feed_flows"], rtol=1e-12, err_msg=REGENERATE)
 
+    @pytest.mark.slow
     def test_the_characterizations_are_difflows(self):
         now = dc.difflow_characterizations()
         for key in ASSAYS:
@@ -710,6 +712,7 @@ class TestSmallColumnAgainstDWSIM:
     What is left is DWSIM's enthalpy conventions (``P v_L``, unsmoothed
     Watson, quadrature), as on the crude above."""
 
+    @pytest.mark.slow
     def test_converged(self, small):
         r, _ = small
         assert bool(r.converged)
@@ -781,6 +784,7 @@ class TestSmallColumnAgainstDWSIM:
         assert q_dw == pytest.approx(d["condenser_duty_W"], rel=1.5e-4)
 
 
+@pytest.mark.slow
 @pytest.mark.release
 def test_difflow_solves_the_column_dwsim_could_not():
     """:data:`COLUMN_A` -- the CDU crude's 28 components in the main column

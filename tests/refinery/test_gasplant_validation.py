@@ -69,6 +69,7 @@ def _x(stream, names):
     return f / f.sum()
 
 
+@pytest.mark.slow
 def test_k_values_point_by_point(solved):
     """Measured: worst relative difference 1.4e-13 (debutanizer)."""
     name, case, ref, *_ = solved
@@ -118,6 +119,7 @@ def test_the_specs_are_the_same_specs(solved):
     assert float(o["boilup_ratio"]) == pytest.approx(ref["boilup_ratio"], rel=1e-6)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("name", POINT_CASES)
 def test_the_state_points_are_still_difflows_stages(name):
     """The state-point reference is only a check on the column if the column

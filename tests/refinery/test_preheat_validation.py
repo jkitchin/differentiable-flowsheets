@@ -61,6 +61,7 @@ def thermo():
 
 
 class TestDrum:
+    @pytest.mark.slow
     def test_adiabatic_flash(self, thermo):
         d, inp = REF["drum"], REF["drum"]["inputs"]
         op = dr.PreflashDrum(dr.PreflashDrumUnitParams(pc.assay("base"), dr.PreflashDrumParams(P=inp["P"])))
@@ -83,6 +84,7 @@ class TestDrum:
 
 
 class TestExchangers:
+    @pytest.mark.slow
     @pytest.mark.parametrize("name", ["E7", "E8"])
     def test_duty_and_outlets(self, thermo, name):
         e = REF["exchangers"][name]

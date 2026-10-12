@@ -492,6 +492,7 @@ class TestDiagnostics:
                                                          n_starts=1))
         assert rep.ordered and rep.vss > 0.5
 
+    @pytest.mark.slow
     def test_an_infeasible_mean_value_design_is_named_as_such(self, scen):
         """EEV bounds SP only among ADMISSIBLE designs.
 
@@ -540,6 +541,7 @@ class TestDiagnostics:
         rep = st.bounds(p, scen, options=FAST)
         assert rep.evpi == pytest.approx(0.0, abs=1e-4)
 
+    @pytest.mark.slow
     def test_health_finds_a_dead_lever(self, scen):
         """A clip on the active path gives an exactly-zero gradient column."""
         def m(x, u, theta):
@@ -554,6 +556,7 @@ class TestDiagnostics:
         assert "dead" in health.dead_levers
         assert not health.healthy
 
+    @pytest.mark.slow
     def test_health_warns_about_an_empty_cvar_tail(self):
         sample = st.ScenarioSet.normal({"t": (5.0, 1.0)}, n=32, seed=0)
 

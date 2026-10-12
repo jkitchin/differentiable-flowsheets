@@ -38,6 +38,7 @@ class TestOutletRoles:
         assert flash["outlet_roles"] == {"liquid": "liquid", "vapor": "vapor"}
 
 
+@pytest.mark.slow
 def test_open_in_editor_starts_the_editor(tmp_path):
     wb = Workbench()
     wb.open_example("01_flash_drum")

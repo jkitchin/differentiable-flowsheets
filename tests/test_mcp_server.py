@@ -53,6 +53,7 @@ def test_schemas_come_from_the_signatures():
     assert schema["properties"]["session"]["default"] == "main"
 
 
+@pytest.mark.slow
 def test_a_round_trip_solves_an_example():
     async def go():
         async with Client(build_server()) as client:

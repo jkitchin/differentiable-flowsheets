@@ -35,12 +35,15 @@ def solved(unit):
     return unit.solve(BPD, T=273.15 + 240.0, P=6e5)
 
 
+@pytest.mark.slow
 class TestProductProperties:
+    @pytest.mark.slow
     def test_a_pure_component_boils_at_its_boiling_point(self):
         th = ColumnThermo.from_characterization(characterize(ASSAY))
         flows = jnp.zeros(th.n_components).at[5].set(1.0)
         np.testing.assert_allclose(products.tbp_curve(flows, th), th.Tb[5], rtol=1e-12)
 
+    @pytest.mark.slow
     def test_whole_crude_recovers_its_assay(self):
         """The crude's own TBP, rebuilt from its cuts, is within a cut of the data."""
         crude = characterize(ASSAY)
@@ -57,13 +60,16 @@ class TestProductProperties:
         assert float(props["crude"].sg) == pytest.approx(float(crude.bulk_sg), rel=1e-12)
         assert float(props["crude"].yield_volume) == pytest.approx(1.0)
 
+    @pytest.mark.slow
     def test_gap_definition(self, solved):
         props = solved.properties
         g = products.gaps(props, ["naphtha", "kero"])[("naphtha", "kero")]
         assert float(g) == pytest.approx(float(props["kero"].tbp_at(5) - props["naphtha"].tbp_at(95)))
 
 
+@pytest.mark.slow
 class TestCrudeUnit:
+    @pytest.mark.slow
     def test_converges(self, solved):
         assert bool(solved.converged)
 
@@ -98,6 +104,7 @@ class TestCrudeUnit:
         # lightest first
         assert text.index("naphtha") < text.index("kero") < text.index("residue")
 
+    @pytest.mark.slow
     def test_furnace_is_added(self):
         params = cc.CrudeColumnParams(n_stages=8, feed_stage=7, bottom_steam=0.2,
                                       specs=(cc.product_rate("naphtha", 0.25, basis="mole"),
@@ -119,6 +126,7 @@ class TestSmallUnit:
             specs=(cc.product_rate("naphtha", 0.25, basis="mole"), cc.overflash(0.05)))
         return dr.CrudeUnit(self.ASSAY, params)
 
+    @pytest.mark.slow
     def test_gradient_with_respect_to_the_assay(self, small):
         """d(residue API)/d(crude SG), through characterisation, thermo, furnace and column."""
 
@@ -132,6 +140,7 @@ class TestSmallUnit:
         assert g < 0  # a heavier crude, a heavier residue
         assert g == pytest.approx(fd, rel=1e-5)
 
+    @pytest.mark.slow
     def test_gradient_with_respect_to_preheat(self, small):
         def fired(T):
             return small.solve(1.0, T=T, P=4e5, basis="mole").column.furnace_fired_duty
@@ -141,11 +150,13 @@ class TestSmallUnit:
         assert g < 0
         assert g == pytest.approx(fd, rel=1e-5)
 
+    @pytest.mark.slow
     def test_assay_must_keep_the_components(self, small):
         other = Assay([0, 30, 70, 100], [320.0, 480.0, 640.0, 900.0], sg=0.85, light_ends={"propane": 1.0})
         with pytest.raises(ValueError, match="different components"):
             small.solve(1.0, T=480.0, P=4e5, basis="mole", assay=other)
 
+    @pytest.mark.slow
     def test_new_params_keep_the_furnace(self, small):
         params = cc.CrudeColumnParams(
             n_stages=8, feed_stage=7, bottom_steam=0.2, P_top=1.4e5, P_bottom=1.6e5,
@@ -155,6 +166,7 @@ class TestSmallUnit:
         assert bool(res.converged)
         assert float(res.column.coil_outlet_T) > float(base.column.coil_outlet_T)
 
+    @pytest.mark.slow
     def test_bad_basis(self, small):
         with pytest.raises(ValueError, match="basis"):
             small.feed(1.0, T=480.0, P=4e5, basis="gallons")

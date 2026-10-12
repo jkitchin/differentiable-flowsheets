@@ -227,6 +227,7 @@ def test_a_model_with_no_spec_rows_is_returned_without_artificials():
 
 # -- 2 and 3. the dead end, before and after ------------------------------
 
+@pytest.mark.slow
 def test_dead_end_is_recovered():
     """The storage model whose opening level sits outside its trust region."""
     net, prices, specs = storage_network(start_as_decision=True)
@@ -239,6 +240,7 @@ def test_dead_end_is_recovered():
     assert np.all(levels >= -1e-4), f"negative inventory: {levels}"
 
 
+@pytest.mark.slow
 def test_disabling_restoration_reproduces_the_dead_end():
     """The before picture: shrinking the radius cannot restore feasibility."""
     net, prices, specs = storage_network(start_as_decision=True)
@@ -250,6 +252,7 @@ def test_disabling_restoration_reproduces_the_dead_end():
     assert not any(h.restoration for h in res.history)
 
 
+@pytest.mark.slow
 def test_restoration_drives_violation_down_monotonically():
     net, prices, specs = storage_network(start_as_decision=True)
     res = _planner(net, prices, specs, options=_opts()).solve()
@@ -262,6 +265,7 @@ def test_restoration_drives_violation_down_monotonically():
 
 # -- 4. the bug that made restoration need a trust region -----------------
 
+@pytest.mark.slow
 def test_restoration_is_judged_on_the_nonlinear_model():
     """A step the phase-one LP predicts feasible can be worse in reality.
 
@@ -287,6 +291,7 @@ def test_restoration_is_judged_on_the_nonlinear_model():
     assert max(res.violations.values(), default=0.0) < 1e-4
 
 
+@pytest.mark.slow
 def test_restoration_does_not_leave_the_optimisation_radius_shrunk():
     """Restoration keeps its own radius; the main loop resumes from its own.
 

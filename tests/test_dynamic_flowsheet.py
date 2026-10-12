@@ -904,6 +904,7 @@ class TestIntegratorArgs:
         fs.simulate((0.0, 50.0), y0=y0, method="diffrax:tsit5", args={"F": jnp.array(4.0)})
         assert len(traces) == n_after_first  # no retrace
 
+    @pytest.mark.slow
     def test_grad_with_respect_to_a_disturbance(self, simple_cstr):
         fs = self._flowsheet_with_args_feed(simple_cstr)
         y0 = fs.initial_state(args={"F": jnp.array(1.0)})

@@ -24,6 +24,7 @@ def wb():
     return bench
 
 
+@pytest.mark.slow
 class TestLanguage:
     @pytest.mark.parametrize("text", [
         "__import__('os')", "os.system('ls')", "a.b.c", "[1, 2]", "x if y else z",
@@ -36,12 +37,14 @@ class TestLanguage:
     def test_references(self):
         assert references("a.b * c + exp(d.e)") == {"a.b", "c", "d.e"}
 
+    @pytest.mark.slow
     def test_values_match_the_streams(self, wb):
         streams = wb.get_streams(["vapor"])["streams"]["vapor"]
         total = sum(v for k, v in streams.items() if k.startswith("F_"))
         value = wb.evaluate([PURITY])["values"][PURITY]
         assert value == pytest.approx(streams["F_ethyl_acetate"] / total)
 
+    @pytest.mark.slow
     def test_unit_parameters_resolve(self, wb):
         assert wb.evaluate(["reactor.V"])["values"]["reactor.V"] == 0.5
 
@@ -51,6 +54,7 @@ class TestLanguage:
 
 
 class TestQuantities:
+    @pytest.mark.slow
     def test_defined_quantities_compose_and_are_saved(self, wb):
         assert wb.define_quantity("purity", PURITY)["ok"]
         assert wb.define_quantity("score", "2 * purity")["ok"]
@@ -69,6 +73,7 @@ class TestQuantities:
 
 
 class TestDerivatives:
+    @pytest.mark.slow
     def test_the_expression_gradient_is_the_function_gradient(self, wb):
         """A string objective and a Python one give the same derivative."""
         fs = wb.sessions["main"].flowsheet
@@ -84,6 +89,7 @@ class TestDerivatives:
         assert answer["converged"] is True
         assert answer["levers"][0]["derivative"] == pytest.approx(float(expected), rel=1e-6)
 
+    @pytest.mark.slow
     def test_the_derivative_agrees_with_a_sweep(self, wb):
         h = 1e-4
         points = wb.sweep("reactor.V", [PURITY], values=[0.5 - h, 0.5 + h])["points"]
@@ -101,6 +107,7 @@ class TestOptimizeAndUncertainty:
     # run it can pass the Workbench's 300 s default and come back as a
     # timeout ({"ok": False, "timed_out": True}), which is not what these
     # tests are about, so they give it room.
+    @pytest.mark.slow
     def test_a_bounded_optimum_meets_its_constraint(self):
         bench = Workbench()
         bench.open_example("03_reactor_recycle")
@@ -112,6 +119,7 @@ class TestOptimizeAndUncertainty:
         assert answer["constraints"][0]["value"] <= 0.33 + 1e-6
         assert answer["value"] > 20.0 * 0.2554 - 0.25     # better than the start
 
+    @pytest.mark.slow
     def test_apply_writes_the_optimum(self):
         bench = Workbench()
         bench.open_example("03_reactor_recycle")
@@ -123,6 +131,7 @@ class TestOptimizeAndUncertainty:
             pytest.approx(answer["levers"]["reactor.V"])
         assert bench.undo()["ok"]
 
+    @pytest.mark.slow
     def test_linear_uncertainty_shares_sum_to_one(self, wb):
         answer = wb.uncertainty(PURITY, {"reactor.V": 0.05, "feed:feed.T": 2.0})
         assert answer["std_linear"] > 0

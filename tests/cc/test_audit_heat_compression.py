@@ -48,6 +48,7 @@ def test_heat_recovery_system_balances():
     assert float(info["lrhx_effectiveness"]) <= 0.95
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("P_in", [101325.0, 2e5, 5e5])
 def test_compression_uses_stream_pressure(P_in):
     """C12: a 1 atm feed left at 74 bar instead of ~150 (P_inlet param used)."""

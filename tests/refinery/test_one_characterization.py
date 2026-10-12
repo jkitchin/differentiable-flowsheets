@@ -105,6 +105,7 @@ def test_balance_closes_in_total_with_the_steam(plant):
     assert m_out == pytest.approx(m_in, rel=1e-9)
 
 
+@pytest.mark.slow
 @pytest.mark.release
 def test_vgo_yield_gradient_in_vacuum_furnace_T(plant):
     """d(VGO yield)/d(VDU coil outlet T) on the crude unit's residue: AD vs FD."""
@@ -123,6 +124,7 @@ def test_vgo_yield_gradient_in_vacuum_furnace_T(plant):
     assert g == pytest.approx(fd, rel=1e-5)
 
 
+@pytest.mark.slow
 @pytest.mark.release
 def test_vgo_rate_gradient_in_crude_rate_crosses_both_units(plant):
     """d(VGO kg/s)/d(crude rate), through the CDU's and the VDU's implicit solves.

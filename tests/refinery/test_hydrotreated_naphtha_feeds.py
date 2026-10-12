@@ -84,13 +84,16 @@ def small_grid():
     return _treated(char)
 
 
+@pytest.mark.slow
 class TestNaphthaFeed:
+    @pytest.mark.slow
     def test_an_untreated_grid_maps_as_from_characterization(self, naphtha_char, grids):
         raw, _, stream = grids
         a = NaphthaFeed.from_hydrotreater(stream, char=raw)
         b = NaphthaFeed.from_characterization(naphtha_char, stream)
         np.testing.assert_allclose(np.asarray(a.flows), np.asarray(b.flows), rtol=1e-12, atol=1e-14)
 
+    @pytest.mark.slow
     def test_treated_mass_is_conserved_and_aromatics_are_the_treated_ones(self, naphtha_char, grids):
         raw, treated, stream = grids
         f = NaphthaFeed.from_hydrotreater(stream, char=treated)
@@ -150,6 +153,7 @@ class TestNaphthaFeed:
 
 
 class TestGasPlantFeed:
+    @pytest.mark.slow
     def test_table_and_stream(self, grids):
         _, treated, stream = grids
         wild = dict(stream, F_hydrogen=jnp.asarray(0.05), F_hydrogen_sulfide=jnp.asarray(0.01),
@@ -191,6 +195,7 @@ class TestGasPlantFeed:
         with pytest.raises(TypeError):
             resolve_product(3.0)
 
+    @pytest.mark.slow
     def test_a_naphtha_splitter_converges_and_balances_on_a_treated_grid(self, small_grid):
         """The per-commit column: 7 components, 8 theoretical trays (compile dominates)."""
         _, treated, stream = small_grid

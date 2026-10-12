@@ -14,6 +14,7 @@ def test_there_are_examples():
     assert KEYS
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("key", KEYS)
 def test_an_example_opens_and_solves_cleanly(key):
     """A warning counts as a failure: an example is what a new user sees

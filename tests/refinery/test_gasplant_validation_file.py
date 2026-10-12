@@ -96,6 +96,7 @@ class TestStatePoints:
     def _thermo(self, case):
         return CubicThermo(gas_components(gc.CASES[case]["names"]), PR)
 
+    @pytest.mark.slow
     def test_k_values(self, case):
         th = self._thermo(case)
         for p in REF["cases"][case]["idaes_points"]:
@@ -103,6 +104,7 @@ class TestStatePoints:
             np.testing.assert_allclose(np.exp(np.asarray(lnK)), p["K"], rtol=1e-5,
                                        err_msg=p["stage"])
 
+    @pytest.mark.slow
     def test_the_flash(self, case):
         """difflow's own TP flash of the same z lands on IDAES's split."""
         th = self._thermo(case)

@@ -77,6 +77,7 @@ def test_ybus_matches_hand_assembly_on_a_triangle():
     np.testing.assert_allclose(y, want, atol=1e-12)
 
 
+@pytest.mark.slow
 def test_ybus_is_symmetric_without_phase_shifters():
     for case in ("case3", "case5", "case9", "case14"):
         y = np.asarray(dp.cases.load_case(case).ybus())

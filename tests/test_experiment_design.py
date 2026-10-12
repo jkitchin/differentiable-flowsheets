@@ -787,6 +787,7 @@ class TestIdentifiability:
         assert "0.707" in combo
         assert combo.count("-") == 1  # one of the two terms is negated
 
+    @pytest.mark.slow
     def test_more_data_does_not_rescue_an_unidentifiable_model(self):
         """The point of the check: rows can be added forever, rank stays 1."""
         theta = {"A": 2.0, "B": 3.0}
@@ -876,6 +877,7 @@ class TestJax:
         )
         assert np.allclose(jitted, direct)
 
+    @pytest.mark.slow
     def test_criterion_jits_and_differentiates(self):
         pool = [
             Experiment.candidate({"T": float(T)}, ["y"], {"y": 0.1})

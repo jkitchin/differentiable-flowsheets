@@ -58,11 +58,14 @@ def overflashed(inlet, thermo):
     return col, col.solve(inlet)
 
 
+@pytest.mark.slow
 class TestOverflashSetsTheFurnace:
+    @pytest.mark.slow
     def test_converges(self, overflashed):
         _, res = overflashed
         assert bool(res.converged)
 
+    @pytest.mark.slow
     def test_overflash_is_met(self, overflashed, inlet, thermo):
         _, res = overflashed
         wash = float(thermo.std_volume(res.x[25] * res.L[25]))  # stage 26, above the feed
@@ -85,6 +88,7 @@ class TestOverflashSetsTheFurnace:
         removed = float(res.condenser_duty) + float(jnp.sum(res.pumparound_duty))
         assert h_in - h_out == pytest.approx(removed, rel=1e-8)
 
+    @pytest.mark.slow
     def test_too_little_overflash_dries_the_column(self, inlet, thermo):
         """With 25 MW off PA1, a 5 % overflash leaves no reflux: no solution.
 
@@ -96,6 +100,7 @@ class TestOverflashSetsTheFurnace:
 
 
 class TestFurnaceSpecs:
+    @pytest.mark.slow
     def test_coil_outlet_spec_reproduces_a_fixed_feed(self, small):
         crude, th = small
         hot = crude.stream(1.0, T=620.0, P=1.6e5, basis="mole")
@@ -109,6 +114,7 @@ class TestFurnaceSpecs:
         np.testing.assert_allclose(fired.condenser_duty, fixed.condenser_duty, rtol=1e-9)
         assert float(fixed.furnace_duty) == 0.0
 
+    @pytest.mark.slow
     def test_duty_spec_inverts_the_outlet_spec(self, small):
         crude, th = small
         cold = crude.stream(1.0, T=480.0, P=4e5, basis="mole")
@@ -118,6 +124,7 @@ class TestFurnaceSpecs:
         assert bool(by_Q.converged)
         assert float(by_Q.coil_outlet_T) == pytest.approx(620.0, abs=1e-6)
 
+    @pytest.mark.slow
     def test_duty_is_the_enthalpy_rise(self, small):
         crude, th = small
         cold = crude.stream(1.0, T=480.0, P=4e5, basis="mole")
@@ -129,6 +136,7 @@ class TestFurnaceSpecs:
         # the default outlet pressure is the feed stage's
         assert float(args["P_F"]) == pytest.approx(1.4e5 + (1.6e5 - 1.4e5) * 6 / 7)
 
+    @pytest.mark.slow
     def test_gradient_of_coil_outlet_with_overflash(self, small):
         crude, th = small
         cold = crude.stream(1.0, T=480.0, P=4e5, basis="mole")
@@ -144,6 +152,7 @@ class TestFurnaceSpecs:
         assert g > 0  # more wash liquid needs a hotter furnace
         assert g == pytest.approx(fd, rel=1e-5)
 
+    @pytest.mark.slow
     def test_vmap_over_inlet_temperature(self, small):
         crude, th = small
         cold = crude.stream(1.0, T=480.0, P=4e5, basis="mole")
@@ -156,6 +165,7 @@ class TestFurnaceSpecs:
 
 
 class TestConfiguration:
+    @pytest.mark.slow
     def test_furnace_adds_a_freedom(self, small):
         _, th = small
         with pytest.raises(ValueError, match="1 furnace"):
@@ -166,6 +176,7 @@ class TestConfiguration:
         with pytest.raises(ValueError, match="needs a Furnace"):
             _small(th, (cc.coil_outlet_temperature(620.0),), furnace=None)
 
+    @pytest.mark.slow
     def test_flows_balance(self, overflashed, inlet, thermo):
         _, res = overflashed
         out = sum(np.asarray(_flows(s, thermo)) for s in res.products.values())

@@ -211,6 +211,7 @@ class TestPFRIsothermal:
         assert "conversion" in info
         assert float(info["conversion"]["A"]) > 0
 
+    @pytest.mark.slow
     def test_pfr_conversion_increases_with_volume(
         self, simple_thermo, first_order_rate_fn, rate_params, simple_stoich, feed_stream
     ):
@@ -544,6 +545,7 @@ class TestGasPFRAdiabatic:
 class TestPFRGradient:
     """Tests for PFR gradient compatibility."""
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_pfr_gradient_wrt_volume(
         self, simple_thermo, first_order_rate_fn, rate_params, simple_stoich
@@ -572,6 +574,7 @@ class TestPFRGradient:
         assert jnp.isfinite(grad_V)
         assert float(grad_V) > 0
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_pfr_gradient_wrt_temperature(
         self, simple_thermo, first_order_rate_fn, rate_params, simple_stoich, feed_stream
@@ -597,6 +600,7 @@ class TestPFRGradient:
         assert jnp.isfinite(grad_T)
         assert float(grad_T) > 0
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_gas_pfr_gradient_wrt_alpha(
         self, simple_thermo, first_order_rate_fn, rate_params, simple_stoich
@@ -849,6 +853,7 @@ class TestPFREdgeCases:
         # Conversion should be very high
         assert float(info["conversion"]["A"]) > 0.99
 
+    @pytest.mark.slow
     def test_no_reaction_at_low_temperature(
         self, simple_thermo, first_order_rate_fn, rate_params, simple_stoich, feed_stream
     ):

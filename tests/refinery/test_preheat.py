@@ -66,12 +66,15 @@ def train_solved(small):
     return tr, f, tr.solve(f, 300.0, _hot(small))
 
 
+@pytest.mark.slow
 class TestTrain:
+    @pytest.mark.slow
     def test_converges(self, train_solved):
         _, _, r = train_solved
         assert bool(r.converged)
         assert float(r.residual_norm) < 1e-8
 
+    @pytest.mark.slow
     def test_each_exchanger_balances(self, train_solved, small):
         tr, _, r = train_solved
         th = small[4]
@@ -95,6 +98,7 @@ class TestTrain:
         _, _, r = train_solved
         np.testing.assert_allclose(r.recovered, sum(e["Q"] for e in r.exchangers.values()), rtol=1e-12)
 
+    @pytest.mark.slow
     def test_fouling_cools_the_furnace_inlet(self, train_solved, small):
         tr, f, _ = train_solved
         tp = small[2]
@@ -114,6 +118,7 @@ class TestTrain:
         assert bool(rb.converged)
         assert float(rb.exchangers["E3"]["Q"]) < float(r.exchangers["E3"]["Q"])
 
+    @pytest.mark.slow
     def test_one_exchanger_matches_difflow_enthalpy_hx(self, small):
         """A one-exchanger train is the enthalpy-based exchanger of difflow.units."""
         _, _, _, crude, th = small
@@ -142,6 +147,7 @@ class TestTrain:
 
 
 class TestThermo:
+    @pytest.mark.slow
     def test_dry_crude_enthalpy_is_the_columns_feed_enthalpy(self, small):
         _, col, _, crude, th = small
         f = _flows(crude, pc.SMALL_RATE)
@@ -151,6 +157,7 @@ class TestThermo:
             E, _ = column._feed_enthalpy(args, T, P)
             np.testing.assert_allclose(crude_enthalpy(th, f, 0.0, T, P), E, rtol=1e-10)
 
+    @pytest.mark.slow
     def test_split_conserves_and_decants_free_water(self, small):
         _, _, _, crude, th = small
         f = _flows(crude, pc.SMALL_RATE)
@@ -184,6 +191,7 @@ def drum(small):
 
 
 class TestDesalter:
+    @pytest.mark.slow
     def test_water_and_energy(self, desalter, small):
         th = desalter.thermo
         feed = desalter.feed(pc.SMALL_RATE, T=410.0, P=10e5)
@@ -200,6 +208,7 @@ class TestDesalter:
         np.testing.assert_allclose(H_in, H_out, rtol=1e-10)
         np.testing.assert_allclose(out["margin_low"], out["T"] - 393.15)
 
+    @pytest.mark.slow
     def test_gradient(self, desalter):
         def T(T_in):
             return desalter.solve(desalter.feed(pc.SMALL_RATE, T=T_in, P=10e5))["T"]
@@ -211,6 +220,7 @@ class TestDesalter:
 
 
 class TestPreflashDrum:
+    @pytest.mark.slow
     def test_adiabatic_flash(self, drum):
         th = drum.thermo
         feed = drum.feed(pc.SMALL_RATE, T=480.0, P=12e5, water=0.002)
@@ -224,6 +234,7 @@ class TestPreflashDrum:
                                    crude_enthalpy(th, f, feed["F_water"], 480.0, 12e5), rtol=1e-10)
         assert float(out["T"]) < 480.0 and 0 < float(out["vapor_fraction"]) < 1
 
+    @pytest.mark.slow
     def test_vapor_fraction_mode_finds_the_pressure(self, small, drum):
         op = dr.PreflashDrum(dr.PreflashDrumUnitParams(
             assay=small[0], drum=dr.PreflashDrumParams(P=2.5e5, vapor_fraction=0.1)))
@@ -265,6 +276,7 @@ class TestOperations:
             d = attribute_docs(cls)
             assert all(d.get(f) for f in cls.__dataclass_fields__), cls.__name__
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("which", ["desalter", "drum"])
     def test_json_round_trip(self, which, request):
         op = request.getfixturevalue(which)
@@ -328,6 +340,7 @@ class TestErrors:
                                         desalter=dr.DesalterParams(), drum=dr.PreflashDrumParams()),
                             small[4])
 
+    @pytest.mark.slow
     def test_pumparound_needs_a_return_temperature(self):
         from .reference import case
 
@@ -341,6 +354,7 @@ class TestErrors:
         with pytest.raises(ValueError, match="neither a product nor a pumparound"):
             dr.PreheatedCrudeUnit(a, col, self._train(hot_streams=(dr.HotStream("kero", ("E2", "E1")),)))
 
+    @pytest.mark.slow
     def test_solve_with_a_different_structure(self, small, train_solved):
         tr, f, _ = train_solved
         other = small[2].update(crude_path=("E1", "desalter", "E3", "E2", "preflash"))
@@ -470,6 +484,7 @@ def coupled(request):
 @pytest.mark.release
 @pytest.mark.slow
 class TestCoupled:
+    @pytest.mark.slow
     def test_converges_from_the_default_start(self, coupled):
         _, unit, r = coupled
         np.testing.assert_allclose(r.furnace_inlet_T, r.train.T_out)
@@ -518,6 +533,7 @@ def _outputs(unit, BPD, v):
 @pytest.mark.release
 @pytest.mark.slow
 class TestGradients:
+    @pytest.mark.slow
     def test_implicit_gradients_match_central_differences(self, base_unit):
         unit, BPD = base_unit
         v0 = jnp.array([1500.0, 2e-4, pc.DRUM_P, float(unit.assay.tbp_T[K_TBP])])
@@ -533,6 +549,7 @@ class TestGradients:
         assert float(J[0, 1]) < 0 < float(J[1, 1])
         assert float(J[2, 2]) < 0
 
+    @pytest.mark.slow
     def test_every_rf_costs_fuel(self, base_unit):
         """Monotone in every exchanger's R_f: a reverse-mode gradient for all
         eight, and a finite fouling of each confirms the sign."""
@@ -545,6 +562,7 @@ class TestGradients:
             assert float(r.furnace_inlet_T) < float(base.furnace_inlet_T), e.name
             assert float(r.fired_duty) > float(base.fired_duty), e.name
 
+    @pytest.mark.slow
     def test_preflash_vapour_falls_with_pressure(self, base_unit):
         unit, BPD = base_unit
         tp = unit.train_params
@@ -552,6 +570,7 @@ class TestGradients:
              for P in (2.0e5, 3.0e5, 4.5e5)]
         assert v[0] > v[1] > v[2] > 0
 
+    @pytest.mark.slow
     def test_cleaning_ranking(self, base_unit):
         unit, BPD = base_unit
         rows = unit.cleaning_ranking(BPD, pc.T_TANK)

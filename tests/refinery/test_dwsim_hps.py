@@ -139,6 +139,7 @@ class TestReferenceIsCurrent:
     def test_points(self):
         assert REF["points"] == json.loads(json.dumps(hc.POINTS)), REGENERATE
 
+    @pytest.mark.slow
     def test_the_constants_are_the_hydrotreaters(self):
         """The unit's flash table now against the frozen one (the effluent
         itself needs a two-minute solve: :func:`test_the_effluent_is_the_hydrotreaters`)."""
@@ -187,6 +188,7 @@ class TestSameModel:
             exact = np.exp(np.asarray(pr_lnphi(r["T"], r["P"], jnp.asarray(c), comps, phase)[0]))
             np.testing.assert_allclose(exact, r[key], rtol=5e-4, err_msg=f"{r['T']} {r['P']}")
 
+    @pytest.mark.slow
     def test_the_flash(self):
         """difflow's ``pr_flash`` of the same feed. Measured: vapour fraction
         4.7e-7, liquid composition 1.7e-6 and vapour 3.7e-8 absolute (60
@@ -202,6 +204,7 @@ class TestSameModel:
             np.testing.assert_allclose(np.asarray(fr.x), r["x"], atol=tol)
             np.testing.assert_allclose(np.asarray(fr.y), r["y"], atol=tol)
 
+    @pytest.mark.slow
     def test_dissolved_gases(self):
         """The fraction of the H2, H2S, NH3 and C1 fed that leaves dissolved
         in the separator liquid (#333). Measured 3.4e-5 relative worst (H2,

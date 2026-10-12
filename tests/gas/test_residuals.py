@@ -119,6 +119,7 @@ def mixed_state():
 # =============================================================================
 
 
+@pytest.mark.slow
 class TestAgainstIndependentOracle:
     """The equations must match a from-scratch restatement of the physics."""
 
@@ -140,6 +141,7 @@ class TestAgainstIndependentOracle:
             )
         return names, got
 
+    @pytest.mark.slow
     def test_triangle(self, triangle_state):
         net, p_bar, q = triangle_state
         names, _ = self._compare(net, p_bar, q)

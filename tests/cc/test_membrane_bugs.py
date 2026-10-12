@@ -30,6 +30,7 @@ def _flue_gas_feed(P=1000000.0):
 class TestBug139PermeateRecycleMassBalance:
     """Bug #139: Permeate recycle mode should combine both retentates."""
 
+    @pytest.mark.slow
     def test_mass_balance_permeate_recycle(self):
         """Total feed moles must equal total retentate + permeate moles."""
         params = MembraneParams(
@@ -54,6 +55,7 @@ class TestBug139PermeateRecycleMassBalance:
             f"Mass balance violated: feed={F_feed}, ret={F_ret}, perm={F_perm}"
         )
 
+    @pytest.mark.slow
     def test_species_balance_permeate_recycle(self):
         """Per-species mass balance must hold."""
         params = MembraneParams(

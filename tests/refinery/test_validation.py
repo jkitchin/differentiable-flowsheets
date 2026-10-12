@@ -82,6 +82,7 @@ class TestReferenceIsCurrent:
     both models); if they have moved, every comparison below is against a
     different crude, and the right response is to regenerate, not loosen."""
 
+    @pytest.mark.slow
     def test_the_component_table_is_the_one_the_reference_used(self, difflow_case):
         unit, crude, thermo, _ = difflow_case
         now = case.component_data(crude, thermo)
@@ -421,6 +422,7 @@ class TestColumnAgainstReference:
 
     ref = REF["layer3"]["column"]
 
+    @pytest.mark.slow
     def test_both_converged(self, solved):
         assert bool(solved.converged)
         assert REF["layer3"]["solve"]["status"] == "optimal"
@@ -488,6 +490,7 @@ class TestGradientsAgainstReference:
     def unit_vf(self, difflow_case):
         return difflow_case[0], difflow_case[3]
 
+    @pytest.mark.slow
     def test_diesel_api_with_diesel_yield(self, unit_vf):
         unit, Vf = unit_vf
         ref = REF["layer4"]["d_diesel_api_d_diesel_yield"]
@@ -497,6 +500,7 @@ class TestGradientsAgainstReference:
 
         assert float(jax.grad(f)(ref["x0"])) == pytest.approx(ref["value"], rel=1e-3)
 
+    @pytest.mark.slow
     def test_fired_duty_with_overflash(self, unit_vf):
         unit, Vf = unit_vf
         ref = REF["layer4"]["d_fired_duty_d_overflash"]

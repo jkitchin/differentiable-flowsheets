@@ -344,6 +344,7 @@ class TestEOFallbackForUnitsWithoutEOResiduals:
 
 
 class TestEOSolverRecycle:
+    @pytest.mark.slow
     def test_cstr_with_recycle(self, simple_thermo, simple_rate_fn):
         """EO matches SM for CSTR with simple recycle via splitter."""
         stoich = jnp.array([[-1.0], [+1.0]])
@@ -504,6 +505,7 @@ from tests.c4_system import (
 class TestEOSFlashResiduals:
     """EOSFlash.eo_residuals vanishes at the sequential flash, in every regime."""
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("T", [325.0, 300.0, 400.0])  # two-phase, liquid, vapor
     def test_zero_at_sm_solution_with_regular_jacobian(self, T):
         eos, _ = _c4_eos_and_thermo()
@@ -534,6 +536,7 @@ class TestCSTRNonIsothermalResiduals:
     specified-duty reactor had no energy equation in EO form at all.
     """
 
+    @pytest.mark.slow
     def test_energy_row_vanishes_at_sm_solution_and_depends_on_T(self):
         cstr = _isomerization_cstr()
         feed = _c4_stream(460.0)

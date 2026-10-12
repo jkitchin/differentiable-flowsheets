@@ -557,6 +557,11 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Changed
 
+- **Per-commit tests check correctness, not expensive solves.** ~990 tests whose recorded cost was the computation
+  (over 2-3 s; the 350 over 10 s were 85% of the ~490 runner-minutes) are marked `slow`, and the Tests workflow now
+  runs `-m "not release and not slow"` on 2 shards instead of 4 (timeout 40 -> 25 min). The nightly Full suite still
+  runs everything. `DIFFLOW_TEST_BUDGET` (set to 180 s in CI) fails a non-slow test whose call runs past it, and CI
+  prints `--durations=15`.
 - **Recycle tears no longer lock a pressurized loop at 1 atm.** `Flowsheet(default_T=None, default_P=None)` is the
   new default: a tear with no better guess starts at the highest pressure and flow-weighted temperature of the
   other inlets of the unit it feeds (feeds, or units upstream of every tear), with `stop_gradient`. Before, the

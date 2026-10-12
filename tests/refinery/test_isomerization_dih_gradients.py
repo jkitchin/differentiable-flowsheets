@@ -43,6 +43,7 @@ def jacobian():
     return unit, feed, base, J, guess
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("j,lever", enumerate(("T_in", "LHSV", "x_nC6")))
 def test_the_jacobian_matches_central_differences(jacobian, j, lever):
     unit, feed, base, J, guess = jacobian
