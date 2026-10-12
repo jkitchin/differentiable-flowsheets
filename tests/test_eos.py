@@ -215,6 +215,21 @@ class TestSRK:
 class TestFlashTPEOS:
     """Tests for flash calculation with EOS."""
 
+    def test_near_critical_split_reaches_bubble_point(self):
+        """0.8 CH4 / 0.2 C3H8 at 250 K, just below its 93.26 bar bubble point
+        (issue #444). Damped substitution had not converged there (V = 0.44 at
+        0.99 Pb, where it is 0.27) and the substitution-based stability test
+        called the feed single-phase from 0.993 Pb up. The reference V values
+        come from Newton continuation from 0.9 Pb, an independent path."""
+        from difflow.database import get_critical_props
+        pr = PengRobinson({s: get_critical_props(s) for s in ("methane", "propane")})
+        z = jnp.array([0.8, 0.2])
+        Pb = 9326215.25
+        f = jax.jit(lambda P: flash_TP_eos(pr, z, 250.0, P)[0])
+        for r, V_ref in [(0.99, 0.27312701), (0.993, 0.22975701),
+                         (0.995, 0.19083899), (0.997, 0.13792233)]:
+            assert float(f(r * Pb)) == pytest.approx(V_ref, abs=1e-6), r
+
     def test_flash_two_phase(self, propane_butane_system):
         """Test flash calculation in the two-phase region."""
         pr = PengRobinson(propane_butane_system)

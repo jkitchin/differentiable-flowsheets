@@ -45,7 +45,9 @@ residence time ``tau``, growth rate ``G`` and nuclei density ``n0``::
 :func:`msmpr_distribution`, :func:`msmpr_moments`, :func:`msmpr_dominant_size`,
 :func:`msmpr_mass_median_size` (the root of the gamma(4) cumulative fraction at
 one half, computed, not typed), :func:`msmpr_mass_cv` (1/sqrt(4) = 50 %),
-:func:`msmpr_from_magma` and :func:`fit_msmpr` (the "ln n vs L" line).
+:func:`msmpr_from_magma`, :func:`fit_msmpr` (the "ln n vs L" line) and
+:func:`sieve_population_density` (a screen analysis converted to ``n(L)``,
+``n_i = M_T w_i / (rho_c k_v Lbar_i^3 dL_i)``, the data that ``fit_msmpr`` fits).
 
 Kinetics are power laws in the absolute supersaturation ``dC = c - c_sat``
 (kg solute per kg solvent): :func:`growth_rate` ``G = k_g dC^g`` (m/s) and
@@ -74,8 +76,11 @@ flowsheet; it is not a stream). Feeding the crystal stream to a ``Dryer`` is a
 dehydration, which the dryer's solid/moisture split does not model.
 
 Water-removal duty: ``Q = m_F cp (T - T_F) + E h_fg(T) - dH_c C`` (W, positive
-heat added; negative is cooling), with ``cp`` a constant solution heat capacity,
-``h_fg`` from :func:`difflow.water.water_latent_heat` and ``dH_c`` the heat of
+heat added; negative is cooling). In ``mode="adiabatic"`` (a vacuum
+crystallizer) the same balance is solved for ``E`` with ``Q`` set to
+``duty`` (0 by default): the feed flashes to ``T`` and its sensible heat and the heat
+of crystallization evaporate the solvent. ``cp`` is a constant solution heat capacity,
+``h_fg`` comes from :func:`difflow.water.water_latent_heat` and ``dH_c`` is the heat of
 crystallization released (J per kg of crystal, user data, default 0).
 
 Not modeled: size-dependent growth, fines destruction or classified product
@@ -423,6 +428,41 @@ def fit_msmpr(L, n, weights=None) -> tuple[Array, Array]:
     return -1.0 / slope, jnp.exp(intercept)
 
 
+def sieve_population_density(mass_fraction, L_upper, L_lower, M_T, crystal_density,
+                             shape_factor=math.pi / 6.0) -> tuple[Array, Array]:
+    """Population density ``n(L)`` from a screen (sieve) analysis of the product crystals.
+
+    The crystals retained between two screens, of mass fraction ``w_i`` and mean
+    size ``Lbar_i = (L_upper + L_lower)/2``, number ``M_T w_i / (rho_c k_v Lbar_i^3)``
+    per m^3; dividing by the size interval ``dL_i = L_upper - L_lower`` gives the
+    population density (McCabe, Smith & Harriott, Ch. 27; Randolph & Larson)::
+
+        n_i = M_T w_i / (rho_c k_v Lbar_i^3 dL_i)
+
+    Args:
+        mass_fraction: Mass fraction of the crystals on each screen (need not sum to 1
+            if the pan or the oversize is left out).
+        L_upper: Aperture of the screen above each cut, i.e. the upper size (m).
+        L_lower: Aperture of the screen that retains the cut, the lower size (m).
+        M_T: Magma (suspension) density, kg crystal per m^3 (the basis of ``n``).
+        crystal_density: Crystal density (kg/m^3).
+        shape_factor: Volume shape factor ``k_v`` (pi/6 for spheres, 1 for cubes).
+
+    Returns:
+        ``(L_mean, n)``: the mean size of each cut (m) and its population
+        density (number per m of size per m^3).
+
+    Example:
+        >>> L, n = sieve_population_density([0.5, 0.5], [2e-3, 1e-3], [1e-3, 0.5e-3], 100.0, 1600.0)
+        >>> bool(n[1] > n[0])
+        True
+    """
+    w, Lu, Ll = _f(mass_fraction), _f(L_upper), _f(L_lower)
+    Lbar = 0.5 * (Lu + Ll)
+    n = _f(M_T) * w / (_f(crystal_density) * _f(shape_factor) * Lbar ** 3 * (Lu - Ll))
+    return Lbar, n
+
+
 # =============================================================================
 # Kinetics and the steady MSMPR
 # =============================================================================
@@ -474,11 +514,11 @@ def msmpr_steady_state(feed_solute, feed_water, T_out, sol: Solubility, kinetics
         supersaturated) and ``closure`` (relative mismatch of the third-moment
         magma density and the balance's, a convergence check).
     """
+    try:  # check the raw value: jnp.asarray of a constant is a tracer under jit
+        too_big = float(kinetics[4]) > 1.0
+    except (jax.errors.TracerArrayConversionError, jax.errors.ConcretizationTypeError):
+        too_big = False  # traced: cannot check
     k_g, g, k_b, b, j = (_f(v) for v in kinetics)
-    try:
-        too_big = float(j) > 1.0
-    except jax.errors.TracerArrayConversionError:  # traced: cannot check
-        too_big = False
     if too_big:
         raise ValueError("msmpr_steady_state needs j <= 1 (a single steady state)")
     S0, W0, E = _f(feed_solute), _f(feed_water), _f(water_evaporated)
@@ -540,7 +580,9 @@ class CrystallizerParams(ParamsMixin):
         solute_MW: Molar mass of the anhydrous solute (g/mol).
         mode: ``"cooling"`` (cool to ``T``, no evaporation), ``"evaporative"``
             (evaporate at constant temperature: ``T`` defaults to the feed's)
-            or ``"cooling_evaporative"`` (both).
+            or ``"cooling_evaporative"`` (both), or ``"adiabatic"`` (a vacuum
+            crystallizer: the feed flashes to ``T`` and the solvent evaporated is
+            solved from the heat balance with ``Q = duty``, 0 by default).
         T: Outlet temperature (K).
         water_evaporated: Solvent evaporated (kg/s).
         evaporation_fraction: Fraction of the feed solvent evaporated, instead of ``water_evaporated``.
@@ -561,18 +603,22 @@ class CrystallizerParams(ParamsMixin):
         transition_width: Width (K) of the smooth blend between the forms.
         kinetics: ``None`` for equilibrium yield, or ``[k_g, g, k_b, b, j]`` for the MSMPR.
         residence_time: Residence time ``tau`` (s), kinetic mode.
-        volume: Crystallizer volume (m^3); ``tau = volume / feed liquor volume flow`` if no ``residence_time``.
+        volume: Crystallizer volume (m^3); if no ``residence_time``, ``tau = volume / Q_P`` with
+            ``Q_P = (m_F - E) / liquor_density`` the volume flow of the product slurry (the feed
+            minus the solvent evaporated), as in the MSMPR definition of ``tau``.
         crystal_density: Crystal (hydrate) density (kg/m^3), kinetic mode.
         shape_factor: Volume shape factor ``k_v``.
         liquor_density: Mother-liquor density (kg/m^3).
         cp_solution: Solution heat capacity (J/kg/K) for the sensible duty.
         heat_of_crystallization: Heat released per kg of crystal formed (J/kg).
         soft: Soft-clip width of the yield, as a fraction of the feed solute.
+        duty: Heat added (W) in ``"adiabatic"`` mode (0 = a truly adiabatic flash;
+            negative removes heat through a jacket or cooler as well).
     """
 
     solute: str
     solute_MW: float
-    mode: Literal["cooling", "evaporative", "cooling_evaporative"] = "cooling"
+    mode: Literal["cooling", "evaporative", "cooling_evaporative", "adiabatic"] = "cooling"
     T: float | None = None
     water_evaporated: float | None = None
     evaporation_fraction: float | None = None
@@ -600,29 +646,56 @@ class CrystallizerParams(ParamsMixin):
     cp_solution: float = 4186.0
     heat_of_crystallization: float = 0.0
     soft: float = 1e-6
+    duty: float = 0.0
 
     def __post_init__(self):
-        if self.mode not in ("cooling", "evaporative", "cooling_evaporative"):
-            raise ValueError("mode must be 'cooling', 'evaporative' or 'cooling_evaporative'")
+        if self.mode not in ("cooling", "evaporative", "cooling_evaporative", "adiabatic"):
+            raise ValueError("mode must be 'cooling', 'evaporative', 'cooling_evaporative' or 'adiabatic'")
         evap = self.water_evaporated is not None or self.evaporation_fraction is not None
         if self.water_evaporated is not None and self.evaporation_fraction is not None:
             raise ValueError("give water_evaporated or evaporation_fraction, not both")
         if self.mode == "cooling" and evap:
             raise ValueError("mode 'cooling' has no evaporation; use 'cooling_evaporative'")
-        if self.mode != "cooling" and not evap:
+        if self.mode == "adiabatic" and evap:
+            raise ValueError("mode 'adiabatic' solves the evaporation from the heat balance; "
+                             "do not give water_evaporated or evaporation_fraction")
+        if self.mode not in ("cooling", "adiabatic") and not evap:
             raise ValueError(f"mode {self.mode!r} needs water_evaporated or evaporation_fraction")
         if self.mode != "evaporative" and self.T is None:
             raise ValueError(f"mode {self.mode!r} needs T")
         if self.kinetics is not None:
             if len(self.kinetics) != 5:
                 raise ValueError("kinetics is [k_g, g, k_b, b, j]")
-            if float(self.kinetics[4]) > 1.0:
+            try:  # concrete only: under jit/grad even indexing a constant array is traced
+                too_big = float(self.kinetics[4]) > 1.0
+            except (jax.errors.TracerArrayConversionError, jax.errors.ConcretizationTypeError):
+                too_big = False
+            if too_big:
                 raise ValueError("kinetics j must be <= 1")
             if self.residence_time is None and self.volume is None:
                 raise ValueError("kinetic mode needs residence_time or volume")
         if (self.upper_solubility_coeffs is not None or self.upper_solubility_T is not None) \
                 and self.transition_T is None:
             raise ValueError("an upper solubility form needs transition_T")
+
+
+def _adiabatic_evaporation(S0, W0, T_in, T, sol: Solubility, p: CrystallizerParams) -> Array:
+    """Solvent flashed off (kg/s) so that the duty equals ``p.duty``.
+
+    ``duty = m_F cp (T - T_F) + E h_fg(T) - dH_c C(E)`` with the equilibrium hydrate
+    flow ``C(E) = (S0 - c (W0 - E)) / (f_s - c f_w)``, linear in ``E``; solved in
+    closed form. The crystal term uses the unclipped ``C``: it is exact whenever
+    crystals form, and with ``dH_c = 0`` (the default) exact always. ``E`` is floored
+    at zero (a feed too cold to flash at ``T`` evaporates nothing).
+    """
+    c = sol.c_sat(T)
+    f_s, f_w = sol.crystal_fractions(T)
+    den = jnp.maximum(f_s - c * f_w, _C_FLOOR)
+    dH = _f(p.heat_of_crystallization)
+    m_F = S0 + W0
+    num = _f(p.duty) - m_F * p.cp_solution * (T - T_in) + dH * (S0 - c * W0) / den
+    E = num / (water_latent_heat(T) - dH * c / den)
+    return _soft_pos(E, 1e-9 * m_F + _TINY)
 
 
 def _make_form(model, coeffs, T, c, **kw):
@@ -685,10 +758,11 @@ class Crystallizer:
         "upper_hydrate_waters": "mol/mol", "transition_T": "K", "transition_width": "K",
         "residence_time": "s", "volume": "m^3", "crystal_density": "kg/m^3", "shape_factor": "-",
         "liquor_density": "kg/m^3", "cp_solution": "J/(kg K)",
-        "heat_of_crystallization": "J/kg", "soft": "-",
+        "heat_of_crystallization": "J/kg", "soft": "-", "duty": "W",
     }
     numerical_method = (
-        "Closed-form two-balance yield with a softplus clip; kinetic steady state by bisection in "
+        "Closed-form two-balance yield with a softplus clip; adiabatic (vacuum) evaporation in closed "
+        "form from the linear heat balance; kinetic steady state by bisection in "
         "ln(dC/dC_max) with an implicit-gradient Newton step."
     )
     outlet_roles = ["crystals", "mother_liquor"]
@@ -734,7 +808,9 @@ class Crystallizer:
         W0 = _f(feed[kw_]) * p.solvent_MW / 1000.0
         T_in = _f(feed["T"])
         T = T_in if p.T is None else _f(p.T)
-        if p.water_evaporated is not None:
+        if p.mode == "adiabatic":
+            E = _adiabatic_evaporation(S0, W0, T_in, T, sol, p)
+        elif p.water_evaporated is not None:
             E = _f(p.water_evaporated)
         elif p.evaporation_fraction is not None:
             E = _f(p.evaporation_fraction) * W0
@@ -748,8 +824,11 @@ class Crystallizer:
             if p.residence_time is not None:
                 tau = _f(p.residence_time)
             else:
-                Q_feed = (S0 + W0) / _f(p.liquor_density)
-                tau = _f(p.volume) / Q_feed
+                # MSMPR tau is the volume over the PRODUCT (slurry) flow; the evaporated
+                # solvent leaves as vapor, so an evaporative crystallizer has a longer tau
+                # than the feed flow suggests
+                Q_product = (S0 + W0 - E) / _f(p.liquor_density)
+                tau = _f(p.volume) / Q_product
             ss = msmpr_steady_state(S0, W0, T, sol, p.kinetics, tau, crystal_density=p.crystal_density,
                                     shape_factor=p.shape_factor, liquor_density=p.liquor_density,
                                     water_evaporated=E, soft=p.soft)

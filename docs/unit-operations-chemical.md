@@ -1149,6 +1149,20 @@ N = gilliland_stages(1.5 * R_min, R_min, N_min, method="molokanov")
 N_R, N_S = kirkbride_feed_stage(11.0, z[1], z[2], x_B[1], x_D[2], 35.52, 64.48)  # 5.96, 5.04
 ```
 
+`underwood_minimum_reflux` is the one-root (class 1) form. When non-keys
+distribute at minimum reflux, as a species boiling between the keys always
+does, use `underwood_class2`. It finds one root per volatility gap spanned by the keys and
+the distributing species, and solves Underwood's second equation for
+`V_min` and their distillate flows:
+
+```python
+from difflow import underwood_class2
+R_min, d, thetas = underwood_class2(jnp.array([4.0, 2.0, 1.5, 1.0]),   # alpha
+                                    jnp.array([30.0, 30.0, 10.0, 30.0]),  # feed flows
+                                    d_LK=29.0, d_HK=1.0, light_key=1, heavy_key=3)
+# d[2] = 4.31 of 10: the intermediate splits; R_min = 1.00
+```
+
 `gilliland_stages` defaults to Eduljee's fit; `method="molokanov"` is the fit
 `ShortcutColumn` uses. `fenske_stages` (above) is the pseudo-binary form, right
 only for a binary.
@@ -1335,6 +1349,22 @@ parameters — give exactly one of `D_spec` or `B_spec`:
 <!-- doc-test: skip: call fragment; the column is built in the examples below -->
 ```python
 distillate, bottoms, info = column(feed, R=2.0, B_spec=40.0)
+```
+
+To design to product specifications instead, `column.solve_specs(feed,
+specs)` solves for `R` and `D` from any two of `("x_D", species, value)`,
+`("x_B", species, value)`, `("recovery_D", species, value)`,
+`("recovery_B", species, value)`, `("R", value)`, `("D", value)` and
+`("B", value)`. It runs a damped Newton iteration and attaches the
+implicit-function derivative, so `jax.grad` of, say, `info["R"]` with respect to
+a purity specification is the design sensitivity. `info["spec_converged"]`
+is False for an infeasible pair:
+
+<!-- doc-test: skip: call fragment; the column is built in the examples below -->
+```python
+distillate, bottoms, info = column.solve_specs(
+    feed, [("x_D", "benzene", 0.95), ("x_B", "toluene", 0.95)])
+R, D = info["R"], info["D"]
 ```
 
 #### Governing Equations (MESH)
@@ -1748,6 +1778,18 @@ fraction of a stage where the reboiler changes index. With open steam, build the
 is `q > 1`. Specifying a feed stage *earlier* than the optimal one
 extends the stripping line into a region where it lies above the curve; the
 stepper does not guard against that.
+
+**Side draws, side feeds and several feeds.** Pass the operating lines of
+every section, from the top down, as `lines=[...]` (with `top_line=None`
+and `bottom_line=None`). Give one switch per pair of adjacent lines:
+`switch_x` (the composition where the two lines meet, or a feed's q-line
+crossing; a sigmoid like the optimal feed) or `switch_stages` (stage
+numbers). Build each line from its section balance with
+`operating_line(L, V, x_out, y_in)` or as `(L, -V, c)` directly. For a liquid
+side draw `S` at `x_S` from the rectifying section, the line below it is
+`V y = (L - S) x + D x_D + S x_S`, and it meets the top line at `x_S`. The
+result adds `switch_stage` (fractional stage of each switch) and
+`N_sections` (stages on each line).
 
 **Pinches.** `minimum_reflux` takes the largest chord slope
 `(x_D - y*(x))/(x_D - x)` from `(x_D, x_D)` to the curve over
@@ -5487,12 +5529,15 @@ connect without a conversion. Every non-solid species is a liquid-phase (or gas-
 species and rides with the fluid. A particle size distribution is **a unit parameter** (fixed size bins),
 not a stream property.
 
-**What is and is not verified.** No published worked example (Geankoplis Ch. 14, McCabe, Smith & Harriott
-Ch. 29-30, Coulson & Richardson Vol. 2, Cooper & Alley Ch. 4) was reproduced: the issue calls those numbers
-"unverified, from recollection" and none could be recalled with confidence. All data below are synthetic
-and labelled illustrative. The tests check the closed forms against independent oracles (a NumPy grid
-maximum, an analytic Coe-Clevenger area, a batch curve generated *from* a known settling law,
-`scipy` quadrature and scalar optimization, hand calculations) and `check_grads`. The Lapple/Shepherd-Lapple
+**What is and is not verified.** The Ruth functions reproduce Geankoplis 5e Examples 14.2-1 to 14.2-3:
+`fit_ruth` on the CaCO3 test data gives $\alpha = 1.855\times10^{11}$ m/kg and $R_m = 10.64\times10^{10}$ m$^{-1}$
+(book: $1.863\times10^{11}$ and $10.63\times10^{10}$), the 20-frame press collects 3.37 m$^3$ in 269.6 s (book 269.7 s)
+and the wash at a quarter of the final rate takes 194 s (`TestGeankoplisFiltration`; the data and answers were
+typed from memory, check them against the printed book). No published thickener or cyclone example
+(McCabe, Smith & Harriott Ch. 29-30, Coulson & Richardson Vol. 2, Cooper & Alley Ch. 4) was reproduced; those
+data below are synthetic and labelled illustrative. The tests check the closed forms against independent
+oracles (a NumPy grid maximum, an analytic Coe-Clevenger area, a batch curve generated *from* a known settling
+law, `scipy` quadrature and scalar optimization, hand calculations) and `check_grads`. The Lapple/Shepherd-Lapple
 constants (K = 16, the standard proportions, the Stairmand set) are typed from memory and flagged
 **unverified** in the code.
 
@@ -5758,7 +5803,7 @@ $$d_{50} = \left[\frac{9\mu W}{2\pi N_e v_i(\rho_p - \rho_g)}\right]^{1/2},\qqua
 The overall efficiency is $\sum_i w_i\,\eta(d_i)$ over the bins, differentiable in $D$, the gas flow and
 $\rho_p$. $d_{50}\propto v_i^{-1/2}$, so efficiency rises with flow at fixed $D$ (the pressure drop rises as
 $v_i^2$). **Unverified, typed from memory:** $K = 16$ (`K_pressure`), the Lapple proportions
-$H = D/2$, $W = D/4$, $D_e = D/2$, $S = D/8$, $L_b = L_c = 2D$, $J = D/4$ and the Stairmand
+$H = D/2$, $W = D/4$, $D_e = D/2$, $S = 5D/8$, $L_b = L_c = 2D$, $J = D/4$ and the Stairmand
 high-efficiency set (`CYCLONE_GEOMETRIES`); `geometry="custom"` with `ratios` takes your own, and
 `delta_P_velocity_heads` replaces the Shepherd-Lapple form by a number of inlet velocity heads. Mass-loading
 effects and re-entrainment are not modelled.
@@ -6356,8 +6401,16 @@ curve and the latent heat includes the heat of fusion (333.5 kJ/kg, recalled).
 enthalpy exactly (and reports `mu > 1` when the mixture fogs);
 `sensible_heat(state, Q, m_dry_air)`; `cool_dehumidify(state, T_coil,
 bypass_factor)` for a coil with an apparatus dew point (it returns the leaving
-state and the sensible, latent and total duty and the condensate);
-`adiabatic_humidify(state, effectiveness=, W_out=)`. A cold-room chain
+state and the sensible, latent and total duty and the condensate). A cold coil
+with a small bypass factor puts the straight line to the apparatus dew point
+above the saturation curve; the coil then delivers saturated air and adds the
+would-be fog to the condensate (`info["fog"]`), so the leaving RH never exceeds
+1. `adiabatic_humidify(state, effectiveness=, W_out=, RH_out=, mu_out=)` moves
+along the adiabatic-saturation line to a fraction of saturation, a humidity
+ratio, a relative humidity or a degree of saturation (Geankoplis's "percentage
+humidity": air at 87.8 C and H = 0.030 humidified to `mu_out=0.9` leaves at
+42.3 C with H = 0.0501, against 42.5 C and 0.0500 read from the chart in
+Geankoplis Ex. 9.3-2). A cold-room chain
 (cool and dehumidify, then reheat):
 
 ```python
@@ -6603,7 +6656,7 @@ as a library and the `Dryer` unit that applies them to the humid-air streams of
 **Functions**: `dry_basis`, `wet_basis`, `free_moisture`, `solids_moisture`,
 `equilibrium_moisture`, `water_activity`, `constant_drying_rate`,
 `heat_transfer_coefficient_tray`, `drying_rate_curve`, `drying_periods`,
-`drying_time`
+`drying_time`, `rotary_dryer_ua`, `heat_transfer_units`
 
 Moisture is on the **dry basis**, $X$ kg water per kg bone-dry solid
 (`dry_basis(w)` and `wet_basis(X)` convert); the *equilibrium moisture* $X^*$ is
@@ -6627,7 +6680,10 @@ $$t = \frac{L_s}{A\,R_c}\left[(X_1 - X_c) + (X_c - X^*)\ln\frac{X_c - X^*}{X_2 -
 
 (`drying_time`; `falling="integral"` replaces the logarithm by
 $(L_s/A)\int dX/R$ over a tabulated rate curve, and `drying_periods` returns the
-two periods separately). The Fick-diffusion series for a slab is not implemented.
+two periods separately). Between the table's points the rate is interpolated
+linearly in $R$ by default; `interpolate="inverse"` interpolates $1/R$ instead,
+which makes the integral exactly the trapezoid rule on a $1/R$ versus $X$ plot,
+the graphical method of Geankoplis Example 9.7-1. The Fick-diffusion series for a slab is not implemented.
 
 **The smooth switch.** Which terms apply depends on where $X_c$ falls relative
 to $X_1$ and $X_2$: $X_1 > X_c > X_2$, falling only ($X_1 < X_c$) and constant
@@ -6666,11 +6722,16 @@ X = equilibrium_moisture(0.5, 300.0, "gab", gab)
 print(f"X_eq(a_w = 0.5) = {float(X):.4f}, back to a_w = {float(water_activity(X, 300.0, 'gab', gab)):.3f}")
 ```
 
-The numbers are an invented illustration, not a published example: the
-Geankoplis (Ch. 9) and McCabe, Smith & Harriott (Ch. 24) drying examples were
-not reproduced (their inputs could not be recalled with confidence), so the
-tests check the closed forms against a numerical $\int dX/R$ of the same
-piecewise rate curve instead. The tray correlations in
+The numbers are an invented illustration. The tests (`TestGeankoplis`) reproduce
+Geankoplis (5e, Ch. 9) Examples 9.6-1 (constant rate from the tray correlation:
+wet bulb 28.9 C and $R_c$ = 3.39 kg/h/m$^2$ as in the book; the time for the
+constant-rate drop, 2.08 h), 9.7-1 (graphical falling-rate integral, 4.06 h
+with `interpolate="inverse"`), 9.7-2 (straight-line falling rate, 4.40 h against
+4.39 h) and 9.10-1 (a countercurrent dryer balance with the product temperature
+specified: 1170 against 1171 kg dry air/h, exit humidity 0.0247). Those inputs and
+answers were **typed from memory** for the unit-operations book and should be
+checked against the printed book; the McCabe, Smith & Harriott (Ch. 24) examples
+are not reproduced. The tray correlations in
 `heat_transfer_coefficient_tray`, $h = 0.0204\,G^{0.8}$ (parallel flow) and
 $h = 1.17\,G^{0.37}$ (perpendicular), with $G$ in kg/m$^2$/h and $h$ in W/m$^2$/K,
 are typed from memory and **unverified**; check them against the book.
@@ -6806,6 +6867,43 @@ print(f"inlet {T - K:.1f} C with {float(air_flow(T)):.1f} kg/s of air: product {
       f"(limit {T_max - K:.1f} C), {float(info['energy_per_kg']) / 1e6:.2f} MJ/kg water")
 ```
 
+#### Rotary-dryer sizing
+
+A direct-heat rotary dryer is sized by heat transfer (McCabe, Smith & Harriott
+7e, Ch. 24). The air cools from $T_{in}$ to $T_{out}$ against solids that sit at
+the wet bulb $T_{wb}$ through most of the shell; the number of heat-transfer units
+$N_t = \ln[(T_{in} - T_{wb})/(T_{out} - T_{wb})]$ (`heat_transfer_units`, in
+`info["N_t"]` of a continuous dryer) is usually 1.5-2.5. With `diameter`
+set, a continuous `Dryer` (either flow) splits the shell into three zones:
+I heats the wet feed to $T_{wb}$, $q_I = m_s(c_{ps} + X_{in}c_{pw})(T_{wb} - T_{s,in})$;
+II evaporates the water at $T_{wb}$, $q_{II} = m_s(X_{in} - X_{out})\lambda(T_{wb})$;
+III heats the dry product to $T_{s,out}$, $q_{III} = m_s(c_{ps} + X_{out}c_{pw})(T_{s,out} - T_{wb})$.
+In a cocurrent dryer the zones run in the same order along the
+shell but the hot air meets zone I. The air temperatures between the zones
+(`zone_air_T`, at the I/II and II/III boundaries) follow from the humid heat, and each zone
+length is $L_i = q_i/(U_a S\,\Delta T_{lm,i})$ with
+$U_a = 237\,G^{0.67}/D$ W/m$^3$/K (`rotary_dryer_ua`; $G$ the air mass velocity
+in kg/m$^2$/s over the cross-section $S$). This is the SI form of MSH's
+$0.5\,G^{0.67}/D$ in US units, **recalled from memory**. `info` gains
+`zone_duties`, `zone_lengths`, `zone_dT_lm`, `zone_air_T`, `Ua`, `length`,
+`volume` and `L_over_D` (typically 4-10). `T_solids_out` fixes the product
+temperature when it is known, as in Geankoplis Example 9.10-1, instead of
+estimating it from the falling rate.
+
+```python
+from difflow import Dryer, DryerParams
+from difflow.psychrometrics import air_stream_from_state, state, MW_WATER
+
+K = 273.15
+wet = {"F_solid": 0.126, "F_H2O": 0.126 * 0.04 / MW_WATER, "T": 26.7 + K, "P": 101325.0}
+air = air_stream_from_state(state(T=93.3 + K, W=0.010), 0.325)      # kg/s dry air
+dryer = Dryer(DryerParams(mode="continuous", X_c=0.03, X_eq=0.0, product_moisture=0.002, h=50.0,
+                          T_solids_out=62.8 + K, solids_cp=1465.0, diameter=1.0))
+_, _, info = dryer(wet, air)
+print(f"N_t = {float(info['N_t']):.2f}, zones {[round(float(L), 2) for L in info['zone_lengths']]} m, "
+      f"L = {float(info['length']):.2f} m (L/D = {float(info['L_over_D']):.1f})")
+```
+
 #### Parameters
 
 <!-- doc-test: skip: field listing (a class sketch), not an executable example -->
@@ -6841,6 +6939,10 @@ class DryerParams:
     T_ambient: float = 293.15          # K, reference of the energy per kg and efficiency
     entrainment: float = 0.0           # fraction of the dry solids carried out as fines (continuous)
     lewis: float = 1.0
+    rate_interpolation: str = "rate"   # | "inverse" (1/R linear between rate_curve points)
+    T_solids_out: float = None         # K, product temperature specified instead of estimated
+    diameter: float = None             # m, three-zone rotary sizing (continuous, either flow)
+    ua_coefficient: float = 237.0      # SI prefactor of Ua = c G^0.67 / D
 ```
 
 #### Equations and Assumptions
@@ -6854,15 +6956,17 @@ class DryerParams:
 - Continuous: the product-temperature estimate above; no heat of wetting; constant
   solid and liquid-water specific heats; air out must stay above its dew point
   (reported, not enforced).
-- Not implemented: the three-zone (preheat, constant-rate, falling-rate) rotary-dryer
-  sizing of McCabe, the Fick-diffusion series, deep-bed humidity profiles, spray
+- Rotary sizing: `Ua` from the recalled MSH correlation (unverified), solids at the
+  wet bulb through zone II, constant heat capacities, no heat loss in the zone split.
+- Not implemented: the Fick-diffusion series, deep-bed humidity profiles, spray
   drying, fluid-bed hydrodynamics.
 - `psychrometrics.wet_bulb_temperature` now starts its Newton solve below the boiling
   point, so it works for the 100-200 C air of a dryer (it returned NaN before).
 
 **Gradients.** Drying time, energy per kg, the exhaust and product temperatures are
 differentiable with respect to the air temperature, humidity and flow, the air
-velocity (through $h$), $X_c$ and the load.
+velocity (through $h$), $X_c$ and the load, and the rotary length with respect to
+the air flow and the diameter.
 
 ---
 
@@ -6880,11 +6984,11 @@ precipitation version (a solubility-product-driven conversion, no size distribut
 the `Crystallizer` is the generic solubility-driven one.
 
 **No solubility data, kinetic constant or hydrate transition temperature is built in.**
-Every curve and constant in this section is synthetic and labelled illustrative; the
-published worked examples (Geankoplis Sec. 12.11, McCabe, Smith & Harriott Ch. 27,
-Wankat Ch. 17) were **not reproduced**, because their inputs and printed answers could not be
-recalled with confidence. The tests check the closed forms against independent
-oracles instead.
+Every curve and constant in this section is synthetic and labelled illustrative. The tests
+check the closed forms against independent oracles, and the yield balance against
+Geankoplis Example 12.11-1 (Na2CO3.10H2O from a cooled 30 wt% solution: 6360 and 6635 kg vs
+the printed 6370 and 6630 kg; the printed values are recalled, see
+`TestPublishedExamples`).
 
 (op-crystallizer)=
 ### Crystallizer
@@ -6968,7 +7072,7 @@ print(float(crystal_yield(0.1, 1.0, 278.15, sol)), float(jax.grad(crystal_yield,
 class CrystallizerParams:
     solute: str                         # stream key F_<solute>
     solute_MW: float                    # g/mol, anhydrous
-    mode: str = "cooling"               # "cooling" | "evaporative" | "cooling_evaporative"
+    mode: str = "cooling"               # "cooling" | "evaporative" | "cooling_evaporative" | "adiabatic"
     T: float = None                     # K (evaporative: defaults to the feed T)
     water_evaporated: float = None      # kg/s ...
     evaporation_fraction: float = None  # ... or a fraction of the feed solvent
@@ -6989,13 +7093,14 @@ class CrystallizerParams:
     transition_width: float = 0.5          # K, smooth blend
     kinetics: list = None                  # [k_g, g, k_b, b, j] -> MSMPR kinetic mode
     residence_time: float = None           # s
-    volume: float = None                   # m^3 (tau = volume / feed liquor flow)
+    volume: float = None                   # m^3 (tau = volume / product slurry flow, (m_F - E)/rho_L)
     crystal_density: float = 2000.0        # kg/m^3
     shape_factor: float = 0.5236           # k_v, pi/6
     liquor_density: float = 1000.0
     cp_solution: float = 4186.0            # J/kg/K
     heat_of_crystallization: float = 0.0   # J per kg of crystal, released
     soft: float = 1e-6
+    duty: float = 0.0                      # W, heat added in "adiabatic" mode
 ```
 
 #### Equations and Assumptions
@@ -7006,8 +7111,13 @@ class CrystallizerParams:
   with constant $c_p$ and a user-supplied heat of crystallization (default 0).
 - Constant liquor density converts the liquor flow to a volume flow; no fines destruction,
   classification, agglomeration, breakage, size-dependent growth or polymorph kinetics.
-- Not implemented: an adiabatic (vacuum flash) mode that solves the evaporation from the
-  heat balance; the evaporation is a specification.
+- `mode="adiabatic"` is a vacuum crystallizer: the feed flashes to `T` (set by the
+  vapor-space pressure) and the solvent evaporated is solved from the same heat balance with
+  $Q$ = `duty` (0 by default): $E = [Q - m_F c_p (T - T_F) + \Delta H_c (S_0 - c W_0)/d]/
+  [h_{fg} - \Delta H_c c/d]$, $d = f_s - c f_w$, closed form because $C$ is linear in $E$.
+  With $\Delta H_c = 0$ it is the textbook flash $E = m_F c_p (T_F - T)/h_{fg}$.
+- In kinetic mode `volume` sets $\tau = V/Q_P$ with $Q_P = (m_F - E)/\rho_L$, the product
+  slurry flow: the evaporated solvent does not pass through the magma.
 
 ```python
 import jax
@@ -7063,8 +7173,8 @@ print("crystals / fresh solute =", float(out["crystals"]["F_Na2SO4"] / fresh["F_
 **Location**: `difflow/units/crystallizer.py`
 
 **Functions**: `msmpr_distribution`, `msmpr_moments`, `msmpr_dominant_size`,
-`msmpr_mass_median_size`, `msmpr_mass_cv`, `msmpr_from_magma`, `fit_msmpr`, `growth_rate`,
-`nucleation_rate`, `msmpr_steady_state`
+`msmpr_mass_median_size`, `msmpr_mass_cv`, `msmpr_from_magma`, `fit_msmpr`,
+`sieve_population_density`, `growth_rate`, `nucleation_rate`, `msmpr_steady_state`
 
 For a steady mixed-suspension, mixed-product-removal crystallizer with residence time
 $\tau$, size-independent growth rate $G$ and nuclei density $n_0$ (Randolph & Larson):
@@ -7078,7 +7188,10 @@ fraction of the gamma(4) law at one half; `msmpr_mass_median_size` computes it (
 the gamma(4) law), it is not typed in. The coefficient of variation of the mass
 distribution is $1/\sqrt{4} = 50\%$. `msmpr_from_magma(M_T, rho_c, k_v, G, tau)` gives
 $n_0$ from a measured magma density and `fit_msmpr(L, n)` is the "$\ln n$ vs. $L$" line
-(slope $-1/(G\tau)$, intercept $\ln n_0$).
+(slope $-1/(G\tau)$, intercept $\ln n_0$). A measured product is usually a screen analysis:
+`sieve_population_density(w, L_upper, L_lower, M_T, rho_c, k_v)` turns the mass fraction $w_i$
+on each screen into $n_i = M_T w_i/(\rho_c k_v \bar L_i^3 \Delta L_i)$ at the mean size
+$\bar L_i$ of the cut, ready for `fit_msmpr` (McCabe, Smith & Harriott Ch. 27).
 
 **Kinetics.** With the absolute supersaturation $\Delta C = c - c_{sat}$ (kg solute per kg
 solvent), $G = k_g\,\Delta C^{g}$ (`growth_rate`) and $B_0 = k_b\,M_T^{\,j}\,\Delta C^{b}$

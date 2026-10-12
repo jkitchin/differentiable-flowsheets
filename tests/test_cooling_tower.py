@@ -486,3 +486,24 @@ class TestCoolingWaterLoop:
         fd = (float(T_cold(1.4 + h)) - float(T_cold(1.4 - h))) / (2 * h)
         assert g < 0
         assert g == pytest.approx(fd, rel=1e-4)
+
+
+class TestGeankoplisExample10_5_1:
+    """Geankoplis, Transport Processes..., Example 10.5-1 (inputs and answer recalled).
+
+    L = G = 1.356 kg/(s m^2), water 43.3 -> 29.4 C, air in at 29.4 C with a
+    23.9 C wet bulb, k_G a = 1.207e-7 kmol/(s m^3 Pa) at 1 atm. Geankoplis
+    integrates dH/(H* - H) graphically and prints a packed height of about
+    6.1 m; the air enters with H_y1 of about 71.7 kJ/kg.
+    """
+
+    def test_inlet_air_enthalpy(self):
+        h1 = state(T=29.4 + K, T_wb=23.9 + K)["h"]
+        assert float(h1) / 1e3 == pytest.approx(71.7, rel=0.005)
+
+    def test_packed_height(self):
+        h1 = state(T=29.4 + K, T_wb=23.9 + K)["h"]
+        M = merkel_number(43.3 + K, 29.4 + K, h1, 1.0, quadrature="gauss", n_quad=16)
+        Ka = 29.0 * 1.207e-7 * 101325.0                   # kg/(s m^3): M_B k_G a P
+        z = M * 1.356 / Ka                                # KaV/L * L/(Ka A)
+        assert float(z) == pytest.approx(6.1, rel=0.03)

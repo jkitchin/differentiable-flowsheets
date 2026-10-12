@@ -9,6 +9,7 @@ Tests cover:
 - JAX differentiability
 """
 
+import math
 import pytest
 import jax
 import jax.numpy as jnp
@@ -137,7 +138,8 @@ class TestPublishedCorrelations:
     """The cost tables reproduce the books they cite (#420)."""
 
     TABLES = ["REACTOR_COSTS", "VESSEL_COSTS", "HEAT_EXCHANGER_COSTS",
-              "COLUMN_COSTS", "PUMP_COSTS", "COMPRESSOR_COSTS", "SEPARATOR_COSTS"]
+              "COLUMN_COSTS", "PUMP_COSTS", "COMPRESSOR_COSTS", "SEPARATOR_COSTS",
+              "EVAPORATOR_COSTS"]
     YEAR = {"Turton": 2001, "Towler": 2010, "Seider": 2013}
 
     def entries(self):
@@ -162,6 +164,18 @@ class TestPublishedCorrelations:
         assert float(got) == pytest.approx(expected, rel=1e-12)
         later = econ.heat_exchanger_cost(100.0, "shell_tube_floating", target_year=2023)
         assert float(later) == pytest.approx(float(escalate_cost(expected, 2001, 2023)))
+
+    def test_turton_evaporator_bodies(self):
+        # Turton Table A.1 evaporator rows (issue #444), 2001 basis
+        for kind, A, K in [("long_tube", 500.0, (4.642, 0.3698, 0.0025)),
+                           ("forced_circulation", 100.0, (5.0238, 0.3475, 0.0703)),
+                           ("falling_film", 100.0, (3.9119, 0.8627, -0.0088))]:
+            x = math.log10(A)
+            expected = 10 ** (K[0] + K[1] * x + K[2] * x * x)
+            got = econ.evaporator_cost(A, kind, target_year=2001)
+            assert float(got) == pytest.approx(expected, rel=1e-12), kind
+        with pytest.raises(ValueError, match="Unknown evaporator type"):
+            econ.evaporator_cost(10.0, "calandria")
 
     def test_towler_centrifugal_compressor(self):
         expected = 580000 + 20000 * 1000.0 ** 0.6

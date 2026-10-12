@@ -43,8 +43,8 @@ def _ethanol_water():
     })
     nrtl = NRTLParams(
         species=("ethanol", "water"),
-        a=jnp.array([[0.0, 3.4578], [-0.8009, 0.0]]),
-        b=jnp.array([[0.0, -586.0809], [246.18, 0.0]]),
+        a=jnp.array([[0.0, -0.8009], [3.4578, 0.0]]),
+        b=jnp.array([[0.0, 246.18], [-586.0809, 0.0]]),
         alpha=jnp.array([[0.0, 0.3], [0.3, 0.0]]),
     )
     return th, nrtl

@@ -148,6 +148,29 @@ class TestEOSFlashGradients:
         assert float(grad_val) != 0.0, "Gradient should be non-zero"
 
 
+    @pytest.mark.slow
+    @pytest.mark.release
+    def test_second_derivative_matches_fd(self):
+        """d2x/dP2 through ``flash_TP_eos`` matches a central difference of the
+        gradient (issue #444). The derivative used to come from unrolling the
+        damped substitution, whose second derivative lags the value: here it
+        was 10% off (and its sign wrong in a two-flash train)."""
+        from difflow.eos import flash_TP_eos
+
+        species = ["methane", "n-butane", "n-decane"]
+        eos = PengRobinson({s: get_critical_props(s) for s in species})
+        z = jnp.array([0.5, 0.2, 0.3])
+
+        def x_methane(P):
+            return flash_TP_eos(eos, z, 320.0, P)[1][0]
+
+        g = jax.jit(jax.grad(x_methane))
+        h = jax.jit(jax.grad(jax.grad(x_methane)))
+        P, dP = 20e5, 10.0
+        h_fd = (g(P + dP) - g(P - dP)) / (2 * dP)
+        npt.assert_allclose(float(h(P)), float(h_fd), rtol=1e-5)
+
+
 # =============================================================================
 # PHFlash gradient tests
 # =============================================================================

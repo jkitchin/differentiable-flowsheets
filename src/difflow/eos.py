@@ -1218,9 +1218,12 @@ def _solve_rachford_rice(z: Array, K: Array, n_bisect: int = 60) -> Array:
     a pole just outside the interval and diverge, clipping to a spurious
     ``V = 1`` for wide-K-spread mixtures (see issue #169).
 
-    Bisection runs under ``stop_gradient``; a single analytic Newton step then
-    restores exact implicit-function-theorem gradients ``dV/dK`` without changing
-    the (already-converged) value.
+    Bisection runs under ``stop_gradient``; two analytic Newton steps then
+    restore exact implicit-function-theorem derivatives without changing the
+    (already-converged) value. One step is exact to first order only (its
+    error is quadratic in the perturbation of ``K``); the second makes the
+    second and third derivatives exact too, so ``jax.hessian`` through a
+    flash is right (issue #444).
 
     Args:
         z: Feed mole fractions
@@ -1245,11 +1248,16 @@ def _solve_rachford_rice(z: Array, K: Array, n_bisect: int = 60) -> Array:
     (lo, hi), _ = lax.scan(body, (jnp.array(0.0), jnp.array(1.0)), None, length=n_bisect)
     V_star = jax.lax.stop_gradient(0.5 * (lo + hi))
 
-    # One analytic Newton step for exact implicit gradients. At convergence
+    # Two analytic Newton steps for exact implicit derivatives. At convergence
     # rr_func(V_star) ~ 0 so the value is unchanged, but the expression carries
-    # dV/dK = -f_K / f_V through autodiff.
-    fp = jax.grad(rr_func)(V_star)
-    V = V_star - rr_func(V_star) / jnp.where(fp == 0.0, -1.0, fp)
+    # dV/dK = -f_K / f_V through autodiff; the second step makes the second
+    # derivative exact as well (Newton from a stopped start is exact to order
+    # 2**n - 1 after n steps).
+    def newton(V):
+        fp = jax.grad(rr_func)(V)
+        return V - rr_func(V) / jnp.where(fp == 0.0, -1.0, fp)
+
+    V = newton(newton(V_star))
     return jnp.clip(V, 0.0, 1.0)
 
 
@@ -1430,6 +1438,127 @@ def _phase_stability(
     return two_phase, feed_is_vapor
 
 
+def _flash_resid(eos, z, T, P, k_ij):
+    """Residual of the two-phase TP flash in ``u = [ln K, V]``."""
+    n = z.shape[0]
+
+    def resid(u):
+        lnK, V = u[:n], u[n]
+        K = jnp.exp(lnK)
+        x = z / (1.0 + V * (K - 1.0))
+        y = K * x
+        x = x / jnp.sum(x)
+        y = y / jnp.sum(y)
+        r_phi = lnK - safe_log(eos.K_values(T, P, x, y, k_ij))
+        r_rr = jnp.sum(z * (K - 1.0) / (1.0 + V * (K - 1.0)))
+        return jnp.concatenate([r_phi, jnp.atleast_1d(r_rr)])
+
+    return resid
+
+
+def _newton_flash(eos, z, T, P, k_ij, K0, V0, n_iter: int = 10):
+    """Finish a substitution flash with Newton's method (values only).
+
+    Runs ``n_iter`` safeguarded Newton steps on the equal-fugacity and
+    Rachford-Rice equations in ``u = [ln K, V]`` (steps capped at 1 in
+    ``ln K``; a step to a non-finite point is refused; the substitution
+    point is kept if Newton ends with a larger residual). All inputs are
+    expected stopped; derivatives are attached afterwards by
+    :func:`_polish_flash`.
+
+    Returns:
+        ``(K, V, ok, dG)``: the split; ``ok`` when it converged to a
+        non-trivial split with ``0 < V < 1``; and ``dG`` = (G_split -
+        G_feed) / RT per mole of feed, the feed taken as its lower-Gibbs
+        cubic root. A split with ``dG < 0`` is a genuine two-phase state.
+    """
+    n = z.shape[0]
+    resid = _flash_resid(eos, z, T, P, k_ij)
+    u0 = jnp.concatenate([safe_log(jnp.maximum(K0, EPS_DIVISION)),
+                          jnp.atleast_1d(V0)])
+
+    def body(u, _):
+        r = resid(u)
+        du = jnp.linalg.solve(jax.jacfwd(resid)(u), r)
+        du = du / jnp.maximum(1.0, jnp.max(jnp.abs(du[:n])))
+        u_new = u - du
+        return jnp.where(jnp.all(jnp.isfinite(u_new)), u_new, u), None
+
+    u, _ = lax.scan(body, u0, None, length=n_iter)
+    # Keep the substitution point if Newton went somewhere worse.
+    r_new = jnp.max(jnp.abs(resid(u)))
+    r_old = jnp.max(jnp.abs(resid(u0)))
+    u = jnp.where(jnp.isfinite(r_new) & (r_new <= r_old), u, u0)
+    r = jnp.minimum(r_new, r_old)
+
+    K = jnp.exp(u[:n])
+    V = u[n]
+    ok = ((r < 1e-8) & (jnp.max(jnp.abs(u[:n])) > 1e-3)
+          & (V > 0.0) & (V < 1.0))
+
+    # Gibbs energy of the split against the single-phase feed.
+    Vc = jnp.clip(V, 0.0, 1.0)
+    x = z / (1.0 + Vc * (K - 1.0))
+    y = K * x
+    x = jnp.maximum(x / jnp.sum(x), EPS_DIVISION)
+    y = jnp.maximum(y / jnp.sum(y), EPS_DIVISION)
+    zz = jnp.maximum(z, EPS_DIVISION)
+
+    def g(w, phase):
+        return jnp.sum(w * (jnp.log(w)
+                            + safe_log(eos.fugacity_coefficient(T, P, w, phase, k_ij))))
+
+    g_feed = jnp.minimum(g(zz, "vapor"), g(zz, "liquid"))
+    g_split = (1.0 - Vc) * g(x, "liquid") + Vc * g(y, "vapor")
+    dG = jnp.where(ok, g_split - g_feed, jnp.inf)
+    return K, V, ok, dG
+
+
+def _polish_flash(eos, z, T, P, k_ij, K0, V0, n_steps: int = 2):
+    """Newton polish of a converged two-phase split, for exact derivatives.
+
+    The unknowns ``u = [ln K_1..ln K_n, V]`` solve the equal-fugacity and
+    Rachford-Rice equations. Started from the (stopped-gradient) converged
+    substitution point, ``n`` chord steps with the Jacobian frozen there leave
+    the value unchanged and make the derivatives with respect to ``z``, ``T``,
+    ``P`` and ``k_ij`` exact through order ``n``. The step error is
+    ``(I - J0^-1 J) e``, and both factors are first order in the perturbation:
+    one step gives the implicit-function-theorem gradient, two give the
+    Hessian as well (issue #444). Freezing ``J0`` means the Jacobian itself is
+    never differentiated, which keeps compile time down.
+
+    A polish that leaves the domain or takes a large step (an unconverged
+    split near the critical point) is rejected; the substitution point is
+    then returned with its value intact, carrying only the first-order
+    derivative of the Rachford-Rice step.
+
+    Returns:
+        (K, V)
+    """
+    n = z.shape[0]
+    resid = _flash_resid(eos, z, T, P, k_ij)
+
+    u0 = lax.stop_gradient(jnp.concatenate(
+        [safe_log(jnp.maximum(K0, EPS_DIVISION)), jnp.atleast_1d(V0)]))
+    J0 = lax.stop_gradient(jax.jacfwd(resid)(u0))
+    u = u0
+    step_max = jnp.array(0.0)
+    for _ in range(n_steps):
+        du = jnp.linalg.solve(J0, resid(u))
+        step_max = jnp.maximum(step_max, lax.stop_gradient(jnp.max(jnp.abs(du))))
+        u = u - du
+
+    V1 = lax.stop_gradient(u[n])
+    ok = (jnp.all(jnp.isfinite(lax.stop_gradient(u))) & (V1 >= 0.0)
+          & (V1 <= 1.0) & (step_max < 0.1))
+    # NaN-safe select: a NaN in the rejected branch would poison the
+    # derivative of the kept one.
+    u_safe = jnp.where(ok, u, u0)
+    K = jnp.where(ok, jnp.exp(u_safe[:n]), K0)
+    V = jnp.where(ok, u_safe[n], _solve_rachford_rice(z, K0))
+    return K, V
+
+
 def flash_TP_eos(
     eos: PengRobinson | SRK,
     z: Array,
@@ -1499,11 +1628,27 @@ def flash_TP_eos(
 
         return K_new, K_new
 
-    # Run iterations
-    K_final, _ = lax.scan(step, K, None, length=max_iter)
+    # Run iterations. The substitution only locates the root: derivatives
+    # come from the Newton polish below, not from unrolling the iteration
+    # (whose derivative of a derivative converges more slowly than the value
+    # and gave wrong-signed Hessians, issue #444).
+    K_ss, _ = lax.scan(step, lax.stop_gradient(K), None, length=max_iter)
+    K_ss = lax.stop_gradient(K_ss)
+    V_ss = lax.stop_gradient(_solve_rachford_rice(z, K_ss))
+    # Near the critical region damped substitution converges very slowly:
+    # 50 steps left V at 0.44 where it is 0.27 (0.8 CH4 / 0.2 C3H8, 250 K,
+    # 0.99 of the bubble pressure). Newton finishes the job (issue #444).
+    K_ss, V_ss, split_ok, dG = _newton_flash(
+        eos, z, lax.stop_gradient(T), lax.stop_gradient(P),
+        None if k_ij is None else lax.stop_gradient(k_ij), K_ss, V_ss)
+    K_final, V_tp = _polish_flash(eos, z, T, P, k_ij, K_ss, V_ss)
+    # The substitution-based stability test can miss an instability near
+    # the critical point (there it called the same feed single-phase from
+    # 0.993 of the bubble pressure up). A converged, non-trivial split that
+    # lowers the Gibbs energy is proof of two phases.
+    two_phase = two_phase | (split_ok & (dG < -1e-10))
 
     # Two-phase flash result
-    V_tp = _solve_rachford_rice(z, K_final)
     x_tp = z / (1 + V_tp * (K_final - 1))
     y_tp = K_final * x_tp
     x_tp = jnp.maximum(x_tp, 0.0)

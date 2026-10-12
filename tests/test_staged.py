@@ -597,3 +597,66 @@ class TestPlot:
         assert len(ax.lines) >= 5
         labels = [t.get_text() for t in ax.texts]
         assert "1" in labels and str(int(np.ceil(float(res["N"])))) in labels
+
+
+class TestMcCabeThieleSections:
+    """``mccabe_thiele(lines=...)``: side draws and side feeds (issue #444)."""
+
+    def _two(self, **kw):
+        c = S.constant_alpha(AL)
+        R = 2.0
+        rect = S.rectifying_line(R, XD)
+        strip = S.stripping_line(R, XD, XB, Z, 1.0)
+        return c, R, rect, strip
+
+    def test_two_lines_reproduce_classic(self):
+        c, R, rect, strip = self._two()
+        ref = S.mccabe_thiele(c, rect, strip, XD, XB, q_line=S.q_line(1.0, Z))
+        x_f, _ = S.intersect_lines(S.q_line(1.0, Z), rect)
+        new = S.mccabe_thiele(c, None, None, XD, XB, lines=[rect, strip], switch_x=[x_f])
+        for k in ("N", "feed_stage", "N_rect"):
+            assert float(new[k]) == pytest.approx(float(ref[k]), rel=1e-12), k
+        ref_s = S.mccabe_thiele(c, rect, strip, XD, XB, mode="specified", feed_stage=5.0)
+        new_s = S.mccabe_thiele(c, None, None, XD, XB, lines=[rect, strip],
+                                switch_stages=[5.0])
+        assert float(new_s["N"]) == pytest.approx(float(ref_s["N"]), rel=1e-12)
+
+    def test_liquid_side_draw(self):
+        """F = 100 (z = 0.4, q = 1); D at XD, a liquid side draw S at x_S
+        from the rectifying section, B at XB; three operating lines from the
+        section balances, switching where adjacent lines meet."""
+        c = S.constant_alpha(AL)
+        F, Sd, x_S, R = 100.0, 10.0, 0.75, 3.0
+        D = (F * Z - Sd * x_S - (F - Sd) * XB) / (XD - XB)
+        B = F - D - Sd
+        L1, V1 = R * D, (R + 1) * D
+        L2, V2 = L1 - Sd, V1
+        L3, V3 = L2 + F, V2
+        top = jnp.array([L1, -V1, -D * XD])
+        mid = jnp.array([L2, -V2, -(D * XD + Sd * x_S)])
+        bot = jnp.array([L3, -V3, B * XB])
+        # bottom line passes through (x_B, x_B); the side-draw lines meet at x_S
+        assert float(S.line_y(bot, XB)) == pytest.approx(XB)
+        assert float(S.line_y(top, x_S)) == pytest.approx(float(S.line_y(mid, x_S)))
+        x_f, _ = S.intersect_lines(S.q_line(1.0, Z), mid)
+        assert float(x_f) == pytest.approx(Z)
+        res = S.mccabe_thiele(c, None, None, XD, XB, lines=[top, mid, bot],
+                              switch_x=[x_S, x_f], feed_width=1e-7)
+        N = float(res["N"])
+        assert 5.0 < N < 30.0 and float(res["pinched"]) < 1e-3
+        sw = np.asarray(res["switch_stage"])
+        assert 1.0 < sw[0] < sw[1] < N + 1.0
+        assert float(jnp.sum(res["N_sections"])) == pytest.approx(N)
+        # a draw costs separation: more stages than the same column without it
+        none = S.mccabe_thiele(c, None, None, XD, XB,
+                               lines=[S.rectifying_line(R, XD),
+                                      S.stripping_line(R, XD, XB, Z, 1.0)],
+                               switch_x=[Z], feed_width=1e-7)
+        assert N > float(none["N"])
+
+    def test_bad_arguments(self):
+        c, R, rect, strip = self._two()
+        with pytest.raises(ValueError, match="exactly one"):
+            S.mccabe_thiele(c, None, None, XD, XB, lines=[rect, strip])
+        with pytest.raises(ValueError, match="switches"):
+            S.mccabe_thiele(c, None, None, XD, XB, lines=[rect, strip], switch_x=[0.4, 0.3])
