@@ -742,8 +742,8 @@ def concentration_polarization(
     Returns:
         Wall (membrane surface) concentration
     """
-    exp_term = jnp.exp(J / k_m)
-    return C_bulk * exp_term / (1.0 - R + R * exp_term)
+    from difflow.units.membranes import polarization_modulus
+    return C_bulk * polarization_modulus(J, k_m, R)
 
 
 def gel_layer_flux(
@@ -762,8 +762,11 @@ def gel_layer_flux(
 
     Returns:
         Limiting permeate flux
+
+    The core :func:`difflow.units.membranes.gel_polarization_flux`.
     """
-    return k_m * jnp.log(C_gel / C_bulk)
+    from difflow.units.membranes import gel_polarization_flux
+    return gel_polarization_flux(k_m, C_gel, C_bulk)
 
 
 def diavolumes_required(

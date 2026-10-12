@@ -1,5 +1,5 @@
 {
- "n_sections": 1214,
+ "n_sections": 1217,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -7270,6 +7270,30 @@
    "source": "unit-operations-chemical.md",
    "targets": [],
    "text": "<!-- doc-test: skip: field listing (a class sketch), not an executable example -->\n```python\n@dataclass\nclass CycloneParams:\n    D: float                            # body diameter, m\n    rho_p: float                        # kg/m^3\n    d_bins: list                        # m, fixed-length size bins\n    mass_fractions: list                # normalized to 1\n    geometry: str = \"lapple\"            # \"lapple\" | \"stairmand_he\" | \"custom\"\n    ratios: list = None                 # [H, W, D_e, S, L_b, L_c, J] / D for \"custom\"\n    n_turns: float = None               # N_e; None: (L_b + L_c/2) / H\n    gas_MW: float = 28.96               # g/mol\n    viscosity: float = 1.8e-5           # Pa s\n    K_pressure: float = 16.0            # Shepherd-Lapple (unverified)\n    delta_P_velocity_heads: float = None\n    solid_species: str = \"solid\"\n    solid_molar_mass: float = 1.0       # kg/mol\n```\n\n**Not included**: hydrocyclones, electrostatic precipitators and bag filters, screening and size\nreduction, and any cost correlation (none is cited here, so no cyclone or thickener entry was added to\n`economics/capital.py`).\n\n**Sources**: Lapple, *Chem. Eng.* 58(5), 144 (1951); Shepherd & Lapple, *Ind. Eng. Chem.* 31, 972 (1939);\nCooper & Alley Ch. 4; Coulson & Richardson Vol. 2 Ch. 1 (recalled; constants unverified).\n\n---"
+  },
+  {
+   "anchor": "membrane-separations",
+   "heading": "Membrane Separations",
+   "path": "Chemical Unit Operations > Membrane Separations",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "`difflow/units/membranes.py` holds the core membrane models: gas permeation in four flow patterns\nfor any number of species, reverse osmosis with concentration polarization, and the\nultrafiltration flux relations (gel polarization). The carbon-capture plugin's\n`MembraneSeparator` (membrane materials from a database) and the bio plugin's `Ultrafiltration`,\n`Diafiltration` and `TFF` use the same functions. Library functions:\n\n| Function | Use it for |\n|---|---|\n| `binary_permeate_composition(x, alpha, pr)` | Binary permeate in equilibrium with a feed-side `x` (complete mixing, or local cross flow); `pr = P_l/P_h` |\n| `binary_reject_composition(y, alpha, pr)` | Its inverse; at `y = x_f`, the minimum reject composition of complete mixing |\n| `binary_complete_mixing(x_f, alpha, pr, x_o=, theta=)` | Geankoplis-style binary complete mixing given the reject or the stage cut |\n| `complete_mixing_area(...)` | Area from the flux of A |\n| `complete_mixing`, `cross_flow`, `cocurrent`, `countercurrent`, `permeation_stage` | Multicomponent stages from feed flows, permeances, area and pressures |\n| `area_for_stage_cut` | Design mode: the area for a stage cut, any pattern |\n| `permeance_from_permeability`, `BARRER`, `GPU` | Unit conversions to mol/(m\u00b2 s Pa) |\n| `osmotic_pressure`, `ro_local_flux` | Van't Hoff osmotic pressure; the local RO fluxes with film-theory polarization |\n| `polarization_modulus`, `gel_polarization_flux`, `uf_flux`, `batch_concentration_time` | UF/MF: polarization, gel-limited flux, flux against TMP, batch concentration time |"
+  },
+  {
+   "anchor": "gaspermeator",
+   "heading": "GasPermeator",
+   "path": "Chemical Unit Operations > Membrane Separations > GasPermeator",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "**Location**: `difflow/units/membranes.py`\n\n**Class**: `GasPermeator`\n\n**Description**: A gas-permeation stage (solution-diffusion) with the permeances given directly,\nin complete mixing, cross flow, cocurrent or countercurrent flow.\n\n`GasPermeator(GasPermeationParams(permeances={...}, area=... or stage_cut=..., flow_pattern=...,\npressure_ratio=...))(feed) -> (retentate, permeate, info)`. The flux is\n$J_i = Q_i(x_i P_h - y_i P_l)$. Complete mixing is solved exactly (a bracketed root). Cross flow\nuses the local permeate composition $y_i = J_i/\\sum_j J_j$ and RK4 along the area. Cocurrent and\ncountercurrent use the bulk permeate composition in the driving force; countercurrent is solved by\nshooting from the closed (retentate) end, where the permeate is the local composition, with Newton's\nmethod on the retentate flows. All four have implicit-function gradients. The binary plug-flow\nresults are tested against hand integrations in the feed-side mole fraction (`tests/test_membranes.py`).\nAt the same area, the permeate purity ranks countercurrent > cross flow > cocurrent > complete mixing.\n\n```python\nfrom difflow import GasPermeator, GasPermeationParams, make_stream\nfrom difflow.units.membranes import GPU\n\nfeed = make_stream({\"O2\": 0.21, \"N2\": 0.79}, T=298.15, P=1e6)\nunit = GasPermeator(GasPermeationParams(permeances={\"O2\": 10 * GPU, \"N2\": 2 * GPU},\n                                        stage_cut=0.3, flow_pattern=\"cross_flow\", pressure_ratio=5.0))\nretentate, permeate, info = unit(feed)\nprint(float(info[\"area\"]), float(info[\"permeate_fraction\"][\"O2\"]))\n```"
+  },
+  {
+   "anchor": "reverseosmosis",
+   "heading": "ReverseOsmosis",
+   "path": "Chemical Unit Operations > Membrane Separations > ReverseOsmosis",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "**Location**: `difflow/units/membranes.py`\n\n**Class**: `ReverseOsmosis`\n\n**Description**: A reverse-osmosis element in plug flow: water flux $J_v = A_w(\\Delta P - \\Delta\\pi)$,\nsolute flux $J_s = B(c_w - c_p)$, film-theory polarization $(c_w - c_p)/(c_b - c_p) = e^{J_v/k}$,\nvan't Hoff osmotic pressure $\\pi = \\phi i c R T$.\n\n`ReverseOsmosis(ReverseOsmosisParams(A_w=..., B=..., area=..., k=...))(feed) -> (concentrate,\npermeate, info)`. The feed carries `H2O` and the solute (default `NaCl`) in mol/s at the feed pressure.\n`info` reports the water recovery, the observed rejection, the concentrations and osmotic pressures and\nthe thermodynamic recovery limit $1 - \\pi_f/\\Delta P$ of a perfect membrane. $A_w$ is a volumetric\npermeance in m/(s Pa); a mass-flux coefficient in kg/(s m\u00b2 Pa) divided by the water density gives it."
   },
   {
    "anchor": "mass-transfer",

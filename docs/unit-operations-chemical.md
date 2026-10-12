@@ -5745,6 +5745,72 @@ Cooper & Alley Ch. 4; Coulson & Richardson Vol. 2 Ch. 1 (recalled; constants unv
 
 ---
 
+## Membrane Separations
+
+`difflow/units/membranes.py` holds the core membrane models: gas permeation in four flow patterns
+for any number of species, reverse osmosis with concentration polarization, and the
+ultrafiltration flux relations (gel polarization). The carbon-capture plugin's
+`MembraneSeparator` (membrane materials from a database) and the bio plugin's `Ultrafiltration`,
+`Diafiltration` and `TFF` use the same functions. Library functions:
+
+| Function | Use it for |
+|---|---|
+| `binary_permeate_composition(x, alpha, pr)` | Binary permeate in equilibrium with a feed-side `x` (complete mixing, or local cross flow); `pr = P_l/P_h` |
+| `binary_reject_composition(y, alpha, pr)` | Its inverse; at `y = x_f`, the minimum reject composition of complete mixing |
+| `binary_complete_mixing(x_f, alpha, pr, x_o=, theta=)` | Geankoplis-style binary complete mixing given the reject or the stage cut |
+| `complete_mixing_area(...)` | Area from the flux of A |
+| `complete_mixing`, `cross_flow`, `cocurrent`, `countercurrent`, `permeation_stage` | Multicomponent stages from feed flows, permeances, area and pressures |
+| `area_for_stage_cut` | Design mode: the area for a stage cut, any pattern |
+| `permeance_from_permeability`, `BARRER`, `GPU` | Unit conversions to mol/(m² s Pa) |
+| `osmotic_pressure`, `ro_local_flux` | Van't Hoff osmotic pressure; the local RO fluxes with film-theory polarization |
+| `polarization_modulus`, `gel_polarization_flux`, `uf_flux`, `batch_concentration_time` | UF/MF: polarization, gel-limited flux, flux against TMP, batch concentration time |
+
+### GasPermeator
+
+**Location**: `difflow/units/membranes.py`
+
+**Class**: `GasPermeator`
+
+**Description**: A gas-permeation stage (solution-diffusion) with the permeances given directly,
+in complete mixing, cross flow, cocurrent or countercurrent flow.
+
+`GasPermeator(GasPermeationParams(permeances={...}, area=... or stage_cut=..., flow_pattern=...,
+pressure_ratio=...))(feed) -> (retentate, permeate, info)`. The flux is
+$J_i = Q_i(x_i P_h - y_i P_l)$. Complete mixing is solved exactly (a bracketed root). Cross flow
+uses the local permeate composition $y_i = J_i/\sum_j J_j$ and RK4 along the area. Cocurrent and
+countercurrent use the bulk permeate composition in the driving force; countercurrent is solved by
+shooting from the closed (retentate) end, where the permeate is the local composition, with Newton's
+method on the retentate flows. All four have implicit-function gradients. The binary plug-flow
+results are tested against hand integrations in the feed-side mole fraction (`tests/test_membranes.py`).
+At the same area, the permeate purity ranks countercurrent > cross flow > cocurrent > complete mixing.
+
+```python
+from difflow import GasPermeator, GasPermeationParams, make_stream
+from difflow.units.membranes import GPU
+
+feed = make_stream({"O2": 0.21, "N2": 0.79}, T=298.15, P=1e6)
+unit = GasPermeator(GasPermeationParams(permeances={"O2": 10 * GPU, "N2": 2 * GPU},
+                                        stage_cut=0.3, flow_pattern="cross_flow", pressure_ratio=5.0))
+retentate, permeate, info = unit(feed)
+print(float(info["area"]), float(info["permeate_fraction"]["O2"]))
+```
+
+### ReverseOsmosis
+
+**Location**: `difflow/units/membranes.py`
+
+**Class**: `ReverseOsmosis`
+
+**Description**: A reverse-osmosis element in plug flow: water flux $J_v = A_w(\Delta P - \Delta\pi)$,
+solute flux $J_s = B(c_w - c_p)$, film-theory polarization $(c_w - c_p)/(c_b - c_p) = e^{J_v/k}$,
+van't Hoff osmotic pressure $\pi = \phi i c R T$.
+
+`ReverseOsmosis(ReverseOsmosisParams(A_w=..., B=..., area=..., k=...))(feed) -> (concentrate,
+permeate, info)`. The feed carries `H2O` and the solute (default `NaCl`) in mol/s at the feed pressure.
+`info` reports the water recovery, the observed rejection, the concentrations and osmotic pressures and
+the thermodynamic recovery limit $1 - \pi_f/\Delta P$ of a perfect membrane. $A_w$ is a volumetric
+permeance in m/(s Pa); a mass-flux coefficient in kg/(s m² Pa) divided by the water density gives it.
+
 ## Mass Transfer
 
 **Location**: `difflow/mass_transfer.py` (pure JAX functions in SI units; not
