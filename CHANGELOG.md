@@ -37,6 +37,11 @@ All notable changes to difflow are recorded here. The format follows
   (`falling_film_thickness`, `falling_film_liquid_coefficient`). Fuller and Wilke-Chang are now tested against
   published worked examples (Poling et al. 5e Ex. 11-3; Geankoplis Ex. 6.2-5 and 6.3-2) in
   `tests/test_mass_transfer.py::TestPublishedExamples`.
+- **Packed `Absorber`/`Stripper` report the liquid-phase basis (book Ch. 15 gaps).** `info["N_OL"]` and
+  `info["H_OL"]` (per solute, `N_OL = N_OG/A`, `H_OL = A H_OG`, `N_OL H_OL = Z`) join `N_OG`/`H_OG`, so a
+  stripper can be read on the basis it is designed on (a TCE air stripper has `H_OG` of several metres and
+  `N_OG < 1`, which is correct but not what a textbook shows). Tests check `N_OL` against Colburn's
+  liquid-phase form and a packed acetone absorber against the log-mean hand method.
 
 - **`ActivityThermo` and an equilibrium reboiler in the McCabe-Thiele stepper (book Ch. 12 gaps).**
   (1) `difflow.ActivityThermo(ideal, activity_model)` gives modified-Raoult K-values
@@ -893,6 +898,17 @@ All notable changes to difflow are recorded here. The format follows
 - **Le Bas oxygen increment for ethers (book Ch. 14).** `LE_BAS_INCREMENTS["O_ether"]` was 9.1, which is the
   methyl-ester value; it is now 9.9 (methyl ethers), and the table gains `O_methyl_ester` (9.1), `O_methyl_ether`
   (9.9), `O_ester_ether` (11.0, higher esters and ethers), `O_SPN` (8.3) and `Cl_medial` (24.6).
+- **`Absorber` docs misattributed the geometric-mean absorption factor to Edmister.** The Kremser mode's
+  `A = sqrt(A_top A_bottom)` is the textbook simplification (Geankoplis 5e Sec. 10.6, Wankat 4e Ch. 12), not
+  Edmister's effective factor `A_e = sqrt(A_N (A_1 + 1) + 0.25) - 0.5`; the module docstring, the
+  `variable_flow` field, the catalog assumptions and `docs/unit-operations-chemical.md` now say so. No
+  numerical change.
+
+- **`Absorber`/`Stripper` reported `L_min`/`G_min` equal to the given flow when a design was infeasible.** In
+  design mode (`recovery=`) below the minimum rate the outlets sit at the A-limited removal, and the minimum was
+  computed from those outlets instead of the specification, so `info["L_min"]` tracked the solvent rate given
+  (e.g. 500 -> 500, 1000 -> 1000 mol/s for a 95 % SO2 scrubber whose true minimum is 1024). The minimum now uses
+  the target end from `recovery`; feasible designs and rating mode are unchanged.
 
 - **`MechanicalVaporRecompression` compressor work was 6 % low.** The
   isentropic work used `Cp_vapor` (1880 J/kg/K) with the exponent of

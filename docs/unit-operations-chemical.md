@@ -1852,8 +1852,9 @@ Three models, chosen by `params.model`:
 
 **`"kremser"`** (closed form per solute). With the effective absorption factor
 `A_i = L/(K_i V)` (the geometric mean of its top and bottom values, so the flow
-change along the column is carried, Edmister's idea; `variable_flow=False`
-uses the inlet flows) and the equivalent equilibrium stages
+change along the column is carried, the usual textbook simplification of
+Geankoplis 5e Sec. 10.6 and Wankat 4e Ch. 12, not Edmister's effective factor;
+`variable_flow=False` uses the inlet flows) and the equivalent equilibrium stages
 `N_eq = N ln(1+E(S-1))/ln S`, `S = 1/A`, for a Murphree vapor efficiency `E`:
 
 $$
@@ -1884,7 +1885,9 @@ viscosities, density and surface tension default to air and water at
 25 C) or you give `H_OG`. For straight lines the outlet follows Colburn's
 closed form; `ntu_method="integral"` evaluates `N_OG` by quadrature for the key
 solute (`concentrated=True` adds the `(1-y)_lm` correction). **Rating**: give
-`height`; **design**: give `recovery` and read `info["height"]`. Flooding and
+`height`; **design**: give `recovery` and read `info["height"]`. The info
+also carries the liquid-phase basis, `N_OL = N_OG/A` and `H_OL = A H_OG`
+(`N_OL H_OL = Z`), which is the natural one for a stripper. Flooding and
 pressure drop are not part of this unit: give the diameter.
 
 **Design instead of rating.** Setting `recovery` (the fraction of the
