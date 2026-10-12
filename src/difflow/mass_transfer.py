@@ -409,6 +409,18 @@ def fuller_diffusivity(
     return D_cm2 * 1.0e-4
 
 
+class WilkeChangAccuracyWarning(UserWarning):
+    """Wilke-Chang is outside its accurate range (a small solute such as a dissolved gas)."""
+
+
+#: Below this solute molar volume (cm^3/mol at the NBP) Wilke-Chang is applied
+#: to small, mostly inorganic solutes (H2 14.3, O2 25.6, NH3 25.8, N2 31.2,
+#: H2S 32.9, CO2 34.0), where its error is 10-20 % or more: Wilke & Chang (1955)
+#: fitted mostly organic solutes, and Reid, Prausnitz & Poling (4e, Sec. 11-9)
+#: report larger errors for water as the *solute* and for small gases.
+WILKE_CHANG_SMALL_SOLUTE_VA = 40.0
+
+
 def wilke_chang_diffusivity(
     T: Array | float,
     mu_B: Array | float,
@@ -425,6 +437,12 @@ def wilke_chang_diffusivity(
     ``phi_B`` has **no default for water**: pass ``2.6`` (see
     :data:`ASSOCIATION_FACTORS`); the default 1.0 is for an unassociated
     solvent.
+
+    For a small solute (``V_A`` below :data:`WILKE_CHANG_SMALL_SOLUTE_VA`,
+    40 cm^3/mol: dissolved NH3, CO2, O2, N2, H2, H2S) the error is 10-20 % or
+    more and a :class:`WilkeChangAccuracyWarning` is raised (for a concrete
+    ``V_A``; not under ``jit``). Use a measured diffusivity for such gases
+    where one exists.
 
     Args:
         T: Temperature (K).
@@ -446,6 +464,15 @@ def wilke_chang_diffusivity(
         >>> round(float(D) * 1e9, 2)
         1.47
     """
+    try:
+        small = float(V_A) < WILKE_CHANG_SMALL_SOLUTE_VA
+    except Exception:  # traced (jit/grad): no check
+        small = False
+    if small:
+        import warnings
+        warnings.warn(f"wilke_chang_diffusivity: V_A = {float(V_A):.1f} cm^3/mol is a small solute "
+                      "(dissolved gas such as NH3 or CO2); Wilke-Chang errs by 10-20 % or more there. "
+                      "Prefer a measured diffusivity.", WilkeChangAccuracyWarning, stacklevel=2)
     mu_cP = _f64(mu_B) * 1.0e3
     D_cm2 = 7.4e-8 * jnp.sqrt(_f64(phi_B) * _f64(MW_B)) * _f64(T) / (mu_cP * _f64(V_A) ** 0.6)
     return D_cm2 * 1.0e-4

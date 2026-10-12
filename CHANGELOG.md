@@ -8,6 +8,31 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Unit-ops book Part V gaps (issue 448).**
+  *Extraction.* `CascadeParams.stage_efficiency` (Murphree, raffinate phase) now applies to counter-current
+  (Lewis overall efficiency, exact for straight lines) and crossflow (stage by stage), not only co-current; its
+  default is `None` (ideal stages; co-current keeps 0.8), and the rigorous model rejects anything but 1.
+  `CascadeParams.profile_stages` tabulates profiles under `jit` over a traced `n_stages` (NaN past `n_stages`;
+  without it a warning says the profiles hold only the inlet row). `hunter_nash` and `tie_line_through` are
+  differentiable (roots replayed in `jnp` through the implicit function theorem; eager only, not under `jit`);
+  `tie_line_through(..., on_outside="flag")` returns `two_phase=False` instead of raising.
+  *Absorption.* `Absorber`/`Stripper` `model="stages"` gain an opt-in stage energy balance
+  (`energy_balance`, `cp_gas`, `intercooler_stages`, `intercooler_T`); `Stripper` gains live steam that
+  condenses (`steam_species`, `steam_latent_heat`; `steam_condensed`, `steam_duty` in `info`). CH4 in
+  `HENRY_WATER` (Sander 2015). `wilke_chang_diffusivity` raises `WilkeChangAccuracyWarning` for small solutes
+  (`V_A` < 40 cm^3/mol: NH3, CO2, O2, ...).
+  *Column hardware.* `downcomer_backup` (Sinnott Sec. 11.13); `size_column(packed_height=...)`;
+  `column_hardware_cost(material=, internals_material=, target_year=, structured_installation_factor=)` with
+  `SHELL_/TRAY_/PACKING_MATERIAL_FACTORS` and `HARDWARE_COST_BASIS` (cost year and basis now stated; structured
+  packing flagged as an installed price); `weep_point(K2=callable)`; `fractional_entrainment` raises
+  `EntrainmentPlaceholderWarning` (still not Fair's chart); `packed_column_diameter` raises
+  `PackingCapacityWarning` for a packing without a Robbins dry factor.
+  *Carbon capture.* `AmineAbsorber` rich loading is limited by Kent-Eisenberg VLE at the rich end
+  (`rich_loading_limit="equilibrium"`, the default; `"stoichiometric"` restores the 0.5 cap; `rich_approach`).
+  This lowers default MEA capture (0.673 -> 0.626 at the defaults) and makes MDEA/AMP at lean loading 0.2
+  capture nothing (they were already above their own VLE). New `solve_amine_loop` closes the absorber-stripper
+  loop on the lean loading.
+
 - **Unit-ops book Parts I-II gaps (issue 442).**
   *Fixes.* `phase_identification_parameter` uses closed-form derivatives of the cubic (cheaper to compile inside
   every TP flash); `eos_pressure_TV` gives the cubic's P(T, v). `eos_bubble_*`/`eos_dew_*` fall back to continuation (from 0.75 T or P/4) when no Wilson start converges

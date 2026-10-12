@@ -20,19 +20,30 @@ def flue():
     return make_stream({"CO2": 15.0, "N2": 85.0}, T=313.15, P=101325.0)
 
 
+# TestKremserBelowOne isolates the Kremser A < 1 path, so it runs with the
+# stoichiometric rich-end bound. With the default rich-end VLE pinch (#448),
+# MDEA and AMP at the default lean loading 0.2 already sit above the loading
+# in equilibrium with 15 kPa CO2 at 40 C (0.028 and 0.172 with the solvent
+# VLE), capture nothing, and these bounds would hold vacuously.
+_KREMSER_ONLY = {"rich_loading_limit": "stoichiometric"}
+
+
 class TestKremserBelowOne:
     """C2: with A < 1 a Kremser column captures at most the fraction A."""
 
     @pytest.mark.parametrize("solvent", ["MDEA", "AMP", "DEA"])
     def test_capture_bounded_by_absorption_factor(self, flue, solvent):
-        _, _, info = AmineAbsorber(AbsorberParams(solvent=solvent))(flue)
+        _, _, info = AmineAbsorber(
+            AbsorberParams(solvent=solvent, **_KREMSER_ONLY))(flue)
         A = float(info["absorption_factor"])
         assert A < 1.0
+        assert float(info["capture_efficiency"]) > 0.0
         # Before the fix: MDEA 0.973 at A = 0.0017, AMP 0.999 at A = 0.106.
         assert float(info["capture_efficiency"]) <= A + 1e-12
 
     def test_effective_stages_positive_and_below_actual(self, flue):
-        _, _, info = AmineAbsorber(AbsorberParams(solvent="MDEA"))(flue)
+        _, _, info = AmineAbsorber(
+            AbsorberParams(solvent="MDEA", **_KREMSER_ONLY))(flue)
         n_eff = float(info["n_stages_effective"])
         assert 0.0 < n_eff <= float(info["n_stages"])
 
@@ -47,18 +58,19 @@ class TestKremserBelowOne:
 
     def test_gradient_finite_for_A_below_one(self, flue):
         def cap(L_G):
-            p = AbsorberParams(solvent="MDEA", L_G_ratio=L_G)
+            p = AbsorberParams(solvent="MDEA", L_G_ratio=L_G, **_KREMSER_ONLY)
             return AmineAbsorber(p)(flue)[2]["capture_efficiency"]
         g = jax.grad(cap)(3.0)
         fd = (cap(3.0 + 1e-5) - cap(3.0 - 1e-5)) / 2e-5
         assert g == pytest.approx(float(fd), rel=1e-4)
 
     def test_required_stages_infeasible_target_is_inf(self, flue):
-        ab = AmineAbsorber(AbsorberParams(solvent="AMP"))
+        ab = AmineAbsorber(AbsorberParams(solvent="AMP", **_KREMSER_ONLY))
         A = float(ab(flue)[2]["absorption_factor"])
         assert jnp.isinf(ab.required_stages(min(0.99, A + 0.2), flue))
         n = float(ab.required_stages(0.5 * A, flue))
-        cap = AmineAbsorber(AbsorberParams(solvent="AMP", n_stages=n))(flue)[2]
+        cap = AmineAbsorber(AbsorberParams(solvent="AMP", n_stages=n,
+                                           **_KREMSER_ONLY))(flue)[2]
         assert float(cap["capture_efficiency"]) == pytest.approx(0.5 * A, rel=1e-6)
 
 

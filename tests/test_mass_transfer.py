@@ -81,10 +81,18 @@ class TestDiffusivities:
         assert V_eth == pytest.approx(59.2)
         D_eth = mt.wilke_chang_diffusivity(298.15, 0.89e-3, 18.015, V_eth, mt.ASSOCIATION_FACTORS["water"])
         assert float(D_eth) == pytest.approx(1.24e-9, rel=0.22)
-        D_co2 = mt.wilke_chang_diffusivity(
-            298.15, 0.89e-3, 18.015, mt.MOLAR_VOLUMES_NBP["CO2"], mt.ASSOCIATION_FACTORS["water"]
-        )
+        with pytest.warns(mt.WilkeChangAccuracyWarning, match="small solute"):   # #448
+            D_co2 = mt.wilke_chang_diffusivity(
+                298.15, 0.89e-3, 18.015, mt.MOLAR_VOLUMES_NBP["CO2"], mt.ASSOCIATION_FACTORS["water"]
+            )
         assert float(D_co2) == pytest.approx(1.92e-9, rel=0.15)
+
+    def test_wilke_chang_no_warning_for_organic_solute(self):
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", mt.WilkeChangAccuracyWarning)
+            mt.wilke_chang_diffusivity(298.15, 0.89e-3, 18.015, 59.2, 2.6)
+            jax.grad(lambda v: mt.wilke_chang_diffusivity(298.15, 0.89e-3, 18.015, v, 2.6))(25.8)
 
     def test_stokes_einstein(self):
         D = mt.stokes_einstein_diffusivity(298.15, 0.89e-3, 1.0e-9)

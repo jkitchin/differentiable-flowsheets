@@ -22,6 +22,7 @@ from difflow.streams import Stream, get_flows, make_stream
 from difflow.params_mixin import ParamsMixin
 from difflow.numerics import safe_divide
 from difflow.staged import kremser_fraction, kremser_stages  # noqa: F401  (re-exported)
+from difflow.staged import _taylor_log_fraction
 
 
 # =============================================================================
@@ -676,12 +677,42 @@ def _rigorous_cascade(model, F: Array, S: Array, T: Array, N: int, pair: tuple[i
     return R_out, E_out, {"converged": converged, "residual": res, "two_phase": two_phase}
 
 
-def _static_stage_count(n_stages) -> int:
-    """Integer number of stages for the profile tables (0 if ``n_stages`` is traced under jit)."""
+def _static_stage_count(n_stages, profile_stages: int | None = None) -> tuple[int, bool]:
+    """Number of profile rows to tabulate, and whether ``n_stages`` is traced.
+
+    A concrete ``n_stages`` gives ``int(n_stages)`` rows. Under ``jit`` with a
+    traced ``n_stages`` the row count cannot follow it, so ``profile_stages``
+    rows are tabulated (rows past ``n_stages`` are NaN-masked by the caller);
+    without ``profile_stages`` the profiles hold only the inlet row.
+    """
     try:
-        return int(n_stages)
-    except (jax.errors.ConcretizationTypeError, TypeError):
-        return 0
+        return int(n_stages), False
+    except (jax.errors.ConcretizationTypeError, jax.errors.TracerIntegerConversionError, TypeError):
+        if profile_stages is None:
+            import warnings
+            warnings.warn("MultistageCascade: n_stages is traced, so info['profiles'] holds only the "
+                          "inlet row; set CascadeParams.profile_stages to tabulate a fixed number of "
+                          "stages under jit", stacklevel=4)
+            return 0, True
+        return int(profile_stages), True
+
+
+def _mask_rows(x: Array, n: int, n_stages: Array, traced: bool) -> Array:
+    """NaN for a profile row ``n`` past a traced ``n_stages`` (rows exist up to ``profile_stages``)."""
+    return jnp.where(n <= n_stages + 1e-9, x, jnp.nan) if traced else x
+
+
+def _overall_efficiency(eta: Array, E: Array) -> Array:
+    """Ideal stages per actual stage for a raffinate-phase Murphree efficiency ``eta``.
+
+    Lewis relation for straight equilibrium and operating lines (constant ``K``,
+    immiscible carriers), written for the raffinate phase, whose stripping-factor
+    analogue is ``1/E``: ``E_o = ln(1 + eta (1/E - 1)) / ln(1/E)``, smooth
+    through ``E = 1`` (limit ``eta``). Exact for the counter-current cascade:
+    ``N`` real stages give the outlet of ``E_o N`` ideal stages (Treybal,
+    *Mass-Transfer Operations* 3e, Sec. 10.4; Wankat 4e Sec. 13.5).
+    """
+    return _taylor_log_fraction(eta, 1.0 / E - 1.0)
 
 
 @dataclass(repr=False)
@@ -694,8 +725,18 @@ class CascadeParams(ParamsMixin):
         flow_config: ``'counter_current'`` (Kremser), ``'crossflow'`` (fresh
             solvent split equally over the stages, ``(1 + E/N)^-N`` left) or
             ``'co_current'``
-        stage_efficiency: Murphree stage efficiency for co-current model (0-1).
-                         Fraction of equilibrium achieved per stage. Default 0.8.
+        stage_efficiency: Murphree raffinate-phase stage efficiency (0-1]:
+            ``(X_{n-1} - X_n) = eta (X_{n-1} - X_n^*)`` with ``X_n^*`` in
+            equilibrium with the extract leaving stage ``n``. ``None``
+            (default) means ideal stages for counter-current and crossflow and
+            the legacy 0.8 for co-current. Counter-current applies it through
+            the Lewis overall efficiency (``E_o N`` ideal stages, exact for
+            straight lines); crossflow stage by stage.
+        profile_stages: Number of stage rows to tabulate in ``info["profiles"]``
+            when ``n_stages`` is traced (``jax.jit`` over it). Rows past
+            ``n_stages`` are NaN. ``None`` (default): a concrete ``n_stages``
+            tabulates ``int(n_stages)`` rows; a traced one only the inlet row
+            (with a warning).
         model: ``"immiscible"`` (default; Kremser, immiscible solvents, constant phase
             flows) or ``"rigorous"``: ``n_stages`` countercurrent ideal stages solved
             with the full two-liquid-phase equations (isoactivity from the NRTL or
@@ -703,13 +744,15 @@ class CascadeParams(ParamsMixin):
             variable phase flows), from a Kremser-profile seed. The rigorous model
             needs an integer ``n_stages``, ``flow_config="counter_current"``, an
             activity-model ``equilibrium`` without ``mutual_solubility`` (which it
-            supersedes), and ignores ``stage_efficiency``.
+            supersedes), and ideal stages (``stage_efficiency`` must be
+            ``None`` or 1).
     """
     n_stages: int | float | Array
     equilibrium: LLEEquilibrium
     flow_config: Literal["counter_current", "crossflow", "co_current"] = "counter_current"
-    stage_efficiency: float = 0.8
+    stage_efficiency: float | Array | None = None
     model: Literal["immiscible", "rigorous"] = "immiscible"
+    profile_stages: int | None = None
 
     def __post_init__(self):
         if self.model not in ("immiscible", "rigorous"):
@@ -742,7 +785,7 @@ class MultistageCascade:
         r"\text{MB at stage } n:\ L x_{i,n-1} + S y_{i,n+1} = L x_{i,n} + S y_{i,n}",
     ]
     assumptions = [
-        "Each stage reaches equilibrium (optionally scaled by stage_efficiency for co-current).",
+        "Each stage reaches equilibrium, or a Murphree raffinate-phase stage_efficiency of it.",
         "Immiscible solvents; constant phase flows along the cascade.",
         "Constant distribution coefficients K_i with respect to temperature within a stage.",
         "model='rigorous' drops the immiscible and constant-flow assumptions: ideal stages with the full "
@@ -754,9 +797,11 @@ class MultistageCascade:
         "Seader, Henley, Roper. Separation Process Principles, 3e, Ch. 8.",
     ]
     parameter_symbols = {"n_stages": "N", "stage_efficiency": r"\eta_M"}
-    parameter_units = {"n_stages": "-", "stage_efficiency": "-"}
+    parameter_units = {"n_stages": "-", "stage_efficiency": "-", "profile_stages": "-"}
     numerical_method = ("Analytical Kremser for counter-current (solute in the entering solvent included); "
-                        "closed form (1 + E/N)^-N for crossflow; approach-to-equilibrium for co-current.")
+                        "closed form (1 + E/N)^-N for crossflow; approach-to-equilibrium for co-current. "
+                        "A Murphree stage_efficiency enters counter-current through the Lewis overall "
+                        "efficiency, crossflow stage by stage.")
 
     def __init__(self, params: CascadeParams):
         """Initialize cascade.
@@ -834,6 +879,9 @@ class MultistageCascade:
         """``model="rigorous"``: countercurrent stages with the two-liquid-phase flash equations."""
         p = self.params
         eq = p.equilibrium
+        eta = p.stage_efficiency
+        if eta is not None and (isinstance(eta, jax.core.Tracer) or float(eta) != 1.0):
+            raise ValueError("model='rigorous' solves ideal stages; stage_efficiency must be None or 1")
         if p.flow_config != "counter_current":
             raise ValueError("model='rigorous' is implemented for flow_config='counter_current' only")
         if eq.activity_model not in ("NRTL", "UNIQUAC"):
@@ -936,7 +984,11 @@ class MultistageCascade:
         #   (X_N - X*) / (X_0 - X*) = (E - 1) / (E^(N+1) - 1),  X* = Y_in / K
         # The small fixed offset keeps the E = 1 limit, 1/(N+1), smooth.
         E_safe = E_arr + 1e-7
-        E_Np1 = E_safe ** (n_stages + 1)
+        eta = self.params.stage_efficiency
+        # Murphree efficiency: N real stages act as E_o N ideal ones (Lewis).
+        stage_scale = 1.0 if eta is None else _overall_efficiency(jnp.asarray(eta, float), E_safe)
+        N_eq = n_stages * stage_scale
+        E_Np1 = E_safe ** (N_eq + 1)
         delta_E = E_safe - 1.0
         frac_remaining = jnp.clip(delta_E / (E_Np1 - 1.0), 0.0, 1.0)
 
@@ -981,18 +1033,29 @@ class MultistageCascade:
         #   X_n = X* + (X_0 - X*) (E^(N+1-n) - 1) / (E^(N+1) - 1)
         #   Y_n = K X_n  (extract leaving stage n, n >= 1)
         # Entry 0 holds the inlets: x[0] = feed X_0, y[0] = solvent Y_in.
+        # With a Murphree efficiency real stage n sits at ideal stage E_o n
+        # (straight lines), and the extract leaving it is off equilibrium, so
+        # Y_n comes from the balance over stages n..N:
+        #   Y_n = Y_in + (F/S) (X_{n-1} - X_N).
         profiles_x = {s: [] for s in solutes}
         profiles_y = {s: [] for s in solutes}
         for i, s in enumerate(solutes):
             profiles_x[s].append(X0[i])
             profiles_y[s].append(Y_in[i])
 
-        N_int = _static_stage_count(n_stages)
+        N_int, traced = _static_stage_count(n_stages, self.params.profile_stages)
+        x_prev = X0
         for n in range(1, N_int + 1):
-            num = E_safe ** (n_stages + 1.0 - n) - 1.0
+            num = E_safe ** (N_eq + 1.0 - n * stage_scale) - 1.0
             frac_n = jnp.clip(num / (E_Np1 - 1.0), 0.0, 1.0)
             x_n = X_star + (X0 - X_star) * frac_n
-            y_n = K_arr * x_n
+            if eta is None:
+                y_n = K_arr * x_n
+            else:
+                y_n = Y_in + F_aq / F_org * (x_prev - X_N)
+            x_prev = x_n
+            x_n = _mask_rows(x_n, n, n_stages, traced)
+            y_n = _mask_rows(y_n, n, n_stages, traced)
             for i, s in enumerate(solutes):
                 profiles_x[s].append(x_n[i])
                 profiles_y[s].append(y_n[i])
@@ -1046,7 +1109,16 @@ class MultistageCascade:
         X0 = safe_divide(F_in_arr, F_aq)
         Y_in = safe_divide(F_solvent_arr, F_org)
         X_star = Y_in / K_arr
-        per_stage = 1.0 / (1.0 + E_arr / n_stages)
+        # Stage n gets S/N of fresh solvent. With a raffinate Murphree
+        # efficiency eta, X_n - X* = (X_{n-1} - X*) (E + eta N - eta E)/(E + eta N)
+        # (balance F (X_{n-1} - X_n) = (S/N)(Y_n - Y_in) and
+        # X_{n-1} - X_n = eta (X_{n-1} - Y_n/K)); eta = 1 is 1/(1 + E/N).
+        eta = self.params.stage_efficiency
+        if eta is None:
+            per_stage = 1.0 / (1.0 + E_arr / n_stages)
+        else:
+            eta = jnp.asarray(eta, float)
+            per_stage = (E_arr + eta * n_stages - eta * E_arr) / (E_arr + eta * n_stages)
         X_N = X_star + (X0 - X_star) * per_stage ** n_stages
         F_raffinate_arr = X_N * F_aq
         F_extracted_arr = F_in_arr + F_solvent_arr - F_raffinate_arr
@@ -1069,14 +1141,24 @@ class MultistageCascade:
                                 'organic_to_aqueous': org_transferred}
 
         # Profiles (ratio basis): x[n] raffinate leaving stage n, y[n] the
-        # extract leaving stage n (= K x[n]); entry 0 is the feed / fresh solvent.
+        # extract leaving stage n (= K x[n] for ideal stages, else from the
+        # stage balance); entry 0 is the feed / fresh solvent.
         profiles_x = {s: [X0[i]] for i, s in enumerate(solutes)}
         profiles_y = {s: [Y_in[i]] for i, s in enumerate(solutes)}
-        for n in range(1, _static_stage_count(n_stages) + 1):
+        N_int, traced = _static_stage_count(n_stages, self.params.profile_stages)
+        x_prev = X0
+        for n in range(1, N_int + 1):
             x_n = X_star + (X0 - X_star) * per_stage ** n
+            if eta is None:
+                y_n = K_arr * x_n
+            else:
+                y_n = Y_in + n_stages * F_aq / F_org * (x_prev - x_n)
+            x_prev = x_n
+            x_n = _mask_rows(x_n, n, n_stages, traced)
+            y_n = _mask_rows(y_n, n, n_stages, traced)
             for i, s in enumerate(solutes):
                 profiles_x[s].append(x_n[i])
-                profiles_y[s].append(K_arr[i] * x_n[i])
+                profiles_y[s].append(y_n[i])
         profiles = {
             "x": profiles_x,
             "y": profiles_y,
@@ -1138,7 +1220,7 @@ class MultistageCascade:
         # Approach to equilibrium with multiple stages
         # Each stage achieves stage_efficiency fraction of remaining driving force
         # Total efficiency = 1 - (1 - eff)^N (differentiable in N)
-        eff_per_stage = self.params.stage_efficiency
+        eff_per_stage = 0.8 if self.params.stage_efficiency is None else self.params.stage_efficiency
         total_eff = 1.0 - (1.0 - eff_per_stage) ** n_stages
 
         x_feed_arr = safe_divide(F_in_arr, F_aq)
@@ -1186,11 +1268,11 @@ class MultistageCascade:
             profiles_x[s].append(x_feed_arr[i])
             profiles_y[s].append(y_solvent_arr[i])
 
-        N_int = _static_stage_count(n_stages)
+        N_int, traced = _static_stage_count(n_stages, self.params.profile_stages)
         for n in range(1, N_int + 1):
             n_arr = jnp.asarray(float(n), dtype=jnp.float64)
             eff_n = 1.0 - (1.0 - eff_per_stage) ** n_arr
-            x_n = x_feed_arr + eff_n * (x_eq_arr - x_feed_arr)
+            x_n = _mask_rows(x_feed_arr + eff_n * (x_eq_arr - x_feed_arr), n, n_stages, traced)
             y_n = K_arr * x_n
             for i, s in enumerate(solutes):
                 profiles_x[s].append(x_n[i])

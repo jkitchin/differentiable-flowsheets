@@ -15,8 +15,22 @@ Equilibrium
 Henry's law in mole fractions, ``y_i = K_i x_i`` with ``K_i = H_i(T)/P`` and a
 van 't Hoff temperature dependence ``H(T) = H_ref exp(-C (1/T - 1/T_ref))``
 (:func:`henry_constant`; ``C = -dH_abs/R``, positive for an exothermic
-absorption). The column is isothermal at ``params.T`` (default: the gas inlet
-temperature); the heat of absorption is reported, not used.
+absorption). By default the column is isothermal at ``params.T`` (default: the
+gas inlet temperature) and the heat of absorption is reported, not used.
+
+Energy balance
+--------------
+``energy_balance=True`` (``model="stages"``) adds an adiabatic stage energy
+balance: the heat of absorption ``R C_i`` per mol transferred heats the stage,
+both phases leave a stage at its temperature (constant ``cp_liquid``,
+``cp_gas``), and each stage's ``K_i`` is evaluated at that temperature, so the
+liquid warms on its way down and the solute gets less soluble.
+``intercooler_stages`` cool the liquid leaving those stages back to
+``intercooler_T``; ``info`` carries the temperature profile and the duties.
+For a :class:`Stripper` with live steam, ``steam_species`` names the steam in
+the stripping gas: the steam that condenses to heat the feed to the column
+temperature and to supply the heat of desorption joins the liquid, and the
+condensed rate and duty are reported.
 
 Models
 ------
@@ -61,11 +75,12 @@ Models
 Limits
 ------
 Dilute (or moderately concentrated, via the flow-corrected ``A``) solutes,
-constant ``K`` per solute (isothermal, no solute-dependent activity), no solvent
-volatility (the carrier leaves dry, the solvent does not evaporate), no
-temperature profile, no reaction (use ``difflow_cc`` for amines). Flooding and
+constant ``K`` per solute (isothermal unless ``energy_balance``, no
+solute-dependent activity), no solvent volatility (the carrier leaves dry, the
+solvent does not evaporate, so the evaporative cooling of a real water
+scrubber is missing), a temperature profile only in the stages model, no reaction (use ``difflow_cc`` for amines). Flooding and
 pressure drop (``fraction_flood`` sizing) are not part of this unit; give the
-diameter. The Henry-constant table :data:`HENRY_WATER` is from memory.
+diameter. The Henry-constant table :data:`HENRY_WATER` is from memory (except CH4).
 
 References
 ----------
@@ -129,6 +144,8 @@ R_GAS = 8.314462618  # J/mol/K
 _FLOOR = 1e-12
 _N_PICARD = 14
 _N_PICARD_STAGES = 40
+_N_SWEEPS_ENERGY = 80
+_N_STEAM_PASSES = 12
 
 
 # ---------------------------------------------------------------------------
@@ -157,12 +174,14 @@ class HenryData:
     source: str = "from memory, approximate (+/-20-30 %), unverified"
 
 
-#: Solutes in water near 25 C. **Every number is from memory** of the
-#: Sander (2015, Atmos. Chem. Phys. 15, 4399) compilation and common textbook
-#: values, converted to the mole-fraction basis (``H [Pa] = 55343 [mol/m3] /
-#: H^cp [mol/(m3 Pa)]``); they are order-of-magnitude values with an uncertainty
-#: of 20-30 % (more for the temperature coefficients), meant for examples and
-#: tests. Use measured data for design.
+#: Solutes in water near 25 C, converted to the mole-fraction basis
+#: (``H [Pa] = 55343 [mol/m3] / H^cp [mol/(m3 Pa)]``, ``C = d ln H^cp / d(1/T)``).
+#: **Every number except CH4 is from memory** of the Sander (2015, Atmos. Chem.
+#: Phys. 15, 4399) compilation and common textbook values; they are
+#: order-of-magnitude values with an uncertainty of 20-30 % (more for the
+#: temperature coefficients), meant for examples and tests. CH4 is the cited
+#: Sander (2015) value (``H^cp = 1.4e-5 mol/(m3 Pa)``, 1600 K), whose own spread
+#: between sources is several percent. Use measured data for design.
 HENRY_WATER: dict[str, HenryData] = {
     "acetone": HenryData(2.0e5, 5000.0),
     "NH3": HenryData(9.4e4, 4100.0),
@@ -171,6 +190,10 @@ HENRY_WATER: dict[str, HenryData] = {
     "SO2": HenryData(4.6e6, 3100.0),
     "TCE": HenryData(5.5e7, 4400.0),
     "benzene": HenryData(3.1e7, 4000.0),
+    # 55343 / 1.4e-5 = 3.95e9 Pa
+    "CH4": HenryData(3.95e9, 1600.0,
+                     "Sander (2015), Atmos. Chem. Phys. 15, 4399: H^cp = 1.4e-5 mol/(m3 Pa) at "
+                     "298.15 K, d ln H^cp/d(1/T) = 1600 K (+/- a few %, more for C)"),
 }
 
 
@@ -378,6 +401,118 @@ def _stages_solve(v_in, l_in, K, Gc, Lc, E, N, n_iter=_N_PICARD_STAGES):
     return v[:, 0], l[:, N - 1], {"l": l, "v": v, "V": V2, "L": L2, "residual": resid}
 
 
+def _stages_solve_energy(v_in, l_in, H_ref, C, T_ref, P, Gc, Lc, E, N, T_G_in, T_L_in,
+                         cp_L, cp_G, ic, T_ic, n_iter=_N_SWEEPS_ENERGY):
+    """Tray-to-tray column with a stage energy balance (adiabatic plus intercoolers).
+
+    The component part is that of :func:`_stages_solve` with
+    ``K_{i,n} = H_i(T_n)/P`` at the temperature of stage ``n``. Both phases leave
+    a stage at its temperature ``T_n``; with sensible enthalpies
+    ``cp (T - T_ref)`` and the heat of absorption ``R C_i`` released per mol of
+    solute moving into the liquid on the stage, the stage balance is
+
+    ``cp_L L_{n-1} T^L_{n-1} + cp_G V_{n+1} T_{n+1} + q_n = (cp_L L_n + cp_G V_n) T_n``
+
+    (``T^L_{n-1}`` is ``T_ic`` when an intercooler cools the liquid leaving
+    stage ``n-1``). A fixed number of damped Picard sweeps (component solve,
+    flows, tridiagonal energy solve) gives the start of a Newton solve of all
+    the equations at once (optimistix, implicit differentiation), because the
+    plain substitution oscillates when the heat effect is large (a
+    temperature bulge at a small L/G).
+    """
+    import optimistix as optx
+
+    ns = v_in.shape[0]
+    V_in = Gc + jnp.sum(v_in)
+    L_in = Lc + jnp.sum(l_in)
+    eye = jnp.eye(N)
+    Sup = jnp.eye(N, k=1)
+    Sub = jnp.eye(N, k=-1)
+
+    def K_of(T, a):
+        H_ref_, C_, P_ = a["H_ref"], a["C"], a["P"]
+        return (H_ref_[:, None] * jnp.exp(-C_[:, None] * (1.0 / T[None, :] - 1.0 / T_ref))) / P_
+
+    def one(vi, li, Ki, V, L):
+        Vnext = jnp.concatenate([V[1:], V_in[None]])
+        c = (1.0 - E) * V / Vnext
+        e = E * Ki * V / L
+        Ablk = jnp.concatenate([-jnp.diag(e), eye - c[:, None] * Sup], axis=1)
+        Bblk = jnp.concatenate([eye - Sub, eye - Sup], axis=1)
+        M = jnp.concatenate([Ablk, Bblk], axis=0)
+        rA = jnp.zeros(N).at[N - 1].set(c[N - 1] * vi)
+        rB = jnp.zeros(N).at[0].add(li).at[N - 1].add(vi)
+        z = jnp.linalg.solve(M, jnp.concatenate([rA, rB]))
+        return z[:N], z[N:]
+
+    solve_all = jax.vmap(one, in_axes=(0, 0, 0, None, None))
+
+    def heat(v, a):
+        v_below = jnp.concatenate([v[:, 1:], a["v_in"][:, None]], axis=1)
+        return R_GAS * jnp.sum(a["C"][:, None] * (v_below - v), axis=0)     # W released per stage
+
+    def energy_matrix(V, L, q, a):
+        cpL, cpG = a["cp_L"], a["cp_G"]
+        diag = cpL * L + cpG * V
+        sub = -cpL * L[:-1] * (1.0 - ic[:-1])                               # theta_{n-1} in row n
+        sup = -cpG * V[1:]                                                  # theta_{n+1} in row n
+        M = jnp.diag(diag) + jnp.diag(sub, -1) + jnp.diag(sup, 1)
+        rhs = q + jnp.concatenate([jnp.zeros(1), cpL * L[:-1] * ic[:-1] * (a["T_ic"] - T_ref)])
+        rhs = rhs.at[0].add(cpL * a["L_in"] * (a["T_L_in"] - T_ref))
+        rhs = rhs.at[N - 1].add(cpG * a["V_in"] * (a["T_G_in"] - T_ref))
+        return M, rhs
+
+    args = {"v_in": v_in, "l_in": l_in, "H_ref": H_ref, "C": C, "P": P, "Gc": Gc, "Lc": Lc,
+            "V_in": V_in, "L_in": L_in, "T_G_in": T_G_in, "T_L_in": T_L_in, "cp_L": cp_L,
+            "cp_G": cp_G, "T_ic": T_ic, "E": E}
+
+    def sweep(carry, _):
+        V, L, T = carry
+        l, v = solve_all(v_in, l_in, K_of(T, args), V, L)
+        Vn = Gc + jnp.sum(v, axis=0)
+        Ln = Lc + jnp.sum(l, axis=0)
+        M, rhs = energy_matrix(Vn, Ln, heat(v, args), args)
+        Tn = T_ref + jnp.linalg.solve(M, rhs)
+        return (Vn, Ln, 0.5 * (T + Tn)), None
+
+    T0 = jnp.full(N, T_L_in)
+    (V, L, T), _ = lax.scan(sweep, (jnp.full(N, V_in), jnp.full(N, L_in), T0), None, length=n_iter)
+    l0, v0 = solve_all(v_in, l_in, K_of(T, args), V, L)
+    # Newton on z = (l, v, T - T_ref), all stages and solutes
+    z0 = lax.stop_gradient(jnp.concatenate([l0.ravel(), v0.ravel(), T - T_ref]))
+
+    def unpack(z):
+        return z[:ns * N].reshape(ns, N), z[ns * N:2 * ns * N].reshape(ns, N), T_ref + z[2 * ns * N:]
+
+    def resid(z, a):
+        l, v, T = unpack(z)
+        Vs = a["Gc"] + jnp.sum(v, axis=0)
+        Ls = a["Lc"] + jnp.sum(l, axis=0)
+        Vnext = jnp.concatenate([Vs[1:], a["V_in"][None]])
+        v_below = jnp.concatenate([v[:, 1:], a["v_in"][:, None]], axis=1)
+        l_above = jnp.concatenate([a["l_in"][:, None], l[:, :-1]], axis=1)
+        K = K_of(T, a)
+        Em = a["E"]
+        r_eq = v - Vs * ((1.0 - Em) * v_below / Vnext + Em * K * l / Ls)
+        r_bal = l_above + v_below - l - v
+        M, rhs = energy_matrix(Vs, Ls, heat(v, a), a)
+        r_T = (M @ (T - T_ref) - rhs) / (a["cp_L"] * a["L_in"])
+        scale = a["V_in"] + a["L_in"]
+        return jnp.concatenate([r_eq.ravel() / scale, r_bal.ravel() / scale, r_T])
+
+    sol = optx.root_find(resid, optx.Newton(rtol=1e-12, atol=1e-13), z0, args=args,
+                         max_steps=60, throw=False)
+    z = jnp.where(jnp.all(jnp.isfinite(sol.value)), sol.value, z0)
+    l, v, T = unpack(z)
+    V2 = Gc + jnp.sum(v, axis=0)
+    L2 = Lc + jnp.sum(l, axis=0)
+    r = resid(z, args)
+    Q_ic = cp_L * L2 * (T - T_ic) * ic
+    return v[:, 0], l[:, N - 1], {"l": l, "v": v, "V": V2, "L": L2, "T": T, "K": K_of(T, args),
+                                  "q": heat(v, args), "Q_ic": Q_ic,
+                                  "residual": jnp.max(jnp.abs(r)) * (V_in + L_in)}
+
+
 def _picard(step, n_iter: int = _N_PICARD):
     """Fixed-point iteration on the net transfer ``delta`` (mol/s, gas to liquid)."""
     def body(delta, _):
@@ -442,7 +577,27 @@ class AbsorptionParams(ParamsMixin):
         MW_gas: Mean molar mass of the gas (kg/mol); default air.
         MW_liquid: Molar mass of the solvent (kg/mol); default water.
         cp_liquid: Liquid molar heat capacity (J/mol/K) for the adiabatic
-            temperature-rise estimate; default water.
+            temperature-rise estimate, the stage energy balance and the
+            live-steam preheat; default water.
+        energy_balance: Solve a stage energy balance (``model="stages"`` only):
+            the heat of absorption ``R C_i`` per mol heats the stage, both phases
+            leave a stage at its temperature, and every stage's ``K_i`` is taken at
+            that temperature. The inlets enter at their stream temperatures
+            (``T`` must be None). False (default) keeps the isothermal column.
+        cp_gas: Gas molar heat capacity (J/mol/K) for the energy balance and the
+            live-steam balance; default air (use about 34 for steam).
+        intercooler_stages: Stages (1 = top, ``n_stages`` = bottom) whose liquid
+            outflow is cooled to ``intercooler_T`` before the next stage down (the
+            bottom one cools the liquid product). Needs ``energy_balance``.
+        intercooler_T: Temperature (K) the intercoolers bring the liquid to;
+            ``None`` takes the liquid inlet temperature. A negative duty means
+            the "intercooler" heats.
+        steam_species: Live-steam stripping (:class:`Stripper` only): the name
+            of the steam species in ``gas_in``. Steam condenses into the liquid
+            to heat the feed to the column temperature and supply the heat of
+            desorption; ``None`` (default) leaves the stripping gas inert.
+        steam_latent_heat: Latent heat of the condensing steam at the column
+            temperature (J/mol); default water at 100 C.
     """
 
     henry: dict[str, float]
@@ -471,6 +626,12 @@ class AbsorptionParams(ParamsMixin):
     MW_gas: float = 0.02897
     MW_liquid: float = 0.018015
     cp_liquid: float = 75.3
+    energy_balance: bool = False
+    cp_gas: float = 29.1
+    intercooler_stages: tuple[int, ...] = ()
+    intercooler_T: float | None = None
+    steam_species: str | None = None
+    steam_latent_heat: float = 40660.0
 
     def __post_init__(self):
         if not self.henry:
@@ -481,6 +642,18 @@ class AbsorptionParams(ParamsMixin):
             raise ValueError("ntu_method must be 'colburn' or 'integral'")
         if self.key_solute is not None and self.key_solute not in self.henry:
             raise ValueError(f"key_solute {self.key_solute!r} not in henry")
+        self.intercooler_stages = tuple(int(n) for n in self.intercooler_stages)
+        if self.energy_balance:
+            if self.model != "stages":
+                raise ValueError("energy_balance needs model='stages' (a stage temperature profile)")
+            if self.T is not None:
+                raise ValueError("energy_balance takes the inlet temperatures from the streams; leave T=None")
+            if self.steam_species is not None:
+                raise ValueError("energy_balance and steam_species cannot be combined")
+        if self.intercooler_stages and not self.energy_balance:
+            raise ValueError("intercooler_stages needs energy_balance=True")
+        if self.steam_species is not None and self.steam_species in self.henry:
+            raise ValueError("steam_species must be an inert of the gas, not a solute in henry")
 
 
 # ---------------------------------------------------------------------------
@@ -553,9 +726,86 @@ class _GasLiquidColumn:
                 ``height`` (packed), ``L_min`` (absorber) or ``G_min`` (stripper)
                 for the key solute and the ratio to it, the solute-free operating
                 line and equilibrium curve (``X``, ``Y``, ``Y_eq``), ``Q_absorption``
-                (W) and ``delta_T_adiabatic`` (K, reported, not applied),
-                ``converged``, ``feasible``.
+                (W) and ``delta_T_adiabatic`` (K, an estimate; applied only with
+                ``energy_balance``), ``converged``, ``feasible``. With
+                ``energy_balance``: ``stage_T`` (K, top to bottom), ``stage_K``
+                (per solute), ``stage_Q_absorption`` (W per stage),
+                ``intercooler_duty`` (W per stage, heat removed), ``Q_intercooler``,
+                ``Q_sensible`` (W, sensible heat gained by both phases),
+                ``energy_balance_error`` (W), ``T_gas_out``, ``T_liquid_out``; ``T``,
+                ``K``, ``A``, ``S`` and the minimum rate are then quoted at the mean
+                stage temperature. With ``steam_species`` (live steam):
+                ``steam_condensed`` (mol/s), ``steam_duty`` (W, latent heat of the
+                condensed steam), ``Q_preheat``, ``Q_desorption``, ``Q_gas_sensible``
+                (W, released by the gas cooling to the column temperature;
+                ``steam_duty = Q_preheat + Q_desorption - Q_gas_sensible``),
+                ``steam_fraction_condensed``.
         """
+        if self.params.steam_species is not None:
+            return self._live_steam(gas_in, liquid_in)
+        return self._column(gas_in, liquid_in)
+
+    def _live_steam(self, gas_in: Stream, liquid_in: Stream) -> tuple[Stream, Stream, dict]:
+        """Live-steam stripper: an overall energy balance sets the steam that condenses.
+
+        The column runs at ``T_s`` (``params.T``, default the steam inlet
+        temperature). The steam that condenses joins the liquid at the top (it
+        heats the feed by direct contact), so the column sees ``L_in + n`` and
+        ``V_in - n``. With sensible heats at constant ``cp`` and the latent heat
+        ``lambda`` at ``T_s``:
+
+        ``n lambda = cp_L L_in (T_s - T_L,in) + cp_G V_in (T_s - T_G,in) + Q_des``
+
+        where ``Q_des = -Q_absorption`` is the heat of desorption. ``Q_des``
+        depends on what is stripped, so the balance and the column are passed
+        a fixed number of times (the coupling is weak).
+        """
+        p = self.params
+        if self._role != "stripper":
+            raise ValueError("steam_species (live steam) is for a Stripper")
+        s = p.steam_species
+        gf = get_flows(gas_in)
+        lf = get_flows(liquid_in)
+        if s not in gf:
+            raise ValueError(f"steam_species {s!r} is not in gas_in")
+        steam_in = jnp.asarray(gf[s], float)
+        T_s = jnp.asarray(p.T if p.T is not None else gas_in["T"], float)
+        T_G = jnp.asarray(gas_in["T"], float)
+        T_L = jnp.asarray(liquid_in["T"], float)
+        V_in = sum(jnp.asarray(v, float) for v in gf.values())
+        L_in = sum(jnp.asarray(v, float) for v in lf.values())
+        lam = jnp.asarray(p.steam_latent_heat, float)
+        Q_pre = p.cp_liquid * L_in * (T_s - T_L)
+        Q_gas = p.cp_gas * V_in * (T_s - T_G)            # <= 0 for superheated steam
+        Q_des = jnp.asarray(0.0)
+        for _ in range(_N_STEAM_PASSES):
+            n_raw = (Q_pre + Q_gas + Q_des) / lam
+            n = jnp.clip(n_raw, 0.0, 0.999 * steam_in)
+            g2 = {**gf, s: steam_in - n}
+            l2 = {**lf, s: jnp.asarray(lf.get(s, 0.0), float) + n}
+            gas_out, liquid_out, info = self._column(make_stream(g2, gas_in["T"], gas_in["P"]),
+                                                     make_stream(l2, liquid_in["T"], liquid_in["P"]))
+            Q_des = -info["Q_absorption"]
+            n_raw = (Q_pre + Q_gas + Q_des) / lam
+            n_new = jnp.clip(n_raw, 0.0, 0.999 * steam_in)
+            # a concrete run stops once the condensate is settled; a traced one runs every pass
+            if not _is_tracer(n_new) and float(jnp.abs(n_new - n)) <= 1e-9 * float(n_new) + 1e-14:
+                break
+        info = dict(info)
+        info.update(
+            steam_condensed=n,
+            steam_duty=n * lam,
+            Q_preheat=Q_pre,
+            Q_desorption=Q_des,
+            Q_gas_sensible=-Q_gas,
+            steam_fraction_condensed=n / steam_in,
+            converged=info["converged"] & (jnp.abs(jnp.clip(n_raw, 0.0, 0.999 * steam_in) - n)
+                                           <= 1e-6 * n + 1e-12),
+            feasible=info["feasible"] & (n_raw < 0.999 * steam_in),
+        )
+        return gas_out, liquid_out, info
+
+    def _column(self, gas_in: Stream, liquid_in: Stream) -> tuple[Stream, Stream, dict]:
         p = self.params
         solutes = list(p.henry)
         key = p.key_solute or solutes[0]
@@ -564,6 +814,7 @@ class _GasLiquidColumn:
         gf = get_flows(gas_in)
         lf = get_flows(liquid_in)
         T = jnp.asarray(p.T if p.T is not None else gas_in["T"], float)
+        T_G_in = T
         P = jnp.asarray(p.P if p.P is not None else gas_in["P"], float)
         H = jnp.stack([henry_constant(p.henry[s], T, p.henry_C.get(s, 0.0), p.T_ref) for s in solutes])
         K = H / P
@@ -576,6 +827,7 @@ class _GasLiquidColumn:
         Lc = L_in - jnp.sum(l_in)
         feasible = jnp.asarray(True)
         extra: dict = {}
+        T_gas_out = T_liq_out = T
 
         # design target for the key solute: v_out_key from the recovery
         r = None if not design else jnp.asarray(p.recovery, float)
@@ -592,7 +844,36 @@ class _GasLiquidColumn:
             if n_f != int(n_f) or n_f < 1:
                 raise ValueError(f"model='stages' needs an integer n_stages >= 1, got {p.n_stages}")
             N = int(n_f)
-            v_out, l_out, prof = _stages_solve(v_in, l_in, K, Gc, Lc, eta, N)
+            if p.energy_balance:
+                bad = [n for n in p.intercooler_stages if not 1 <= n <= N]
+                if bad:
+                    raise ValueError(f"intercooler_stages {bad} outside 1..{N}")
+                ic = jnp.asarray([1.0 if n + 1 in p.intercooler_stages else 0.0 for n in range(N)])
+                T_L_in = jnp.asarray(liquid_in["T"], float)
+                T_ic = jnp.asarray(p.intercooler_T if p.intercooler_T is not None else T_L_in, float)
+                H_ref = jnp.stack([jnp.asarray(p.henry[s], float) for s in solutes])
+                C_vh = jnp.stack([jnp.asarray(p.henry_C.get(s, 0.0), float) for s in solutes])
+                v_out, l_out, prof = _stages_solve_energy(
+                    v_in, l_in, H_ref, C_vh, jnp.asarray(p.T_ref, float), P, Gc, Lc, eta, N,
+                    T, T_L_in, jnp.asarray(p.cp_liquid, float), jnp.asarray(p.cp_gas, float), ic, T_ic)
+                T_gas_out = prof["T"][0]
+                T_liq_out = ic[N - 1] * T_ic + (1.0 - ic[N - 1]) * prof["T"][N - 1]
+                # the factors and the minimum rate below are quoted at the mean stage temperature
+                T = jnp.mean(prof["T"])
+                K = jnp.stack([henry_constant(p.henry[s], T, p.henry_C.get(s, 0.0), p.T_ref)
+                               for s in solutes]) / P
+                Q_rel = jnp.sum(prof["q"])
+                Q_ic = jnp.sum(prof["Q_ic"])
+                L_bot_, V_top_ = Lc + jnp.sum(l_out), Gc + jnp.sum(v_out)
+                sens = (p.cp_liquid * (L_bot_ * (T_liq_out - p.T_ref) - L_in * (T_L_in - p.T_ref))
+                        + p.cp_gas * (V_top_ * (T_gas_out - p.T_ref) - V_in * (T_G_in - p.T_ref)))
+                extra.update(stage_T=prof["T"], stage_K={s: prof["K"][i] for i, s in enumerate(solutes)},
+                             stage_Q_absorption=prof["q"], intercooler_duty=prof["Q_ic"],
+                             Q_intercooler=Q_ic, Q_sensible=sens,
+                             energy_balance_error=Q_rel - sens - Q_ic,
+                             T_gas_out=T_gas_out, T_liquid_out=T_liq_out)
+            else:
+                v_out, l_out, prof = _stages_solve(v_in, l_in, K, Gc, Lc, eta, N)
             V_top = Gc + jnp.sum(v_out)
             L_bot = Lc + jnp.sum(l_out)
             A = jnp.sqrt(L_in * L_bot / (V_in * V_top)) / K if p.variable_flow else L_in / (V_in * K)
@@ -694,8 +975,8 @@ class _GasLiquidColumn:
         for i, s in enumerate(solutes):
             gas_flows[s] = v_out[i]
             liq_flows[s] = l_out[i]
-        gas_out = make_stream(gas_flows, T, P)
-        liquid_out = make_stream(liq_flows, T, P)
+        gas_out = make_stream(gas_flows, T_gas_out, P)
+        liquid_out = make_stream(liq_flows, T_liq_out, P)
 
         # key-solute operating line, equilibrium curve and minimum rate (solute-free ratios)
         G_s = V_in - v_in[k]
@@ -754,7 +1035,11 @@ class _GasLiquidColumn:
 
 
 _COMMON_ASSUMPTIONS = [
-    "Isothermal at T; the heat of absorption is reported, not applied.",
+    "Isothermal at T by default (the heat of absorption is reported, not applied); with energy_balance "
+    "(stages model) an adiabatic stage energy balance with constant cp, optional intercoolers, no solvent "
+    "evaporation.",
+    "Live steam (steam_species): the steam that heats the feed to T and supplies the heat of desorption "
+    "condenses into the liquid at the top; constant latent heat and cp.",
     "Henry's law per solute, y = K x with K = H(T)/P; solutes do not interact.",
     "No solvent evaporation and no carrier dissolution: non-solute species stay on the side they enter.",
     "Constant total flows per stage, corrected through the geometric mean of the end absorption factors.",
@@ -778,6 +1063,7 @@ _COMMON_UNITS = {
     "P": "Pa", "T": "K", "recovery": "-", "diameter": "m", "height": "m", "H_OG": "m",
     "D_G": "m^2/s", "D_L": "m^2/s", "mu_G": "Pa s", "mu_L": "Pa s", "rho_L": "kg/m^3",
     "sigma": "N/m", "MW_gas": "kg/mol", "MW_liquid": "kg/mol", "cp_liquid": "J/(mol K)",
+    "cp_gas": "J/(mol K)", "intercooler_T": "K", "intercooler_stages": "-", "steam_latent_heat": "J/mol",
 }
 _COMMON_SYMBOLS = {"n_stages": "N", "stage_efficiency": r"E_{MV}", "henry": "H", "recovery": r"\phi",
                    "height": "Z", "H_OG": "H_{OG}", "diameter": "D"}
@@ -801,7 +1087,8 @@ class Absorber(_GasLiquidColumn):
     parameter_units = _COMMON_UNITS
     parameter_symbols = _COMMON_SYMBOLS
     numerical_method = ("Closed-form Kremser with a fixed-iteration flow correction; tray-to-tray linear solve "
-                        "per solute with Picard sweeps on the stage flows; Colburn or Gauss-Legendre NTU.")
+                        "per solute with Picard sweeps on the stage flows (with energy_balance: damped sweeps, then "
+                        "an optimistix Newton solve of all stage equations); Colburn or Gauss-Legendre NTU.")
     outlet_roles = ["gas_out", "liquid_out"]
 
     def __init__(self, params: AbsorptionParams):

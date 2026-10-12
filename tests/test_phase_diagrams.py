@@ -725,6 +725,70 @@ class TestHunterNash:
             hunter_nash(d, F, S, 0.02, S_over_F=1e-3)
 
 
+class TestDifferentiableGeometry:
+    """#448: hunter_nash and tie_line_through carry gradients; on_outside='flag'."""
+
+    @pytest.fixture
+    def data(self):
+        from difflow.phase_diagrams import tabulated_lle
+        c = np.linspace(0.0, 0.3, 10)
+        xI = np.stack([0.98 - c, np.full_like(c, 0.02), c], axis=1)
+        xII = np.stack([0.03 + 0.2 * c, 0.97 - 1.7 * c, 1.5 * c], axis=1)
+        return tabulated_lle(np.stack([xI, xII], axis=1))
+
+    @staticmethod
+    def _fd(f, x, h):
+        return (float(f(x + h)) - float(f(x - h))) / (2 * h)
+
+    def test_hunter_nash_grad_wrt_solvent_ratio(self, data):
+        from difflow.phase_diagrams import hunter_nash
+        F, S = np.array([0.75, 0.0, 0.25]), np.array([0.0, 1.0, 0.0])
+
+        def n(sf):
+            return hunter_nash(data, F, S, 0.02, S_over_F=sf)["n_stages"]
+        r = hunter_nash(data, F, S, 0.02, S_over_F=0.8)
+        assert r["feasible"] and 1.0 < float(r["n_stages"]) < 20.0
+        g = float(jax.grad(n)(0.8))
+        assert g < 0.0                                     # more solvent, fewer stages
+        assert g == pytest.approx(self._fd(n, 0.8, 1e-5), rel=1e-5)
+
+    def test_hunter_nash_grad_wrt_raffinate_and_feed(self, data):
+        from difflow.phase_diagrams import hunter_nash
+        S = jnp.array([0.0, 1.0, 0.0])
+
+        def n_x(c):
+            return hunter_nash(data, jnp.array([0.75, 0.0, 0.25]), S, c, S_over_F=0.8)["n_stages"]
+
+        def n_f(z):
+            return hunter_nash(data, jnp.array([1.0 - z, 0.0, z]), S, 0.02, S_over_F=0.8)["n_stages"]
+        assert float(jax.grad(n_x)(0.02)) == pytest.approx(self._fd(n_x, 0.02, 1e-6), rel=1e-5)
+        assert float(jax.grad(n_f)(0.25)) == pytest.approx(self._fd(n_f, 0.25, 1e-6), rel=1e-5)
+
+    def test_tie_line_through_grad_wrt_point(self, data):
+        from difflow.phase_diagrams import tie_line_through
+        M, d = jnp.array([0.45, 0.45, 0.10]), jnp.array([-1.0, 0.0, 1.0])
+
+        def c_I(z):
+            return tie_line_through(data, M + z * d)["x_I"][2]
+        assert float(jax.grad(c_I)(0.0)) == pytest.approx(self._fd(c_I, 0.0, 1e-6), rel=1e-6)
+
+    def test_flag_outside(self, data):
+        from difflow.phase_diagrams import tie_line_through
+        r = tie_line_through(data, np.array([0.99, 0.005, 0.005]), on_outside="flag")
+        assert r["two_phase"] is False and np.all(np.isnan(np.asarray(r["x_I"])))
+        assert float(r["frac_I"]) == 1.0
+        assert tie_line_through(data, np.array([0.45, 0.45, 0.10]), on_outside="flag")["two_phase"] is True
+        with pytest.raises(ValueError):
+            tie_line_through(data, np.array([0.99, 0.005, 0.005]))
+        with pytest.raises(ValueError, match="on_outside"):
+            tie_line_through(data, np.array([0.45, 0.45, 0.10]), on_outside="nan")
+
+    def test_not_under_jit(self, data):
+        from difflow.phase_diagrams import tie_line_through
+        with pytest.raises(TypeError):                     # a variable stage count is not traceable
+            jax.jit(lambda m: tie_line_through(data, m)["x_I"])(jnp.array([0.45, 0.45, 0.10]))
+
+
 class TestHunterNashPlot:
     @pytest.fixture(autouse=True)
     def _agg(self):
