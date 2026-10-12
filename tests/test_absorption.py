@@ -732,6 +732,28 @@ class TestTextbookStyleChecks:
         assert float(info["N_OG_integral"]) == pytest.approx(N_hand, rel=5e-3)
         assert float(info["height"]) == pytest.approx(H_OG * N_hand, rel=5e-3)
 
+    @pytest.mark.parametrize("role", ["absorber", "stripper"])
+    def test_minimum_rate_is_for_the_spec_even_when_infeasible(self, role):
+        """Design mode below the minimum: L_min/G_min must not track the given flow.
+
+        An infeasible design leaves the outlets at the A-limited removal, and the
+        minimum used to be computed from those outlets, so it came back equal to
+        whatever solvent rate was given (book Ch 15, SO2 exercise).
+        """
+        P, T = 101325.0, 300.0
+        if role == "absorber":
+            p = AbsorptionParams(henry={"X": 50.0 * P}, recovery=0.95)
+            gas = make_stream({"air": 19.96, "X": 0.04}, T=T, P=P)
+            mins = [float(Absorber(p)(gas, make_stream({"H2O": L}, T=T, P=P))[2]["L_min"])
+                    for L in (300.0, 600.0, 3000.0)]
+        else:
+            p = AbsorptionParams(henry={"X": 50.0 * P}, recovery=0.95)
+            liq = make_stream({"H2O": 100.0, "X": 0.01}, T=T, P=P)
+            mins = [float(Stripper(p)(make_stream({"air": V}, T=T, P=P), liq)[2]["G_min"])
+                    for V in (0.5, 1.0, 10.0)]
+        assert mins[0] == pytest.approx(mins[2], rel=1e-3)
+        assert mins[1] == pytest.approx(mins[2], rel=1e-3)
+
 
 class TestRecycleFlowsheet:
     @pytest.mark.slow

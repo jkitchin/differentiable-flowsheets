@@ -872,6 +872,12 @@ All notable changes to difflow are recorded here. The format follows
   `variable_flow` field, the catalog assumptions and `docs/unit-operations-chemical.md` now say so. No
   numerical change.
 
+- **`Absorber`/`Stripper` reported `L_min`/`G_min` equal to the given flow when a design was infeasible.** In
+  design mode (`recovery=`) below the minimum rate the outlets sit at the A-limited removal, and the minimum was
+  computed from those outlets instead of the specification, so `info["L_min"]` tracked the solvent rate given
+  (e.g. 500 -> 500, 1000 -> 1000 mol/s for a 95 % SO2 scrubber whose true minimum is 1024). The minimum now uses
+  the target end from `recovery`; feasible designs and rating mode are unchanged.
+
 - **`MechanicalVaporRecompression` compressor work was 6 % low.** The
   isentropic work used `Cp_vapor` (1880 J/kg/K) with the exponent of
   `gamma = 1.3`, a pair no ideal gas has. It now uses

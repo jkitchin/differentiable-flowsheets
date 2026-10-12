@@ -708,12 +708,21 @@ class _GasLiquidColumn:
         Xs = jnp.linspace(0.0, 1.0, 41) * (jnp.maximum(X_in, X_out) - jnp.minimum(X_in, X_out)) + \
             jnp.minimum(X_in, X_out)
         slope, icpt = solute_free_operating_line(G_s, L_s, X_in, Y_out)
+        # The minimum rate is for the specification. In design mode an infeasible
+        # solvent rate leaves the outlets at the A-limited removal, not at the
+        # target, so take the target end from `recovery` rather than the outlets.
+        Y_out_min, X_out_min = Y_out, X_out
+        if p.recovery is not None:
+            if self._role == "absorber":
+                Y_out_min = v_in[k] * (1.0 - p.recovery) / G_s
+            else:
+                X_out_min = l_in[k] * (1.0 - p.recovery) / L_s
         if self._role == "absorber":
-            L_min = minimum_solvent_rate(curve, Y_in, Y_out, X_in, G_s)
+            L_min = minimum_solvent_rate(curve, Y_in, Y_out_min, X_in, G_s)
             ratio = L_s / L_min
             minimum = {"L_min": L_min, "L_over_Lmin": ratio}
         else:
-            G_min = minimum_stripping_gas_rate(curve, X_in, X_out, Y_in, L_s)
+            G_min = minimum_stripping_gas_rate(curve, X_in, X_out_min, Y_in, L_s)
             minimum = {"G_min": G_min, "G_over_Gmin": G_s / G_min}
         # heat of absorption: C_i R per mol, released when solute goes into the liquid
         C = jnp.stack([jnp.asarray(p.henry_C.get(s, 0.0), float) for s in solutes])
