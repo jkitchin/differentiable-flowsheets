@@ -31,6 +31,9 @@ Contents
   :data:`difflow.mass_transfer.PACKINGS`).
 * Whole column: :func:`size_column`, :func:`column_hardware_cost`.
 * Flash drums: :func:`flash_drum_size` (Souders-Brown, Walas rules of thumb).
+* Surface tension (the ``sigma`` the tray correlations need):
+  :func:`surface_tension_curl_pitzer`, :func:`surface_tension_brock_bird`,
+  :func:`liquid_surface_tension`.
 
 Limits (weeping, entrainment, flooding) are returned as **continuous margins**
 and are never raised on traced values, so an optimizer can use them as smooth
@@ -55,6 +58,8 @@ __all__ = [
     "oconnell_efficiency", "gpdc_flood", "gpdc_pressure_drop",
     "kister_gill_flood_dp", "packed_column_diameter", "hetp", "size_column",
     "column_hardware_cost", "flash_drum_size", "PackingData", "PACKINGS",
+    "surface_tension_curl_pitzer", "surface_tension_brock_bird",
+    "liquid_surface_tension",
 ]
 
 
@@ -130,6 +135,113 @@ def flooding_velocity(C_SB, rho_L, rho_V) -> Array:
     return _f(C_SB) * jnp.sqrt((rho_L - rho_V) / rho_V)
 
 
+# =============================================================================
+# Surface tension (issue #444)
+# =============================================================================
+
+
+def _one_minus_Tr(T, Tc):
+    # (1 - Tr), kept positive so the 11/9 power stays finite (sigma -> 0 at Tc)
+    return jnp.maximum(1.0 - _f(T) / _f(Tc), 1e-12)
+
+
+def surface_tension_curl_pitzer(T, Tc, Pc, omega) -> Array:
+    """Pure-liquid surface tension (N/m), corresponding states (Curl-Pitzer).
+
+    ``sigma = Pc^(2/3) Tc^(1/3) (1.86 + 1.18 w)/19.05
+    [(3.75 + 0.91 w)/(0.291 - 0.08 w)]^(2/3) (1 - Tr)^(11/9)`` in dyn/cm with
+    ``Pc`` in bar (Poling, Prausnitz and O'Connell 5e, Sec. 12-3). Needs only
+    the critical constants of :func:`difflow.database.get_critical_props`.
+    Typically within 5 % for non-polar and weakly polar organics; it is poor
+    for hydrogen-bonding liquids (water, alcohols, acids), which need measured
+    data.
+
+    Args:
+        T: Temperature (K).
+        Tc: Critical temperature (K).
+        Pc: Critical pressure (Pa).
+        omega: Acentric factor (-).
+
+    Returns:
+        Surface tension (N/m); zero at and above ``Tc``.
+
+    Example:
+        >>> s = surface_tension_curl_pitzer(298.15, 562.05, 48.95e5, 0.210)
+        >>> 0.027 < float(s) < 0.030     # benzene, measured 0.0282
+        True
+    """
+    w = _f(omega)
+    Pc_bar = _f(Pc) / 1e5
+    sigma_dyn = (Pc_bar ** (2.0 / 3.0) * _f(Tc) ** (1.0 / 3.0)
+                 * (1.86 + 1.18 * w) / 19.05
+                 * ((3.75 + 0.91 * w) / (0.291 - 0.08 * w)) ** (2.0 / 3.0)
+                 * _one_minus_Tr(T, Tc) ** (11.0 / 9.0))
+    return jnp.where(_f(T) < _f(Tc), sigma_dyn * 1e-3, 0.0)
+
+
+def surface_tension_brock_bird(T, Tc, Pc, Tb) -> Array:
+    """Pure-liquid surface tension (N/m), Brock-Bird with the Miller ``Q``.
+
+    ``sigma = Pc^(2/3) Tc^(1/3) Q (1 - Tr)^(11/9)`` in dyn/cm with ``Pc`` in
+    bar and ``Q = 0.1196 [1 + Tbr ln(Pc/1.01325)/(1 - Tbr)] - 0.279``
+    (Poling, Prausnitz and O'Connell 5e, Sec. 12-3). Needs the normal boiling
+    point; the same caveat on hydrogen-bonding liquids as
+    :func:`surface_tension_curl_pitzer`.
+
+    Args:
+        T: Temperature (K).
+        Tc: Critical temperature (K).
+        Pc: Critical pressure (Pa).
+        Tb: Normal boiling point (K).
+
+    Returns:
+        Surface tension (N/m); zero at and above ``Tc``.
+    """
+    Pc_bar = _f(Pc) / 1e5
+    Tbr = _f(Tb) / _f(Tc)
+    Q = 0.1196 * (1.0 + Tbr * jnp.log(Pc_bar / 1.01325) / (1.0 - Tbr)) - 0.279
+    sigma_dyn = (Pc_bar ** (2.0 / 3.0) * _f(Tc) ** (1.0 / 3.0) * Q
+                 * _one_minus_Tr(T, Tc) ** (11.0 / 9.0))
+    return jnp.where(_f(T) < _f(Tc), sigma_dyn * 1e-3, 0.0)
+
+
+def liquid_surface_tension(species, T, x=None) -> Array:
+    """Surface tension (N/m) of a liquid from the species database.
+
+    Each pure value is :func:`surface_tension_curl_pitzer` on the critical
+    constants of :func:`difflow.database.get_critical_props`; a mixture takes
+    the mole-fraction average, the usual first estimate for non-aqueous
+    mixtures of similar molecules (Poling et al. 5e Sec. 12-5). The surface
+    of a mixture is enriched in the lower-tension species, so the linear rule
+    is an upper bound, typically a few per cent high for hydrocarbons and
+    badly wrong for aqueous mixtures.
+
+    Args:
+        species: Species name or list of names.
+        T: Temperature (K).
+        x: Liquid mole fractions (same order as ``species``); omitted for a
+            single species, or equal fractions.
+
+    Returns:
+        Surface tension (N/m).
+
+    Example:
+        >>> s = liquid_surface_tension(["benzene", "toluene"], 353.0, [0.5, 0.5])
+        >>> 0.018 < float(s) < 0.024
+        True
+    """
+    from difflow.database import get_critical_props
+
+    if isinstance(species, str):
+        species = [species]
+    props = [get_critical_props(s) for s in species]
+    sig = jnp.stack([surface_tension_curl_pitzer(T, p.Tc, p.Pc, p.omega) for p in props])
+    if x is None:
+        x = jnp.full(len(props), 1.0 / len(props))
+    x = jnp.asarray(x, dtype=float)
+    return jnp.sum(x * sig) / jnp.sum(x)
+
+
 def _tray_flood(V_molar, MW_V, rho_V, L_molar, MW_L, rho_L, sigma, tray_spacing,
                 foaming_factor, hole_area_factor):
     V_mass = _f(V_molar) * _f(MW_V) / 1000.0
@@ -172,7 +284,8 @@ def tray_column_diameter(
         L_molar: Liquid molar flow (mol/s).
         MW_L: Liquid molecular weight (g/mol).
         rho_L: Liquid density (kg/m^3).
-        sigma: Liquid surface tension (N/m); required.
+        sigma: Liquid surface tension (N/m); required. Estimate it with
+            :func:`liquid_surface_tension` when there are no data.
         tray_spacing: Tray spacing (m).
         fraction_flood: Fraction of flooding velocity (0.7-0.85 typical).
         downcomer_fraction: ``A_d / A_c`` (0.1 typical; 0.08-0.2).

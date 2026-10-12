@@ -387,3 +387,43 @@ class TestFlashDrumSize:
             return D + info["volume"]
 
         check_grads(f, (1.0, 15.0, 0.107), order=1, modes=["fwd", "rev"])
+
+
+# =============================================================================
+# Surface tension (issue #444)
+# =============================================================================
+
+
+class TestSurfaceTension:
+    # Measured at 25 C (CRC Handbook), mN/m
+    MEASURED = {"benzene": 28.22, "toluene": 27.93, "n-hexane": 17.89,
+                "n-heptane": 19.65, "cyclohexane": 24.65}
+
+    @pytest.mark.parametrize("name", sorted(MEASURED))
+    def test_curl_pitzer_against_data(self, name):
+        from difflow.database import get_critical_props
+        p = get_critical_props(name)
+        s = float(cd.surface_tension_curl_pitzer(298.15, p.Tc, p.Pc, p.omega))
+        assert s * 1e3 == pytest.approx(self.MEASURED[name], rel=0.06)
+
+    def test_brock_bird_benzene(self):
+        from difflow.database import get_critical_props
+        p = get_critical_props("benzene")
+        s = float(cd.surface_tension_brock_bird(298.15, p.Tc, p.Pc, 353.24))
+        assert s * 1e3 == pytest.approx(28.22, rel=0.05)
+
+    def test_vanishes_at_critical_and_falls_with_T(self):
+        from difflow.database import get_critical_props
+        p = get_critical_props("benzene")
+        f = lambda T: cd.surface_tension_curl_pitzer(T, p.Tc, p.Pc, p.omega)
+        assert float(f(p.Tc + 1.0)) == 0.0
+        assert float(f(300.0)) > float(f(400.0)) > float(f(500.0)) > 0.0
+        check_grads(f, (350.0,), order=1, modes=["rev"])
+
+    def test_mixture_and_diameter(self):
+        s_b = float(cd.liquid_surface_tension("benzene", 353.0))
+        s_t = float(cd.liquid_surface_tension("toluene", 353.0))
+        s_m = float(cd.liquid_surface_tension(["benzene", "toluene"], 353.0, [0.25, 0.75]))
+        assert s_m == pytest.approx(0.25 * s_b + 0.75 * s_t, rel=1e-12)
+        D, _ = cd.tray_column_diameter(100.0, 80.0, 2.9, 80.0, 85.0, 790.0, s_m)
+        assert np.isfinite(float(D)) and float(D) > 0.0
