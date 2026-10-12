@@ -21,6 +21,7 @@ The `difflow_power` plugin provides:
 - **Unit operations** that compose into a `difflow.Flowsheet`
 - **State estimation** over `difflow.reconciliation`, which is the same computation as chemical data reconciliation
 - **Verification** against the full equation set and every operating limit
+- **Renewable generators**: wind, solar and hydro resource models, curtailable units inside an inverter capability circle, and the marginal value of the resource
 
 All operations are fully differentiable using JAX: gradients of any solved quantity with respect to load, generator setpoints, line impedances, transformer taps or fuel prices are exact, through the converged solve.
 
@@ -223,6 +224,41 @@ opf.check_prices()           # the two must agree
 ```
 
 The gradient is of the *barrier* solution at the final `μ`, which differs from the exact optimum by `O(μ)` — below any modelling error at the default tolerance, but the reason driving `μ` down matters for a sensitivity even when the primal answer already looks converged.
+
+---
+
+(power-renewables)=
+## Renewable generators
+
+A wind farm, a solar plant or a hydro unit enters the OPF as an ordinary `Generator` with two things set differently. Its ceiling `p_max_mw` is what the resource makes available this hour, not a nameplate, and its floor is zero, so the OPF is free to curtail it. Its reactive output is bounded jointly with its real output by an apparent-power rating, `s_max_mva`, which adds the row `P² + Q² ≤ S_max²`. An inverter is rated in current, so at full real output it has almost no var capability left, while a curtailed one has its whole rating available as vars. The box limits alone cannot express that. Like the thermal limits, the circle is posed on the square, because a curtailed unit sits at the origin of its own circle.
+
+`difflow_power.renewables` turns weather into the available MW and builds the generator:
+
+```python
+import difflow_power as dp
+
+net = dp.cases.case9()
+net.generators["wind"] = dp.wind_generator(
+    "5", wind_speed=10.0, n_turbines=40, turbine_mw=3.0)
+net.generators["pv"] = dp.solar_generator(
+    "7", irradiance=850.0, t_ambient=30.0, capacity_mw_dc=60.0)
+net.generators["hydro"] = dp.hydro_generator(
+    "9", flow=80.0, head=40.0, machine_mva=35.0, cost=(0.0, 15.0, 0.0))
+
+opf = dp.solve_acopf(net)
+dp.curtailment(opf, ["wind", "pv", "hydro"])
+```
+
+| function | model |
+|---|---|
+| `wind_turbine_power` | idealised power curve: zero below cut-in, cubic to rated speed, flat to cut-out, zero beyond; scaled by air density |
+| `pv_power` | irradiance and NOCT cell temperature to AC MW; PVWatts v5 defaults (−0.47 %/°C, 14 % losses, 96 % inverter efficiency) and clipping at the inverter rating |
+| `hydro_power` | `ρ g Q H η` at the available flow and net head |
+| `renewable_generator` | the generic curtailable unit, from an available MW and an MVA rating |
+
+The resource models are plain JAX functions, so `jax.grad` gives available power per m/s of wind or per W/m² of irradiance. The network data model holds floats, so a factory evaluates the model to a number, and the OPF side of the chain comes from `curtailment`. Its `value_per_mw` is the multiplier on the unit's ceiling, which by the envelope theorem is the reduction in optimal cost per MW of extra resource. It is zero for a curtailed unit (more wind would also go unused) and for one already on its capability circle. The product of the two is, for example, the value of the wind in $/h per m/s. The test suite checks that value against a finite difference of the optimal cost.
+
+`solve_acopf(..., enforce_capability=False)` drops the circles. `operating_report` reports a state outside one as `"<gen>.s"` in `generator_violations`. On a PQ bus a power flow fixes both the unit's outputs at their schedule (the available power at unity power factor). On a PV bus the unit holds voltage. Each call describes one snapshot: storage, ramping and a day of weather need a multi-period OPF, which this plugin does not have.
 
 ---
 

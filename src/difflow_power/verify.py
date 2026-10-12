@@ -49,7 +49,8 @@ class OperatingReport(ParamsMixin):
         voltage_violations: bus -> pu outside its limits (signed;
             negative is under, positive is over).
         generator_violations: ``"<gen>.<p|q>"`` -> MW / MVAr outside
-            its box.
+            its box, and ``"<gen>.s"`` -> MVA beyond its apparent-power
+            rating for a unit that has one.
         thermal_violations: branch -> loading as a fraction of rating,
             for branches above 1.0.
         worst_loading: highest branch loading, or 0.0 if nothing is
@@ -171,6 +172,10 @@ def operating_report(
                 generator[f"{gid}.{tag}"] = value - lo
             elif value > hi + tol:
                 generator[f"{gid}.{tag}"] = value - hi
+        if gen.s_max_mva is not None:
+            mva = float(jnp.hypot(pg[i], qg[i]))
+            if mva > gen.s_max_mva + tol:
+                generator[f"{gid}.s"] = mva - gen.s_max_mva
 
     s_from, s_to = branch_flows(x, network, layout)
     thermal: dict[str, float] = {}

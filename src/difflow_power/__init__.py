@@ -31,6 +31,9 @@ as *differentiable flowsheets*:
   chemical data reconciliation
 - Verification against the full equation set and every limit
   (:mod:`difflow_power.verify`)
+- Renewable generators (:mod:`difflow_power.renewables`): wind, solar
+  and hydro resource models, curtailable units with an inverter
+  capability circle, and the marginal value of the resource
 
 Quick start:
     >>> import difflow_power as dp
@@ -259,6 +262,19 @@ from difflow_power.estimation import (
     network_residual_fn,
     perturb,
 )
+from difflow_power import renewables
+from difflow_power.renewables import (
+    Curtailment,
+    curtailment,
+    hydro_generator,
+    hydro_power,
+    pv_cell_temperature,
+    pv_power,
+    renewable_generator,
+    solar_generator,
+    wind_generator,
+    wind_turbine_power,
+)
 from difflow_power.plotting import (
     circular_positions,
     draw_legend,
@@ -397,6 +413,18 @@ __all__ = [
     "network_residual_fn",
     "perturb",
     "estimated_values",
+    # renewables
+    "renewables",
+    "wind_turbine_power",
+    "pv_cell_temperature",
+    "pv_power",
+    "hydro_power",
+    "renewable_generator",
+    "wind_generator",
+    "solar_generator",
+    "hydro_generator",
+    "curtailment",
+    "Curtailment",
     # plotting
     "draw_network",
     "draw_legend",

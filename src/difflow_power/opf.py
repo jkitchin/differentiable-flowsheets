@@ -21,6 +21,9 @@ a power flow ignores.
     \\quad |S_{f}|^2 \\le \\bar S^2, \\; |S_{t}|^2 \\le \\bar S^2
     \\quad\\text{(thermal ratings, both ends)}
 
+    \\quad P_{g,k}^2 + Q_{g,k}^2 \\le \\bar S_{g,k}^2
+    \\quad\\text{(apparent-power rating of a unit that has one)}
+
 The equalities come from :mod:`difflow_power.residuals` unchanged ---
 this module adds no physics --- and the whole thing is handed to
 :func:`difflow_power.ipm.solve_nlp`.
@@ -34,7 +37,10 @@ and a lightly loaded branch is exactly where an interior-point method
 puts an early iterate. The squared form is a smooth quadratic
 everywhere. Both ends are limited because a lossy branch carries more
 at its sending end than its receiving end, and the rating applies to
-the conductor at both.
+the conductor at both. A generator's apparent-power rating
+(:attr:`~difflow_power.network.Generator.s_max_mva`, an inverter's
+current limit) is squared for the same reason: a curtailed wind farm
+sits at the origin of its own capability circle.
 
 Prices
 ------
@@ -125,6 +131,9 @@ class OPFStructure(ParamsMixin):
         rate_squared: their squared ratings (pu^2).
         angle_branches: positions of branches with a real angle limit.
         angle_min, angle_max: those limits (rad).
+        capability_generators: positions (in the layout's generator
+            order) of units with an apparent-power rating.
+        capability_squared: their squared ratings (pu^2).
         bound_names: label of each bound inequality row, in order.
         equality_names: label of each equality row, in order.
     """
@@ -140,6 +149,8 @@ class OPFStructure(ParamsMixin):
     angle_branches: tuple[int, ...] = ()
     angle_min: tuple[float, ...] = ()
     angle_max: tuple[float, ...] = ()
+    capability_generators: tuple[int, ...] = ()
+    capability_squared: tuple[float, ...] = ()
     bound_names: tuple[str, ...] = ()
     equality_names: tuple[str, ...] = ()
 
@@ -153,8 +164,16 @@ class OPFStructure(ParamsMixin):
         return 2 * len(self.angle_branches)
 
     @property
+    def n_capability(self) -> int:
+        """Capability rows: one per unit with an apparent-power rating."""
+        return len(self.capability_generators)
+
+    @property
     def n_inequality(self) -> int:
-        return len(self.bound_names) + self.n_thermal + self.n_angle
+        return (
+            len(self.bound_names) + self.n_thermal + self.n_angle
+            + self.n_capability
+        )
 
     @property
     def inequality_names(self) -> list[str]:
@@ -167,7 +186,7 @@ class OPFStructure(ParamsMixin):
             f"{side}_{i}"
             for i in self.angle_branches
             for side in ("angle_max", "angle_min")
-        ]
+        ] + [f"capability_{k}" for k in self.capability_generators]
 
 
 def acopf_structure(
@@ -177,6 +196,7 @@ def acopf_structure(
     enforce_ratings: bool = True,
     enforce_voltage: bool = True,
     enforce_angles: bool = True,
+    enforce_capability: bool = True,
 ) -> OPFStructure:
     """Decide the OPF's constraint set from the network's limits.
 
@@ -194,6 +214,8 @@ def acopf_structure(
             this off gives the "P-only" dispatch that is sometimes
             wanted for comparison against a DC solution.
         enforce_angles: include angle-difference limits.
+        enforce_capability: include generator apparent-power ratings
+            (``s_max_mva``).
 
     Returns:
         An :class:`OPFStructure`.
@@ -254,6 +276,14 @@ def acopf_structure(
                 ang_lo.append(float(max(lo, -VACUOUS_ANGLE_RAD)))
                 ang_hi.append(float(min(hi, VACUOUS_ANGLE_RAD)))
 
+    cap_i, cap_sq = [], []
+    if enforce_capability:
+        for k, gid in enumerate(layout.generators):
+            s_max = network.generators[gid].s_max_mva
+            if s_max is not None:
+                cap_i.append(k)
+                cap_sq.append((s_max / base) ** 2)
+
     from difflow_power.residuals import residual_names
 
     return OPFStructure(
@@ -268,6 +298,8 @@ def acopf_structure(
         angle_branches=tuple(ang_i),
         angle_min=tuple(ang_lo),
         angle_max=tuple(ang_hi),
+        capability_generators=tuple(cap_i),
+        capability_squared=tuple(cap_sq),
         bound_names=tuple(bound_names),
         equality_names=tuple(
             residual_names(network, layout)
@@ -310,7 +342,8 @@ def acopf_problem(
     Returns:
         The NLP. Its equalities are the network physics plus any
         collapsed fixed bounds; its inequalities are the finite box
-        bounds, the thermal ratings and the angle limits, in the order
+        bounds, the thermal ratings, the angle limits and the unit
+        capability circles, in the order
         :meth:`OPFStructure.inequality_names` gives.
     """
     n = layout.size
@@ -325,6 +358,8 @@ def acopf_problem(
     ang_i = jnp.asarray(structure.angle_branches, dtype=int)
     ang_lo = jnp.asarray(structure.angle_min, dtype=jnp.float64)
     ang_hi = jnp.asarray(structure.angle_max, dtype=jnp.float64)
+    cap_i = jnp.asarray(structure.capability_generators, dtype=int)
+    cap_sq = jnp.asarray(structure.capability_squared, dtype=jnp.float64)
 
     f_idx, t_idx = network.branch_index_arrays()
     n_bus = layout.n_bus
@@ -368,6 +403,10 @@ def acopf_problem(
             rows.append(
                 jnp.stack([diff - ang_hi, ang_lo - diff], axis=1).reshape(-1)
             )
+        if cap_i.shape[0]:
+            pg = x[layout.slice_pg][cap_i]
+            qg = x[layout.slice_qg][cap_i]
+            rows.append(pg**2 + qg**2 - cap_sq)
         if not rows:
             return jnp.zeros((0,), dtype=jnp.float64)
         return jnp.concatenate(rows)
@@ -619,6 +658,7 @@ def solve_acopf(
     enforce_ratings: bool = True,
     enforce_voltage: bool = True,
     enforce_angles: bool = True,
+    enforce_capability: bool = True,
     tap_branches: Sequence[str] = (),
     shift_branches: Sequence[str] = (),
     **ipm_options: Any,
@@ -642,8 +682,9 @@ def solve_acopf(
             optimality. Turn it off for a case whose power flow does not
             converge --- the OPF often still does, since it can move
             voltages the power flow had pinned.
-        enforce_ratings, enforce_voltage, enforce_angles: which limit
-            families to carry; see :func:`acopf_structure`.
+        enforce_ratings, enforce_voltage, enforce_angles,
+        enforce_capability: which limit families to carry; see
+            :func:`acopf_structure`.
         tap_branches: transformers whose tap ratio is a decision
             variable, bounded to +-10%.
         shift_branches: phase shifters whose angle is a decision
@@ -670,6 +711,7 @@ def solve_acopf(
         enforce_ratings=enforce_ratings,
         enforce_voltage=enforce_voltage,
         enforce_angles=enforce_angles,
+        enforce_capability=enforce_capability,
     )
     nlp = acopf_problem(network, layout, structure)
 

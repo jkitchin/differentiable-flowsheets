@@ -27,11 +27,15 @@ the root CLAUDE.md, which keeps only what every session needs).
   `demand_sensitivity`, `parameter_sensitivity`, `voltage_stability_margin`
 - Estimation: `estimate_state` over `difflow.reconciliation` (state estimation
   and data reconciliation are the same computation)
+- Renewables: `renewables.py` resource models (wind curve, PV, hydro) and
+  factories building a curtailable `Generator` (`p_min=0`, `p_max` = available)
+  with `s_max_mva`, the capability circle the OPF poses as `P^2+Q^2 <= S^2`;
+  `curtailment()` reads the value of resource off the ceiling multiplier
 - Cases: `case3`, `case5` (PJM), `case9` (WSCC), `case14` (IEEE),
   `radial_feeder`, plus `from_matpower`
 
 Invariants encoded in the plugin (do not weaken them):
-- Thermal limits are posed on `|S|^2`, never `|S|`: the modulus has curvature
+- Thermal limits (and generator capability circles) are posed on `|S|^2`, never `|S|`: the modulus has curvature
   going as `1/|S|` and early interior-point iterates sit on lightly loaded
   branches.
 - The angle-reference row stays in the residual set. Without it the Jacobian is
