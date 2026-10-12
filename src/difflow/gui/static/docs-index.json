@@ -1,5 +1,5 @@
 {
- "n_sections": 1222,
+ "n_sections": 1223,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -3089,7 +3089,15 @@
    "path": "Streams and Flowsheets > Recycle Calculations > Implicit Differentiation",
    "source": "streams-and-flowsheets.md",
    "targets": [],
-   "text": "The flowsheet solver uses implicit differentiation through the converged solution:\n\n$$\\frac{d\\mathbf{y}}{d\\mathbf{p}} = \\left(\\mathbf{I} - \\frac{\\partial f}{\\partial \\mathbf{x}}\\right)^{-1} \\frac{\\partial f}{\\partial \\mathbf{p}}$$\n\nThis is implemented using JAX custom VJP rules, enabling gradient computation through the entire flowsheet solve.\n\n```python\nimport jax\n\n# Gradient through flowsheet\ndef flowsheet_objective(feed_flow):\n    original = fs.feeds['fresh_feed']\n    fs.feeds['fresh_feed'] = make_stream({species[0]: feed_flow, species[1]: 0.0},\n                                         T=340.0, P=101325.0)\n    try:\n        results = fs.solve()\n    finally:\n        fs.feeds['fresh_feed'] = original   # do not leave a tracer in the flowsheet\n    return results['liquid_product'][f'F_{species[1]}']\n\ngrad_fn = jax.grad(flowsheet_objective)\nsensitivity = grad_fn(1.0)   # d(product B) / d(fresh feed flow)\n```\n\n---"
+   "text": "The flowsheet solver uses implicit differentiation through the converged solution:\n\n$$\\frac{d\\mathbf{y}}{d\\mathbf{p}} = \\left(\\mathbf{I} - \\frac{\\partial f}{\\partial \\mathbf{x}}\\right)^{-1} \\frac{\\partial f}{\\partial \\mathbf{p}}$$\n\nThis is implemented using JAX custom VJP rules, enabling gradient computation through the entire flowsheet solve.\n\n```python\nimport jax\n\n# Gradient through flowsheet\ndef flowsheet_objective(feed_flow):\n    original = fs.feeds['fresh_feed']\n    fs.feeds['fresh_feed'] = make_stream({species[0]: feed_flow, species[1]: 0.0},\n                                         T=340.0, P=101325.0)\n    try:\n        results = fs.solve()\n    finally:\n        fs.feeds['fresh_feed'] = original   # do not leave a tracer in the flowsheet\n    return results['liquid_product'][f'F_{species[1]}']\n\ngrad_fn = jax.grad(flowsheet_objective)\nsensitivity = grad_fn(1.0)   # d(product B) / d(fresh feed flow)\n```"
+  },
+  {
+   "anchor": "objectives-over-unit-parameters",
+   "heading": "Objectives over unit parameters",
+   "path": "Streams and Flowsheets > Recycle Calculations > Objectives over unit parameters",
+   "source": "streams-and-flowsheets.md",
+   "targets": [],
+   "text": "`create_objective(fs, objective_fn, **solve_kwargs)` (also\n`fs.make_objective_fn`) turns a flowsheet into a function of a dict of unit\nparameters, `{\"unit.field\": value}`, that `jax.grad` can differentiate. A\nfield may name a key of the unit's `Unit.params` (the keyword arguments it is\ncalled with, such as a splitter's `split_frac` or the reactor's `T_spec`\nabove) or a field of the operation's own `Params`. Extra keyword arguments go\nto `fs.solve`, so a loop that needs more iterations under `jax.grad` (plain\nsubstitution) can be given them.\n\n```python\nfrom difflow import create_objective\n\nobj = create_objective(\n    fs, lambda res: res['liquid_product'][f'F_{species[1]}'], max_iter=500,\n)\np = {'splitter.split_frac': 0.8}\nprint(float(obj(p)), float(jax.grad(obj)(p)['splitter.split_frac']))\n```\n\n---"
   },
   {
    "anchor": "plugin-system",

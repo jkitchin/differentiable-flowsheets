@@ -578,6 +578,27 @@ grad_fn = jax.grad(flowsheet_objective)
 sensitivity = grad_fn(1.0)   # d(product B) / d(fresh feed flow)
 ```
 
+### Objectives over unit parameters
+
+`create_objective(fs, objective_fn, **solve_kwargs)` (also
+`fs.make_objective_fn`) turns a flowsheet into a function of a dict of unit
+parameters, `{"unit.field": value}`, that `jax.grad` can differentiate. A
+field may name a key of the unit's `Unit.params` (the keyword arguments it is
+called with, such as a splitter's `split_frac` or the reactor's `T_spec`
+above) or a field of the operation's own `Params`. Extra keyword arguments go
+to `fs.solve`, so a loop that needs more iterations under `jax.grad` (plain
+substitution) can be given them.
+
+```python
+from difflow import create_objective
+
+obj = create_objective(
+    fs, lambda res: res['liquid_product'][f'F_{species[1]}'], max_iter=500,
+)
+p = {'splitter.split_frac': 0.8}
+print(float(obj(p)), float(jax.grad(obj)(p)['splitter.split_frac']))
+```
+
 ---
 
 ## Plugin System

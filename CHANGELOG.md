@@ -29,6 +29,11 @@ All notable changes to difflow are recorded here. The format follows
   and `retention_factor`, `plate_count`, `resolution`, `purnell_resolution`, `plates_for_resolution`, `van_deemter`,
   `van_deemter_optimum`, `gaussian_peak`. Tests reproduce Geankoplis 5e Examples 12.2-1 and 12.3-1 (data recalled
   from memory) and the Klinkenberg solution (`tests/test_adsorption.py`).
+- **`create_objective` / `Flowsheet.make_objective_fn` forward solve keywords and reach `Unit.params`.** Extra
+  keyword arguments go to `fs.solve` (e.g. `max_iter` for a slow loop under `jax.grad`, which takes plain
+  substitution), and a `"unit.field"` key that names an entry of the unit's call-keyword dict (a splitter's
+  `split_frac`, a reactor's `T_spec`) now sets it; before, only fields of the operation's `Params` were reachable
+  and `split_frac` raised `AttributeError`. A field that is neither still raises.
 
 - **Unit-ops book Ch. 10-13 gaps (#444).** (1) `DistillationColumn.solve_specs(feed, specs)` solves for `R` and
   `D` from any two of `x_D`/`x_B` purities, `recovery_D`/`recovery_B`, `R`, `D`, `B` (damped Newton, implicit
@@ -968,6 +973,21 @@ All notable changes to difflow are recorded here. The format follows
   feed titre; it now uses the Langmuir loading at the feed concentration times `(1 - breakthrough_limit)`, as the
   column call does, and the unit's `equations` show the dissociation-constant isotherm `q_max C/(K_d + C)` it
   actually evaluates.
+- **`grad` of a recycle solve after a jitted `grad` (`difflow.flowsheet.Unit`).** `Unit` was a dataclass with a
+  value `__eq__` over `params`, which holds tracers when a design variable goes in through `Unit.params`. The
+  Units ride in the `optx.fixed_point` args, so equinox's trace cache compared them and raised "Exception raised
+  while checking equality of metadata fields ... _ClosureConvert": once `jit(grad(f))` had run, `grad(jit(f))`
+  and `grad(f)` failed in the same process (this broke `sensitivity_analysis` on a jitted plant model). `Unit`
+  now compares by identity (`@dataclass(eq=False)`); its hash is unchanged.
+
+- **Bisection with a NaN bracket end (`difflow.staged._solve_monotone`).** When the residual was NaN at one end of
+  the bracket (humid air below its dew point at the 200 K lower bound of the cocurrent `Dryer` outlet solve), the
+  direction of monotonicity came out wrong, the bisection walked to the wrong end and the final Newton step gave a
+  nearly right value with a wrong gradient: `d T_air_out / d G` was -0.012 against +3.14 K per kg/s by finite
+  differences at 60 kg/s of 400 C air. The direction is now read from the finite end and a NaN midpoint counts as
+  lying on the NaN end's side. Used by the dryer, leaching, crystallizer, batch-distillation and filtration solves.
+- **`total_utility_cost` is differentiable.** It called `float()` and branched in Python on the duties, so
+  `jax.grad`/`jit`/`vmap` over it raised; it is now pure JAX (negative duties still cost nothing).
 
 - **Flash derivatives and near-boundary values (#444).** (1) `flash_TP_eos` second derivatives were wrong (the
   Hessian of a two-flash PR train had the wrong sign): derivatives came from unrolling 50 damped substitution steps.
