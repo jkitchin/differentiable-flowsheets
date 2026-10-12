@@ -302,3 +302,102 @@ class TestFeedStreamParams:
 
         assert jnp.isfinite(g)
         assert g == pytest.approx(fd, rel=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# Unit.params levers and solve keywords (unit-ops book, Ch 24)
+# ---------------------------------------------------------------------------
+
+
+def _purge_loop():
+    """Ch 1's methanol loop with a per-pass conversion that falls with CH4.
+
+    The purge fraction lives in the Splitter's ``Unit.params`` dict, not on a
+    ParamsMixin, and the loop gain near ``1 - p`` makes a small purge need
+    many plain-substitution iterations under ``jax.grad``.
+    """
+    from difflow import (ComponentSplitter, ComponentSplitterParams, Mixer,
+                         Splitter, StoichiometricReactor,
+                         StoichiometricReactorParams, total_flow)
+
+    sp = ["CO", "H2", "MeOH", "CH4"]
+    nu = {"CO": -1.0, "H2": -2.0, "MeOH": 1.0}
+
+    def reactor(inlet):
+        X = 0.30 * (1 - inlet["F_CH4"] / total_flow(inlet))
+        return StoichiometricReactor(
+            StoichiometricReactorParams(stoich=nu, key="CO", conversion=X))(inlet)
+
+    fs = Flowsheet(species_order=sp, default_P=None)
+    fs.add_feed("fresh", make_stream({"CO": 100.0, "H2": 200.0, "MeOH": 0.0, "CH4": 3.0},
+                                     T=500.0, P=50e5))
+    fs.add_unit(Unit("mixer", Mixer(sp), ["fresh", "recycle"], ["rx_in"]))
+    fs.add_unit(Unit("reactor", reactor, ["rx_in"], ["rx_out"]))
+    fs.add_unit(Unit("sep", ComponentSplitter(ComponentSplitterParams({"MeOH": 0.0},
+                                                                      default_fraction=1.0)),
+                     ["rx_out"], ["gas", "crude"]))
+    fs.add_unit(Unit("purge", Splitter(sp), ["gas"], ["purge", "recycle"],
+                     {"split_frac": 0.10}))
+    fs.add_recycle("recycle", "recycle")
+    return fs
+
+
+class TestUnitParamsLevers:
+    """``"<unit>.<key>"`` reaches a key of ``Unit.params`` (e.g. split_frac)."""
+
+    def test_apply_params_updates_unit_params_dict(self):
+        fs = _purge_loop()
+        new = fs._apply_params({"purge.split_frac": 0.05})
+        purge = [u for u in new.units if u.name == "purge"][0]
+        assert purge.params["split_frac"] == 0.05
+        # The source flowsheet is untouched.
+        assert [u for u in fs.units if u.name == "purge"][0].params["split_frac"] == 0.10
+
+    def test_unit_params_and_operation_params_together(self, cstr_flowsheet):
+        """``T_spec`` is a call keyword, ``V`` a CSTRParams field: both apply."""
+        new = cstr_flowsheet._apply_params({"reactor.T_spec": 360.0,
+                                            "reactor.V": jnp.array(2.0)})
+        assert new.units[0].params["T_spec"] == 360.0
+        assert float(new.units[0].operation.params.V) == pytest.approx(2.0)
+
+    def test_unknown_field_on_paramless_operation_raises(self):
+        fs = _purge_loop()
+        with pytest.raises(AttributeError, match="not keys of its Unit.params"):
+            fs._apply_params({"purge.nonsense": 1.0})
+
+    def test_objective_varies_with_split_frac(self):
+        fs = _purge_loop()
+        obj = fs.make_objective_fn(lambda s: s["crude"]["F_MeOH"])
+        assert float(obj({"purge.split_frac": 0.20})) < float(obj({"purge.split_frac": 0.10}))
+
+
+class TestSolveKeywordsForwarded:
+    """``make_objective_fn``/``create_objective`` pass keywords to ``solve``."""
+
+    def test_max_iter_reaches_solve(self):
+        fs = _purge_loop()
+        seen = {}
+        orig = Flowsheet.solve
+
+        def spy(self, *args, **kwargs):
+            seen.update(kwargs)
+            return orig(self, *args, **kwargs)
+
+        Flowsheet.solve = spy
+        try:
+            create_objective(fs, lambda s: s["crude"]["F_MeOH"],
+                             max_iter=777, tol_basis="error")({"purge.split_frac": 0.1})
+        finally:
+            Flowsheet.solve = orig
+        assert seen["max_iter"] == 777 and seen["tol_basis"] == "error"
+
+    def test_gradient_of_split_frac_matches_finite_difference(self):
+        """At p = 0.03 (gain ~0.97) the traced solve needs max_iter well above 100."""
+        fs = _purge_loop()
+        obj = create_objective(fs, lambda s: s["crude"]["F_MeOH"], max_iter=3000)
+        f = lambda p: obj({"purge.split_frac": p})
+        p0 = 0.03
+        g = float(jax.grad(f)(p0))
+        h = 1e-5
+        fd = (float(f(p0 + h)) - float(f(p0 - h))) / (2 * h)
+        assert g == pytest.approx(fd, rel=1e-4)

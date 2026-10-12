@@ -8,6 +8,12 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`create_objective` / `Flowsheet.make_objective_fn` forward solve keywords and reach `Unit.params`.** Extra
+  keyword arguments go to `fs.solve` (e.g. `max_iter` for a slow loop under `jax.grad`, which takes plain
+  substitution), and a `"unit.field"` key that names an entry of the unit's call-keyword dict (a splitter's
+  `split_frac`, a reactor's `T_spec`) now sets it; before, only fields of the operation's `Params` were reachable
+  and `split_frac` raised `AttributeError`. A field that is neither still raises.
+
 - **Unit-ops book Ch. 10-13 gaps (#444).** (1) `DistillationColumn.solve_specs(feed, specs)` solves for `R` and
   `D` from any two of `x_D`/`x_B` purities, `recovery_D`/`recovery_B`, `R`, `D`, `B` (damped Newton, implicit
   derivative; an infeasible pair ends with `spec_converged` False). (2) `underwood_class2`: Underwood's general
