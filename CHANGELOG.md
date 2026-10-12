@@ -22,6 +22,9 @@ All notable changes to difflow are recorded here. The format follows
   `sieve_population_density` converts a screen analysis into the MSMPR population density for
   `fit_msmpr`. `TestPublishedExamples` reproduces Geankoplis Example 12.11-1 (Na2CO3.10H2O
   yield, with and without evaporation).
+- **Published-example tests for cake filtration (book Ch. 21).** `TestGeankoplisFiltration` reproduces
+  Geankoplis 5e Examples 14.2-1 (alpha and R_m from the CaCO3 t-V data with `fit_ruth`), 14.2-2 (the 20-frame
+  press, 269.7 s) and 14.2-3 (wash at a quarter of the final rate, 194 s), also through the `CakeFilter` unit.
 
 - **Unit-ops book Parts I-II gaps (issue 442).**
   *Fixes.* `phase_identification_parameter` uses closed-form derivatives of the cubic (cheaper to compile inside
@@ -940,6 +943,26 @@ All notable changes to difflow are recorded here. The format follows
   array inside `jit`) failed; it now skips the check for traced values. Regression test
   `test_gradient_with_respect_to_kinetics` (checks the `j = 1` closed form
   `d ln L50/d ln k_b = -g/(b+3g)`).
+- **Sigma theory in the bio centrifuges was off by factors of 2 and sqrt(pi) (book Ch. 21).** `Centrifuge`
+  captured `min(1, 2 v_s Sigma/Q)`, twice the ideal-settler value, so a disc stack (whose Sigma is the standard
+  Ambler form) over-predicted the recovery by up to 2x below complete capture. It now captures
+  `min(1, v_s e Sigma/Q)`: complete at `Q = v_s e Sigma`, half at `Q_critical = 2 v_s e Sigma`
+  (Geankoplis 5e Sec. 14.4C). `efficiency` is now Ambler's correction on Sigma (the machine is an ideal settler
+  of area `efficiency * Sigma`); it used to multiply the capture, so a disc stack at the default 0.7 could never
+  recover more than 70 % of the cells however slow the feed. `critical_particle_diameter` had a spurious pi in the denominator (cut size 1.77x
+  too small): `d50 = sqrt(9 mu Q/(Delta rho g Sigma))`. `tubular_bowl_sigma` returned half the thin-layer value
+  (`pi` for `2 pi omega^2 L r^2/g`); it is now the thin-layer value and takes `r_inner=` for the thick-layer
+  form `omega^2 pi L (r2^2 - r1^2)/(2 g ln(2 r2/(r1 + r2)))`. The `equations` entry (a tanh that the code never
+  used) and the bio docs now match the code. Tests: `TestSigmaTheory` (Hazen capture, cut size, the
+  Stokes-trajectory oracle for a thick layer, a gradient in rpm).
+- **Lapple cyclone outlet-duct length.** `CYCLONE_GEOMETRIES["lapple"]` had `S = D/8`; Lapple's standard is
+  `S = 5D/8` (Cooper & Alley Table 4.1, recalled). `S` enters no calculation, so no result changes.
+- **`SettlerParams` accepted unsorted or repeated settling data (book Ch. 21).** The PCHIP interpolation behind
+  `coe_clevenger` needs strictly increasing `C_data`; a Kynch table passed in descending order, or with the
+  repeated `C0` of the constant-rate points, silently gave a thickener area of 1442 m^2 instead of 63. It now
+  raises `ValueError` for `C_data` (and for `t_data` in `kynch`/`talmage_fitch`) that is not strictly
+  increasing. Concrete-only: traced values pass unchecked. Test:
+  `TestSettlerUnit.test_unsorted_or_repeated_data_is_rejected`.
 
 - **Le Bas oxygen increment for ethers (book Ch. 14).** `LE_BAS_INCREMENTS["O_ether"]` was 9.1, which is the
   methyl-ester value; it is now 9.9 (methyl ethers), and the table gains `O_methyl_ester` (9.1), `O_methyl_ether`

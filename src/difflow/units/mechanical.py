@@ -75,7 +75,7 @@ Lapple (1951): the cut size ``d50 = [9 mu W / (2 pi N_e v_i (rho_p - rho_g))]^(1
 grade efficiency ``eta(d) = 1/(1 + (d50/d)^2)`` and the Shepherd-Lapple pressure
 drop ``dP = K (H W / D_e^2) rho v_i^2 / 2``. **Unverified, typed from memory:**
 the constant ``K = 16``, the Lapple standard proportions (``H = D/2``,
-``W = D/4``, ``D_e = D/2``, ``S = D/8``, ``L_b = 2 D``, ``L_c = 2 D``,
+``W = D/4``, ``D_e = D/2``, ``S = 5D/8``, ``L_b = 2 D``, ``L_c = 2 D``,
 ``J = D/4``) and the Stairmand high-efficiency set (``0.5, 0.2, 0.5, 0.5,
 1.5, 2.5, 0.375`` times ``D``). Cyclone mass-loading effects, re-entrainment
 and the Barth / Muschelknautz models are not included.
@@ -109,6 +109,7 @@ from typing import Literal
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import Array
 from jax.scipy.special import logsumexp
 
@@ -592,7 +593,7 @@ def filter_area_for_cycle(V, t_on, mu, alpha, c_s, dP, R_m=0.0, c2=1.0, c1=1.0) 
 #: geometry ratios ``[H, W, D_e, S, L_b, L_c, J] / D`` of the Lapple and Stairmand high-efficiency
 #: cyclones. UNVERIFIED: typed from memory (Lapple 1951; Coulson & Richardson Vol. 2 / Towler & Sinnott).
 CYCLONE_GEOMETRIES = {
-    "lapple": [0.5, 0.25, 0.5, 0.125, 2.0, 2.0, 0.25],
+    "lapple": [0.5, 0.25, 0.5, 0.625, 2.0, 2.0, 0.25],
     "stairmand_he": [0.5, 0.2, 0.5, 0.5, 1.5, 2.5, 0.375],
 }
 _GEOM_KEYS = ("H", "W", "D_e", "S", "L_b", "L_c", "J")
@@ -703,6 +704,15 @@ def _balance_error(feed: dict, *outs: dict) -> Array:
     return err
 
 
+def _strictly_increasing(x) -> bool:
+    """True if the (concrete) sequence ``x`` is strictly increasing; traced values pass unchecked."""
+    try:
+        a = np.asarray(x, dtype=float)
+    except Exception:  # traced (jit/grad): the check is concrete-only
+        return True
+    return bool(np.all(np.diff(a) > 0))
+
+
 @dataclass
 class SettlerParams(ParamsMixin):
     """Parameters of a gravity settler / thickener.
@@ -777,11 +787,16 @@ class SettlerParams(ParamsMixin):
                 raise ValueError("coe_clevenger needs either C_data/v_data or the particle model d_p (not both)")
             if self.C_data is not None and (self.v_data is None or len(self.v_data) != len(self.C_data)):
                 raise ValueError("C_data and v_data must have the same length")
+            if self.C_data is not None and not _strictly_increasing(self.C_data):
+                raise ValueError("C_data must be strictly increasing (sort it and drop repeated "
+                                 "concentrations, e.g. the constant-rate points of a Kynch construction)")
         else:
             if self.t_data is None or self.z_data is None or len(self.t_data) != len(self.z_data):
                 raise ValueError(f"{m} needs t_data and z_data of equal length")
             if self.batch_C0 is None:
                 raise ValueError(f"{m} needs batch_C0")
+            if not _strictly_increasing(self.t_data):
+                raise ValueError("t_data must be strictly increasing")
         if self.d_bins is not None and (self.mass_fractions is None
                                         or len(self.mass_fractions) != len(self.d_bins)):
             raise ValueError("d_bins and mass_fractions must have the same length")
