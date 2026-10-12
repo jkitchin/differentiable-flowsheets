@@ -55,6 +55,7 @@ def _run(**kwargs):
 class TestTargetElementsIsALabel:
     """target_elements labels the diagnostics; it moves no flow (#288)."""
 
+    @pytest.mark.slow
     def test_outlet_flows_do_not_depend_on_target_elements(self):
         """Documented behaviour: same streams whatever is labelled.
 

@@ -113,6 +113,7 @@ def test_bad_profile_shape():
         pipe(profile=[(0.0, 0.0)])(water())
 
 
+@pytest.mark.slow
 def test_gradient_of_minimum_pressure():
     def P_min(D, P_in):
         return pipe(D=D, profile=CREST)(water(P=P_in))[1]["P_min"] / 1e5

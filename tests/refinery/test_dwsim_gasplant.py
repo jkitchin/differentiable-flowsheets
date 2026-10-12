@@ -208,6 +208,7 @@ def _x(stream, names):
 @pytest.mark.slow
 class TestColumns:
 
+    @pytest.mark.slow
     def test_k_values_at_dwsims_stage_states(self, column):
         """difflow's PR ``ln K`` at DWSIM's own (T, P, x, y) on every
         equilibrium stage, no column in the way. Measured 5.1e-7
@@ -334,6 +335,7 @@ def compressed():
 @pytest.mark.release
 class TestCompressor:
 
+    @pytest.mark.slow
     def test_stage_power_and_discharge_temperature(self, compressed):
         """Measured: power 5.1e-5 (stage 1) and 4.9e-5 (stage 2) relative,
         discharge temperatures 2.7 and 2.8 mK -- R and the midpoint rule in
@@ -384,6 +386,7 @@ class TestVaporPressure:
         c = REF["rvp"][name]
         return c, dc.gas_components_of(c["components"]), jnp.asarray(c["case"]["z"])
 
+    @pytest.mark.slow
     def test_true_vapor_pressure(self, name):
         """Bubble pressure at 100 F: measured 8.6e-7 and 1.1e-6 relative
         (DWSIM's flash residual and its truncated sqrt(2))."""
@@ -424,6 +427,7 @@ class TestVaporPressure:
         assert r["rvp_dwsim_correlation"] / r["d323"]["rvp"] - 1 == pytest.approx(gap, abs=0.005)
 
 
+@pytest.mark.slow
 @pytest.mark.release
 def test_the_correlation_crosses_the_tvp_once():
     """``RVP(TVP) = TVP`` where ``ln t + 0.15279 = 2.7738 log10 t`` (t in

@@ -334,6 +334,7 @@ class TestInitializationHelpers:
         assert T_out > simple_inlet["T"]
 
 
+@pytest.mark.slow
 class TestFlowsheetAcceleration:
     """Tests for flowsheet solver with acceleration."""
 
@@ -380,6 +381,7 @@ class TestFlowsheetAcceleration:
 
         return fs
 
+    @pytest.mark.slow
     def test_flowsheet_anderson_acceleration(self, simple_flowsheet_with_recycle):
         """Test flowsheet solving with Anderson acceleration."""
         fs = simple_flowsheet_with_recycle
@@ -399,6 +401,7 @@ class TestFlowsheetAcceleration:
 
         assert feed_total == pytest.approx(product_total, rel=0.05)
 
+    @pytest.mark.slow
     def test_flowsheet_wegstein_acceleration(self, simple_flowsheet_with_recycle):
         """Test flowsheet solving with Wegstein acceleration."""
         fs = simple_flowsheet_with_recycle
@@ -417,6 +420,7 @@ class TestFlowsheetAcceleration:
         assert "product" in streams
         assert "reactor_out" in streams
 
+    @pytest.mark.slow
     def test_acceleration_methods_converge_to_same_solution(self, simple_flowsheet_with_recycle):
         """Test that different acceleration methods converge to the same solution."""
         fs = simple_flowsheet_with_recycle
@@ -514,6 +518,7 @@ class TestTearInitialization:
         guess = get_flows(fs._initialize_tear_stream("recycle"))
         assert guess == pytest.approx(get_flows(fs._make_zero_stream()))
 
+    @pytest.mark.slow
     def test_explicit_tear_initial_still_wins(self, recycle_flowsheet):
         """A caller who says what the tear is does not get overruled by a guess."""
         fs = recycle_flowsheet
@@ -524,6 +529,7 @@ class TestTearInitialization:
         assert fs.last_solve_converged
         assert "product" in streams
 
+    @pytest.mark.slow
     def test_same_fixed_point_either_way(self, recycle_flowsheet):
         """A better start may not change where the iteration lands.
 

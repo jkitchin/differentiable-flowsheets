@@ -79,6 +79,7 @@ def fuel_oil(r):
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_feed_carries_the_residue_sulfur_metals_and_ccr(char, feed):
     cuts = tuple(n for n in char.pseudo_names if f"F_{n}" in feed)
     lay = rds_layout(char, cuts)
@@ -112,6 +113,7 @@ def test_conversion_sends_heavy_cuts_to_lighter_ones():
     np.testing.assert_allclose(mult[4:], (2.0, 2.0))
 
 
+@pytest.mark.slow
 def test_lever_rule_and_pool_agree(char, feed):
     """The cutter arithmetic that rules out cutter blending alone (see the docs)."""
     fo_char = BlendCharacterization.from_characterization(char, contaminants=True)
@@ -134,12 +136,14 @@ def test_lever_rule_and_pool_agree(char, feed):
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_unit_converges_and_balances_close(result):
     assert bool(result.converged)
     for k, v in result.balances.items():
         assert float(v) < 1e-10, (k, float(v))
 
 
+@pytest.mark.slow
 def test_fuel_oil_meets_the_half_percent_sulfur_spec(char, feed, result):
     fo = fuel_oil(result)
     assert float(fo.properties["S_ppm"]) <= 5000.0
@@ -155,6 +159,7 @@ def test_fuel_oil_meets_the_half_percent_sulfur_spec(char, feed, result):
     assert float(fo.properties["viscosity_cSt"]) < float(raw.properties["viscosity_cSt"])
 
 
+@pytest.mark.slow
 def test_route_sulfur_and_mass_balances_close(rds, result):
     """Residue in = fuel oil + H2S (sulfur); residue + treat gas = fuel oil + gas (mass)."""
     lay = rds.layout
@@ -172,6 +177,7 @@ def test_route_sulfur_and_mass_balances_close(rds, result):
     np.testing.assert_allclose(float(fo.mass), float(o["residue.rate"] + o["distillate.rate"]), rtol=1e-12)
 
 
+@pytest.mark.slow
 def test_structure_is_fixed_at_construction(rds, feed):
     with pytest.raises(ValueError, match="T_in"):
         rds.solve(feed, params=rds.params.update(T_in=(640.0, 650.0)))
@@ -186,6 +192,7 @@ def test_structure_is_fixed_at_construction(rds, feed):
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.release
 def test_illustrative_constants_land_in_ards_ranges(result):
     """The constants were chosen to give ARDS-like severities (see the kinetics docstring)."""

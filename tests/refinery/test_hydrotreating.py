@@ -83,6 +83,7 @@ def bed_setup(diesel):
 # =============================================================================
 
 
+@pytest.mark.slow
 def test_feed_mass_from_atoms_equals_char_mass(diesel):
     char, cuts, feed, unit = diesel
     lay = unit.layout
@@ -100,6 +101,7 @@ def test_feed_mass_from_atoms_equals_char_mass(diesel):
     assert S_attr == pytest.approx(S, rel=1e-12)
 
 
+@pytest.mark.slow
 def test_stream_round_trip(diesel):
     char, cuts, feed, unit = diesel
     lay = unit.layout
@@ -121,6 +123,7 @@ def test_layout_requires_carbon_and_hydrogen():
 # =============================================================================
 
 
+@pytest.mark.slow
 def test_pr_fugacity_matches_difflow_pengrobinson():
     names = ("methane", "propane", "n_hexane")
     crit = {n: dr.thermo.LIGHT_ENDS[n] for n in names}
@@ -156,6 +159,7 @@ def test_rachford_rice_negative_flash():
     assert float(V) > 1.0                     # a superheated feed: the negative flash gives V > 1
 
 
+@pytest.mark.slow
 def test_pr_flash_converges_and_differentiates(bed_setup):
     unit, th, comps, kin, lay, oil, gas = bed_setup
     z = flash_components(oil + gas, lay, comps)
@@ -168,6 +172,7 @@ def test_pr_flash_converges_and_differentiates(bed_setup):
     assert float(g) == pytest.approx(float(fd), rel=1e-5)
 
 
+@pytest.mark.slow
 def test_compressor_isentropic_ideal_gas():
     lay = Layout(("hydrogen", "methane"), ("pc01",), ("C", "H"), ("C", "H"))
     comps = Components.build(lay, [400.0], [0.75], [100.0], [550.0], [3e6], [0.3], [3e4],
@@ -197,6 +202,7 @@ def test_newton_solve_implicit_gradient():
     assert float(gf) == pytest.approx(float(g), rel=1e-12)
 
 
+@pytest.mark.slow
 def test_solve_tear_fixed_point():
     g = lambda x, a: 0.9 * x + a                     # fixed point x = 10 a, dx/da = 10
     s = solve_tear(g, jnp.asarray([1.0, 2.0]), jnp.asarray([0.5, 1.0]))
@@ -226,6 +232,7 @@ def test_thermochemistry_pinned_to_model_compounds():
     assert sum(hk.CRACK_GAS_SPLIT.values()) == pytest.approx(1.0)
 
 
+@pytest.mark.slow
 def test_aromatics_equilibrium_is_cp_integrated():
     """#338: K(T) of every saturation step is the shared table's Cp-integrated
     ln K (1 bar), not the constant-dH/dS form, which at 350 C is 3.8x too
@@ -252,6 +259,7 @@ def test_aromatics_equilibrium_is_cp_integrated():
     np.testing.assert_allclose(g2, g, rtol=1e-12)
 
 
+@pytest.mark.slow
 def test_kinetics_conserve_elements(bed_setup):
     unit, th, comps, kin, lay, oil, gas = bed_setup
     stream = oil + gas
@@ -267,6 +275,7 @@ def test_kinetics_conserve_elements(bed_setup):
     assert float(r.gas[lay.gas_index("hydrogen_sulfide")]) > 0
 
 
+@pytest.mark.slow
 def test_power_law_fallback(bed_setup):
     unit, th, comps, kin, lay, oil, gas = bed_setup
     stream = oil + gas
@@ -607,6 +616,7 @@ def test_fractionator_cut_point_gradient_matches_central_differences(diesel_resu
 # =============================================================================
 
 
+@pytest.mark.slow
 def test_makeup_composition_is_traceable(diesel):
     """``HydrotreaterParams.makeup`` values may be tracers: d(makeup_y)/d(purity) is exact."""
     from difflow_refinery.hydroprocessing.recycle import makeup_vector

@@ -178,6 +178,7 @@ def _pipe_loop_net(D_ab=0.1023, demand_c=0.012):
     return net
 
 
+@pytest.mark.slow
 def test_pipe_network_methods_agree_and_balance():
     net = _pipe_loop_net()
     r_n = net.solve(method="newton")
@@ -196,6 +197,7 @@ def test_pipe_network_methods_agree_and_balance():
     np.testing.assert_allclose(float(h["dP_static"]), 5.0 * rho_g, rtol=1e-12)
 
 
+@pytest.mark.slow
 def test_network_jit():
     def q_ab(d):
         return _pipe_loop_net(demand_c=d).solve().branch_flows["AB"]
@@ -226,6 +228,7 @@ def test_gradient_wrt_demand_and_diameter_newton():
     np.testing.assert_allclose(g, fd, rtol=1e-5)
 
 
+@pytest.mark.slow
 def test_gradient_hardy_cross_matches_newton():
     def total_supply(d, method):
         demand = dict(DEMAND, C=d)

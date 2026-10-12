@@ -91,6 +91,7 @@ def test_mixture_transport_natural_gas():
                                             / (float(r["Z"]) * 8.314462618 * 288.15))
 
 
+@pytest.mark.slow
 def test_gradients():
     f = lambda T, P: dense_gas_viscosity("methane", T, P * 1e5) * 1e6  # noqa: E731
     check_grads(f, (288.15, 50.0), order=1, modes=["rev"], atol=1e-5, rtol=1e-5)

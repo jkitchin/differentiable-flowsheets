@@ -94,6 +94,7 @@ class TestGraphReading:
 
 
 class TestPatchUnit:
+    @pytest.mark.slow
     def test_a_refused_patch_changes_nothing(self, session):
         """A good parameter beside a taken name used to land, and the
         patch was then reported as refused: the editor showed 1.0 over a
@@ -118,6 +119,7 @@ class TestPatchUnit:
         answer = session.patch_unit("reactor", {"name": ""})
         assert answer["ok"] is False and "empty" in answer["error"]
 
+    @pytest.mark.slow
     def test_an_edit_that_fails_unexpectedly_drops_the_streams(self, session):
         session.solve()
         def boom():
@@ -311,6 +313,7 @@ class TestAddAndRemove:
         answer = session.rename_stream("rx", "feed")
         assert not answer["ok"] and "already has something" in answer["error"]
 
+    @pytest.mark.slow
     def test_an_idle_feed_is_not_counted_as_mass_in(self, session):
         """It enters nothing: counted, it read as mass lost in the units."""
         solved = session.solve()
@@ -589,11 +592,13 @@ class TestFeeds:
 
 
 class TestEditedFlowsheetStillSolves:
+    @pytest.mark.slow
     def test_after_a_parameter_change(self, session):
         session.patch_unit("reactor", {"params": {"V": 2.0}})
         solved = session.solve()
         assert solved["ok"], solved.get("error")
 
+    @pytest.mark.slow
     def test_after_a_disconnect_and_reconnect(self, session):
         session.disconnect("mixer", "mixed", "reactor", "mixed")
         freed = edit.unit(session.flowsheet, "reactor").inlet_names[0]
@@ -920,11 +925,13 @@ class TestDerivativesAtAnUnconvergedPoint:
         assert s.open_example("02_reactor_flash")["ok"]
         return s
 
+    @pytest.mark.slow
     def test_a_converged_point_says_so(self, ester):
         answer = ester.sensitivity(lever="reactor.V")
         assert answer["ok"], answer
         assert answer["converged"] is True and answer["warning"] is None
 
+    @pytest.mark.slow
     def test_an_unconverged_point_is_flagged(self, ester):
         fs = ester.flowsheet
         real = fs.solve
@@ -963,6 +970,7 @@ class TestSolverOptions:
         assert s.open_example("03_reactor_recycle")["ok"]
         return s
 
+    @pytest.mark.slow
     def test_the_options_reach_the_solve(self, recycle):
         assert recycle.set_solver_options({"max_iter": 1})["ok"]
         answer = recycle.solve()
@@ -975,6 +983,7 @@ class TestSolverOptions:
         assert answer["tol"] == pytest.approx(1e-6)
         assert "wegstein" in answer["method"].lower()
 
+    @pytest.mark.slow
     def test_an_unknown_stored_key_does_not_break_later_options(self, recycle):
         """A key from a hand-edited file used to raise KeyError on every set."""
         recycle.flowsheet.view["solver"] = {"future_option": 3}
@@ -1010,6 +1019,7 @@ class TestSolverOptions:
         assert not answer["ok"]
         assert "solver" not in recycle.flowsheet.view
 
+    @pytest.mark.slow
     def test_every_solve_option_reaches_the_solve(self, recycle):
         """The editor's four were not all of them: damping, tear choice and
         the error basis are what a hard loop actually needs."""
@@ -1023,6 +1033,7 @@ class TestSolverOptions:
         assert answer["ok"] and answer["converged"] is True
         assert answer["solver"]["damping"] == 0.5
 
+    @pytest.mark.slow
     def test_the_gain_and_the_hidden_error_are_returned(self):
         """At gain 0.99 the error is about 100x the step `tol` tested, and
         the TearToleranceWarning that says so went to stderr, unseen."""
@@ -1038,6 +1049,7 @@ class TestSolverOptions:
         categories = [w["category"] for w in answer["warnings"]]
         assert categories.count("TearToleranceWarning") == 1
 
+    @pytest.mark.slow
     def test_the_derivatives_use_them_too(self, recycle):
         assert recycle.set_solver_options({"max_iter": 1})["ok"]
         lever = recycle.levers()["levers"][0]["key"]
@@ -1045,6 +1057,7 @@ class TestSolverOptions:
         assert answer["ok"], answer
         assert answer["converged"] is False
 
+    @pytest.mark.slow
     def test_the_verdict_is_of_the_iteration_the_derivative_used(self, recycle):
         """A traced solve is plain substitution whatever is stored.
 

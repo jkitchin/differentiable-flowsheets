@@ -40,12 +40,14 @@ def char():
     return dr.characterize(_assay())
 
 
+@pytest.mark.slow
 def test_material_and_bulk_gravity_recombine(char):
     assert float(jnp.sum(char.mass_fraction)) == pytest.approx(1.0, abs=1e-13)
     assert float(jnp.sum(char.volume_fraction)) == pytest.approx(1.0, abs=1e-13)
     assert float(char.bulk_sg) == pytest.approx(0.86, rel=1e-12)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("key", list(dr.CONTAMINANTS))
 def test_bulk_contaminants_recombine(char, key):
     field, unit = dr.CONTAMINANTS[key]
@@ -58,6 +60,7 @@ def test_bulk_contaminants_recombine(char, key):
     assert np.all(np.diff(per[k:]) >= 0.0)
 
 
+@pytest.mark.slow
 def test_a_measured_curve_is_used_as_given():
     T_pts = jnp.asarray([400.0, 600.0, 800.0, 1100.0])
     S = jnp.asarray([0.1, 1.0, 2.5, 4.0])
@@ -67,6 +70,7 @@ def test_a_measured_curve_is_used_as_given():
                                np.interp(np.asarray(char.Tb), T_pts, S) * 1e-2, rtol=1e-12)
 
 
+@pytest.mark.slow
 def test_residue_lump_is_what_was_asked_for():
     he = dr.HeavyEnd(residue_Tb=1200.0, residue_mw=1400.0, residue_sg=1.08)
     char = dr.characterize(_assay(heavy_end=he))
@@ -90,6 +94,7 @@ def test_cuts_run_in_order_to_the_lump(char):
     assert edges[-2] == pytest.approx(dr.HeavyEnd().T_max)
 
 
+@pytest.mark.slow
 def test_the_curve_passes_through_its_data():
     curve = dr.tbp_curve(_assay())
     np.testing.assert_allclose(np.asarray(curve(jnp.asarray(T_K))), np.asarray(PCT) / 100.0,
@@ -102,12 +107,14 @@ def test_the_curve_passes_through_its_data():
     assert np.all(np.diff(x) > 0) and x[-1] < 1.0
 
 
+@pytest.mark.slow
 def test_method_defaults():
     assert dr.characterize(_assay()).method == "twu"
     plain = dr.Assay([0, 50, 100], [300.0, 600.0, 900.0], sg=0.85)
     assert dr.characterize(plain).method == "twu"
 
 
+@pytest.mark.slow
 def test_gradient_with_respect_to_a_tbp_point_matches_fd():
     """d(mass-average Tb and bulk-weighted S of the vacuum range)/d(T at 80%)."""
     base = _assay()
@@ -128,6 +135,7 @@ def test_gradient_with_respect_to_a_tbp_point_matches_fd():
     assert abs(g) > 1e-3
 
 
+@pytest.mark.slow
 def test_vacuum_assay_converts_to_the_same_crude():
     """The vacuum package's synthetic crude is one `Assay` away."""
     a = heavy_crude()
@@ -152,6 +160,7 @@ def test_heavy_end_rejects_unusable_data(pct, T, msg):
 # -- into the blend pool ----------------------------------------------------
 
 
+@pytest.mark.slow
 def test_blend_grid_from_the_characterization(char):
     """The whole crude as a blend component recombines to the assay."""
     grid = dr.BlendCharacterization.from_characterization(char)

@@ -139,6 +139,7 @@ class TestWetBulb:
         assert float(s["T_wb"]) - K == pytest.approx(twb, abs=0.1)
         assert float(s["T_dp"]) - K == pytest.approx(tdp, abs=0.1)
 
+    @pytest.mark.slow
     def test_ordering_dew_point_wet_bulb_dry_bulb(self):
         for t, rh in itertools.product([-10.0, 5.0, 25.0, 45.0], [0.1, 0.5, 0.9]):
             s = state(T=t + K, RH=rh)
@@ -184,6 +185,7 @@ class TestWetBulb:
         assert float(wet_bulb_temperature(T, W)) > float(wet_bulb_temperature(T, W, over_ice=False)) - 1.0
         assert float(wet_bulb_temperature(T, W)) < T
 
+    @pytest.mark.slow
     def test_vectorises_and_jits(self):
         Tv = jnp.linspace(270.0, 320.0, 7)
         Wv = jnp.full(7, 0.003)
@@ -200,6 +202,7 @@ STATES = [(-8.0, 0.55), (4.0, 0.8), (22.0, 0.35), (30.0, 0.5), (48.0, 0.15)]
 
 
 class TestState:
+    @pytest.mark.slow
     @pytest.mark.parametrize("t,rh", STATES)
     def test_every_pair_round_trips(self, t, rh):
         ref = state(T=t + K, RH=rh)
@@ -229,6 +232,7 @@ class TestState:
         assert float(s["mu"]) == pytest.approx(float(s["W"] / s["W_sat"]))
         assert 0.0 < float(s["mu"]) < 1.0
 
+    @pytest.mark.slow
     def test_pressure_dependence(self):
         lo = state(T=300.0, RH=0.5, P=80e3)
         hi = state(T=300.0, RH=0.5, P=P)
@@ -241,6 +245,7 @@ class TestState:
         assert len(leaves) == len(ps.STATE_KEYS)
         assert float(jax.jit(lambda T: state(T=T, RH=0.5)["h"])(300.0)) == pytest.approx(float(s["h"]))
 
+    @pytest.mark.slow
     def test_vmap(self):
         T = jnp.linspace(280.0, 310.0, 5)
         out = jax.vmap(lambda t: state(T=t, RH=0.6)["T_dp"])(T)
@@ -251,6 +256,7 @@ class TestState:
 
 
 class TestProcesses:
+    @pytest.mark.slow
     def test_mix_air_conserves_dry_air_water_and_enthalpy(self):
         a = state(T=303.15, RH=0.7)
         b = state(T=275.15, RH=0.4)
@@ -305,6 +311,7 @@ class TestProcesses:
         assert float(info["condensate"]) == 0.0
         assert float(out["T"]) < 303.15
 
+    @pytest.mark.slow
     def test_adiabatic_humidification_follows_the_wet_bulb_line(self):
         a = state(T=308.15, RH=0.2)
         out = adiabatic_humidify(a, effectiveness=0.8)
@@ -345,6 +352,7 @@ class TestAirStreams:
         s = state_from_air_stream({"F_H2O": 0.0, "F_air": 0.0, "T": 300.0, "P": P})
         assert float(s["W"]) == 0.0 and bool(jnp.isfinite(s["h"]))
 
+    @pytest.mark.slow
     def test_gradient_through_the_stream(self):
         f = lambda T, m: state_from_air_stream(
             air_stream_from_state(state(T=T, RH=0.5), m))["T_wb"]
@@ -367,6 +375,7 @@ class TestChart:
                 W = ln["W"][np.isfinite(ln["W"])]
                 assert W.size > 0 and W.min() >= 0.0
 
+    @pytest.mark.slow
     def test_each_line_is_the_state_it_claims_to_be(self):
         d = psychrometric_chart_data(n=41)
         for fam, key, scale in (("rh", "RH", 1.0), ("wb", "T_wb", 1.0), ("h", "h", 1.0), ("v", "v", 1.0)):
@@ -401,11 +410,13 @@ def _prop(name):
 
 
 class TestGradients:
+    @pytest.mark.slow
     @pytest.mark.parametrize("name", ["W", "h", "T_wb", "T_dp"])
     @pytest.mark.parametrize("x0", [(303.15, 0.5, P), (268.15, 0.6, 90e3)])
     def test_check_grads_wrt_T_RH_P(self, name, x0):
         check_grads(_prop(name), x0, order=1, modes=["rev"], rtol=1e-5, atol=1e-8)
 
+    @pytest.mark.slow
     def test_wet_bulb_derivative_wrt_W_matches_finite_differences(self):
         f = lambda W: wet_bulb_temperature(303.15, W)
         g = float(jax.grad(f)(0.012))
@@ -413,6 +424,7 @@ class TestGradients:
         assert g == pytest.approx((float(f(0.012 + h)) - float(f(0.012 - h))) / (2 * h), rel=1e-6)
         assert g > 0
 
+    @pytest.mark.slow
     def test_dew_point_derivative_is_physical(self):
         # p_ws(T_dp) = RH p_ws(T)  =>  dT_dp/dRH = p_ws(T) / p_ws'(T_dp)
         g = float(jax.grad(lambda rh: state(T=300.0, RH=rh)["T_dp"])(0.5))
@@ -420,6 +432,7 @@ class TestGradients:
         dp = float(jax.grad(ps.saturation_pressure)(Td))
         assert g == pytest.approx(float(ps.saturation_pressure(300.0)) / dp, rel=1e-8)
 
+    @pytest.mark.slow
     def test_other_pairs_differentiate(self):
         for pair in (("RH", "h"), ("RH", "T_wb"), ("T_wb", "h")):
             ref = state(T=303.15, RH=0.5)
@@ -434,6 +447,7 @@ class TestGradients:
 class TestHotAirWetBulb:
     """Wet bulb above the boiling point of water at P (a dryer's 100-200 C air): the Newton seed must stay below it."""
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("T,W", [(373.15, 0.01), (423.15, 0.01), (473.15, 0.05)])
     def test_wet_bulb_of_hot_air_is_finite_and_satisfies_the_balance(self, T, W):
         from scipy import optimize

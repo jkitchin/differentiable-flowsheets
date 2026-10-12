@@ -145,6 +145,7 @@ class TestThermo:
         assert k.E["ring_opening"] == pytest.approx(59600.0 / 1.8 * th.R)
         assert k.E["hydrocracking_P"] == pytest.approx(62300.0 / 1.8 * th.R)
 
+    @pytest.mark.slow
     def test_enthalpy_is_cubic_thermo_plus_heats_of_formation(self):
         F = jnp.asarray(lean_naphtha().flows).at[sp.INDEX["H2"]].set(400.0)
         flows = {k: F[i] for i, k in enumerate(sp.NAMES)}
@@ -182,6 +183,7 @@ class TestFeed:
         assert float(g.group_fractions("volume")["naphthenes"]) == pytest.approx(0.35, rel=1e-12)
         assert float(g.volume_flow) == pytest.approx(float(f.volume_flow), rel=1e-12)
 
+    @pytest.mark.slow
     def test_from_characterization_conserves_mass_and_differentiates(self):
         import difflow_refinery as dr
         from difflow_refinery.composition import CompositionRangeWarning
@@ -221,6 +223,7 @@ def _bed_feed():
 
 
 class TestBed:
+    @pytest.mark.slow
     def test_adiabatic_and_element_conserving(self):
         F = _bed_feed()
         kin = ReformingKinetics()
@@ -232,6 +235,7 @@ class TestBed:
         assert abs(float(H_out - H_in)) < 1e-9 * abs(float(H_in))
         assert float(coke) > 0.0
 
+    @pytest.mark.slow
     def test_long_bed_reaches_dehydrogenation_equilibrium(self):
         # Only the dehydrogenations, a very long bed: the outlet quotient is K(T_out).
         A = {f: 0.0 for f in kn.FAMILIES}
@@ -246,6 +250,7 @@ class TestBed:
         Q = p[sp.INDEX["A7"]] * p[sp.INDEX["H2"]] ** 3 / p[sp.INDEX["N7"]]
         assert float(Q) == pytest.approx(float(rm.equilibrium_constants(To)[i]), rel=1e-4)
 
+    @pytest.mark.slow
     def test_outlet_temperature_gradient(self):
         F = _bed_feed()
         kin = ReformingKinetics()
@@ -298,6 +303,7 @@ class TestFlowsheet:
             assert o["reformate.aromatics_vol"] > 40.0
         assert float(rich.outputs()["reformate.RON"]) > float(lean.outputs()["reformate.RON"])
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_severity_trends(self, lean):
         hot = CatalyticReformer(ReformerParams().with_wait(783.15)).solve(lean_naphtha(),
@@ -307,6 +313,7 @@ class TestFlowsheet:
         assert float(b["h2.net_mol_s"]) > float(a["h2.net_mol_s"])
         assert float(b["c5plus.yield_vol"]) < float(a["c5plus.yield_vol"])
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_aromatics_rise_as_pressure_falls(self, lean):
         low = CatalyticReformer(ReformerParams(P_separator=8.0e5)).solve(lean_naphtha(),

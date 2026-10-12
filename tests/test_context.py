@@ -117,14 +117,17 @@ class TestDocsIndex:
 
 # -- the briefs -------------------------------------------------------
 
+@pytest.mark.slow
 class TestBlockPack:
 
+    @pytest.mark.slow
     def test_it_carries_the_values_this_unit_actually_holds(self, session):
         pack = context.block(session, name="reactor", question="volume")
         text = pack.prompt()
         assert "V [m^3] = 1.5" in text          # the value, and its units
         assert "Operation: CSTR" in text
 
+    @pytest.mark.slow
     def test_a_parameter_it_cannot_print_is_named_not_dropped(self, session):
         # Same rule as the published page: a parameter that vanishes
         # reads as a parameter the unit does not have.
@@ -148,6 +151,7 @@ class TestBlockPack:
 
 class TestFlowsheetPack:
 
+    @pytest.mark.slow
     def test_it_names_the_units_the_wiring_and_the_recycle(self, session):
         text = context.flowsheet(session, "what is this?").prompt()
         assert "reactor (CSTR): mixed -> rx" in text
@@ -188,6 +192,7 @@ class TestSolvePack:
             session.solve_error = None
 
 
+@pytest.mark.slow
 class TestPlanningPack:
 
     @pytest.fixture(scope="class")
@@ -198,6 +203,7 @@ class TestPlanningPack:
         return DeltaVectorSet.from_result(
             chain.two_plant_chain().planner(radius=0.3).solve())
 
+    @pytest.mark.slow
     def test_the_jacobian_is_readable_as_a_table(self, dvs):
         pack = context.planning(dvs, "which lever moves the margin?")
         table = next(s for s in pack.sections
@@ -208,6 +214,7 @@ class TestPlanningPack:
         assert "ngl.ethane_recovery" not in table.body
         assert "Base case:" in table.body
 
+    @pytest.mark.slow
     def test_it_says_where_the_linear_model_stops_being_the_flowsheet(self, dvs):
         assert "trust radius" in context.planning(dvs).prompt()
 
@@ -247,6 +254,7 @@ class TestBudget:
         assert [s.title for s in kept] == sorted(
             (s.title for s in kept), key=int)
 
+    @pytest.mark.slow
     def test_a_real_pack_fits_the_window(self, session):
         for kind in ("flowsheet", "block", "solve"):
             pack = session.context(kind=kind, name="reactor",

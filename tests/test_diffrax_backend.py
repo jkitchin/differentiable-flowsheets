@@ -254,6 +254,7 @@ class TestGradientsThroughDiffrax:
     through the ODE solution.
     """
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_gradient_wrt_initial_condition(self):
         """Compute gradient of final state w.r.t. initial condition."""
@@ -275,6 +276,7 @@ class TestGradientsThroughDiffrax:
         # Gradient should be positive (larger y0 -> larger final value)
         assert grad[0] > 0
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_gradient_wrt_parameter(self):
         """Optimize reaction rate parameter using gradient descent."""
@@ -316,6 +318,7 @@ class TestJitAndVmap:
             float(jnp.exp(-2.0)), rel=1e-5
         )
 
+    @pytest.mark.slow
     def test_vmap_and_jit_grad(self):
         def y_final(k):
             return integrate_diffrax(

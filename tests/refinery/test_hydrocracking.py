@@ -106,6 +106,7 @@ def test_species_density_is_uniform_at_alpha_one():
     np.testing.assert_allclose(np.asarray(hck.species_density(t, 0.5)), np.asarray(t) ** 3 / 0.25)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("scheme", hck.SCHEMES)
 def test_distribution_rows_are_stochastic_and_only_go_lighter(vgo, scheme):
     char, cuts, feed, unit = vgo
@@ -167,6 +168,7 @@ def _ctx(bed_setup, T=653.15):
     return reaction_context(f, lay, comps, km, T, 150e5)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("scheme", hck.SCHEMES)
 def test_cracking_conserves_elements(bed_setup, scheme):
     unit, th, comps, cst, lay, oil, gas, Q = bed_setup
@@ -185,6 +187,7 @@ def test_cracking_conserves_elements(bed_setup, scheme):
     assert float(jnp.sum(r.cut)) > 0
 
 
+@pytest.mark.slow
 def test_nitrogen_inhibits_cracking(bed_setup):
     unit, th, comps, cst, lay, oil, gas, Q = bed_setup
     ctx = _ctx(bed_setup)
@@ -197,6 +200,7 @@ def test_nitrogen_inhibits_cracking(bed_setup):
     assert float(jnp.sum(r2)) > float(jnp.sum(r0))
 
 
+@pytest.mark.slow
 def test_feed_has_no_cracked_molecules(vgo):
     char, cuts, feed, unit = vgo
     oil = hcu_feed(char, feed, unit.layout)
@@ -210,6 +214,7 @@ def test_feed_has_no_cracked_molecules(vgo):
 # =============================================================================
 
 
+@pytest.mark.slow
 def test_fractionator_shares_and_conservation(bed_setup):
     unit, th, comps, cst, lay, oil, gas, Q = bed_setup
     Tb = th["cut"]["Tb"]
@@ -229,6 +234,7 @@ def test_fractionator_shares_and_conservation(bed_setup):
     assert float(frac.smootherstep(0.0)) == pytest.approx(0.5)
 
 
+@pytest.mark.slow
 def test_fixed_point_adjoint_gradient():
     """z = a + b tanh(z) A: the adjoint gradient against the implicit-function closed form."""
     A = jnp.asarray([[0.3, 0.1], [0.05, 0.2]])
@@ -272,6 +278,7 @@ def pretreated(bed_setup):
     return r, W
 
 
+@pytest.mark.slow
 def test_pretreat_removes_nitrogen(bed_setup, pretreated):
     unit, th, comps, cst, lay, oil, gas, Q = bed_setup
     r, W = pretreated
@@ -282,6 +289,7 @@ def test_pretreat_removes_nitrogen(bed_setup, pretreated):
     np.testing.assert_allclose(np.asarray(e_out), np.asarray(e_in), rtol=1e-12)
 
 
+@pytest.mark.slow
 def test_cracking_bed_conversion_rises_with_temperature(bed_setup, pretreated):
     unit, th, comps, cst, lay, oil, gas, Q = bed_setup
     r, W = pretreated

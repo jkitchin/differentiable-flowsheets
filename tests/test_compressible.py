@@ -155,6 +155,7 @@ class TestIsothermalPipe:
         v = 100.0 * R_GAS * 288.0 / (0.0175 * float(r.P_choke))
         assert v == pytest.approx(np.sqrt(R_GAS * 288.0 / 0.0175))
 
+    @pytest.mark.slow
     def test_grads(self):
         G = float(isothermal_pipe_mass_flux(60e5, 40e5, **self.args))
 
@@ -309,6 +310,7 @@ class TestIsothermalPipeFlow:
         assert float(r.G) == pytest.approx(float(isothermal_pipe_mass_flux(
             60e5, 40e5, 288.15, 50e3, 0.6, r.f, 0.0180042, Z=0.851)), rel=1e-14)
 
+    @pytest.mark.slow
     def test_gradients(self):
         def m(P1_bar, D):
             return isothermal_pipe_flow(P1_bar * 1e5, 40e5, 288.15, 50e3, D, 45e-6,
@@ -316,6 +318,7 @@ class TestIsothermalPipeFlow:
 
         check_grads(m, (60.0, 0.6), order=1, modes=["rev"], eps=1e-5)
 
+    @pytest.mark.slow
     def test_profile_and_distance_are_inverse(self):
         r = isothermal_pipe_flow(*self.ARGS, Z=0.851)
         x = jnp.linspace(0.0, 50e3, 6)

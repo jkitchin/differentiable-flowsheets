@@ -46,6 +46,7 @@ def test_assay_refuses_bad_input(kwargs, match):
         Assay(**args)
 
 
+@pytest.mark.slow
 def test_api_and_sg_are_the_same_input():
     a = characterize(Assay(PCT, TBP, sg=0.86))
     b = characterize(Assay(PCT, TBP, api=141.5 / 0.86 - 131.5))
@@ -65,6 +66,7 @@ def test_cut_points_outside_the_curve_are_refused():
 # ---------------------------------------------------------- the interpolant
 
 
+@pytest.mark.slow
 def test_pchip_matches_scipy_and_integrates_exactly():
     x = np.asarray(TBP)
     y = np.asarray(PCT) / 100.0
@@ -80,6 +82,7 @@ def test_pchip_matches_scipy_and_integrates_exactly():
 # ---------------------------------------------------------- the cut crude
 
 
+@pytest.mark.slow
 def test_mass_balance(crude):
     for frac in (crude.volume_fraction, crude.mass_fraction, crude.mole_fraction):
         assert float(jnp.sum(frac)) == pytest.approx(1.0, abs=1e-12)
@@ -90,6 +93,7 @@ def test_mass_balance(crude):
     assert float(crude.bulk_sg) == pytest.approx(0.86, rel=1e-12)
 
 
+@pytest.mark.slow
 def test_cuts_are_ordered_and_inside_their_edges(crude):
     edges = np.asarray(crude.cut_edges)
     Tb = np.asarray(crude.Tb)
@@ -103,21 +107,25 @@ def test_cuts_are_ordered_and_inside_their_edges(crude):
     assert np.all(np.diff(np.asarray(crude.Pc)) < 0)
 
 
+@pytest.mark.slow
 def test_cut_fractions_are_the_curve_differences(crude):
     x = PchipInterpolator(TBP, np.asarray(PCT) / 100)(np.asarray(crude.cut_edges))
     np.testing.assert_allclose(crude.volume_fraction[3:], np.diff(x), atol=1e-12)
 
 
+@pytest.mark.slow
 def test_a_straight_tbp_curve_puts_tb_at_mid_cut():
     crude = characterize(Assay([0, 100], [300.0, 900.0], sg=0.85), cut_points=[400.0, 550.0, 700.0])
     np.testing.assert_allclose(crude.Tb, [350.0, 475.0, 625.0, 800.0], rtol=1e-12)
     np.testing.assert_allclose(crude.volume_fraction, [1 / 6, 0.25, 0.25, 1 / 3], rtol=1e-12)
 
 
+@pytest.mark.slow
 def test_constant_watson_k_without_a_gravity_curve(crude):
     np.testing.assert_allclose(crude.Kw, crude.Kw[0], rtol=1e-12)
 
 
+@pytest.mark.slow
 def test_gravity_curve():
     flat = characterize(Assay(PCT, TBP, sg_curve=([0, 100], [0.88, 0.88])))
     np.testing.assert_allclose(flat.SG, 0.88, rtol=1e-12)
@@ -142,6 +150,7 @@ def test_default_cut_points_are_round_celsius():
     assert set(np.round(widths[cuts[:-1] >= 600])) <= {100.0}
 
 
+@pytest.mark.slow
 def test_more_cuts_converge():
     """Refining the cuts leaves the whole-crude properties where they were."""
     assay = Assay(PCT, TBP, sg=0.86, light_ends=LIGHT)
@@ -161,6 +170,7 @@ def _middle_distillate_mass(tbp, sg, propane):
     return jnp.sum(crude.mass_fraction[4:8]) + jnp.sum(crude.Tc[4:8]) / 1e4
 
 
+@pytest.mark.slow
 def test_gradients_wrt_the_assay_match_finite_differences():
     from jax.test_util import check_grads
 
@@ -168,6 +178,7 @@ def test_gradients_wrt_the_assay_match_finite_differences():
                 order=1, modes=["fwd", "rev"], rtol=1e-5, atol=1e-8)
 
 
+@pytest.mark.slow
 def test_gradient_wrt_the_percentages():
     def f(pct_interior):
         pct = jnp.concatenate([jnp.zeros(1), pct_interior, jnp.full(1, 100.0)])

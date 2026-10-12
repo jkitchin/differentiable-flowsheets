@@ -61,6 +61,7 @@ def test_stage_pressures_gradients():
 # MultistageCompressor
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_train_balances(thermo, feed):
     params = MultistageCompressorParams(P_out=30e5, n_stages=3, intercooler_dP=0.2e5)
     out, info = MultistageCompressor(params, thermo)(feed)
@@ -79,6 +80,7 @@ def test_train_balances(thermo, feed):
     assert np.all(np.asarray(info["intercooler_vapor_fraction"]) == 1.0)
 
 
+@pytest.mark.slow
 def test_one_stage_train_is_the_compressor(thermo, feed):
     _, one = Compressor(CompressorParams(P_out=8e5), thermo)(feed)
     out, info = MultistageCompressor(
@@ -87,6 +89,7 @@ def test_one_stage_train_is_the_compressor(thermo, feed):
     assert float(out["T"]) == pytest.approx(float(one["T_out"]), rel=1e-10)
 
 
+@pytest.mark.slow
 def test_aftercooler_and_given_pressures(thermo, feed):
     params = MultistageCompressorParams(P_out=0.0, discharge_pressures=(3e5, 9e5),
                                         intercooler_dP=0.1e5, aftercool=True)
@@ -97,6 +100,7 @@ def test_aftercooler_and_given_pressures(thermo, feed):
     assert info["intercooler_Q"].shape == (2,)
 
 
+@pytest.mark.slow
 def test_work_is_differentiable_in_the_split(thermo, feed):
     # Near-ideal gas, no loss: the equal split is close to the minimum, so the
     # derivative of the total work in the middle pressure is small against

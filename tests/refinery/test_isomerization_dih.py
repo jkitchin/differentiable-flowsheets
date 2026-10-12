@@ -43,6 +43,7 @@ def solved(request):
     return kind, dih, feed, info, ron_once
 
 
+@pytest.mark.slow
 def test_the_recycle_converges(solved):
     loop = solved[3]["loop"]
     assert loop["converged"], loop
@@ -82,5 +83,6 @@ def test_the_side_draw_is_what_was_asked(solved):
         unit.params.dih_side_draw, rel=1e-4)
 
 
+@pytest.mark.slow
 def test_the_dih_has_a_duty(solved):
     assert float(solved[3]["outputs"]["dih_duty"]) > 1e6

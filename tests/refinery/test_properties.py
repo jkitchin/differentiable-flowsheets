@@ -129,10 +129,12 @@ class TestFreezePoint:
         Ts = pr.saturation_temperature(x, MW)
         assert float(pr.freeze_point(x, MW)) == pytest.approx(float(jnp.max(Ts)), abs=0.5)
 
+    @pytest.mark.slow
     def test_light_naphtha_gets_the_floor_not_minus_infinity(self, bc):
         p = pr.estimate_properties(bc[1], cut_moles(bc, "LSR"), ["freeze_C"])
         assert float(p["freeze_C"]) == pytest.approx(pr.FREEZE_FLOOR_K - C, abs=1.0)
 
+    @pytest.mark.slow
     def test_kerosene_is_in_the_jet_range(self, bc):
         p = pr.estimate_properties(bc[1], cut_moles(bc, "kero"), ["freeze_C"])
         assert -75.0 < float(p["freeze_C"]) < -35.0
@@ -142,6 +144,7 @@ class TestFreezePoint:
 # Flash point, smoke point, viscosity (unverified correlations).
 # -----------------------------------------------------------------------------
 
+@pytest.mark.slow
 class TestFlashPoint:
     def test_rises_with_the_ten_percent_point(self):
         T = jnp.linspace(320.0, 560.0, 25)
@@ -194,6 +197,7 @@ class TestViscosity:
         with pytest.warns(pr.PropertyRangeWarning):
             pr.abbott_viscosity(1100.0, 1.03)
 
+    @pytest.mark.slow
     def test_residue_at_50C_is_hundreds_of_cSt(self, bc):
         p = pr.estimate_properties(bc[1], cut_moles(bc, "residue"), ["viscosity_cSt"])
         assert 50.0 < float(p["viscosity_cSt"]) < 2000.0
@@ -274,6 +278,7 @@ class TestFromStream:
         assert float(res.properties["flash_C"]) == pytest.approx(
             float(kero.properties["flash_C"]), abs=1e-8)
 
+    @pytest.mark.slow
     def test_estimates_are_differentiable_in_the_flows(self, bc):
         b = bc[1]
         m0 = cut_moles(bc, "HSR") + 1e-6
@@ -288,6 +293,7 @@ class TestFromStream:
         assert float(jnp.max(jnp.abs(J))) > 0.0
 
 
+@pytest.mark.slow
 @pytest.mark.release
 def test_estimate_gradients_match_central_differences(bc):
     b = bc[1]

@@ -168,6 +168,7 @@ class TestPublishedCorrelations:
         got = econ.compressor_cost(1000.0, "centrifugal", target_year=2010)
         assert float(got) == pytest.approx(expected, rel=1e-12)
 
+    @pytest.mark.slow
     def test_costs_rise_and_are_differentiable_over_each_range(self):
         for name, p in self.entries():
             sizes = jnp.geomspace(p.S_min, p.S_max, 7)

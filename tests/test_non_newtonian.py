@@ -81,6 +81,7 @@ def test_dodge_metzner_shear_thinning_lowers_turbulent_friction():
     assert all(a > b for a, b in zip(f, f[1:]))
 
 
+@pytest.mark.slow
 def test_power_law_gradients():
     for Re in (800.0, 3000.0, 2e4, 2e5):
         for n in (0.5, 0.9):

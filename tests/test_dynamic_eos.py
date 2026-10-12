@@ -69,6 +69,7 @@ class TestCSTREOSDynamic:
             return outlet, n_hold
         return outlet, jnp.concatenate([n_hold, jnp.array([outlet["T"]])])
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("mode", ["isothermal", "adiabatic"])
     def test_transient_fixed_point_matches_steady_state(self, mode):
         names, eos, cstr, inlet, params = self._cstr(mode)
@@ -109,6 +110,7 @@ class TestDynamicEOSFlash:
             flash.initial_state(inp), max_steps=200, throw=False)
         return flash, inp, sol.value
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_steady_state_split_matches_feed_flash(self, pr_cubic):
         names, eos, _ = pr_cubic
@@ -138,6 +140,7 @@ class TestDynamicEOSFlash:
         feed_total = sum(float(v) for v in get_flows(feed).values())
         assert draw == pytest.approx(feed_total, rel=1e-6)
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_derivatives_differentiable(self, pr_cubic):
         names, eos, _ = pr_cubic
@@ -164,6 +167,7 @@ class TestDynamicCounterCurrentHX:
         hx = DynamicCounterCurrentHX(UA=UA, thermo=ct, tau=30.0)
         return hx, {"hot": hot, "cold": cold}, hot, cold
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_cold_start_heats_up(self, pr_cubic):
         _, _, ct = pr_cubic
@@ -171,6 +175,7 @@ class TestDynamicCounterCurrentHX:
         d0 = hx.derivatives(0.0, hx.initial_state(inp), inp)
         assert float(d0[0]) > 0.0  # zero-duty start: duty grows
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_steady_state_conserves_energy(self, pr_cubic):
         _, _, ct = pr_cubic

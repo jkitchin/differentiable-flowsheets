@@ -62,6 +62,7 @@ NEAR_CRITICAL = [215.37, 0.00280338, 0.0, 6.25626, 0.0111435, 0.0100384, 0.08671
                  74.3897, 63.5167, 52.5016, 14.9299]
 
 
+@pytest.mark.slow
 def test_a_failed_bed_inlet_flash_reports_a_residual_instead_of_raising(naphtha_unit):
     """#332: the flash (and its T-derivative, as the reactor takes it) at that point returns, flagged.
 

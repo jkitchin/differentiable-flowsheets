@@ -62,6 +62,7 @@ class TestTearStreamConfig:
 # ============================================================================
 
 
+@pytest.mark.slow
 class TestREEMassBalance:
     """Tests for mass balance verification in REE flowsheets."""
 
@@ -265,6 +266,7 @@ class TestFlashPhaseDetection:
         )
         assert total_out == pytest.approx(total_in, rel=1e-6)
 
+    @pytest.mark.slow
     def test_flash_with_eos(self):
         """Flash with EOS parameter uses flash_TP_eos."""
         from difflow.units.flash import Flash, FlashParams

@@ -131,7 +131,8 @@ PYTEST := pytest -n auto --dist loadfile --no-loadscope-reorder
 # What you run while working, and what every commit is checked against:
 # everything except the `release` tier, which re-derives physics and numerics
 # rather than checking the code (see the marker notes in pyproject.toml).
-# `slow` comes out too, so a local run stays short -- CI keeps it.
+# `slow` comes out too, as it does in the Tests workflow; the nightly Full
+# suite runs both.
 test:
 	$(UV_RUN_DEV) $(PYTEST) tests/ -v -m "not release and not slow"
 

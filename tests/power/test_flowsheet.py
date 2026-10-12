@@ -59,6 +59,7 @@ def test_a_meshed_network_is_refused():
         RadialFeederFlowsheet(dp.cases.case9())
 
 
+@pytest.mark.slow
 def test_sweep_matches_newton_on_every_bus():
     net = dp.cases.radial_feeder()
     streams = RadialFeederFlowsheet(net).solve()
@@ -72,6 +73,7 @@ def test_sweep_matches_newton_on_every_bus():
         ) == pytest.approx(reference.va_degrees[bus], abs=1e-7)
 
 
+@pytest.mark.slow
 def test_sweep_matches_newton_on_the_substation_infeed():
     net = dp.cases.radial_feeder()
     flowsheet = RadialFeederFlowsheet(net)
@@ -83,6 +85,7 @@ def test_sweep_matches_newton_on_the_substation_infeed():
     assert flowsheet.last_solve_stats["converged"]
 
 
+@pytest.mark.slow
 def test_sweep_branch_flows_match_the_equation_oriented_ones():
     net = dp.cases.radial_feeder()
     streams = RadialFeederFlowsheet(net).solve()
@@ -94,6 +97,7 @@ def test_sweep_branch_flows_match_the_equation_oriented_ones():
         )
 
 
+@pytest.mark.slow
 def test_the_two_ends_of_a_branch_carry_different_currents():
     """What the backward pass has to get right.
 
@@ -172,6 +176,7 @@ def test_sweep_objective_is_differentiable_in_demand():
     assert float(grad[i]) > 1.0
 
 
+@pytest.mark.slow
 def test_ladder_flowsheet_matches_newton():
     net = ladder_network()
     flowsheet, order = build_ladder_flowsheet(net)
@@ -190,6 +195,7 @@ def test_ladder_flowsheet_matches_newton():
     )
 
 
+@pytest.mark.slow
 def test_ladder_flowsheet_converges_in_a_handful_of_tears():
     """The infeed correction is nearly an exact Newton step."""
     flowsheet, _ = build_ladder_flowsheet(ladder_network())
@@ -244,6 +250,7 @@ def _ladder_variant(variant):
                         loads=loads)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "variant", ["root_load", "shunt", "root_shunt", "dg", "tap_reversed"]
 )

@@ -77,9 +77,11 @@ def random_linear():
 # =============================================================================
 
 
+@pytest.mark.slow
 class TestLinearExactness:
     """A linear problem must be solved exactly, in one step."""
 
+    @pytest.mark.slow
     def test_two_variable_closed_form(self):
         """x0 + x1 = 10 with sigma = (1, 2) puts 4x the adjustment on x1."""
         y = jnp.array([6.0, 6.0])
@@ -92,6 +94,7 @@ class TestLinearExactness:
         assert res.converged
         assert res.residual_norm < 1e-12
 
+    @pytest.mark.slow
     def test_matches_closed_form_wls(self, random_linear):
         residual_fn, a, b, y, sigma = random_linear
         res = reconcile(residual_fn, y, sigma)
@@ -270,6 +273,7 @@ class TestStructure:
         assert all(c == MEASURED_REDUNDANT for c in st.classes.values())
         assert all(0.0 < r <= 1.0 for r in st.redundancy.values())
 
+    @pytest.mark.slow
     def test_unmeasured_observable_is_classified(self):
         y = jnp.array([6.0, jnp.nan])
         sigma = jnp.array([1.0, jnp.inf])
@@ -426,6 +430,7 @@ class TestScaling:
 class TestGrossError:
     """The global test's statistic and degrees of freedom must be right."""
 
+    @pytest.mark.slow
     def test_global_test_dof_equals_degree_of_redundancy(self, random_linear):
         """E[objective] == degrees of redundancy, for several unmeasured counts.
 
@@ -591,6 +596,7 @@ def leak_campaign():
 
 
 class TestReconcileMulti:
+    @pytest.mark.slow
     @pytest.mark.release
     def test_pooling_shrinks_the_standard_error_by_sqrt_k(self, leak_campaign):
         """The whole point: K data sets estimate a shared parameter
@@ -665,6 +671,7 @@ class TestReconcileMulti:
         assert gt.dof == res.structure.degree_of_redundancy
         assert not gt.detected
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_shared_by_index_matches_shared_by_name(self, leak_campaign):
         ys, sigma = leak_campaign
@@ -676,6 +683,7 @@ class TestReconcileMulti:
         )
         assert by_index.shared["leak"] == pytest.approx(by_name.shared["leak"])
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_per_data_set_params_are_threaded(self, leak_campaign):
         """A campaign whose set point changed halfway: the leak is
@@ -707,6 +715,7 @@ class TestReconcileMulti:
         assert res.stacked.names[-1] == "leak"
         assert res.stacked.names[0] == "feed[0]"
 
+    @pytest.mark.slow
     @pytest.mark.release
     def test_per_data_set_sigma_is_accepted(self, leak_campaign):
         ys, sigma = leak_campaign
@@ -763,6 +772,7 @@ class TestReconcileMulti:
 
 
 class TestMonitor:
+    @pytest.mark.slow
     def test_clean_data_never_rejects(self, leak_campaign):
         ys, sigma = leak_campaign
         # measure the leak too, so the problem is redundant

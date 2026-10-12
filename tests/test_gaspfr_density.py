@@ -55,6 +55,7 @@ def test_warning_is_bed_warning_subclass():
     assert issubclass(GasPFRDensityWarning, GasPFRBedWarning)
 
 
+@pytest.mark.slow
 def test_rho_from_MW_matches_explicit_value():
     rho = _rho_ideal(MW_MIX)
     with warnings.catch_warnings():
@@ -125,6 +126,7 @@ def test_no_density_anywhere_raises():
         GasPFR(_params(**BED, MW={"A": 28.0}))(_inlet())
 
 
+@pytest.mark.slow
 def test_gradient_through_derived_density():
     def dp(P):
         inlet = make_stream({"A": 1.0, "B": 0.5}, T0, P)

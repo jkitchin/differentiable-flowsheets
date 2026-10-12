@@ -102,6 +102,7 @@ def test_eos_saturation_temperature_and_gradient():
     assert g == pytest.approx(fd, rel=1e-4)
 
 
+@pytest.mark.slow
 def test_eos_species_in_a_mixture_eos_and_pressure_roundtrip():
     eos = PengRobinson({s: get_critical_props(s) for s in ("methane", "propane")})
     T = saturation_temperature("propane", 1e6, model="eos", eos=eos)

@@ -36,6 +36,7 @@ class TestNonConvergence:
     #: shows the same edge at 150 kg/s); 15 MW converges.
     FAIL_MW = 30.0
 
+    @pytest.mark.slow
     def test_a_failed_solve_is_nan(self, unit):
         blk = cdu_block(unit, ["pa1.duty"], ["naphtha.tbp95", "furnace.fired"], rate=BPD, T=T_IN, P=P_IN,
                         bounds={"pa1.duty": (10.0, 30.0)})
@@ -44,6 +45,7 @@ class TestNonConvergence:
         assert np.all(np.isnan(np.asarray(blk.fn(u))))
         assert np.all(np.isfinite(np.asarray(blk.fn(np.array([15.0])))))
 
+    @pytest.mark.slow
     def test_unmasked_it_would_have_looked_like_an_answer(self, unit):
         blk = cdu_block(unit, ["pa1.duty"], ["naphtha.tbp95"], rate=BPD, T=T_IN, P=P_IN,
                         bounds={"pa1.duty": (10.0, 30.0)}, mask_nonconverged=False)

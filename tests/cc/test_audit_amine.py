@@ -161,6 +161,7 @@ class TestStripperOverheadCondenser:
         _, (_, _, base) = run()
         assert float(info["reboiler_duty"]) > float(base["reboiler_duty"])
 
+    @pytest.mark.slow
     def test_loop_closes_without_make_up_water(self):
         gas = make_stream({"CO2": 13.0, "N2": 87.0}, T=313.15, P=101325.0)
         ab = AmineAbsorber(AbsorberParams(solvent="MEA", n_stages=15,

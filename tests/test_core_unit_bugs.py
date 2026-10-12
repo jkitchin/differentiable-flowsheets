@@ -57,6 +57,7 @@ def test_issue_69_cstr_heat_duty_sign_simplified():
 # Bug #70: PFR adiabatic dT/dV has spurious volumetric flow division
 # ============================================================================
 
+@pytest.mark.slow
 def test_issue_70_pfr_adiabatic_temperature_profile():
     """PFR adiabatic dT/dV should be independent of volumetric flow units.
 

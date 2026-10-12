@@ -72,7 +72,9 @@ def block(unit):
                      rate=BPD, T=T_IN, P=P_IN)
 
 
+@pytest.mark.slow
 class TestLevers:
+    @pytest.mark.slow
     def test_what_the_test_column_offers(self, unit):
         lv = available_levers(unit)
         for name, units in [("crude.rate", "bbl/d"), ("preheat.T", "C"), ("naphtha.yield", "-"),
@@ -82,6 +84,7 @@ class TestLevers:
         # the column is closed by an overflash, so it has no coil-outlet lever
         assert "furnace.cot" not in lv
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("name", ["naphtha.yield", "naphtha.bpd", "pa1.duty", "overflash",
                                       "pa1.dT", "bottom.steam", "preheat.T"])
     def test_planner_units_round_trip(self, unit, name):
@@ -99,6 +102,7 @@ class TestLevers:
         # 1 mol/s of steam is 64.854 kg/h
         assert lv["bottom.steam"].from_si(1.0, feed_volume) == pytest.approx(64.854)
 
+    @pytest.mark.slow
     def test_bad_requests_say_what_is_wrong(self, unit):
         kw = dict(rate=BPD, T=T_IN, P=P_IN, jit=False)
         with pytest.raises(ValueError, match="no lever"):
@@ -114,6 +118,7 @@ class TestLevers:
 
 
 class TestBlock:
+    @pytest.mark.slow
     def test_units_metadata(self, block):
         assert block.metadata["u_units"] == ["bbl/d", "-", "-", "MW"]
         units = dict(zip(block.y_names, block.metadata["y_units"]))
@@ -125,6 +130,7 @@ class TestBlock:
         assert block.fn.output_units["steam.total"] == "kg/h"
         assert len(block.metadata["y_units"]) == len(block.y_names)
 
+    @pytest.mark.slow
     def test_base_point_is_the_unit_solve(self, block, solved):
         np.testing.assert_allclose(block.u0, [BPD, 0.2, 0.11, 15.0], rtol=1e-12)
         y = dict(zip(block.y_names, np.asarray(block.fn(block.u0))))
@@ -135,6 +141,7 @@ class TestBlock:
         assert y["gap.kero_diesel"] == pytest.approx(float(solved.gaps()[("kero", "diesel")]), abs=1e-6)
         assert y["furnace.fired"] == pytest.approx(float(solved.column.furnace_fired_duty) / 1e6, rel=1e-9)
 
+    @pytest.mark.slow
     def test_default_outputs_are_healthy(self, block):
         """No held yield (a constant row) and no light-ends TBP5 (a kink) by default."""
         assert "diesel.yield" not in block.y_names
@@ -144,10 +151,12 @@ class TestBlock:
         report = check_delta_health(block)
         assert report.ok, [str(f) for f in report.findings]
 
+    @pytest.mark.slow
     def test_delta_vectors_against_finite_differences(self, block):
         out = check_delta_vectors(block)
         assert out["passed"], (out["max_rel_error"], out["max_abs_error"])
 
+    @pytest.mark.slow
     def test_a_held_yield_follows_the_crude(self, unit):
         blk = cdu_block(unit, ["crude.rate"], ["diesel.bpd", "diesel.yield", "residue.yield"],
                         rate=BPD, T=T_IN, P=P_IN)
@@ -156,6 +165,7 @@ class TestBlock:
         assert y[1] == pytest.approx(0.17, rel=1e-9)
         assert y[2] == pytest.approx(0.47, rel=1e-9)
 
+    @pytest.mark.slow
     def test_kink_in_the_light_ends_tbp5(self, unit):
         """Why naphtha TBP5 is not a default output: it sits on n-butane's node.
 
@@ -170,6 +180,7 @@ class TestBlock:
         right = (f(0.2 + h) - f(0.2)) / h
         assert left > 1.5 * right > 0
 
+    @pytest.mark.slow
     def test_export_carries_the_units(self, block, tmp_path):
         path = write_json(DeltaVectorSet.from_block(block), tmp_path / "cdu.json")
         text = json.dumps(json.load(open(path)))

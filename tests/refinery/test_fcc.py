@@ -185,6 +185,7 @@ class TestKinetics:
 
 
 class TestConverges:
+    @pytest.mark.slow
     @pytest.mark.parametrize("which", ["light_res", "heavy_res"])
     def test_converges_from_default_initialization(self, which, request):
         res = request.getfixturevalue(which)
@@ -198,17 +199,20 @@ class TestConverges:
         assert 880.0 < _f(o["regenerator_T"]) < 1033.15
         assert 0.55 < _f(o["conversion"]) < 0.85
 
+    @pytest.mark.slow
     def test_heavy_feed_converts_less_and_needs_more_catalyst(self, light_res, heavy_res):
         lo, ho = light_res["outputs"], heavy_res["outputs"]
         assert _f(ho["conversion"]) < _f(lo["conversion"])
         assert _f(ho["cat_oil"]) > _f(lo["cat_oil"])
 
+    @pytest.mark.slow
     def test_riser_resolution(self, light_feed, light_res):
         fine = FCCUnit(FCCParams(n_steps=800)).solve(light_feed)
         for k in ("conversion", "yield.gasoline", "yield.coke", "regenerator_T"):
             assert _f(fine["outputs"][k]) == pytest.approx(_f(light_res["outputs"][k]), rel=1e-8)
 
 
+@pytest.mark.slow
 class TestBalances:
     @pytest.mark.parametrize("which", ["light_res", "heavy_res"])
     def test_mass_elements_energy_close(self, which, request):
@@ -242,6 +246,7 @@ class TestBalances:
         assert _f(o["c4_olefins"]) == pytest.approx(p.olefins_in_c4)
         assert _f(o["flue_o2"]) == pytest.approx(p.flue_o2)
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("kw", [dict(scheme="lee_4"), dict(scheme="weekman_nace_3"),
                                     dict(deactivation="coke"),
                                     dict(co_co2="arthur", flue_o2=0.002)])
@@ -254,6 +259,7 @@ class TestBalances:
             o = res["outputs"]
             assert _f(o["co_co2"]) == pytest.approx(_f(arthur_co_co2(o["regenerator_T"])))
 
+    @pytest.mark.slow
     def test_air_rate_mode_is_the_inverse_of_the_flue_o2_mode(self, light_feed, light_res):
         air = _f(light_res["outputs"]["air_rate"])
         res = FCCUnit(FCCParams(air_rate=air)).solve(light_feed)
@@ -273,6 +279,7 @@ def rot_sweep(unit, light_feed):
 
 
 class TestTrends:
+    @pytest.mark.slow
     def test_conversion_rises_with_riser_outlet_T(self, rot_sweep):
         _, outs = rot_sweep
         X = [_f(o["conversion"]) for o in outs]
@@ -285,6 +292,7 @@ class TestTrends:
         assert 0 < i < len(g) - 1, g          # interior maximum: overcracking
         assert g[-1] < g[i] - 0.05
 
+    @pytest.mark.slow
     def test_ccr_raises_regenerator_T_at_fixed_riser_T(self, unit, light_feed):
         T = [_f(unit.solve(dataclasses.replace(light_feed, ccr=jnp.asarray(c)))["outputs"]["regenerator_T"])
              for c in (0.0, 0.005, 0.01)]
@@ -298,6 +306,7 @@ class TestTrends:
 class TestGradients:
     KEYS = ("conversion", "yield.gasoline", "yield.coke", "regenerator_T")
 
+    @pytest.mark.slow
     def test_gradients_wrt_specs_match_central_fd(self, unit, heavy_feed):
         """d(conversion, gasoline, coke, T_rg)/d(ROT, preheat) on the heavy feed."""
         def f(z):
@@ -335,6 +344,7 @@ class TestGradients:
             np.testing.assert_allclose(J[:, j], fd, rtol=1e-5, atol=1e-12)
             assert np.all(fd != 0.0)
 
+    @pytest.mark.slow
     def test_reverse_mode_matches_forward(self, unit, light_feed):
         def g(rot):
             return unit.solve(light_feed, riser_outlet_T=rot)["outputs"]["regenerator_T"]
@@ -410,6 +420,7 @@ class TestStreams:
 
 
 class TestProfile:
+    @pytest.mark.slow
     def test_profile_ends_at_the_outlet(self, unit, light_feed, light_res):
         prof = unit.profile(light_feed, light_res["x"], n_points=31)
         go = np.asarray(prof["groups"][:, 0])
@@ -421,6 +432,7 @@ class TestProfile:
 
 
 class TestPlanning:
+    @pytest.mark.slow
     def test_block_delta_vectors(self, unit, light_feed, light_res):
         blk = fcc_block(unit, light_feed, levers=["riser_outlet_T", "feed.ccr"],
                         outputs=["conversion", "yield.gasoline", "regenerator_T"], jit=False)
@@ -434,6 +446,7 @@ class TestPlanning:
         assert J[2, 1] > 0           # more CCR -> hotter regenerator
         assert blk.metadata["u_units"][0] == "K"
 
+    @pytest.mark.slow
     def test_unknown_lever(self, unit, light_feed):
         with pytest.raises(ValueError):
             fcc_block(unit, light_feed, levers=["no_such_knob"])

@@ -544,6 +544,7 @@ class TestPoolPropertyMode:
 
 
 class TestPoolStreamMode:
+    @pytest.mark.slow
     def test_mass_and_volume_balance(self, char, stream_components):
         pool = BlendPool("gasoline")
         V = jnp.array([0.6, 0.3, 0.05]) * 1e-3
@@ -687,6 +688,7 @@ class TestGradients:
 
         _fd_check(fo, jnp.array([0.6, 0.4, 3000.0, 3.0, 1.0, 0.86]))
 
+    @pytest.mark.slow
     def test_stream_mode_wrt_recipe_and_boiling_points(self, char,
                                                        stream_components):
         pool = BlendPool("gasoline")
@@ -739,6 +741,7 @@ class TestSmoothMargins:
 
 
 class TestPlanningBlock:
+    @pytest.mark.slow
     def test_as_block_delta_vectors(self, stream_components):
         pool = BlendPool("gasoline")
         blk = pool.as_block(stream_components)

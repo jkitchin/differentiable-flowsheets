@@ -114,6 +114,7 @@ def _np_stages(y_in, V_in_inert, L_inert, K, N, E=1.0):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 class TestKremser:
     @pytest.mark.parametrize("A", [0.3, 0.9, 1.7, 5.0])
     @pytest.mark.parametrize("N", [1.0, 3.0, 7.5])
@@ -134,6 +135,7 @@ class TestKremser:
             assert f == pytest.approx(A, rel=1e-9)
             assert float(kremser_absorption(A, 5.0)) < A
 
+    @pytest.mark.slow
     def test_unit_matches_closed_form_fraction(self):
         """Pure solvent, dilute: recovery equals the Kremser fraction at the unit's own A."""
         ab = _absorber(n_stages=6.0, variable_flow=False)
@@ -144,6 +146,7 @@ class TestKremser:
         assert float(info["A"]["acetone"]) == pytest.approx(A, rel=1e-12)
         assert float(info["recovery"]["acetone"]) == pytest.approx(_np_fraction(A, 6.0), rel=1e-12)
 
+    @pytest.mark.slow
     def test_solute_in_entering_solvent(self):
         """v_out = v_in (1-f) + (l_in/A) f with a non-clean solvent."""
         ab = _absorber(n_stages=4.0, variable_flow=False)
@@ -174,6 +177,7 @@ class TestKremser:
 
 
 class TestStagesMode:
+    @pytest.mark.slow
     @pytest.mark.parametrize("N", [1, 3, 8])
     def test_against_independent_numpy_solve(self, N):
         y = 0.03
@@ -195,6 +199,7 @@ class TestStagesMode:
         y_top, _ = _np_stages(y, 1.0 - y, 2.0, K, N, E=E)
         assert float(g["F_acetone"] / (g["F_acetone"] + g["F_air"])) == pytest.approx(y_top, rel=1e-8)
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("E", [1.0, 0.7])
     def test_dilute_linear_kremser_agrees_to_1e4(self, E):
         gas, liq = _streams(y=1e-6, L=2.0)
@@ -205,6 +210,7 @@ class TestStagesMode:
             out[model] = float(info["recovery"]["acetone"])
         assert abs(out["kremser"] - out["stages"]) < 1e-4
 
+    @pytest.mark.slow
     def test_concentrated_case_diverges_in_the_expected_direction(self):
         """The gap grows with concentration (Kremser's mean A is only an approximation)."""
         gaps = []
@@ -269,6 +275,7 @@ class TestMinimumRate:
         ref = _brute_min_slope(Ystar, Y_out, X_in, X_end) * G
         assert float(minimum_solvent_rate(curve, Y_in, Y_out, X_in, G)) == pytest.approx(ref, rel=1e-6)
 
+    @pytest.mark.slow
     def test_tangent_pinch_on_a_tabulated_curve(self):
         # an S-shaped (inflected) equilibrium curve in mole fractions: the pinch is interior
         x = np.array([0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.10])
@@ -599,6 +606,7 @@ def _out_solute(model="kremser", **kw):
 ARGS = (2.0, 1.0, 5.4, 0.8, 2.0e5, 3.0)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("model", ["kremser", "packed"])
 @pytest.mark.parametrize("i", range(6))
 def test_check_grads_outlet_solute(model, i):
@@ -614,6 +622,7 @@ def test_check_grads_outlet_solute(model, i):
     check_grads(g, (ARGS[i],), order=1, modes=["rev"], atol=1e-5, rtol=1e-5)
 
 
+@pytest.mark.slow
 def test_check_grads_design_and_stripper():
     henry, C = henry_params(["TCE"])
 
@@ -630,6 +639,7 @@ def test_check_grads_design_and_stripper():
     check_grads(g, (4.0,), order=1, modes=["rev"], atol=1e-6, rtol=1e-5)
 
 
+@pytest.mark.slow
 def test_gradient_of_stage_count_wrt_L_is_negative_and_matches_finite_difference():
     def n(L):
         u = Absorber(AbsorptionParams(henry={"acetone": 2e5}, recovery=0.9))
@@ -678,6 +688,7 @@ def _treated_acetone(L):
 
 
 class TestRecycleFlowsheet:
+    @pytest.mark.slow
     def test_converges_and_balances(self):
         fs, guess = _loop(2.0)
         s = fs.solve(tear_initial=guess, tol=1e-12, max_iter=200)
@@ -691,6 +702,7 @@ class TestRecycleFlowsheet:
         assert float(s["lean"]["F_acetone"]) > 0.0
         assert float(s["treated"]["F_acetone"]) < 0.2 * a_in
 
+    @pytest.mark.slow
     def test_gradient_wrt_solvent_rate(self):
         L0 = 2.0
         g = float(jax.grad(_treated_acetone)(L0))
@@ -699,6 +711,7 @@ class TestRecycleFlowsheet:
         assert g < 0  # more solvent, cleaner gas
         assert g == pytest.approx(fd, rel=1e-4)
 
+    @pytest.mark.slow
     def test_L_over_G_tradeoff_has_an_interior_optimum(self):
         """Treated-gas loss falls with L while a stripper-gas cost rises: the total has a minimum."""
         Ls = np.linspace(0.8, 6.0, 14)

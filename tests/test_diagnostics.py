@@ -32,17 +32,20 @@ def bench(case_name: str) -> Workbench:
 
 
 class TestSolveRecord:
+    @pytest.mark.slow
     def test_the_history_is_the_residual_per_iteration(self):
         fs = get_case("flash_recycle").build()
         fs.solve(acceleration="wegstein", max_iter=7, on_nonconvergence="ignore")
         assert len(fs.last_solve_history) == 7
         assert fs.last_solve_history[-1] == fs.last_solve_residual
 
+    @pytest.mark.slow
     def test_the_fixed_point_path_keeps_no_history(self):
         fs = get_case("flash_recycle").build()
         fs.solve(acceleration="none", on_nonconvergence="ignore")
         assert fs.last_solve_history is None
 
+    @pytest.mark.slow
     def test_unit_info_is_kept(self):
         wb = Workbench()
         wb.open_example("03_reactor_recycle")
@@ -51,6 +54,7 @@ class TestSolveRecord:
         assert {"reactor", "flash"} <= set(fs.last_solve_unit_info)
         assert bool(fs.last_solve_unit_info["reactor"]["converged"])
 
+    @pytest.mark.slow
     def test_nothing_is_kept_while_tracing(self):
         """Info holding tracers must not outlive jax.grad."""
         wb = Workbench()
@@ -62,7 +66,9 @@ class TestSolveRecord:
         assert fs.last_solve_unit_info == {}
 
 
+@pytest.mark.slow
 class TestInnerSolves:
+    @pytest.mark.slow
     @pytest.mark.parametrize("example", ["01_flash_drum", "02_reactor_flash"])
     def test_a_good_solve_closes_its_balance(self, example):
         wb = Workbench()
@@ -131,6 +137,7 @@ class TestClassify:
 
 
 class TestDiagnose:
+    @pytest.mark.slow
     def test_a_failing_loop_is_named_with_its_remedies(self):
         answer = bench("phase_coupled_flash").diagnose()
         kinds = [f["kind"] for f in answer["findings"]]
@@ -171,6 +178,7 @@ def pcf_applied():
 
 
 class TestConverge:
+    @pytest.mark.slow
     @pytest.mark.parametrize("case", [
         pytest.param(c.name, marks=pytest.mark.release)
         if c.name == "phase_coupled_flash" else c.name for c in CORPUS])
@@ -178,6 +186,7 @@ class TestConverge:
         answer = bench(case).converge(timeout=3600)
         assert answer["passed"], [(t["remedy"], t["problems"]) for t in answer["trials"]]
 
+    @pytest.mark.slow
     def test_the_known_remedy_is_found(self, pcf_applied):
         """The corpus records that only Wegstein solves this one."""
         _, answer = pcf_applied
@@ -186,6 +195,7 @@ class TestConverge:
             ("current", False), ("wegstein", True)]
         assert answer["best"]["remedy"] == "wegstein"
 
+    @pytest.mark.slow
     def test_apply_keeps_a_numerics_remedy_and_it_is_undoable(self, pcf_applied):
         wb, answer = pcf_applied
         assert answer["applied"] == "wegstein"
@@ -195,6 +205,7 @@ class TestConverge:
         # cannot serialize, so there is no undo record and it says so.
         assert answer["undoable"] is False
 
+    @pytest.mark.slow
     def test_an_applied_remedy_on_a_saved_flowsheet_is_undoable(self):
         wb = Workbench()
         wb.open_example("03_reactor_recycle")
@@ -204,6 +215,7 @@ class TestConverge:
         assert wb.undo()["ok"]
         assert wb.sessions["main"].solver_options()["max_iter"] == 3
 
+    @pytest.mark.slow
     def test_without_apply_the_settings_are_untouched(self):
         wb = Workbench()
         wb.open_example("03_reactor_recycle")
@@ -214,6 +226,7 @@ class TestConverge:
         assert wb.sessions["main"].solver_options()["max_iter"] == 3
         assert wb.sessions["main"].solver_options()["acceleration"] == "none"
 
+    @pytest.mark.slow
     def test_a_signed_answer_passes_with_a_caveat(self):
         """Negative flows qualify an answer; they do not refute it."""
         answer = bench("signed_tear").converge(timeout=3600)
