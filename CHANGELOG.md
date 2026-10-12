@@ -909,6 +909,12 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- **`cool_dehumidify` no longer delivers supersaturated air (book Ch. 18).** With a cold coil and a small bypass
+  factor the straight line to the apparatus dew point crosses the saturation curve: 30 C / 60 % air on a 2 C coil
+  at BF = 0.1 left at RH = 1.034. The coil now delivers saturated air at the same total enthalpy and adds the fog
+  to the condensate (`info["fog"]`); the duty is unchanged. `adiabatic_humidify` gains `RH_out=` and `mu_out=`
+  (degree of saturation) targets; Geankoplis Ex. 9.3-1 to 9.3-3 and the cooling tower of Ex. 10.5-1 (z = 6.0 m
+  against about 6.1 m printed) are now tests.
 - **Le Bas oxygen increment for ethers (book Ch. 14).** `LE_BAS_INCREMENTS["O_ether"]` was 9.1, which is the
   methyl-ester value; it is now 9.9 (methyl ethers), and the table gains `O_methyl_ester` (9.1), `O_methyl_ether`
   (9.9), `O_ester_ether` (11.0, higher esters and ethers), `O_SPN` (8.3) and `Cl_medial` (24.6).

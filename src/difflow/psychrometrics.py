@@ -591,10 +591,19 @@ def cool_dehumidify(st: dict, T_coil: Array | float, bypass_factor: Array | floa
         T_coil: Coil (apparatus dew point) temperature (K).
         bypass_factor: Fraction of the air that bypasses the coil (0-1).
 
+    The straight line can cross the (convex) saturation curve when the coil
+    line is steep (a cold coil, a small bypass factor): the mixed point would
+    then be supersaturated (``RH > 1``, a fog). A coil does not deliver fog;
+    the droplets are caught on the wet fins, so the leaving air is taken as
+    saturated at the temperature where the mixed enthalpy, less the enthalpy
+    of the condensed fog, is saturated air (the same balance as adiabatic
+    saturation), and the fog is added to the condensate (``info["fog"]``).
+
     Returns:
         ``(out, info)``; ``info`` holds, per kg dry air, ``Q_total``,
-        ``Q_sensible``, ``Q_latent`` (J/kg, positive = removed) and
-        ``condensate`` (kg/kg), with the condensate leaving at ``T_coil``.
+        ``Q_sensible``, ``Q_latent`` (J/kg, positive = removed),
+        ``condensate`` (kg/kg, coil condensate leaving at ``T_coil`` plus any
+        fog) and ``fog`` (kg/kg, the part that would have left as droplets).
     """
     P = st["P"]
     bf = _f(bypass_factor)
@@ -608,18 +617,36 @@ def cool_dehumidify(st: dict, T_coil: Array | float, bypass_factor: Array | floa
     clipped = bf * st["W"] + (1.0 - bf) * W_s > st["W"]
     T_sens = T_coil + bf * (st["T"] - T_coil)
     h_out = jnp.where(clipped, humid_enthalpy(T_sens, st["W"]), h_out)
-    out = state(T=humid_temperature(h_out, W_out), W=W_out, P=P, over_ice=over_ice)
+    cond_coil = st["W"] - W_out
+    Q_total = h_in - h_out - cond_coil * condensed_enthalpy(T_coil, over_ice)
+    # a supersaturated mixed point drops its fog: saturated air at T' with
+    # h_out = h_s(T') + (W_out - W_s(T')) h_cond(T')
+    T_mix = humid_temperature(h_out, W_out)
+    fogged = W_out > saturation_humidity_ratio(T_mix, P, over_ice)
+
+    def res(Ts, h_, W_, P_):
+        Ws_ = saturation_humidity_ratio(Ts, P_, over_ice)
+        h_t = saturation_enthalpy(Ts, P_, over_ice) + (W_ - Ws_) * condensed_enthalpy(Ts, over_ice)
+        return (h_t - h_) / humid_heat(W_)
+
+    T_sat = _newton(res, T_mix, h_out, W_out, P)
+    W_sat = saturation_humidity_ratio(T_sat, P, over_ice)
+    fog = jnp.where(fogged, W_out - W_sat, 0.0)
+    T_out = jnp.where(fogged, T_sat, T_mix)
+    W_out = jnp.where(fogged, W_sat, W_out)
+    out = state(T=T_out, W=W_out, P=P, over_ice=over_ice)
     cond = st["W"] - W_out
-    Q_total = h_in - h_out - cond * condensed_enthalpy(T_coil, over_ice)
     # latent part: the condensate's latent heat at the entering temperature
     Q_latent = cond * (H_FG0 + CP_VAPOR * (st["T"] - T_REF))
     info = {"Q_total": Q_total, "Q_latent": Q_latent, "Q_sensible": Q_total - Q_latent,
-            "condensate": cond, "T_coil": T_coil, "bypass_factor": bf}
+            "condensate": cond, "fog": fog, "T_coil": T_coil, "bypass_factor": bf}
     return out, info
 
 
 def adiabatic_humidify(st: dict, effectiveness: Array | float = 1.0,
-                       W_out: Array | float | None = None) -> dict:
+                       W_out: Array | float | None = None,
+                       RH_out: Array | float | None = None,
+                       mu_out: Array | float | None = None) -> dict:
     """Evaporative (adiabatic) humidification toward saturation.
 
     Air moves along its adiabatic-saturation line: ``h`` is constant apart
@@ -631,13 +658,46 @@ def adiabatic_humidify(st: dict, effectiveness: Array | float = 1.0,
         effectiveness: Fraction of the way to saturation, in humidity ratio,
             ``(W_out - W_in) / (W_s* - W_in)``; ignored when ``W_out`` is given.
         W_out: Leaving humidity ratio (kg/kg); overrides ``effectiveness``.
+        RH_out: Leaving relative humidity (0-1); overrides ``effectiveness``.
+        mu_out: Leaving degree of saturation ``W / W_s(T)`` (Geankoplis's
+            "percentage humidity" / 100, as in "humidified to 90 %
+            saturation"); overrides ``effectiveness``.
+
+    At most one of ``W_out``, ``RH_out`` and ``mu_out`` may be given; the last
+    two take one implicit Newton solve along the adiabatic line.
+
+    Example:
+        >>> from difflow.psychrometrics import state, adiabatic_humidify
+        >>> out = adiabatic_humidify(state(T=361.0, W=0.030), mu_out=0.9)
+        >>> round(float(out["T"]) - 273.15, 1), round(float(out["W"]), 4)
+        (42.3, 0.0501)
     """
+    if sum(x is not None for x in (W_out, RH_out, mu_out)) > 1:
+        raise ValueError("give at most one of W_out, RH_out and mu_out")
     P = st["P"]
-    Tas = adiabatic_saturation_temperature(st["T"], st["W"], P)
+    W_in = _f(st["W"])
+    h_in = humid_enthalpy(st["T"], W_in)
+    Tas = adiabatic_saturation_temperature(st["T"], W_in, P)
     Ws = saturation_humidity_ratio(Tas, P)
-    Wo = st["W"] + _f(effectiveness) * (Ws - st["W"]) if W_out is None else _f(W_out)
-    h = humid_enthalpy(st["T"], st["W"]) + (Wo - st["W"]) * condensed_enthalpy(Tas)
-    return state(T=humid_temperature(h, Wo), W=Wo, P=P)
+    h_l = condensed_enthalpy(Tas)
+
+    def T_of(Wo):
+        return humid_temperature(h_in + (Wo - W_in) * h_l, Wo)
+
+    if RH_out is not None or mu_out is not None:
+        use_rh = RH_out is not None
+        target = _f(RH_out if use_rh else mu_out)
+
+        def res(Wo, tgt, P_):
+            T_ = T_of(Wo)
+            Wt = humidity_ratio_from_rh(T_, tgt, P_) if use_rh else tgt * saturation_humidity_ratio(T_, P_)
+            return (Wo - Wt) * 1.0e3            # about 1 per g/kg
+        Wo = _newton(res, W_in + target * (Ws - W_in), target, _f(P))
+    elif W_out is not None:
+        Wo = _f(W_out)
+    else:
+        Wo = W_in + _f(effectiveness) * (Ws - W_in)
+    return state(T=T_of(Wo), W=Wo, P=P)
 
 
 # =============================================================================

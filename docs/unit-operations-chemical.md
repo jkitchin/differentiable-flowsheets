@@ -6183,8 +6183,16 @@ curve and the latent heat includes the heat of fusion (333.5 kJ/kg, recalled).
 enthalpy exactly (and reports `mu > 1` when the mixture fogs);
 `sensible_heat(state, Q, m_dry_air)`; `cool_dehumidify(state, T_coil,
 bypass_factor)` for a coil with an apparatus dew point (it returns the leaving
-state and the sensible, latent and total duty and the condensate);
-`adiabatic_humidify(state, effectiveness=, W_out=)`. A cold-room chain
+state and the sensible, latent and total duty and the condensate). A cold coil
+with a small bypass factor puts the straight line to the apparatus dew point
+above the saturation curve; the coil then delivers saturated air and adds the
+would-be fog to the condensate (`info["fog"]`), so the leaving RH never exceeds
+1. `adiabatic_humidify(state, effectiveness=, W_out=, RH_out=, mu_out=)` moves
+along the adiabatic-saturation line to a fraction of saturation, a humidity
+ratio, a relative humidity or a degree of saturation (Geankoplis's "percentage
+humidity": air at 87.8 C and H = 0.030 humidified to `mu_out=0.9` leaves at
+42.3 C with H = 0.0501, against 42.5 C and 0.0500 read from the chart in
+Geankoplis Ex. 9.3-2). A cold-room chain
 (cool and dehumidify, then reheat):
 
 ```python
