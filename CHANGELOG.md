@@ -8,6 +8,15 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Robbins packed-bed pressure drop, Robbins/Kister-Gill flooding and liquid surface tension (book Ch. 16 gaps).**
+  `column_design.robbins_pressure_drop` is Perry's 8e Eqs. (14-145)-(14-151); it reproduces Perry's Example 13
+  (2-in metal Pall rings, 0.38 in H2O/ft vs the printed 0.38-0.40). `robbins_flood` solves for the gas flux at which
+  Robbins reaches the Kister-Gill flood drop (an implicit-gradient bisection), and
+  `packed_column_diameter(..., flood="robbins")` uses it for modern packings, where Perry's does not recommend the
+  Eckert flood line. `DRY_PACKING_FACTORS` holds Perry's dry packing factors. `hetp("structured", C_XY=1.45)` adds
+  Perry's X-type factor (Eq. 14-159). `liquid_properties.surface_tension` (IAPWS for water, Brock-Bird otherwise,
+  `SurfaceTensionWarning` for alcohols and acids) and `mixture_surface_tension` supply the Fair chart's sigma.
+
 - **`ActivityThermo` and an equilibrium reboiler in the McCabe-Thiele stepper (book Ch. 12 gaps).**
   (1) `difflow.ActivityThermo(ideal, activity_model)` gives modified-Raoult K-values
   `gamma_i(x, T) Psat_i / P` with the wrapped `IdealThermo`'s enthalpies, so `DistillationColumn` (CMO and MESH)
@@ -859,6 +868,14 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Fixed
+
+- **Packed-column pressure drop was about a third of the published value, and the Eckert flood line ran high.**
+  `gpdc_pressure_drop` anchored an assumed power law to the Kister-Gill flood drop at the Eckert flood line and gave
+  0.13 in H2O/ft for Perry's 8e Example 13 (printed 0.38-0.40); it now defaults to the Robbins correlation
+  (`method="anchored"` keeps the old model). The Eckert flood-line fit `ln Y = -3.5021 - 1.028 ln X - 0.11093 ln^2 X`
+  gave Y = 0.034 where Dutta's Example 5.2 reads 0.021 off the chart (26 % high on G); it is now the Kessler-Wankat
+  fit `log10 Y = -1.6678 - 1.085 log10 X - 0.29655 log10^2 X` (0.024; Dutta's column comes out 0.87 m vs 0.90 m).
+  `packed_column_diameter` reports the Robbins pressure drop.
 
 - **`MechanicalVaporRecompression` compressor work was 6 % low.** The
   isentropic work used `Cp_vapor` (1880 J/kg/K) with the exponent of
