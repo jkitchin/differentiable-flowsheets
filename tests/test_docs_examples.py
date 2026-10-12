@@ -25,6 +25,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 DOC_SECTIONS = [
     ("docs/unit-operations-chemical.md", "## Distillation", "## Heat Exchangers"),
     ("docs/convergence.md", "## A worked diagnosis", "## Tear selection"),
+    ("docs/unit-operations-chemical.md", "## Adsorption, Ion Exchange and Chromatography", "## Summary Tables"),
 ]
 
 

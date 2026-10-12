@@ -166,6 +166,7 @@ from difflow.activity import (
     VanLaarParams,
 )
 from difflow import staged  # noqa: F401  (difflow.staged: McCabe-Thiele, Kremser)
+from difflow import adsorption  # noqa: F401  (difflow.adsorption: isotherms, fixed beds, ion exchange, chromatography)
 from difflow.units import column_design  # noqa: F401  (difflow.units.column_design: tray/packing hardware)
 from difflow.phase_diagrams import (
     bubble_T,

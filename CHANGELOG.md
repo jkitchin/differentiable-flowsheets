@@ -17,6 +17,18 @@ All notable changes to difflow are recorded here. The format follows
   `batch_concentration_time`, `BARRER`, `GPU`. The carbon-capture `MembraneSeparator`/`MultistageMembrane`
   use the core solver and gain `flow_pattern=` and `n_steps=`; bio `gel_layer_flux` uses the core gel model.
   The plug-flow models are tested against hand integrations in the feed-side mole fraction.
+- **`difflow.adsorption` (unit-ops book Ch 23).** A core module for adsorption, ion exchange and chromatography,
+  independent of the CO2-only cycle models in `difflow_cc` and the mAb column in `difflow_bio`: linear, Langmuir
+  (affinity form) and Freundlich isotherms; `fit_isotherm` (linearized start, Levenberg-Marquardt polish);
+  `batch_adsorption`; the length-of-unused-bed method (`lub_analysis`, `lub_break_time`, `stoichiometric_time`);
+  `fixed_bed_breakthrough`, an isothermal LDF bed. A clean bed without dispersion is solved in corrected time
+  theta = t - eps z/v_s, where the fluid hold-up drops out exactly, so a liquid bed that lasts months costs a few
+  hundred steps; otherwise a method-of-lines form. Both use adaptive Tsit5 with the step capped inside the stability
+  region so reverse-mode gradients are right (uncapped, the gradient of the stoichiometric time came out -1010
+  against +50); `klinkenberg_breakthrough`; `ion_exchange_equilibrium` (mass action, any valences);
+  and `retention_factor`, `plate_count`, `resolution`, `purnell_resolution`, `plates_for_resolution`, `van_deemter`,
+  `van_deemter_optimum`, `gaussian_peak`. Tests reproduce Geankoplis 5e Examples 12.2-1 and 12.3-1 (data recalled
+  from memory) and the Klinkenberg solution (`tests/test_adsorption.py`).
 
 - **Unit-ops book Ch. 10-13 gaps (#444).** (1) `DistillationColumn.solve_specs(feed, specs)` solves for `R` and
   `D` from any two of `x_D`/`x_B` purities, `recovery_D`/`recovery_B`, `R`, `D`, `B` (damped Newton, implicit
@@ -951,6 +963,11 @@ All notable changes to difflow are recorded here. The format follows
   `C_b exp(J/k)/(1-R+R exp(J/k))`, which gives `C_w = C_b` for a fully retained solute (R = 1), the case that
   polarizes most. It now returns `C_b exp(J/k)/(R+(1-R) exp(J/k))` (film theory; `C_b exp(J/k)` at R = 1) via
   the core `polarization_modulus`.
+- **Protein A load volume used the resin's saturation capacity as its dynamic capacity.**
+  `ProteinAChromatography.calculate_load_volume` took the dynamic binding capacity as `0.9 q_max` whatever the
+  feed titre; it now uses the Langmuir loading at the feed concentration times `(1 - breakthrough_limit)`, as the
+  column call does, and the unit's `equations` show the dissociation-constant isotherm `q_max C/(K_d + C)` it
+  actually evaluates.
 
 - **Flash derivatives and near-boundary values (#444).** (1) `flash_TP_eos` second derivatives were wrong (the
   Hessian of a two-flash PR train had the wrong sign): derivatives came from unrolling 50 damped substitution steps.
