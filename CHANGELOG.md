@@ -12,9 +12,11 @@ All notable changes to difflow are recorded here. The format follows
   independent of the CO2-only cycle models in `difflow_cc` and the mAb column in `difflow_bio`: linear, Langmuir
   (affinity form) and Freundlich isotherms; `fit_isotherm` (linearized start, Levenberg-Marquardt polish);
   `batch_adsorption`; the length-of-unused-bed method (`lub_analysis`, `lub_break_time`, `stoichiometric_time`);
-  `fixed_bed_breakthrough`, an isothermal LDF method-of-lines bed solved by adaptive Tsit5 whose step is capped
-  inside the stability region so reverse-mode gradients are right (uncapped, the gradient of the stoichiometric time
-  came out -1010 against +50); `klinkenberg_breakthrough`; `ion_exchange_equilibrium` (mass action, any valences);
+  `fixed_bed_breakthrough`, an isothermal LDF bed. A clean bed without dispersion is solved in corrected time
+  theta = t - eps z/v_s, where the fluid hold-up drops out exactly, so a liquid bed that lasts months costs a few
+  hundred steps; otherwise a method-of-lines form. Both use adaptive Tsit5 with the step capped inside the stability
+  region so reverse-mode gradients are right (uncapped, the gradient of the stoichiometric time came out -1010
+  against +50); `klinkenberg_breakthrough`; `ion_exchange_equilibrium` (mass action, any valences);
   and `retention_factor`, `plate_count`, `resolution`, `purnell_resolution`, `plates_for_resolution`, `van_deemter`,
   `van_deemter_optimum`, `gaussian_peak`. Tests reproduce Geankoplis 5e Examples 12.2-1 and 12.3-1 (data recalled
   from memory) and the Klinkenberg solution (`tests/test_adsorption.py`).
