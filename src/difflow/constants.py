@@ -58,8 +58,9 @@ LMTD_BLEND_WIDTH = 0.1
 # Used in effectiveness-NTU calculations
 CR_BLEND_WIDTH = 0.05
 
-# Phase boundary transition width for VLE
-# Smaller = sharper transitions, larger = smoother gradients
+# Phase boundary transition width for VLE. No longer used by Flash, which
+# returns the exact Rachford-Rice root (the blend biased V near the bubble
+# and dew points, issue #444); kept for callers that import it.
 PHASE_TRANSITION_WIDTH = 0.02
 
 # Temperature profile scaling for distillation.
