@@ -291,6 +291,35 @@ SEPARATOR_COSTS = {
 }
 
 
+# Evaporator bodies, sized by heat-transfer area (issue #444).
+EVAPORATOR_COSTS = {
+    "forced_circulation": CostParams(
+        a=5.0238, b=0.3475, n=0.0703, S_min=5.0, S_max=1000.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': evaporator, forced circulation (pumped)',
+    ),
+    "falling_film": CostParams(
+        a=3.9119, b=0.8627, n=-0.0088, S_min=50.0, S_max=500.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': evaporator, falling film',
+    ),
+    "agitated_film": CostParams(
+        a=5.0, b=0.149, n=-0.0134, S_min=0.5, S_max=5.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': evaporator, agitated film (scraped wall)',
+    ),
+    "short_tube": CostParams(
+        a=5.2366, b=-0.6572, n=0.35, S_min=10.0, S_max=100.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': evaporator, short tube',
+    ),
+    "long_tube": CostParams(
+        a=4.642, b=0.3698, n=0.0025, S_min=100.0, S_max=10000.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': evaporator, long tube',
+    ),
+}
+
 # =============================================================================
 # Core Cost Functions (JAX-differentiable)
 # =============================================================================
@@ -472,6 +501,36 @@ def heat_exchanger_cost(
         raise ValueError(f"Unknown heat exchanger type: {hx_type}. "
                         f"Available: {list(HEAT_EXCHANGER_COSTS.keys())}")
     return equipment_cost(area, HEAT_EXCHANGER_COSTS[hx_type], target_year)
+
+
+def evaporator_cost(
+    area: Array,
+    evaporator_type: str = "long_tube",
+    target_year: int = DEFAULT_CURRENT_YEAR,
+) -> Array:
+    """Calculate evaporator body purchased equipment cost.
+
+    One body per call: a multiple-effect train is the sum over its effects
+    (``info["A"]`` of a :class:`~difflow.units.evaporator.MultiEffectEvaporator`
+    is per effect).
+
+    Args:
+        area: Heat-transfer area of the body (m²)
+        evaporator_type: Type of evaporator (see EVAPORATOR_COSTS)
+        target_year: Cost basis year
+
+    Returns:
+        Purchased equipment cost ($)
+
+    Example:
+        >>> c = evaporator_cost(500.0, "long_tube", target_year=2001)
+        >>> round(float(c), -3)
+        455000.0
+    """
+    if evaporator_type not in EVAPORATOR_COSTS:
+        raise ValueError(f"Unknown evaporator type: {evaporator_type}. "
+                        f"Available: {list(EVAPORATOR_COSTS.keys())}")
+    return equipment_cost(area, EVAPORATOR_COSTS[evaporator_type], target_year)
 
 
 def pump_cost(

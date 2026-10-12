@@ -143,6 +143,11 @@ An area optimizer working below about 22 m² will move toward the minimum, and
 | `SEPARATOR_COSTS` | `centrifuge_disk` | power_law | 57000, 480000, 0.7 | 0.26–0.49 m (bowl diameter) | 2010 | Towler & Sinnott 2e Table 7.2: high-speed disk centrifuge |
 | `SEPARATOR_COSTS` | `filter_rotary` | log_quadratic | 4.8123, 0.2858, 0.042 | 0.9–300 m² | 2001 | Turton et al. 5e Table A.1: disc and drum filter |
 | `SEPARATOR_COSTS` | `extraction_column` | log_quadratic | 3.4974, 0.4485, 0.1074 | 0.3–520 m³ | 2001 | Turton et al. 5e Table A.1: tower shell (column internals not included) |
+| `EVAPORATOR_COSTS` | `forced_circulation` | log_quadratic | 5.0238, 0.3475, 0.0703 | 5–1000 m² | 2001 | Turton et al. 5e Table A.1: evaporator, forced circulation (pumped) |
+| `EVAPORATOR_COSTS` | `falling_film` | log_quadratic | 3.9119, 0.8627, -0.0088 | 50–500 m² | 2001 | Turton et al. 5e Table A.1: evaporator, falling film |
+| `EVAPORATOR_COSTS` | `agitated_film` | log_quadratic | 5.0, 0.149, -0.0134 | 0.5–5 m² | 2001 | Turton et al. 5e Table A.1: evaporator, agitated film (scraped wall) |
+| `EVAPORATOR_COSTS` | `short_tube` | log_quadratic | 5.2366, -0.6572, 0.35 | 10–100 m² | 2001 | Turton et al. 5e Table A.1: evaporator, short tube |
+| `EVAPORATOR_COSTS` | `long_tube` | log_quadratic | 4.642, 0.3698, 0.0025 | 100–10000 m² | 2001 | Turton et al. 5e Table A.1: evaporator, long tube |
 
 Outside the valid size range a correlation is an extrapolation.
 `validate_cost_params(params, size)` flags that case. It also flags a local
