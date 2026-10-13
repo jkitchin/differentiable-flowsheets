@@ -1,0 +1,251 @@
+{
+ "format_version": 2,
+ "difflow_version": "0.3.0",
+ "species_order": [
+  "cells",
+  "mAb",
+  "HCP",
+  "DNA",
+  "aggregates"
+ ],
+ "defaults": {
+  "flow": 1.0,
+  "T": 298.15,
+  "P": 101325.0
+ },
+ "feeds": {
+  "harvest": {
+   "F_cells": 40000.0,
+   "F_mAb": 10000.0,
+   "F_HCP": 500.0,
+   "F_DNA": 200.0,
+   "F_aggregates": 300.0,
+   "T": 298.15,
+   "P": 101325.0
+  }
+ },
+ "units": [
+  {
+   "name": "centrifuge",
+   "operation": "DiscStackCentrifuge",
+   "params": {
+    "n_discs": 100,
+    "r_outer": 0.15,
+    "r_inner": 0.05,
+    "half_angle": 0.698,
+    "rpm": 6000.0,
+    "efficiency": 0.8,
+    "species_order": [
+     "cells",
+     "mAb",
+     "HCP",
+     "DNA",
+     "aggregates"
+    ],
+    "cell_species": "cells",
+    "lysis_threshold_g": null,
+    "lysis_coefficient": 0.0,
+    "lysate_species": "lysate"
+   },
+   "constructor": {},
+   "extra_params": {
+    "Q": 0.000278,
+    "d_particle": 1.5e-05,
+    "rho_particle": 1050.0,
+    "rho_fluid": 1000.0,
+    "viscosity": 0.001,
+    "concentrate_fraction": 0.05
+   },
+   "inlets": [
+    "harvest"
+   ],
+   "outlets": [
+    "cell_sludge",
+    "clarified"
+   ]
+  },
+  {
+   "name": "protein_a",
+   "operation": "ProteinAChromatography",
+   "params": {
+    "column_volume": 300.0,
+    "q_max": 40.0,
+    "K_d": 0.05,
+    "target_species": "mAb",
+    "yield_factor": 0.95,
+    "impurity_clearance": {
+     "HCP": 2.0,
+     "DNA": 3.0,
+     "cells": 4.0
+    },
+    "species_order": [
+     "cells",
+     "mAb",
+     "HCP",
+     "DNA",
+     "aggregates"
+    ],
+    "k_ads": null,
+    "n_plates": null,
+    "elution_cv": 2.0
+   },
+   "constructor": {},
+   "extra_params": {
+    "feed_volume": 1900.0,
+    "breakthrough_limit": 0.01
+   },
+   "inlets": [
+    "clarified"
+   ],
+   "outlets": [
+    "proa_eluate",
+    "proa_flowthrough"
+   ]
+  },
+  {
+   "name": "cex",
+   "operation": "IonExchangeChromatography",
+   "params": {
+    "column_volume": 200.0,
+    "mode": "bind_elute",
+    "q_max": 60.0,
+    "K_d": 0.3,
+    "target_species": "mAb",
+    "selectivity": {
+     "mAb": 1.0,
+     "cells": 0.0
+    },
+    "yield_factor": 0.92,
+    "species_order": [
+     "cells",
+     "mAb",
+     "HCP",
+     "DNA",
+     "aggregates"
+    ],
+    "impurity_clearance": {
+     "HCP": 0.5,
+     "DNA": 1.0,
+     "aggregates": 0.7
+    }
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "proa_eluate"
+   ],
+   "outlets": [
+    "cex_eluate",
+    "cex_waste"
+   ]
+  },
+  {
+   "name": "aex",
+   "operation": "IonExchangeChromatography",
+   "params": {
+    "column_volume": 50.0,
+    "mode": "flow_through",
+    "q_max": 50.0,
+    "K_d": 0.5,
+    "target_species": "mAb",
+    "selectivity": {
+     "mAb": 0.0,
+     "cells": 1.0
+    },
+    "yield_factor": 0.95,
+    "species_order": [
+     "cells",
+     "mAb",
+     "HCP",
+     "DNA",
+     "aggregates"
+    ],
+    "impurity_clearance": {
+     "HCP": 1.5,
+     "DNA": 3.0,
+     "aggregates": 0.1
+    }
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "cex_eluate"
+   ],
+   "outlets": [
+    "aex_flowthrough",
+    "aex_bound"
+   ]
+  },
+  {
+   "name": "uf",
+   "operation": "Ultrafiltration",
+   "params": {
+    "membrane_area": 10.0,
+    "MWCO": 30.0,
+    "rejection": {
+     "mAb": 0.995,
+     "HCP": 0.995,
+     "DNA": 0.995,
+     "aggregates": 0.999,
+     "cells": 1.0
+    },
+    "Lp": 50.0,
+    "k_mass": 5e-06,
+    "sigma": 1000.0,
+    "fouling_coefficient": 0.0,
+    "species_order": [
+     "cells",
+     "mAb",
+     "HCP",
+     "DNA",
+     "aggregates"
+    ],
+    "molecular_weights": {}
+   },
+   "constructor": {},
+   "extra_params": {
+    "concentration_factor": 10.0,
+    "TMP": 1.0,
+    "feed_volume": 1000.0
+   },
+   "inlets": [
+    "aex_flowthrough"
+   ],
+   "outlets": [
+    "drug_substance",
+    "uf_permeate"
+   ]
+  }
+ ],
+ "recycles": {},
+ "view": {
+  "title": "mAb downstream purification",
+  "description": "A 2000 L monoclonal antibody harvest (grams per batch) clarified in a disc-stack centrifuge, captured on Protein A, polished by cation- and anion-exchange chromatography and concentrated 10x by ultrafiltration.",
+  "nodes": {
+   "feed:harvest": {
+    "x": 80,
+    "y": 220
+   },
+   "centrifuge": {
+    "x": 300,
+    "y": 220
+   },
+   "protein_a": {
+    "x": 520,
+    "y": 220
+   },
+   "cex": {
+    "x": 740,
+    "y": 220
+   },
+   "aex": {
+    "x": 960,
+    "y": 220
+   },
+   "uf": {
+    "x": 1180,
+    "y": 220
+   }
+  }
+ }
+}

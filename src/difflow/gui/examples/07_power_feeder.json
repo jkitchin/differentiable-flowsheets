@@ -1,0 +1,278 @@
+{
+ "format_version": 2,
+ "difflow_version": "0.3.0",
+ "species_order": [
+  "P",
+  "Q"
+ ],
+ "defaults": {
+  "flow": 0.0,
+  "T": 0.0,
+  "P": 1.0
+ },
+ "feeds": {
+  "infeed": {
+   "F_P": 0.0,
+   "F_Q": 0.0,
+   "T": 0.0,
+   "P": 1.0
+  }
+ },
+ "units": [
+  {
+   "name": "src_s",
+   "operation": "SlackSource",
+   "params": {
+    "vm_setpoint": 1.02,
+    "va_reference": 0.0
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "infeed"
+   ],
+   "outlets": [
+    "src_s_out"
+   ]
+  },
+  {
+   "name": "load_s",
+   "operation": "LoadDraw",
+   "params": {
+    "p_pu": 0.0,
+    "q_pu": 0.0
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "src_s_out"
+   ],
+   "outlets": [
+    "bus_s"
+   ]
+  },
+  {
+   "name": "line_t0",
+   "operation": "SeriesBranch",
+   "params": {
+    "r": 0.03,
+    "x": 0.035,
+    "b": 0.0,
+    "g": 0.0,
+    "tap": 1.0,
+    "shift": 0.0
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "bus_s"
+   ],
+   "outlets": [
+    "branch_t0_out"
+   ]
+  },
+  {
+   "name": "load_n1",
+   "operation": "LoadDraw",
+   "params": {
+    "p_pu": 0.06,
+    "q_pu": 0.025
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "branch_t0_out"
+   ],
+   "outlets": [
+    "bus_n1"
+   ]
+  },
+  {
+   "name": "line_t1",
+   "operation": "SeriesBranch",
+   "params": {
+    "r": 0.045,
+    "x": 0.05,
+    "b": 0.0,
+    "g": 0.0,
+    "tap": 1.0,
+    "shift": 0.0
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "bus_n1"
+   ],
+   "outlets": [
+    "branch_t1_out"
+   ]
+  },
+  {
+   "name": "load_n2",
+   "operation": "LoadDraw",
+   "params": {
+    "p_pu": 0.09,
+    "q_pu": 0.04
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "branch_t1_out"
+   ],
+   "outlets": [
+    "bus_n2"
+   ]
+  },
+  {
+   "name": "line_t2",
+   "operation": "SeriesBranch",
+   "params": {
+    "r": 0.06,
+    "x": 0.062,
+    "b": 0.0,
+    "g": 0.0,
+    "tap": 1.0,
+    "shift": 0.0
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "bus_n2"
+   ],
+   "outlets": [
+    "branch_t2_out"
+   ]
+  },
+  {
+   "name": "load_n3",
+   "operation": "LoadDraw",
+   "params": {
+    "p_pu": 0.075,
+    "q_pu": 0.03
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "branch_t2_out"
+   ],
+   "outlets": [
+    "bus_n3"
+   ]
+  },
+  {
+   "name": "line_t3",
+   "operation": "SeriesBranch",
+   "params": {
+    "r": 0.055,
+    "x": 0.058,
+    "b": 0.0,
+    "g": 0.0,
+    "tap": 1.0,
+    "shift": 0.0
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "bus_n3"
+   ],
+   "outlets": [
+    "branch_t3_out"
+   ]
+  },
+  {
+   "name": "load_n4",
+   "operation": "LoadDraw",
+   "params": {
+    "p_pu": 0.11000000000000001,
+    "q_pu": 0.045
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "branch_t3_out"
+   ],
+   "outlets": [
+    "bus_n4"
+   ]
+  },
+  {
+   "name": "close",
+   "operation": "LadderClose",
+   "params": {
+    "vm_setpoint": 1.02,
+    "va_reference": 0.0
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "bus_n4",
+    "infeed"
+   ],
+   "outlets": [
+    "infeed_next"
+   ]
+  }
+ ],
+ "recycles": {
+  "infeed_next": "infeed"
+ },
+ "view": {
+  "title": "Radial distribution feeder (ladder)",
+  "description": "A four-section 12.47 kV distribution feeder solved sequentially, with the substation infeed as the one tear and LadderClose driving the open-end leftover power to zero.",
+  "nodes": {
+   "feed:infeed": {
+    "x": 40.0,
+    "y": 140.0
+   },
+   "src_s": {
+    "x": 190.0,
+    "y": 140.0
+   },
+   "load_s": {
+    "x": 190.0,
+    "y": 300.0
+   },
+   "line_t0": {
+    "x": 380.0,
+    "y": 140.0
+   },
+   "load_n1": {
+    "x": 475.0,
+    "y": 300.0
+   },
+   "line_t1": {
+    "x": 665.0,
+    "y": 140.0
+   },
+   "load_n2": {
+    "x": 760.0,
+    "y": 300.0
+   },
+   "line_t2": {
+    "x": 950.0,
+    "y": 140.0
+   },
+   "load_n3": {
+    "x": 1045.0,
+    "y": 300.0
+   },
+   "line_t3": {
+    "x": 1235.0,
+    "y": 140.0
+   },
+   "load_n4": {
+    "x": 1330.0,
+    "y": 300.0
+   },
+   "close": {
+    "x": 1520.0,
+    "y": 300.0
+   }
+  },
+  "solver": {
+   "clip_negative_flows": false,
+   "tol": 1e-12,
+   "max_iter": 100
+  }
+ }
+}
