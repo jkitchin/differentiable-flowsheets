@@ -118,6 +118,7 @@ __all__ = [
     "ISOTHERMS",
     "fit_isotherm",
     "batch_adsorption",
+    "break_time",
     "lub_analysis",
     "lub_break_time",
     "fixed_bed_breakthrough",
@@ -158,7 +159,9 @@ def linear_isotherm(c: Array | float, K: Array | float) -> Array:
     return jnp.asarray(K) * jnp.asarray(c)
 
 
-def langmuir_isotherm(c: Array | float, q_max: Array | float, K: Array | float) -> Array:
+def langmuir_isotherm(c: Array | float, q_max: Array | float,
+                      K: Array | float | None = None, *,
+                      K_d: Array | float | None = None) -> Array:
     """Langmuir isotherm ``q = q_max K c / (1 + K c)``.
 
     ``K`` is the affinity (adsorption equilibrium) constant in 1/(units of c).
@@ -169,6 +172,9 @@ def langmuir_isotherm(c: Array | float, q_max: Array | float, K: Array | float) 
         c: Fluid-phase concentration.
         q_max: Monolayer (saturation) capacity, units of q.
         K: Affinity constant, 1/(units of c).
+        K_d: Dissociation constant in units of ``c`` (``K = 1/K_d``), the
+            convention of ``difflow_bio.langmuir_isotherm``. Give exactly one
+            of ``K`` and ``K_d``.
 
     Returns:
         Equilibrium loading ``q``.
@@ -177,6 +183,11 @@ def langmuir_isotherm(c: Array | float, q_max: Array | float, K: Array | float) 
         >>> float(langmuir_isotherm(1.0, 2.0, 1.0))
         1.0
     """
+    if (K is None) == (K_d is None):
+        raise ValueError("give exactly one of K (affinity) or K_d (dissociation)")
+    if K is None:
+        c_, K_d_ = jnp.asarray(c), jnp.asarray(K_d)
+        return jnp.asarray(q_max) * c_ / (K_d_ + c_)
     Kc = jnp.asarray(K) * jnp.asarray(c)
     return jnp.asarray(q_max) * Kc / (1.0 + Kc)
 
@@ -413,11 +424,70 @@ def _cumtrapz(y: Array, x: Array) -> Array:
     return jnp.concatenate([jnp.zeros(1, dtype=seg.dtype), jnp.cumsum(seg)])
 
 
+def break_time(t: Array, c_ratio: Array, c_break: Array | float = 0.05) -> Array:
+    """Time at which a sampled breakthrough curve first reaches ``c_break``.
+
+    Linear interpolation puts a kink in ``t_b`` wherever the crossing moves
+    from one grid cell to the next, so ``d t_b/dL`` of a bed model wobbles by
+    a few per cent with the time grid (worse in the curved tail). This uses a
+    monotone cubic Hermite interpolant on the bracketing cell (slopes from
+    finite differences, limited to ``[0, 3 * secant]``), solved by bisection
+    with one implicit Newton step, so the value is accurate between samples
+    and the derivative follows the curve rather than the grid.
+
+    Args:
+        t: Times (increasing).
+        c_ratio: Effluent ``c/c0`` at those times (running maximum is used).
+        c_break: Break-point ``c/c0``.
+
+    Returns:
+        The break time (the last time if the curve never reaches ``c_break``,
+        the first if it starts above it).
+
+    Example:
+        >>> import jax.numpy as jnp
+        >>> t = jnp.linspace(0.0, 4.0, 5)
+        >>> round(float(break_time(t, t / 4.0, 0.3)), 6)
+        1.2
+    """
+    t = jnp.asarray(t, dtype=float)
+    r = jax.lax.cummax(jnp.asarray(c_ratio, dtype=float))
+    cb = jnp.asarray(c_break, dtype=float)
+    n = r.size
+    hi = jnp.clip(jnp.searchsorted(r + jnp.arange(n) * 1e-12, cb), 1, n - 1)
+    lo = hi - 1
+    dt = t[hi] - t[lo]
+    delta = (r[hi] - r[lo]) / dt
+    m = jnp.gradient(r, t)
+    m_lo = jnp.clip(m[lo], 0.0, 3.0 * delta)
+    m_hi = jnp.clip(m[hi], 0.0, 3.0 * delta)
+    r_lo, r_hi = r[lo], r[hi]
+
+    def h(s):
+        s2, s3 = s * s, s * s * s
+        return ((2 * s3 - 3 * s2 + 1) * r_lo + (s3 - 2 * s2 + s) * dt * m_lo
+                + (-2 * s3 + 3 * s2) * r_hi + (s3 - s2) * dt * m_hi)
+
+    def body(_, b):
+        a, c = b
+        mid = 0.5 * (a + c)
+        below = h(mid) < cb
+        return jnp.where(below, mid, a), jnp.where(below, c, mid)
+
+    a, c = jax.lax.fori_loop(0, 60, body, (jnp.zeros(()), jnp.ones(())))
+    s0 = jax.lax.stop_gradient(0.5 * (a + c))
+    slope = jax.lax.stop_gradient(jax.grad(h)(s0))
+    s = s0 - (h(s0) - cb) / jnp.where(jnp.abs(slope) > 1e-30, slope, 1.0)
+    s = jnp.clip(s, 0.0, 1.0)
+    return t[lo] + s * dt
+
+
 def lub_analysis(
     t: Array,
     c_ratio: Array,
     L: Array | float,
     c_break: Array | float = 0.05,
+    refine: bool = False,
 ) -> dict:
     """Length of unused bed (LUB) from a measured breakthrough curve.
 
@@ -425,13 +495,18 @@ def lub_analysis(
     (nearly) 1 by its last point, or ``t_s`` is underestimated. The break
     time is the first crossing of ``c_break`` (linear interpolation on the
     running maximum of ``c_ratio``, so noise below the break point does not
-    trigger it).
+    trigger it); ``refine=True`` uses :func:`break_time` instead, so the
+    crossing and its gradient do not follow the time grid.
 
     Args:
         t: Times (increasing), any time unit.
         c_ratio: Effluent ``c/c0`` at those times.
         L: Bed length of the test (any length unit).
         c_break: Break-point ``c/c0`` (e.g. 0.01 or 0.05).
+        refine: Locate the break with :func:`break_time` (monotone cubic
+            Hermite) instead of linear interpolation. Use it when
+            differentiating a modelled curve; the default reproduces a
+            graphical reading of measured data.
 
     Returns:
         Dict with ``"t_break"``, ``"t_stoich"`` (``t_s``), ``"t_usable"``
@@ -452,10 +527,12 @@ def lub_analysis(
     deficit = 1.0 - r
     cum = _cumtrapz(deficit, t)
     t_s = cum[-1]
-    r_mono = jax.lax.cummax(r)
-    # strictly increasing abscissa for interp: add a vanishing ramp
-    r_inc = r_mono + jnp.arange(r.size) * 1e-12
-    t_b = jnp.interp(c_break, r_inc, t)
+    if refine:
+        t_b = break_time(t, r, c_break)
+    else:
+        # strictly increasing abscissa for interp: add a vanishing ramp
+        r_inc = jax.lax.cummax(r) + jnp.arange(r.size) * 1e-12
+        t_b = jnp.interp(c_break, r_inc, t)
     t_u = jnp.interp(t_b, t, cum)
     frac = t_u / t_s
     return {

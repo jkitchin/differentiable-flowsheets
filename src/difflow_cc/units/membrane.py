@@ -26,6 +26,7 @@ __all__ = [
     "MultistageMembrane",
 ]
 
+import warnings
 from dataclasses import dataclass
 from typing import Literal
 
@@ -37,16 +38,18 @@ from difflow.streams import Stream, make_stream, get_flows, total_flow
 from difflow.params_mixin import ParamsMixin
 from difflow.numerics import safe_divide
 from difflow.flowsheet import _concrete
+from difflow.units.membranes import BARRER as _CORE_BARRER, GPU as _CORE_GPU
 from difflow_cc.database import get_membrane, Membrane
 
 
 # Unit conversions
 # 1 Barrer = 10^-10 cm³(STP)·cm / (cm²·s·cmHg)
 # 1 GPU = 10^-6 cm³(STP) / (cm²·s·cmHg) = Barrer / thickness(cm)
-# Converting to SI: 1 GPU = 3.35e-10 mol/(m²·s·Pa)
+# Converting to SI: 1 GPU = 3.3464e-10 mol/(m²·s·Pa). The constants are the
+# core ones (difflow.units.membranes), so the plugin and core agree (#455).
 
-GPU_TO_SI = 3.35e-10  # mol/(m²·s·Pa)
-BARRER_TO_SI = 3.35e-16  # mol·m/(m²·s·Pa)
+GPU_TO_SI = _CORE_GPU  # mol/(m²·s·Pa)
+BARRER_TO_SI = _CORE_BARRER  # mol·m/(m²·s·Pa)
 
 # Gas constant
 R = 8.314  # J/(mol*K)
@@ -406,7 +409,7 @@ class MembraneSeparator:
             CO2_recovery_target: Target CO2 recovery (0-1)
 
         Returns:
-            Required membrane area (m²)
+            Required membrane area (m²), for the membrane's ``flow_pattern``
         """
         p = self.params
         T = jnp.asarray(p.T_operation)
@@ -430,14 +433,22 @@ class MembraneSeparator:
         F = jnp.sum(F_i)
         A_ref = F / (jnp.max(Q) * P_feed)
 
-        # Same complete-mixing model as __call__ (audit C5); CO2 recovery
-        # rises monotonically with area from 0 to 1, so the root in
-        # s = ln(A / A_ref) is bracketed.
-        def h(s):
-            A = A_ref * jnp.exp(s)
-            t = _solve_retentate_fraction(F_i, Q, A, P_feed, P_permeate)
-            y = _permeate_composition(t, F_i, Q, A, P_feed, P_permeate)
-            return (1.0 - t) * F * y[k] / F_i[k] - recovery
+        # Same model as __call__ (audit C5); CO2 recovery rises
+        # monotonically with area from 0 to 1, so the root in
+        # s = ln(A / A_ref) is bracketed. A plug-flow ``flow_pattern`` uses
+        # the same integration as __call__ (#455).
+        if p.flow_pattern == "complete_mixing":
+            def h(s):
+                A = A_ref * jnp.exp(s)
+                t = _solve_retentate_fraction(F_i, Q, A, P_feed, P_permeate)
+                y = _permeate_composition(t, F_i, Q, A, P_feed, P_permeate)
+                return (1.0 - t) * F * y[k] / F_i[k] - recovery
+        else:
+            def h(s):
+                A = A_ref * jnp.exp(s)
+                _, perm, _ = permeation_stage(F_i, Q, A, P_feed, P_permeate,
+                                              p.flow_pattern, p.n_steps)
+                return perm[k] / F_i[k] - recovery
 
         s0 = _bisect_increasing(h, -60.0, 60.0, n_iter=80)
         return A_ref * jnp.exp(_implicit_step(h, s0))
@@ -490,6 +501,7 @@ class MultistageMembrane:
         configuration: Literal["series", "permeate_recycle"] = "series",
         recycle_iterations: int = 100,
         stage_params: list[MembraneParams] | None = None,
+        recycle_tol: float = 1e-6,
     ):
         """Initialize multi-stage membrane.
 
@@ -502,6 +514,10 @@ class MultistageMembrane:
                 stage-1 permeate; its retentate is recycled to stage 1).
             recycle_iterations: Successive-substitution passes used to
                 converge the 'permeate_recycle' loop.
+            recycle_tol: Relative residual (recycle change over total feed)
+                below which the loop counts as converged; otherwise a
+                ``RuntimeWarning`` is issued and
+                ``info["recycle_converged"]`` is False.
             stage_params: Optional per-stage parameters (one per stage),
                 e.g. a smaller second stage in 'permeate_recycle': with one
                 shared ``params`` that stage sees only the stage-1 permeate
@@ -524,6 +540,7 @@ class MultistageMembrane:
         if n_stages < 1:
             raise ValueError(f"n_stages must be >= 1, got {n_stages}")
         self.recycle_iterations = int(recycle_iterations)
+        self.recycle_tol = float(recycle_tol)
         self.params = params
         self.n_stages = n_stages
         self.configuration = configuration
@@ -638,6 +655,14 @@ class MultistageMembrane:
             0, self.recycle_iterations, lambda _, r: run(r)[0], jnp.zeros_like(F_feed))
         new_rec, (ret_1, perm_1, perm_2, info_1, info_2) = run(rec)
         residual = jnp.max(jnp.abs(new_rec - rec)) / jnp.maximum(jnp.sum(F_feed), 1e-300)
+        converged = residual < self.recycle_tol
+        if not isinstance(converged, jax.core.Tracer) and not bool(converged):
+            warnings.warn(
+                f"MultistageMembrane recycle not converged after "
+                f"{self.recycle_iterations} iterations (relative residual "
+                f"{float(residual):.3g} > recycle_tol={self.recycle_tol:g}); "
+                "increase recycle_iterations or the stage-2 area.",
+                RuntimeWarning, stacklevel=3)
 
         final_retentate = ret_1
         final_permeate = perm_2
@@ -654,6 +679,7 @@ class MultistageMembrane:
             "overall_CO2_purity": safe_divide(F_CO2_perm, F_perm_total),
             "recycle_flow": jnp.sum(new_rec),
             "recycle_residual": residual,
+            "recycle_converged": converged,
             "interstage_compression": {"from_Pa": perm_1["P"], "to_Pa": P1,
                                        "flow": total_flow(perm_1)},
             "stage_info": [info_1, info_2],

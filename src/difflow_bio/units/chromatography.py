@@ -41,6 +41,10 @@ def langmuir_isotherm(
 
     q = q_max * C / (K_d + C)
 
+    ``K_d`` is a dissociation constant (concentration units). The core
+    :func:`difflow.adsorption.langmuir_isotherm` takes an affinity ``K =
+    1/K_d`` positionally, or this form as ``K_d=``.
+
     Args:
         C: Mobile phase concentration (g/L)
         q_max: Maximum binding capacity (g/L resin)

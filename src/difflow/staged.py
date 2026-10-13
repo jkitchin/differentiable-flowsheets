@@ -64,6 +64,8 @@ References
 
 from __future__ import annotations
 
+import warnings
+
 import jax
 import jax.numpy as jnp
 from jax import Array, lax
@@ -551,8 +553,10 @@ def mccabe_thiele(
         (fractional; ``nan`` without a bottom line), ``x`` (``x_0..x_n``),
         ``y`` (``y_1..y_n``), ``credit`` (``c_1..c_n``), ``x_vertices`` /
         ``y_vertices`` (staircase for plotting; trim with ``credit > 0``),
-        ``x_feed`` (the switch composition) and ``pinched`` (soft flag in
-        [0, 1]: the cascade stalled short of ``x_bottom``). With ``lines``,
+        ``x_feed`` (the switch composition), ``pinched`` (soft flag in
+        [0, 1]: the cascade stalled short of ``x_bottom``) and ``capped``
+        (bool: ``n_max`` steps ran out before ``x_bottom``, so ``N`` is a
+        lower bound; also a ``RuntimeWarning`` outside a trace). With ``lines``,
         also ``switch_stage`` (fractional stage number of each switch, the
         stage on which line ``j + 1`` first applies) and ``N_sections``
         (stages stepped on each line); ``feed_stage`` is the first switch.
@@ -661,7 +665,22 @@ def mccabe_thiele(
         "y_vertices": yv,
         "x_feed": x_f,
         "pinched": jnp.tanh(rem / 1e-3),
+        "capped": _capped(rem, n_max),
     }
+
+
+def _capped(rem, n_max):
+    """True when the scan ran out of steps (``n_max``) before reaching ``x_bottom``.
+
+    Warns outside a trace: a capped ``N`` is a lower bound, not the answer.
+    """
+    capped = rem > 1e-12
+    if not isinstance(capped, jax.core.Tracer) and bool(capped):
+        warnings.warn(
+            f"mccabe_thiele reached n_max={n_max} before x_bottom; N is capped "
+            "(a lower bound). Increase n_max or check for a pinch.",
+            RuntimeWarning, stacklevel=3)
+    return capped
 
 
 def _mccabe_thiele_sections(curve, lines, x_top, x_bottom, switch_x,
@@ -742,6 +761,7 @@ def _mccabe_thiele_sections(curve, lines, x_top, x_bottom, switch_x,
         "y_vertices": yv,
         "x_feed": sw[0] if switch_x is not None else jnp.asarray(jnp.nan),
         "pinched": jnp.tanh(rem / 1e-3),
+        "capped": _capped(rem, n_max),
     }
 
 
