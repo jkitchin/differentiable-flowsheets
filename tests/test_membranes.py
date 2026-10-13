@@ -163,6 +163,58 @@ class TestCountercurrentSolveCost:
         check_grads(f, (5e5, 0.3), order=1, modes=["rev"], eps=1e-4, rtol=1e-4)
 
 
+class TestRunDry:
+    """More area than the feed needs: the feed side empties and everything permeates.
+
+    The flux per unit area depends on mole fractions, not on how much gas is left, so a
+    plug-flow stage runs dry at a finite area. Past it the stages used to return NaN.
+    """
+
+    GPU = 3.348e-10
+    Fi = 1000 / 22.414 / 3.6 * jnp.array([0.15, 0.85])
+    Q = jnp.array([100.0, 5.0]) * GPU
+    P_h, P_l = 13e5, 1.05e5
+    # Near the dry end only the slow gas is left and its flux Q (P_h - P_l) is constant,
+    # so the cut rises linearly in area at this slope until it reaches 1.
+    slope = float(5.0 * GPU * (13e5 - 1.05e5) / jnp.sum(Fi))
+
+    def test_empty_feed_side_has_zero_flux(self):
+        y, J = M.local_permeate_composition(jnp.zeros(2), self.Q, self.P_h, self.P_l)
+        assert float(J) == 0.0 and np.all(np.isfinite(y))
+        g = jax.grad(lambda x: M.local_permeate_composition(x, self.Q, self.P_h, self.P_l)[1])
+        assert np.all(np.isfinite(g(jnp.zeros(2))))
+
+    @pytest.mark.parametrize("pattern", ["cross_flow", "cocurrent", "countercurrent"])
+    def test_large_area_permeates_everything(self, pattern):
+        R, V, prof = M.permeation_stage(self.Fi, self.Q, 1e4, self.P_h, self.P_l, pattern)
+        np.testing.assert_allclose(V, self.Fi, rtol=1e-12)
+        assert np.all(np.asarray(R) == 0.0)
+        assert np.all(np.isfinite(np.asarray(prof["L"])))
+        if pattern == "countercurrent":
+            assert bool(prof["exhausted"])
+            np.testing.assert_allclose(prof["L"][0], self.Fi)    # feed end
+            assert float(jnp.sum(prof["L"][-1])) == 0.0            # dry before the retentate end
+
+    def test_countercurrent_is_continuous_through_the_dry_point(self):
+        # Just short of running dry the shooting solve converges and the cut sits on the
+        # constant-flux line; just past it the stage is dry. Both sides give finite gradients.
+        cut = jax.jit(lambda A: jnp.sum(M.countercurrent(self.Fi, self.Q, A, self.P_h, self.P_l)[1])
+                      / jnp.sum(self.Fi))
+        dcut = jax.jit(jax.grad(cut))
+        c0 = float(cut(5300.0))
+        for A in (5305.0, 5310.0, 5312.0):
+            assert float(cut(A)) == pytest.approx(c0 + self.slope * (A - 5300.0), abs=1e-9)
+            assert float(dcut(A)) == pytest.approx(self.slope, rel=1e-6)
+        A_dry = 5300.0 + (1.0 - c0) / self.slope
+        for A in (A_dry + 0.2, A_dry + 5.0):
+            assert float(cut(A)) == 1.0 and float(dcut(A)) == 0.0
+
+    def test_countercurrent_unchanged_short_of_dry(self):
+        R, _, prof = M.countercurrent(self.Fi, self.Q, 3000.0, self.P_h, self.P_l)
+        assert not bool(prof["exhausted"]) and float(prof["residual"]) < 1e-13
+        np.testing.assert_allclose(R, [5.825562e-06, 4.625748], rtol=1e-6)
+
+
 class TestGasPermeator:
     def test_conserves_and_reports(self):
         feed = make_stream({"CO2": 0.13, "N2": 0.87}, T=313.0, P=2e5)

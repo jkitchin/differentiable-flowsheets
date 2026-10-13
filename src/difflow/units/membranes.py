@@ -392,10 +392,16 @@ def local_permeate_composition(x, Q, P_h, P_l, n_iter=80):
         n_iter: Bisection halvings.
 
     Returns:
-        ``(y, J)``: permeate mole fractions (n,) and total flux.
+        ``(y, J)``: permeate mole fractions (n,) and total flux. An empty feed
+        side (``x`` all zero, as when a large area permeates the whole feed)
+        has ``J = 0``.
     """
     x = jnp.asarray(x, float)
     Q = jnp.asarray(Q, float)
+    # With x = 0 the root is J = 0 and y = 0/0. Solve on a stand-in composition instead (the
+    # double-where keeps NaN out of the gradients too) and report zero flux.
+    empty = jnp.sum(Q * x) <= 0.0
+    x = jnp.where(empty, jnp.ones_like(x) / x.shape[-1], x)
     J_max = P_h * jnp.sum(Q * x)
 
     # Work in s = J/J_max in [0, 1]; f increasing in s.
@@ -407,7 +413,7 @@ def local_permeate_composition(x, Q, P_h, P_l, n_iter=80):
     s = _implicit_step(f, s0)
     J = s * J_max
     y = Q * x * P_h / (J + Q * P_l)
-    return y / jnp.sum(y), J
+    return y / jnp.sum(y), jnp.where(empty, 0.0, J)
 
 
 def _rk4(rhs, y0, h, n_steps):
@@ -507,6 +513,12 @@ def _counter_integrate(R, F_i, Q, area, P_h, P_l, n_steps):
     Returns the feed-side flows from the retentate end (index 0) to the feed
     end (index n_steps).
     """
+    rhs = _counter_rhs(R, F_i, Q, P_h, P_l)
+    return _rk4(rhs, R, area / n_steps, n_steps)
+
+
+def _counter_rhs(R, F_i, Q, P_h, P_l):
+    """``d L_i / d(-a)`` in a countercurrent permeator with retentate ``R``."""
     delta = 1e-12 * jnp.sum(F_i)
 
     def rhs(L):
@@ -518,10 +530,11 @@ def _counter_integrate(R, F_i, Q, area, P_h, P_l, n_steps):
         y = (V + delta * y_loc) / (jnp.sum(V) + delta)
         return Q * jnp.maximum(x * P_h - y * P_l, 0.0)
 
-    return _rk4(rhs, R, area / n_steps, n_steps)
+    return rhs
 
 
 _SHOOT_TOL = 1e-14     # countercurrent shooting: relative feed-end mismatch at which Newton stops
+_EXHAUSTED_FRAC = 1e-12  # retentate fraction below which a countercurrent stage counts as run dry
 
 
 def countercurrent(F_i, Q, area, P_h, P_l, n_steps=100, newton_iter=40):
@@ -534,6 +547,13 @@ def countercurrent(F_i, Q, area, P_h, P_l, n_steps=100, newton_iter=40):
     converged root carries exact first derivatives (implicit function
     theorem).
 
+    The flux per unit area depends on the feed-side mole fractions, not on
+    how much gas is left, so with enough area the feed side runs dry before
+    the retentate end and everything permeates. Shooting has no root then
+    (any ``R > 0`` grows past ``F`` before the feed end); the stage returns
+    ``R = 0`` with zero derivatives, ``profile["exhausted"]`` is True, and the
+    profile is integrated from the feed end, where ``L = V = F``.
+
     Args:
         F_i, Q, area, P_h, P_l, n_steps: As :func:`cross_flow`.
         newton_iter: Most Newton iterations (it stops earlier, once the
@@ -541,8 +561,8 @@ def countercurrent(F_i, Q, area, P_h, P_l, n_steps=100, newton_iter=40):
 
     Returns:
         ``(retentate_flows, permeate_flows, profile)``; ``profile`` has
-        ``area`` (from the feed end), ``L``, ``y`` (bulk permeate) and
-        ``residual`` (relative mismatch at the feed end).
+        ``area`` (from the feed end), ``L``, ``y`` (bulk permeate),
+        ``residual`` (relative mismatch at the feed end) and ``exhausted``.
     """
     F_i = jnp.asarray(F_i, float)
     Q = jnp.asarray(Q, float)
@@ -558,6 +578,17 @@ def countercurrent(F_i, Q, area, P_h, P_l, n_steps=100, newton_iter=40):
     frac0 = jnp.clip(R0 / F_i, 1e-9, 1.0 - 1e-9)
     u0 = jnp.log(frac0) - jnp.log1p(-frac0)
     args = jax.lax.stop_gradient((F_i, Q, area, jnp.asarray(P_h, float), jnp.asarray(P_l, float)))
+    # Run dry: with R = 0 both flows are known at the feed end (L = V = F), so the profile is an
+    # initial-value problem from there. If the feed side empties before the retentate end, R = 0
+    # is the solution; if not, it is not.
+    # The test is an Euler step from every stored state before the end, not the end state: in the step where the
+    # flow reaches zero, RK4's later stages are clipped to zero flux and leave L > 0. Near the end the
+    # gas is the slow component alone and the flux is constant, so the Euler step is exact there.
+    rhs_dry = _counter_rhs(jnp.zeros_like(F_i), F_i, Q, P_h, P_l)
+    h = area / n_steps
+    Ls_dry = jnp.maximum(_rk4(lambda L: -rhs_dry(L), F_i, h, n_steps), 0.0)
+    euler = jnp.sum(Ls_dry[:-1], axis=1) - h * jnp.sum(jax.vmap(rhs_dry)(Ls_dry[:-1]), axis=1)
+    exhausted = jax.lax.stop_gradient(jnp.any(euler <= _EXHAUSTED_FRAC * jnp.sum(F_i)))
 
     # Newton converges quadratically (3-5 iterations from the cross-flow start), so it stops once
     # the feed-end mismatch reaches round-off rather than always running ``newton_iter`` steps.
@@ -572,20 +603,23 @@ def countercurrent(F_i, Q, area, P_h, P_l, n_steps=100, newton_iter=40):
 
     def unconverged(state):
         k, _, r = state
-        return (k < newton_iter) & (jnp.max(jnp.abs(r)) > _SHOOT_TOL)
+        return (k < newton_iter) & (jnp.max(jnp.abs(r)) > _SHOOT_TOL) & ~exhausted
 
     _, u_star, _ = jax.lax.while_loop(unconverged, newton, (0, u0, resid(u0, *args)))
-    u_star = jax.lax.stop_gradient(u_star)
+    # A run-dry stage keeps a well-conditioned point for the (discarded) implicit step.
+    u_star = jax.lax.stop_gradient(jnp.where(exhausted, u0, u_star))
     # Implicit-function step: value-neutral, exact first derivatives.
     Jm = jax.lax.stop_gradient(jax.jacfwd(resid)(u_star, *args))
     r = resid(u_star, F_i, Q, area, P_h, P_l)
     u = u_star - jnp.linalg.solve(Jm, r - jax.lax.stop_gradient(r))
-    R = F_i * jax.nn.sigmoid(u)
-    Ls = _counter_integrate(R, F_i, Q, area, P_h, P_l, n_steps)[::-1]
+    R = jnp.where(exhausted, 0.0, F_i * jax.nn.sigmoid(u))
+    Ls_shot = _counter_integrate(R, F_i, Q, area, P_h, P_l, n_steps)[::-1]
+    Ls = jnp.where(exhausted, Ls_dry, Ls_shot)
     Vs = jnp.maximum(Ls - R[None], 0.0)
     ys = jax.vmap(_safe_frac)(Vs)
     profile = {"area": jnp.linspace(0.0, 1.0, n_steps + 1) * area, "L": Ls, "y": ys,
-               "residual": jnp.max(jnp.abs(jax.lax.stop_gradient(r)))}
+               "residual": jnp.where(exhausted, 0.0, jnp.max(jnp.abs(jax.lax.stop_gradient(r)))),
+               "exhausted": exhausted}
     return R, F_i - R, profile
 
 
