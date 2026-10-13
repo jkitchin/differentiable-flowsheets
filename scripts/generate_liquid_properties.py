@@ -111,6 +111,10 @@ SOURCES = {
         "Chem. Ref. Data 38, 101 (2009)), with mu_2 = 1, on the "
         "saturated-liquid density of IAPWS SR1-86(1992) (Wagner & Pruss, J. "
         "Phys. Chem. Ref. Data 22, 783 (1993))"),
+    "iapws_sr186": (
+        "IAPWS SR1-86(1992), saturated-liquid density of ordinary water "
+        "(Wagner & Pruss, J. Phys. Chem. Ref. Data 22, 783 (1993), eq. 2.3); "
+        "within 0.001 % of IAPWS-95 below 400 K"),
     "nist_water_fit": (
         "Quartic in T fitted by difflow to NIST WebBook (SRD 69) "
         "saturated-liquid water thermal conductivity, 273.16-630 K, weighted "
@@ -269,8 +273,12 @@ def fit_heavy_water(Tm):
 NIST_WATER = ROOT / "tests" / "reference" / "nist_water_saturated_liquid.csv"
 
 
-def water_transport():
-    """Water viscosity and conductivity from IAPWS / NIST, not Perry's.
+def water_properties(MW):
+    """Water density, viscosity and conductivity from IAPWS / NIST.
+
+    The VDI-PPDS water density is off from IAPWS-95 by +0.62 % at 273 K,
+    +0.18 % at 288 K and -0.23 % at 353 K; the IAPWS SR1-86 saturated-liquid
+    equation is within 0.001 % below 400 K and 0.09 % at 640 K.
 
     Perry's DIPPR 101 water viscosity is off by -5.0 % at 273 K, +2.7 % at
     300 K and -4.7 % at 630 K against IAPWS 2008, and its conductivity by up
@@ -281,10 +289,11 @@ def water_transport():
     d = np.loadtxt(NIST_WATER, delimiter=",", comments="#", skiprows=5)
     m = d[:, 0] <= 633.15
     c = np.polyfit(d[m, 0], d[m, 4], 4, w=1.0 / d[m, 4])[::-1]
+    rho = corr("IAPWS_SR186", [float(MW)], 273.16, 647.0, True, "iapws_sr186")
     mu = corr("IAPWS2008_SAT", [], 273.16, 640.0, True, "iapws")
     k = corr("DIPPR100", [float(x) for x in c], 273.16, 633.15, True,
              "nist_water_fit")
-    return mu, k
+    return rho, mu, k
 
 
 def chemicals_value(c, T):
@@ -320,7 +329,7 @@ def main():
             mu = viscosity(name, cas, Tm, crit.Tc)
             k = conductivity(name, cas, Tm, crit.Tc)
         if name == "water":
-            mu, k = water_transport()
+            rho, mu, k = water_properties(crit.MW)
         if mu is None:
             raise RuntimeError(f"no viscosity for {name}; add groups or data")
         data[name] = {"CAS": cas, "MW": crit.MW, "Tm": float(Tm),
@@ -328,7 +337,7 @@ def main():
 
         pts = {}
         for key, c in (("rho", rho), ("mu", mu), ("k", k)):
-            if c["source"] in ("iapws", "nist_water_fit"):
+            if c["source"] in ("iapws", "iapws_sr186", "nist_water_fit"):
                 continue    # not a `chemicals` correlation; tested vs NIST
             Ts = np.linspace(c["Tmin"], min(c["Tmax"], 0.95 * crit.Tc), 5)[1:-1]
             pts[key] = [[float(t), float(chemicals_value(c, t))] for t in Ts]

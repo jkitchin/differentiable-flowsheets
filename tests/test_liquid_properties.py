@@ -98,7 +98,7 @@ class TestEquationsMatchSource:
     @pytest.mark.parametrize("name", sorted(REF["chemicals"]))
     def test_species(self, name):
         for prop in PROPS:
-            # water mu/k are IAPWS / NIST forms, checked in TestWaterAgainstNIST
+            # water rho/mu/k are IAPWS / NIST forms, checked in TestWaterAgainstNIST
             for T, expected in REF["chemicals"][name].get(prop, []):
                 assert _native(name, prop, T) == pytest.approx(
                     expected, rel=1e-9), (name, prop, T)
@@ -185,6 +185,16 @@ class TestWaterAgainstNIST:
                            (433.15, 1.0, 14.538324), (873.15, 100.0, 35.802262)):
             assert float(iapws_viscosity(T, rho)) == pytest.approx(mu * 1e-6, rel=1e-8)
 
+    def test_density(self):
+        # liquid_density("water") is IAPWS SR1-86; the VDI-PPDS form it replaced was
+        # +0.18 % at 288 K and -0.23 % at 353 K
+        T, rho = NIST_WATER[:, 0], NIST_WATER[:, 2]
+        lo, hi = T <= 400.0, T <= 640.0
+        ours = np.asarray(liquid_density("water", jnp.asarray(T)))
+        np.testing.assert_allclose(ours[lo], rho[lo], rtol=1e-5)
+        np.testing.assert_allclose(ours[hi], rho[hi], rtol=9e-4)
+        assert get_liquid_properties("water").rho.form == "IAPWS_SR186"
+
     def test_saturated_density(self):
         T, rho = NIST_WATER[:, 0], NIST_WATER[:, 2]
         lo, hi = T <= 400.0, T <= 640.0
@@ -243,7 +253,8 @@ class TestRangeWarnings:
 class TestGradients:
     # One species per correlation form in use.
     @pytest.mark.parametrize("name,prop,T", [
-        ("water", "rho", 320.0),          # PPDS10
+        ("benzene", "rho", 320.0),        # PPDS10
+        ("water", "rho", 320.0),          # IAPWS_SR186
         ("benzene", "mu", 320.0),         # DIPPR101 (Perry's)
         ("neopentane", "mu", 260.0),      # PPDS9
         ("toluene", "k", 320.0),          # DIPPR100
