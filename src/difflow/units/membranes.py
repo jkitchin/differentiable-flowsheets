@@ -146,6 +146,48 @@ def _bisect_increasing(fn, lo, hi, n_iter=100):
     return jax.lax.stop_gradient(0.5 * (a + c))
 
 
+def _illinois_increasing(fn, lo, hi, n_iter=40, tol=1e-13):
+    """Root of an increasing ``fn`` bracketed by ``[lo, hi]`` by the Illinois method.
+
+    For an ``fn`` too expensive for plain bisection's ~40 evaluations (each a countercurrent
+    shooting solve): false position, with the retained end's value halved whenever the same end
+    is kept twice, converges superlinearly and never leaves the bracket. It needs no derivative,
+    so it compiles no larger than bisection. Stops when ``|fn| < tol`` or the bracket is narrower
+    than ``tol``. Returns a stop-gradient value; pair with an implicit-function step.
+    """
+    # The first two passes evaluate the bracket ends (as if each replaced itself), so fn is traced
+    # once, inside the loop.
+    def body(state):
+        k, a, fa, c, fc, side, _, xb, fb = state
+        x = (a * fc - c * fa) / (fc - fa)
+        x = jnp.where(jnp.isfinite(x) & (x > a) & (x < c), x, 0.5 * (a + c))
+        x = jnp.where(k == 0, a, jnp.where(k == 1, c, x))
+        fx = fn(x)
+        left = jnp.where(k == 0, True, jnp.where(k == 1, False, fx < 0.0))  # x replaces a
+        # Illinois: halve the value at the end kept for the second time running
+        fc = jnp.where(left & (side == 1), 0.5 * fc, fc)
+        fa = jnp.where(~left & (side == -1), 0.5 * fa, fa)
+        a, fa = jnp.where(left, x, a), jnp.where(left, fx, fa)
+        c, fc = jnp.where(left, c, x), jnp.where(left, fc, fx)
+        side = jnp.where(k < 2, 0, jnp.where(left, 1, -1))
+        # Near the root XLA may evaluate fn's round-off-level sign differently in the copies that
+        # feed different selects, so the bracket can be updated inconsistently there: return the
+        # best point seen rather than reading it back from the bracket.
+        best = jnp.abs(fx) < jnp.abs(fb)
+        xb, fb = jnp.where(best, x, xb), jnp.where(best, fx, fb)
+        return k + 1, a, fa, c, fc, side, jnp.where(k < 2, jnp.inf, fx), xb, fb
+
+    def unconverged(state):
+        k, a, _, c, _, _, fx, _, _ = state
+        return (k < n_iter + 2) & (jnp.abs(fx) > tol) & (c - a > tol)
+
+    lo, hi = jnp.asarray(lo, float), jnp.asarray(hi, float)
+    inf = jnp.asarray(jnp.inf)
+    state = (0, lo, jnp.asarray(-1.0), hi, jnp.asarray(1.0), 0, inf, lo, inf)
+    xb = jax.lax.while_loop(unconverged, body, state)[7]
+    return jax.lax.stop_gradient(xb)
+
+
 def _implicit_step(fn, u0):
     """Value-neutral Newton step from a stop-gradient root ``u0``.
 
@@ -479,6 +521,9 @@ def _counter_integrate(R, F_i, Q, area, P_h, P_l, n_steps):
     return _rk4(rhs, R, area / n_steps, n_steps)
 
 
+_SHOOT_TOL = 1e-14     # countercurrent shooting: relative feed-end mismatch at which Newton stops
+
+
 def countercurrent(F_i, Q, area, P_h, P_l, n_steps=100, newton_iter=40):
     """Countercurrent plug-flow permeator (permeate leaves at the feed end).
 
@@ -491,7 +536,8 @@ def countercurrent(F_i, Q, area, P_h, P_l, n_steps=100, newton_iter=40):
 
     Args:
         F_i, Q, area, P_h, P_l, n_steps: As :func:`cross_flow`.
-        newton_iter: Newton iterations.
+        newton_iter: Most Newton iterations (it stops earlier, once the
+            relative feed-end mismatch is below 1e-14).
 
     Returns:
         ``(retentate_flows, permeate_flows, profile)``; ``profile`` has
@@ -513,14 +559,23 @@ def countercurrent(F_i, Q, area, P_h, P_l, n_steps=100, newton_iter=40):
     u0 = jnp.log(frac0) - jnp.log1p(-frac0)
     args = jax.lax.stop_gradient((F_i, Q, area, jnp.asarray(P_h, float), jnp.asarray(P_l, float)))
 
-    def newton(_, u):
-        r = resid(u, *args)
+    # Newton converges quadratically (3-5 iterations from the cross-flow start), so it stops once
+    # the feed-end mismatch reaches round-off rather than always running ``newton_iter`` steps.
+    # Every input is stop-gradient: derivatives come from the implicit step below.
+    def newton(state):
+        k, u, r = state
         Jm = jax.jacfwd(resid)(u, *args)
         du = jnp.linalg.solve(Jm, -r)
         du = du * jnp.minimum(1.0, 2.0 / jnp.maximum(jnp.max(jnp.abs(du)), 1e-300))
-        return u + du
+        u = u + du
+        return k + 1, u, resid(u, *args)
 
-    u_star = jax.lax.stop_gradient(jax.lax.fori_loop(0, newton_iter, newton, u0))
+    def unconverged(state):
+        k, _, r = state
+        return (k < newton_iter) & (jnp.max(jnp.abs(r)) > _SHOOT_TOL)
+
+    _, u_star, _ = jax.lax.while_loop(unconverged, newton, (0, u0, resid(u0, *args)))
+    u_star = jax.lax.stop_gradient(u_star)
     # Implicit-function step: value-neutral, exact first derivatives.
     Jm = jax.lax.stop_gradient(jax.jacfwd(resid)(u_star, *args))
     r = resid(u_star, F_i, Q, area, P_h, P_l)
@@ -594,13 +649,13 @@ def area_for_stage_cut(F_i, Q, P_h, P_l, theta, flow_pattern="complete_mixing", 
     sargs = jax.lax.stop_gradient(args)
     s0 = _bisect_increasing(lambda s: h(s, *sargs), -6.0, 3.0, n_iter)
     if flow_pattern == "countercurrent":
-        # Countercurrent needs a little less area than cross flow: refine by
-        # bisection from the cross-flow area.
+        # Countercurrent needs a little less area than cross flow: refine from the
+        # cross-flow area by the Illinois method (each evaluation is a shooting solve).
         def hc(s, F_i, Q, P_h, P_l, theta):
             _, perm, _ = countercurrent(F_i, Q, A_cm * jnp.exp(s), P_h, P_l, n_steps)
             return jnp.sum(perm) / jnp.sum(F_i) - theta
 
-        s0 = _bisect_increasing(lambda s: hc(s, *sargs), s0 - 1.0, s0 + 0.2, 40)
+        s0 = _illinois_increasing(lambda s: hc(s, *sargs), s0 - 1.0, s0 + 0.2, 40)
         h = hc
     d = jax.lax.stop_gradient(jax.grad(h)(s0, *sargs))
     r = h(s0, *args)
