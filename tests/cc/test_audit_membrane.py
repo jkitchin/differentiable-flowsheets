@@ -133,3 +133,13 @@ class TestRecycleConvergenceReported:
                                  n_stages=2, configuration="permeate_recycle")
         _, _, info = cas(_feed())
         assert bool(info["recycle_converged"])
+
+
+@pytest.mark.parametrize("pattern", ["cross_flow", "cocurrent", "countercurrent"])
+def test_required_area_honours_flow_pattern(pattern):
+    """required_area sizes the same model __call__ runs (#455)."""
+    mem = MembraneParams(membrane_type="Matrimid", flow_pattern=pattern, n_steps=40)
+    feed = _feed()
+    A = MembraneSeparator(mem).required_area(feed, 0.6)
+    _, perm, info = MembraneSeparator(mem.update(area=float(A)))(feed)
+    assert float(info["CO2_recovery"] if "CO2_recovery" in info else info.get("overall_CO2_recovery")) == pytest.approx(0.6, abs=2e-3)

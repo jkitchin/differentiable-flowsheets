@@ -409,7 +409,7 @@ class MembraneSeparator:
             CO2_recovery_target: Target CO2 recovery (0-1)
 
         Returns:
-            Required membrane area (m²)
+            Required membrane area (m²), for the membrane's ``flow_pattern``
         """
         p = self.params
         T = jnp.asarray(p.T_operation)
@@ -433,14 +433,22 @@ class MembraneSeparator:
         F = jnp.sum(F_i)
         A_ref = F / (jnp.max(Q) * P_feed)
 
-        # Same complete-mixing model as __call__ (audit C5); CO2 recovery
-        # rises monotonically with area from 0 to 1, so the root in
-        # s = ln(A / A_ref) is bracketed.
-        def h(s):
-            A = A_ref * jnp.exp(s)
-            t = _solve_retentate_fraction(F_i, Q, A, P_feed, P_permeate)
-            y = _permeate_composition(t, F_i, Q, A, P_feed, P_permeate)
-            return (1.0 - t) * F * y[k] / F_i[k] - recovery
+        # Same model as __call__ (audit C5); CO2 recovery rises
+        # monotonically with area from 0 to 1, so the root in
+        # s = ln(A / A_ref) is bracketed. A plug-flow ``flow_pattern`` uses
+        # the same integration as __call__ (#455).
+        if p.flow_pattern == "complete_mixing":
+            def h(s):
+                A = A_ref * jnp.exp(s)
+                t = _solve_retentate_fraction(F_i, Q, A, P_feed, P_permeate)
+                y = _permeate_composition(t, F_i, Q, A, P_feed, P_permeate)
+                return (1.0 - t) * F * y[k] / F_i[k] - recovery
+        else:
+            def h(s):
+                A = A_ref * jnp.exp(s)
+                _, perm, _ = permeation_stage(F_i, Q, A, P_feed, P_permeate,
+                                              p.flow_pattern, p.n_steps)
+                return perm[k] / F_i[k] - recovery
 
         s0 = _bisect_increasing(h, -60.0, 60.0, n_iter=80)
         return A_ref * jnp.exp(_implicit_step(h, s0))
