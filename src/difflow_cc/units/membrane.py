@@ -26,6 +26,7 @@ __all__ = [
     "MultistageMembrane",
 ]
 
+import warnings
 from dataclasses import dataclass
 from typing import Literal
 
@@ -490,6 +491,7 @@ class MultistageMembrane:
         configuration: Literal["series", "permeate_recycle"] = "series",
         recycle_iterations: int = 100,
         stage_params: list[MembraneParams] | None = None,
+        recycle_tol: float = 1e-6,
     ):
         """Initialize multi-stage membrane.
 
@@ -502,6 +504,10 @@ class MultistageMembrane:
                 stage-1 permeate; its retentate is recycled to stage 1).
             recycle_iterations: Successive-substitution passes used to
                 converge the 'permeate_recycle' loop.
+            recycle_tol: Relative residual (recycle change over total feed)
+                below which the loop counts as converged; otherwise a
+                ``RuntimeWarning`` is issued and
+                ``info["recycle_converged"]`` is False.
             stage_params: Optional per-stage parameters (one per stage),
                 e.g. a smaller second stage in 'permeate_recycle': with one
                 shared ``params`` that stage sees only the stage-1 permeate
@@ -524,6 +530,7 @@ class MultistageMembrane:
         if n_stages < 1:
             raise ValueError(f"n_stages must be >= 1, got {n_stages}")
         self.recycle_iterations = int(recycle_iterations)
+        self.recycle_tol = float(recycle_tol)
         self.params = params
         self.n_stages = n_stages
         self.configuration = configuration
@@ -638,6 +645,14 @@ class MultistageMembrane:
             0, self.recycle_iterations, lambda _, r: run(r)[0], jnp.zeros_like(F_feed))
         new_rec, (ret_1, perm_1, perm_2, info_1, info_2) = run(rec)
         residual = jnp.max(jnp.abs(new_rec - rec)) / jnp.maximum(jnp.sum(F_feed), 1e-300)
+        converged = residual < self.recycle_tol
+        if not isinstance(converged, jax.core.Tracer) and not bool(converged):
+            warnings.warn(
+                f"MultistageMembrane recycle not converged after "
+                f"{self.recycle_iterations} iterations (relative residual "
+                f"{float(residual):.3g} > recycle_tol={self.recycle_tol:g}); "
+                "increase recycle_iterations or the stage-2 area.",
+                RuntimeWarning, stacklevel=3)
 
         final_retentate = ret_1
         final_permeate = perm_2
@@ -654,6 +669,7 @@ class MultistageMembrane:
             "overall_CO2_purity": safe_divide(F_CO2_perm, F_perm_total),
             "recycle_flow": jnp.sum(new_rec),
             "recycle_residual": residual,
+            "recycle_converged": converged,
             "interstage_compression": {"from_Pa": perm_1["P"], "to_Pa": P1,
                                        "flow": total_flow(perm_1)},
             "stage_info": [info_1, info_2],

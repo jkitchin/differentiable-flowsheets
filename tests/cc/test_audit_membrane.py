@@ -113,3 +113,23 @@ class TestPermeateRecycle:
         # Stage 2 enriches: product purer than a single stage.
         single = MembraneSeparator(MembraneParams(membrane_type="Matrimid", area=500.0))(feed)[2]
         assert float(info["overall_CO2_purity"]) > float(single["CO2_purity"])
+
+
+class TestRecycleConvergenceReported:
+    """A non-converged permeate recycle warns and is flagged (#455)."""
+
+    def test_unconverged_warns(self):
+        cas = MultistageMembrane(
+            MembraneParams(membrane_type="Matrimid", area=500.0),
+            n_stages=2, configuration="permeate_recycle", recycle_iterations=1,
+            stage_params=[MembraneParams(membrane_type="Matrimid", area=500.0),
+                          MembraneParams(membrane_type="Matrimid", area=5.0)])
+        with pytest.warns(RuntimeWarning, match="recycle not converged"):
+            _, _, info = cas(_feed())
+        assert not bool(info["recycle_converged"])
+
+    def test_converged_flag(self):
+        cas = MultistageMembrane(MembraneParams(membrane_type="Matrimid", area=500.0),
+                                 n_stages=2, configuration="permeate_recycle")
+        _, _, info = cas(_feed())
+        assert bool(info["recycle_converged"])

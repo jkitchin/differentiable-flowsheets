@@ -692,3 +692,29 @@ class TestSolveMonotoneNanBracket:
         root = lambda p: S._solve_monotone(lambda x: x ** 3 - p, 0.0, 10.0)
         assert float(root(8.0)) == pytest.approx(2.0, abs=1e-12)
         assert float(jax.grad(root)(8.0)) == pytest.approx(1.0 / 12.0, rel=1e-9)
+
+
+class TestCapped:
+    """``n_max`` reached before ``x_bottom`` is reported, not silent (#455)."""
+
+    R = 1.5 * float(S.minimum_reflux(S.constant_alpha(AL), Z, 1.0, XD))
+
+    def _call(self, n_max):
+        c = S.constant_alpha(AL)
+        R = self.R
+        return S.mccabe_thiele(c, S.rectifying_line(R, XD),
+                               S.stripping_line(R, XD, XB, Z, 1.0), XD, XB,
+                               q_line=S.q_line(1.0, Z), n_max=n_max)
+
+    def test_capped_flag_and_warning(self):
+        with pytest.warns(RuntimeWarning, match="n_max"):
+            res = self._call(5)
+        assert bool(res["capped"])
+
+    def test_not_capped(self, recwarn):
+        res = self._call(100)
+        assert not bool(res["capped"])
+        assert not [w for w in recwarn if "n_max" in str(w.message)]
+
+    def test_flag_survives_jit(self):
+        assert bool(jax.jit(lambda: self._call(5)["capped"])())
