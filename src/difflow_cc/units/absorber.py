@@ -300,6 +300,9 @@ class AmineAbsorber:
         "packing_height": "m",
     }
     numerical_method = "Kremser with amine VLE correlation; stage-wise loading accounting."
+    #: the lean solvent is a port the editor can wire (the loop closes
+    #: through it) and leave off (the solvent is then built from params)
+    optional_inlets = ("solvent_in",)
 
     def __init__(self, params: AbsorberParams):
         """Initialize absorber.

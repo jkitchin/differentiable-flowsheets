@@ -30,7 +30,11 @@ Do not weaken them; each has a regression test that failed before the fix.
   opt-out (#448, `tests/cc/test_amine_rich_pinch_loop.py`).
 - `solve_amine_loop` (closed absorber-stripper loop, lean loading as the
   tear, bracketed bisection + implicit derivatives) is a library function,
-  not a registered palette operation.
+  not a registered palette operation. On a flowsheet the loop closes through
+  `SolventMakeup` (a palette op) into `AmineAbsorber`'s optional
+  `solvent_in` (declared in `optional_inlets`): it fixes the circulation,
+  without which a conserved-amine recycle has no unique steady state.
+  The flowsheet must agree with `solve_amine_loop` (`tests/cc/test_solvent_makeup.py`).
 - Membranes: exact complete-mixing balance per species (no reversed driving
   force, no ad-hoc caps); feed side at the stream pressure unless
   `feed_pressure` is given; `pressure_ratio > 1`.

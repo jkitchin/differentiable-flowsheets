@@ -539,6 +539,35 @@ d_capture = jax.grad(lambda lg: solve_amine_loop(
 | `converged`, `residual` | -, mol/mol | Tear closure |
 | `absorber`, `stripper` | dict | The units' own `info` |
 
+### SolventMakeup
+
+`SolventMakeup` closes the same loop on a flowsheet, where it can be drawn and edited. It takes the stripper's lean solvent and returns it for the absorber's optional second inlet, `solvent_in`, with the amine and water flows reset to the design circulation, the loading (`CO2_absorbed / Amine`) carried through, and the temperature and pressure of the trim cooler and pump. A recycle of conserved amine with no purge has no unique steady state (any circulating inventory is one), and the water leaving with the treated gas and the CO2 product would drain the loop. Fixing the circulation here removes both, so the lean loading is the one thing the tear has to find. It is the closure `solve_amine_loop` makes internally, and the flowsheet converges to the same lean loading and capture.
+
+```python
+from difflow.flowsheet import Unit
+from difflow_cc import (AmineAbsorber, AmineStripper, SolventMakeup,
+                        SolventMakeupParams)
+
+# circulation from the design: L/G times the gas flow, split by wt% amine
+makeup = SolventMakeup(SolventMakeupParams(amine_flow=471.0, water_flow=3729.0,
+                                           T=313.15, P=101325.0))
+fs.add_unit(Unit("absorber", AmineAbsorber(absorber_p),
+                 ["flue_gas", "lean_return"], ["treated_gas", "rich"]))
+fs.add_unit(Unit("stripper", AmineStripper(stripper_p), ["rich"],
+                 ["lean", "co2_product"]))
+fs.add_unit(Unit("makeup", makeup, ["lean"], ["lean_makeup"]))
+fs.add_recycle("lean_makeup", "lean_return")
+```
+
+| Parameter | Units | Description |
+|-----------|-------|-------------|
+| `amine_flow` | mol/s | Circulating amine, `L_G_ratio * F_gas * x_amine` for an L/G design |
+| `water_flow` | mol/s | Circulating water |
+| `T` | K | Lean solvent temperature after the trim cooler |
+| `P` | Pa | Lean solvent pressure after the pump |
+
+`info` carries `lean_loading`, `makeup_water` (negative is a purge) and `makeup_amine` (zero at a converged loop). In the editor the absorber starts with only its gas inlet; **Add inlet** gives it `solvent_in`, and it builds the lean solvent from its own parameters until that is wired.
+
 ---
 
 (membraneseparator)=
