@@ -264,3 +264,53 @@ class TestChromatography:
         mean = jnp.trapezoid(t * y, t) / 2.0
         var = jnp.trapezoid((t - mean) ** 2 * y, t) / 2.0
         assert float(mean ** 2 / var) == pytest.approx(400.0, rel=1e-4)
+
+
+def test_langmuir_K_d_matches_affinity():
+    from difflow.adsorption import langmuir_isotherm
+    c = jnp.array([0.1, 1.0, 5.0])
+    assert jnp.allclose(langmuir_isotherm(c, 3.0, K_d=0.25),
+                        langmuir_isotherm(c, 3.0, 4.0))
+    with pytest.raises(ValueError):
+        langmuir_isotherm(c, 3.0)
+    with pytest.raises(ValueError):
+        langmuir_isotherm(c, 3.0, 4.0, K_d=0.25)
+
+
+def test_break_time_hermite_between_samples_and_smooth_gradient():
+    t = jnp.linspace(0.0, 10.0, 21)
+    c = lambda L: 0.5 * (1.0 + jnp.tanh((t - 4.0 * L) / 1.5))
+    exact = lambda L, cb: 4.0 * L + 1.5 * jnp.arctanh(2 * cb - 1.0)
+    for cb in (0.01, 0.05, 0.5):
+        tb = ad.break_time(t, c(1.0), cb)
+        lin = jnp.interp(cb, c(1.0), t)
+        assert abs(float(tb) - float(exact(1.0, cb))) <= abs(float(lin) - float(exact(1.0, cb))) + 1e-9
+    # derivative wrt the curve position is ~4 for every L (no grid wobble)
+    g = jax.vmap(jax.grad(lambda L: ad.break_time(t, c(L), 0.05)))(jnp.linspace(0.8, 1.2, 9))
+    assert jnp.allclose(g, 4.0, rtol=0.1)
+    # never-reached and already-above limits
+    assert float(ad.break_time(t, jnp.zeros_like(t), 0.5)) == pytest.approx(10.0)
+
+
+def test_lub_analysis_refine_option():
+    t = jnp.linspace(0.0, 10.0, 21)
+    r = 0.5 * (1.0 + jnp.tanh((t - 4.0) / 1.5))
+    a = ad.lub_analysis(t, r, 1.0, 0.05)
+    b = ad.lub_analysis(t, r, 1.0, 0.05, refine=True)
+    exact = 4.0 + 1.5 * jnp.arctanh(2 * 0.05 - 1.0)
+    assert abs(float(b["t_break"]) - float(exact)) <= abs(float(a["t_break"]) - float(exact))
+
+
+@pytest.mark.parametrize("solver", ["tsit5", "kvaerno5"])
+def test_fixed_bed_reverse_mode_both_solvers(solver):
+    """The implicit solver differentiates in reverse mode (#455)."""
+    t = jnp.linspace(0.0, 60.0, 25)
+
+    def f(k):
+        r = ad.fixed_bed_breakthrough(t, 0.5, 0.01, 0.4, 1.0, 1.0, k, q_max=10.0,
+                                      K=2.0, n_cells=20, solver=solver, method="mol")
+        return jnp.sum(r["c_out"])
+
+    g = jax.grad(f)(0.05)
+    fd = (f(0.05 + 1e-5) - f(0.05 - 1e-5)) / 2e-5
+    assert float(g) == pytest.approx(float(fd), rel=1e-3)

@@ -38,16 +38,18 @@ from difflow.streams import Stream, make_stream, get_flows, total_flow
 from difflow.params_mixin import ParamsMixin
 from difflow.numerics import safe_divide
 from difflow.flowsheet import _concrete
+from difflow.units.membranes import BARRER as _CORE_BARRER, GPU as _CORE_GPU
 from difflow_cc.database import get_membrane, Membrane
 
 
 # Unit conversions
 # 1 Barrer = 10^-10 cm³(STP)·cm / (cm²·s·cmHg)
 # 1 GPU = 10^-6 cm³(STP) / (cm²·s·cmHg) = Barrer / thickness(cm)
-# Converting to SI: 1 GPU = 3.35e-10 mol/(m²·s·Pa)
+# Converting to SI: 1 GPU = 3.3464e-10 mol/(m²·s·Pa). The constants are the
+# core ones (difflow.units.membranes), so the plugin and core agree (#455).
 
-GPU_TO_SI = 3.35e-10  # mol/(m²·s·Pa)
-BARRER_TO_SI = 3.35e-16  # mol·m/(m²·s·Pa)
+GPU_TO_SI = _CORE_GPU  # mol/(m²·s·Pa)
+BARRER_TO_SI = _CORE_BARRER  # mol·m/(m²·s·Pa)
 
 # Gas constant
 R = 8.314  # J/(mol*K)
