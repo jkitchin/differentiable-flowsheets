@@ -5908,6 +5908,13 @@ method on the retentate flows. All four have implicit-function gradients. The bi
 results are tested against hand integrations in the feed-side mole fraction (`tests/test_membranes.py`).
 At the same area, the permeate purity ranks countercurrent > cross flow > cocurrent > complete mixing.
 
+The flux per unit area depends on the feed-side mole fractions, not on how much gas is left, so a
+plug-flow stage with more area than the feed needs runs dry partway along: everything permeates
+(stage cut 1, retentate exactly zero) and the rest of the membrane carries nothing. The three
+plug-flow patterns return that answer with zero derivatives. Countercurrent shooting has no root
+there, so it tests for it first by integrating from the feed end with a zero retentate, and reports
+`profile["exhausted"]`.
+
 ```python
 from difflow import GasPermeator, GasPermeationParams, make_stream
 from difflow.units.membranes import GPU
