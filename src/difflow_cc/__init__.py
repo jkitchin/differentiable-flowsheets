@@ -126,6 +126,8 @@ from difflow_cc.units import (
     StripperParams,
     AmineStripper,
     # Closed absorber-stripper loop
+    SolventMakeupParams,
+    SolventMakeup,
     solve_amine_loop,
     # Membrane separation
     MembraneParams,
@@ -300,6 +302,14 @@ def register(registry):
         plugin="difflow_cc",
     )
 
+    registry.register(
+        name="SolventMakeup",
+        cls=SolventMakeup,
+        category="carbon_capture_amine",
+        description="Restore the design amine circulation to close the loop",
+        plugin="difflow_cc",
+    )
+
     # Register membrane units
     registry.register(
         name="MembraneSeparator",
@@ -356,7 +366,7 @@ def register(registry):
         "operations": [
             "AmineAbsorber",
             "AmineStripper",
-    "solve_amine_loop",
+            "SolventMakeup",
             "MembraneSeparator",
             "MultistageMembrane",
             "PSAUnit",
@@ -428,6 +438,8 @@ __all__ = [
     "AmineAbsorber",
     "StripperParams",
     "AmineStripper",
+    "SolventMakeupParams",
+    "SolventMakeup",
     "solve_amine_loop",
     # Units - Membrane
     "MembraneParams",

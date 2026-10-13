@@ -1,0 +1,438 @@
+{
+ "format_version": 2,
+ "difflow_version": "0.3.0",
+ "species_order": [
+  "gas"
+ ],
+ "defaults": {
+  "flow": 5.0,
+  "T": 283.15,
+  "P": 5000000.0
+ },
+ "feeds": {
+  "entry01_feed": {
+   "F_gas": 34.888888888888886,
+   "T": 283.15,
+   "P": 5000000.0
+  },
+  "entry02_feed": {
+   "F_gas": 30.527777777777782,
+   "T": 283.15,
+   "P": 5000000.0
+  },
+  "entry03_feed": {
+   "F_gas": 0.0,
+   "T": 283.15,
+   "P": 5000000.0
+  }
+ },
+ "units": [
+  {
+   "name": "src_entry01",
+   "operation": "SourceHead",
+   "params": {
+    "P_set": 5000000.0
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "entry01_feed"
+   ],
+   "outlets": [
+    "entry01"
+   ]
+  },
+  {
+   "name": "pipe01",
+   "operation": "GasPipe",
+   "params": {
+    "beta": {
+     "$array": 4468609079.748033
+    }
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "entry01"
+   ],
+   "outlets": [
+    "entry03_arrival"
+   ]
+  },
+  {
+   "name": "node_entry03",
+   "operation": "Junction",
+   "params": {},
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "entry03_arrival",
+    "entry03_feed"
+   ],
+   "outlets": [
+    "entry03"
+   ]
+  },
+  {
+   "name": "cs01",
+   "operation": "Compressor",
+   "params": {
+    "ratio": 1.1,
+    "eta_ad": 0.8,
+    "kappa": 1.3,
+    "cp": 2200.0
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "entry03"
+   ],
+   "outlets": [
+    "N01"
+   ]
+  },
+  {
+   "name": "split_N01",
+   "operation": "TearSplit",
+   "params": {},
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "N01",
+    "v01_tear"
+   ],
+   "outlets": [
+    "v01_in",
+    "pipe02_in"
+   ]
+  },
+  {
+   "name": "v01",
+   "operation": "OpenValve",
+   "params": {},
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "v01_in"
+   ],
+   "outlets": [
+    "v01_out"
+   ]
+  },
+  {
+   "name": "pipe02",
+   "operation": "GasPipe",
+   "params": {
+    "beta": {
+     "$array": 4468609079.748033
+    }
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "pipe02_in"
+   ],
+   "outlets": [
+    "N02"
+   ]
+  },
+  {
+   "name": "split_N02",
+   "operation": "FlowSplit",
+   "params": {
+    "w": 21.805555555555557
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "N02"
+   ],
+   "outlets": [
+    "pipe04_in",
+    "pipe05_in"
+   ]
+  },
+  {
+   "name": "pipe04",
+   "operation": "GasPipe",
+   "params": {
+    "beta": {
+     "$array": 4468609079.748033
+    }
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "pipe04_in"
+   ],
+   "outlets": [
+    "exit01"
+   ]
+  },
+  {
+   "name": "pipe05",
+   "operation": "GasPipe",
+   "params": {
+    "beta": {
+     "$array": 4468609079.748033
+    }
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "pipe05_in"
+   ],
+   "outlets": [
+    "N04_a"
+   ]
+  },
+  {
+   "name": "node_N03",
+   "operation": "Junction",
+   "params": {},
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "v01_out",
+    "entry02_feed"
+   ],
+   "outlets": [
+    "N03"
+   ]
+  },
+  {
+   "name": "pipe03_back",
+   "operation": "BackPipe",
+   "params": {
+    "beta": {
+     "$array": 4468609079.748033
+    }
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "N03",
+    "entry02_feed"
+   ],
+   "outlets": [
+    "entry02"
+   ]
+  },
+  {
+   "name": "pipe06",
+   "operation": "PressureDrivenPipe",
+   "params": {
+    "beta": {
+     "$array": 4468609079.748033
+    }
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "N03",
+    "N04_a"
+   ],
+   "outlets": [
+    "pipe06_out"
+   ]
+  },
+  {
+   "name": "v01_update",
+   "operation": "FlowMinus",
+   "params": {},
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "pipe06_out",
+    "entry02_feed"
+   ],
+   "outlets": [
+    "v01_calc"
+   ]
+  },
+  {
+   "name": "node_N04",
+   "operation": "Junction",
+   "params": {},
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "N04_a",
+    "pipe06_out"
+   ],
+   "outlets": [
+    "N04"
+   ]
+  },
+  {
+   "name": "cs02",
+   "operation": "Compressor",
+   "params": {
+    "ratio": 1.05,
+    "eta_ad": 0.8,
+    "kappa": 1.3,
+    "cp": 2200.0
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "N04"
+   ],
+   "outlets": [
+    "N05"
+   ]
+  },
+  {
+   "name": "split_N05",
+   "operation": "FlowSplit",
+   "params": {
+    "w": 26.166666666666668
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "N05"
+   ],
+   "outlets": [
+    "pipe07_in",
+    "pipe08_in"
+   ]
+  },
+  {
+   "name": "pipe07",
+   "operation": "GasPipe",
+   "params": {
+    "beta": {
+     "$array": 4468609079.748033
+    }
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "pipe07_in"
+   ],
+   "outlets": [
+    "exit02"
+   ]
+  },
+  {
+   "name": "pipe08",
+   "operation": "GasPipe",
+   "params": {
+    "beta": {
+     "$array": 4468609079.748033
+    }
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "pipe08_in"
+   ],
+   "outlets": [
+    "exit03"
+   ]
+  }
+ ],
+ "recycles": {
+  "v01_calc": "v01_tear"
+ },
+ "view": {
+  "title": "GasLib-11 gas network",
+  "description": "The GasLib-11 benchmark with its standard nomination: 8 pipes, a valve and 2 compressor stations around one loop, entry01 held at 50 bar.",
+  "nodes": {
+   "feed:entry01_feed": {
+    "x": 60.0,
+    "y": 460.0
+   },
+   "feed:entry03_feed": {
+    "x": 460.0,
+    "y": 322.5
+   },
+   "feed:entry02_feed": {
+    "x": 760.0,
+    "y": 835.0
+   },
+   "src_entry01": {
+    "x": 210.0,
+    "y": 460.0
+   },
+   "pipe01": {
+    "x": 335.0,
+    "y": 460.0
+   },
+   "node_entry03": {
+    "x": 460.0,
+    "y": 460.0
+   },
+   "cs01": {
+    "x": 585.0,
+    "y": 460.0
+   },
+   "split_N01": {
+    "x": 710.0,
+    "y": 460.0
+   },
+   "v01": {
+    "x": 835.0,
+    "y": 522.5
+   },
+   "pipe02": {
+    "x": 835.0,
+    "y": 397.5
+   },
+   "split_N02": {
+    "x": 960.0,
+    "y": 335.0
+   },
+   "pipe04": {
+    "x": 960.0,
+    "y": 210.0
+   },
+   "pipe05": {
+    "x": 1085.0,
+    "y": 397.5
+   },
+   "node_N03": {
+    "x": 960.0,
+    "y": 585.0
+   },
+   "pipe03_back": {
+    "x": 960.0,
+    "y": 710.0
+   },
+   "pipe06": {
+    "x": 1085.0,
+    "y": 522.5
+   },
+   "v01_update": {
+    "x": 1085.0,
+    "y": 660.0
+   },
+   "node_N04": {
+    "x": 1210.0,
+    "y": 460.0
+   },
+   "cs02": {
+    "x": 1335.0,
+    "y": 460.0
+   },
+   "split_N05": {
+    "x": 1460.0,
+    "y": 460.0
+   },
+   "pipe07": {
+    "x": 1548.125,
+    "y": 371.875
+   },
+   "pipe08": {
+    "x": 1548.125,
+    "y": 548.125
+   }
+  },
+  "solver": {
+   "clip_negative_flows": false,
+   "tol": 1e-10,
+   "max_iter": 200
+  }
+ }
+}

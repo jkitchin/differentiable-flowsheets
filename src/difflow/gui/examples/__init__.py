@@ -8,9 +8,9 @@ through untouched.
 
 Files rather than Python that builds them: the point of an example here
 is that it opens in the editor, and the only way to be sure a file opens
-is to ship the file. ``tests/test_gui_examples.py`` opens and solves
-every one, so a change to the format that breaks them fails the suite
-rather than the menu.
+is to ship the file. ``tests/test_gui_examples.py`` opens every one
+(it does not solve them), so a change to the format that breaks them
+fails the suite rather than the menu.
 
 To add one, drop a ``NN_name.json`` in this directory with
 ``view.title`` and ``view.description`` set; the ``NN`` prefix orders

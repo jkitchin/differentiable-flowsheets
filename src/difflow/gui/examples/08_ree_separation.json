@@ -1,0 +1,306 @@
+{
+ "format_version": 2,
+ "difflow_version": "0.3.0",
+ "species_order": [
+  "H2O",
+  "La",
+  "Pr",
+  "Nd",
+  "Sm",
+  "Gd",
+  "Dy",
+  "PC88A",
+  "kerosene",
+  "C2O4"
+ ],
+ "defaults": {
+  "flow": 0.01,
+  "T": 298.15,
+  "P": 101325.0
+ },
+ "feeds": {
+  "leach_liquor": {
+   "F_H2O": 194.5552278938844,
+   "F_La": 0.6882616253503785,
+   "F_Pr": 0.0906603791338671,
+   "F_Nd": 0.2507358977437809,
+   "F_Sm": 0.017038261507756926,
+   "F_Gd": 0.0043121526038150245,
+   "F_Dy": 0.0006415641678846744,
+   "T": 298.15,
+   "P": 101325.0
+  },
+  "solvent": {
+   "F_kerosene": 233.46627347266127,
+   "F_PC88A": 116.73313673633064,
+   "F_La": 0.0,
+   "F_Pr": 0.0,
+   "F_Nd": 0.0,
+   "F_Sm": 0.0,
+   "F_Gd": 0.0,
+   "F_Dy": 0.0,
+   "T": 298.15,
+   "P": 101325.0
+  },
+  "scrub_acid": {
+   "F_H2O": 70.03988204179838,
+   "F_La": 0.0,
+   "F_Pr": 0.0,
+   "F_Nd": 0.0,
+   "F_Sm": 0.0,
+   "F_Gd": 0.0,
+   "F_Dy": 0.0,
+   "T": 298.15,
+   "P": 101325.0
+  },
+  "strip_acid": {
+   "F_H2O": 93.38650938906451,
+   "F_La": 0.0,
+   "F_Pr": 0.0,
+   "F_Nd": 0.0,
+   "F_Sm": 0.0,
+   "F_Gd": 0.0,
+   "F_Dy": 0.0,
+   "T": 298.15,
+   "P": 101325.0
+  },
+  "oxalic_acid": {
+   "F_H2O": 86.01495697574758,
+   "F_C2O4": 0.7749095223040322,
+   "T": 298.15,
+   "P": 101325.0
+  }
+ },
+ "units": [
+  {
+   "name": "extraction",
+   "operation": "REEExtractor",
+   "params": {
+    "n_stages": 10,
+    "extractant": "PC88A",
+    "elements": [
+     "La",
+     "Pr",
+     "Nd",
+     "Sm",
+     "Gd",
+     "Dy"
+    ],
+    "diluent": "kerosene",
+    "pH": 1.15,
+    "extractant_conc": 0.5,
+    "include_loading": true,
+    "include_speciation": false,
+    "speciation_medium": "sulfate",
+    "ligand_conc": 0.5,
+    "nitrate_conc": null,
+    "mechanism": null,
+    "capacity_sharpness": 8,
+    "coefficient_overrides": null,
+    "no_data": "warn",
+    "model": "correlation",
+    "aqueous_volumetric_flow": null,
+    "organic_volumetric_flow": null,
+    "counter_ion": "Na",
+    "anion": "Cl",
+    "reaction_network": null,
+    "log10_K": null,
+    "base_addition": 0.0
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "extraction_feed_guess",
+    "solvent"
+   ],
+   "outlets": [
+    "raffinate",
+    "loaded_organic"
+   ]
+  },
+  {
+   "name": "scrubbing",
+   "operation": "REEScrubber",
+   "params": {
+    "n_stages": 6,
+    "extractant": "PC88A",
+    "elements": [
+     "La",
+     "Pr",
+     "Nd",
+     "Sm",
+     "Gd",
+     "Dy"
+    ],
+    "target_elements": [
+     "Pr",
+     "Nd"
+    ],
+    "diluent": "kerosene",
+    "pH": 1.05,
+    "extractant_conc": 0.5,
+    "scrub_type": null,
+    "nitrate_conc": null,
+    "mechanism": null,
+    "coefficient_overrides": null,
+    "no_data": "warn"
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "loaded_organic",
+    "scrub_acid"
+   ],
+   "outlets": [
+    "scrub_liquor",
+    "scrubbed_organic"
+   ]
+  },
+  {
+   "name": "stripping",
+   "operation": "REEStripper",
+   "params": {
+    "n_stages": 5,
+    "extractant": "PC88A",
+    "elements": [
+     "La",
+     "Pr",
+     "Nd",
+     "Sm",
+     "Gd",
+     "Dy"
+    ],
+    "diluent": "kerosene",
+    "pH": 0.2,
+    "extractant_conc": 0.5,
+    "acid_type": "HCl",
+    "acid_conc": 0.6309573444801932,
+    "nitrate_conc": null,
+    "mechanism": null,
+    "coefficient_overrides": null,
+    "no_data": "warn",
+    "max_strip_acid": 6.0
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "scrubbed_organic",
+    "strip_acid"
+   ],
+   "outlets": [
+    "strip_liquor",
+    "barren_organic"
+   ]
+  },
+  {
+   "name": "feed_mixer",
+   "operation": "Mixer",
+   "params": {},
+   "constructor": {
+    "species_order": [
+     "H2O",
+     "La",
+     "Pr",
+     "Nd",
+     "Sm",
+     "Gd",
+     "Dy",
+     "PC88A",
+     "kerosene",
+     "C2O4"
+    ]
+   },
+   "extra_params": {},
+   "inlets": [
+    "leach_liquor",
+    "scrub_liquor"
+   ],
+   "outlets": [
+    "extraction_feed"
+   ]
+  },
+  {
+   "name": "precipitation",
+   "operation": "OxalatePrecipitator",
+   "params": {
+    "elements": [
+     "La",
+     "Pr",
+     "Nd",
+     "Sm",
+     "Gd",
+     "Dy"
+    ],
+    "precipitant_excess": 1.5,
+    "temperature": 298.15,
+    "residence_time": 3600.0,
+    "target_conversion": 0.995,
+    "coprecipitation_factor": 0.0
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "strip_liquor",
+    "oxalic_acid"
+   ],
+   "outlets": [
+    "filtrate",
+    "oxalate_cake"
+   ]
+  }
+ ],
+ "recycles": {
+  "extraction_feed": "extraction_feed_guess"
+ },
+ "view": {
+  "title": "Didymium (Pr/Nd) solvent extraction",
+  "description": "A Ce-free bastnasite chloride liquor split on PC88A: Pr and Nd extracted from La, scrubbed with the scrub liquor refluxed, stripped and precipitated as oxalate.",
+  "nodes": {
+   "feed:leach_liquor": {
+    "x": 60,
+    "y": 100
+   },
+   "feed_mixer": {
+    "x": 220,
+    "y": 160
+   },
+   "feed:solvent": {
+    "x": 220,
+    "y": 340
+   },
+   "extraction": {
+    "x": 400,
+    "y": 240
+   },
+   "feed:scrub_acid": {
+    "x": 580,
+    "y": 60
+   },
+   "scrubbing": {
+    "x": 600,
+    "y": 240
+   },
+   "feed:strip_acid": {
+    "x": 800,
+    "y": 60
+   },
+   "stripping": {
+    "x": 820,
+    "y": 240
+   },
+   "feed:oxalic_acid": {
+    "x": 1020,
+    "y": 60
+   },
+   "precipitation": {
+    "x": 1040,
+    "y": 240
+   }
+  },
+  "solver": {
+   "tol": 1e-11,
+   "max_iter": 200
+  },
+  "code_context": "# Didymium (Pr/Nd) on PC88A: the worked design of\n# examples/09_ree_ndfeb_magnet.ipynb. These two names are what the\n# REE units need and are not numbers, so the palette can drop more.\nextractant = 'PC88A'\nelements = ('La', 'Pr', 'Nd', 'Sm', 'Gd', 'Dy')\n"
+ }
+}

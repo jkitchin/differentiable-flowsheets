@@ -259,6 +259,26 @@ export const SYMBOLS = {
     ],
   },
 
+  /**
+   * A fixed catalyst bed: the hydrotreater, reformer or isomerization
+   * reactor. Hatched rather than dotted, so it does not read as an
+   * adsorber, with the support grid under the bed and a nozzle at each
+   * end because the flow goes straight through it.
+   */
+  fixed_bed: {
+    label: 'fixed-bed reactor',
+    shapes: [
+      ['rect', { x: 16, y: 3, width: 16, height: 34, rx: 6 }],
+      ['rect', { x: 17, y: 12, width: 14, height: 16, ...WASH }],
+      ['line', { x1: 17, y1: 20, x2: 25, y2: 12 }],
+      ['line', { x1: 17, y1: 28, x2: 31, y2: 14 }],
+      ['line', { x1: 23, y1: 28, x2: 31, y2: 20 }],
+      ['line', { x1: 16, y1: 28, x2: 32, y2: 28 }],
+      ['line', { x1: 24, y1: 0, x2: 24, y2: 3 }],
+      ['line', { x1: 24, y1: 37, x2: 24, y2: 40 }],
+    ],
+  },
+
   /** A spinning bowl. */
   centrifuge: {
     label: 'centrifuge',
@@ -550,6 +570,7 @@ export const OPERATION_SYMBOLS = {
 
   // pressure
   EOSCompressor: 'compressor',
+  MultistageCompressor: 'compressor',
   Turboexpander: 'turbine',
   JTValve: 'valve',
   Pipe: 'pipe',
@@ -567,6 +588,7 @@ export const OPERATION_SYMBOLS = {
   // carbon capture
   AmineAbsorber: 'packed_column',
   AmineStripper: 'packed_column',
+  SolventMakeup: 'mixer',
   MembraneSeparator: 'membrane',
   MultistageMembrane: 'membrane',
   PSAUnit: 'adsorber',
@@ -623,6 +645,16 @@ export const OPERATION_SYMBOLS = {
   // refinery
   CrudeDistillationUnit: 'column',
   VacuumColumn: 'column',
+  GasPlantColumn: 'column',
+  PreflashDrum: 'flash_drum',
+  Desalter: 'settler',
+  AmineTreater: 'packed_column',
+  WetGasCompressor: 'compressor',
+  IsomerizationReactor: 'fixed_bed',
+  // composites: a reactor with its separations, a column with its
+  // preheat train; drawn as the small flowsheet they are
+  IsomerizationUnit: 'train',
+  CrudeUnitWithPreheat: 'train',
 }
 
 /**

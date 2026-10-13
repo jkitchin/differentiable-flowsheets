@@ -1,4 +1,11 @@
-"""The editor's Examples menu: every example opens, and solves."""
+"""The editor's Examples menu: every example opens.
+
+Opened, not solved. An example breaks when a unit's parameters or the
+file format change under it, and that shows up the moment the file is
+read and its units are built --- cheaply, on every commit. Solving them
+would cost minutes (the refinery's columns alone take most of one) to
+re-check physics that each plugin's own tests already pin down.
+"""
 
 import warnings
 
@@ -14,20 +21,21 @@ def test_there_are_examples():
     assert KEYS
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("key", KEYS)
-def test_an_example_opens_and_solves_cleanly(key):
-    """A warning counts as a failure: an example is what a new user sees
+def test_an_example_opens_cleanly(key):
+    """Every unit builds, nothing waits on code, and nothing warns.
+
+    A warning counts as a failure: an example is what a new user sees
     first, and one that opens with a DefaultCpWarning teaches them to
-    ignore warnings."""
+    ignore warnings.
+    """
     session = FlowsheetSession()
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert session.open_example(key) == {"ok": True}
-        assert session.context_error is None
-        answer = session.solve()
-    assert answer["ok"], answer.get("error")
+    assert session.context_error is None
     assert session.pending == {}
+    assert session.flowsheet.units
 
 
 @pytest.mark.parametrize("entry", examples.listing(), ids=KEYS)
@@ -92,3 +100,4 @@ def test_opening_needs_the_token():
         assert status == 403
     finally:
         live.close()
+

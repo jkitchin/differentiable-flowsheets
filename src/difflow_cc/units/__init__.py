@@ -22,7 +22,11 @@ from difflow_cc.units.stripper import (
     AmineStripper,
 )
 
-from difflow_cc.units.amine_loop import solve_amine_loop
+from difflow_cc.units.amine_loop import (
+    SolventMakeup,
+    SolventMakeupParams,
+    solve_amine_loop,
+)
 
 from difflow_cc.units.membrane import (
     MembraneParams,
@@ -45,7 +49,10 @@ __all__ = [
     # Amine stripping
     "StripperParams",
     "AmineStripper",
-    # Closed absorber-stripper loop (library function, not a palette op)
+    # Closed absorber-stripper loop: the solver (library function) and the
+    # makeup block that closes it on a flowsheet (palette op)
+    "SolventMakeupParams",
+    "SolventMakeup",
     "solve_amine_loop",
     # Membrane
     "MembraneParams",

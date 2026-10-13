@@ -1,0 +1,132 @@
+{
+ "format_version": 2,
+ "difflow_version": "0.3.0",
+ "species_order": [
+  "CO2",
+  "N2",
+  "O2",
+  "H2O",
+  "Amine",
+  "CO2_absorbed"
+ ],
+ "defaults": {
+  "flow": 0.0,
+  "T": 313.15,
+  "P": 101325.0
+ },
+ "feeds": {
+  "flue_gas": {
+   "F_CO2": 135.0,
+   "F_O2": 45.0,
+   "F_H2O": 73.0,
+   "F_N2": 747.0,
+   "T": 313.15,
+   "P": 101325.0
+  }
+ },
+ "units": [
+  {
+   "name": "absorber",
+   "operation": "AmineAbsorber",
+   "params": {
+    "solvent": "MEA",
+    "n_stages": 15,
+    "solvent_conc": 30.0,
+    "L_G_ratio": 4.2,
+    "T_gas_in": 313.15,
+    "T_liquid_in": 313.15,
+    "P_absorber": 101325.0,
+    "stage_efficiency": 0.25,
+    "lean_loading": 0.2,
+    "model_water_transfer": false,
+    "rich_loading_limit": "equilibrium",
+    "rich_approach": 1.0,
+    "column_diameter": null,
+    "packing_type": null,
+    "packing_height": null
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "flue_gas",
+    "lean_return"
+   ],
+   "outlets": [
+    "treated_gas",
+    "rich_solvent"
+   ]
+  },
+  {
+   "name": "stripper",
+   "operation": "AmineStripper",
+   "params": {
+    "solvent": "MEA",
+    "n_stages": 10,
+    "T_reboiler": 393.15,
+    "P_stripper": 200000.0,
+    "steam_ratio": 2.0,
+    "T_condenser": 313.15,
+    "reflux_ratio": null,
+    "target_lean_loading": 0.2,
+    "reboiler_duty": null,
+    "cross_exchanger_approach": 10.0
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "rich_solvent"
+   ],
+   "outlets": [
+    "lean_solvent",
+    "co2_product"
+   ]
+  },
+  {
+   "name": "makeup",
+   "operation": "SolventMakeup",
+   "params": {
+    "amine_flow": 470.96934961375524,
+    "water_flow": 3729.030650386245,
+    "T": 313.15,
+    "P": 101325.0
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "lean_solvent"
+   ],
+   "outlets": [
+    "lean_makeup"
+   ]
+  }
+ ],
+ "recycles": {
+  "lean_makeup": "lean_return"
+ },
+ "view": {
+  "title": "Amine CO2 capture (MEA), closed loop",
+  "description": "A 30 wt% MEA absorber and stripper with the lean solvent recycled through a makeup block, capturing 92 % of the CO2 in a 13.5 % CO2 coal flue gas.",
+  "nodes": {
+   "feed:flue_gas": {
+    "x": 80,
+    "y": 200
+   },
+   "absorber": {
+    "x": 320,
+    "y": 180
+   },
+   "stripper": {
+    "x": 580,
+    "y": 220
+   },
+   "makeup": {
+    "x": 450,
+    "y": 400
+   }
+  },
+  "solver": {
+   "tol": 1e-10,
+   "max_iter": 200
+  }
+ }
+}

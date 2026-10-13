@@ -22,18 +22,113 @@ The lean/rich cross exchanger is the stripper's own
 which would count the same heat recovery twice.
 """
 
-__all__ = ["solve_amine_loop"]
+__all__ = ["SolventMakeup", "SolventMakeupParams", "solve_amine_loop"]
+
+from dataclasses import dataclass
 
 import jax.numpy as jnp
 import optimistix as optx
 from jax import Array
 
 from difflow.numerics import safe_divide
+from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, get_flows, make_stream, total_flow
 from difflow_cc.units.absorber import AbsorberParams, AmineAbsorber
 from difflow_cc.units.stripper import AmineStripper, StripperParams
 
 _MW_WATER = 18.0  # g/mol, as in AmineAbsorber
+
+
+
+@dataclass
+class SolventMakeupParams(ParamsMixin):
+    """Design circulation of an amine loop, restored on every pass.
+
+    Attributes:
+        amine_flow: circulating amine (mol/s). For a design given as L/G,
+            it is ``L_G_ratio * F_gas * x_amine`` with ``x_amine`` the amine
+            mole fraction of the solvent, as ``AmineAbsorber`` builds it.
+        water_flow: circulating water (mol/s).
+        T: lean solvent temperature leaving the trim cooler (K).
+        P: lean solvent pressure leaving the pump (Pa).
+    """
+
+    amine_flow: float
+    water_flow: float
+    T: float = 313.15
+    P: float = 101325.0
+
+
+class SolventMakeup:
+    """Return lean amine to the absorber at the design circulation.
+
+    The block that closes an absorber-stripper loop drawn as a flowsheet:
+    the stripper's lean outlet comes in, and the absorber's lean solvent
+    goes out with its amine and water flows reset to the design values,
+    its loading (``CO2_absorbed / Amine``) carried through, at the trim
+    cooler's temperature and the pump's pressure.
+
+    A recycle of conserved amine with no purge has no unique steady state
+    --- any circulating inventory is one --- and the water the treated gas
+    and the CO2 product carry away would drain the loop. Fixing the
+    circulation here removes both, leaving the lean loading as the one
+    quantity the tear has to find. It is the same closure
+    :func:`solve_amine_loop` makes internally, so a flowsheet built with
+    this unit converges to the same answer.
+    """
+
+    symbol = "Makeup"
+    equations = [
+        r"F_\mathrm{amine} = F_\mathrm{amine}^\mathrm{design},\quad"
+        r"F_\mathrm{H_2O} = F_\mathrm{H_2O}^\mathrm{design}",
+        r"F_\mathrm{CO_2,abs} = \alpha\,F_\mathrm{amine},\quad"
+        r"\alpha = F_\mathrm{CO_2,abs}^\mathrm{in}/F_\mathrm{amine}^\mathrm{in}",
+    ]
+    references = [
+        "Kohl, A.L. and Nielsen, R.B. Gas Purification, 5e, Gulf, 1997.",
+    ]
+    parameter_units = {
+        "amine_flow": "mol/s",
+        "water_flow": "mol/s",
+        "T": "K",
+        "P": "Pa",
+    }
+    numerical_method = "Explicit: flows reset, loading carried through."
+
+    def __init__(self, params: SolventMakeupParams):
+        self.params = params
+
+    def __call__(self, lean_in: Stream) -> tuple[Stream, dict]:
+        """Restore the design circulation.
+
+        Args:
+            lean_in: Lean solvent from the stripper, with ``Amine``,
+                ``H2O`` and ``CO2_absorbed`` flows.
+
+        Returns:
+            lean_out: Lean solvent for the absorber's ``solvent_in``.
+            info: Dict with
+                - lean_loading: mol CO2 per mol amine, carried through
+                - makeup_water: water added (mol/s); negative is a purge
+                - makeup_amine: amine added (mol/s); zero at a converged
+                  loop, where the stripper returns what it was sent
+        """
+        p = self.params
+        flows = get_flows(lean_in)
+        amine_in = jnp.asarray(flows.get("Amine", 0.0))
+        loading = safe_divide(jnp.asarray(flows.get("CO2_absorbed", 0.0)),
+                              amine_in)
+        amine = jnp.asarray(p.amine_flow)
+        water = jnp.asarray(p.water_flow)
+        lean_out = make_stream(
+            {"H2O": water, "Amine": amine, "CO2_absorbed": loading * amine},
+            jnp.asarray(p.T), jnp.asarray(p.P))
+        info = {
+            "lean_loading": loading,
+            "makeup_water": water - jnp.asarray(flows.get("H2O", 0.0)),
+            "makeup_amine": amine - amine_in,
+        }
+        return lean_out, info
 
 
 def solve_amine_loop(

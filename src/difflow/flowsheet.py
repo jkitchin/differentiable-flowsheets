@@ -1766,16 +1766,14 @@ class Flowsheet:
     def _usable_tear(self, stream: Any) -> bool:
         """Whether a guess can stand in for a tear stream.
 
-        ``_streams_to_array`` indexes every species in ``species_order``
-        plus T and P, so a stream missing any of them does not fail as a
-        bad guess --- it fails as a ``KeyError`` several frames away.
+        ``_streams_to_array`` reads a species the stream does not carry as
+        zero flow, so an outlet that omits some --- an aqueous liquor with
+        no extractant in it --- is a usable guess as it stands. T and P it
+        cannot invent: a stream missing either does not fail as a bad
+        guess, it fails as a ``KeyError`` several frames away.
         """
         try:
-            return (
-                all(f"F_{s}" in stream for s in self.species_order)
-                and "T" in stream
-                and "P" in stream
-            )
+            return "T" in stream and "P" in stream
         except TypeError:
             return False
 
@@ -2527,13 +2525,21 @@ class Flowsheet:
             self.last_solve_unit_info[unit.name] = info
 
     def _streams_to_array(self, streams: dict[str, Stream]) -> Array:
-        """Convert dictionary of streams to a flat array."""
+        """Convert dictionary of streams to a flat array.
+
+        A species a stream does not carry packs as zero flow. Plugin units
+        routinely return only the species their outlet holds --- a solvent
+        extraction scrubber's aqueous liquor has no extractant or diluent
+        in it --- and tearing such a stream used to fail here as a
+        ``KeyError``. Absent means none, which is how the units that sum
+        streams (``Flash``, the psychrometric helpers) already read it.
+        """
         arrays = []
         for name in sorted(streams.keys()):
             stream = streams[name]
             # Pack: [F_species..., T, P]
             for s in self.species_order:
-                arrays.append(stream[f"F_{s}"])
+                arrays.append(stream.get(f"F_{s}", 0.0))
             arrays.append(stream["T"])
             arrays.append(stream["P"])
         return jnp.array(arrays)
