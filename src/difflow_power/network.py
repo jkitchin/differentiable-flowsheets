@@ -226,6 +226,13 @@ class Generator(ParamsMixin):
         vm_setpoint: voltage the unit regulates its bus to (pu), or
             ``None`` to take the bus's own setpoint.
         name: optional human label.
+        s_max_mva: apparent-power rating (MVA), or ``None`` for none.
+            Bounds the joint output ``P^2 + Q^2 <= s_max^2``: the
+            current limit of an inverter, or the armature limit of a
+            synchronous machine. The box limits alone would let a unit
+            at full real output also deliver its full reactive range,
+            which no converter rated in MVA can. Built by the factories
+            in :mod:`difflow_power.renewables`.
     """
 
     bus: str
@@ -238,9 +245,15 @@ class Generator(ParamsMixin):
     q_mvar: float = 0.0
     vm_setpoint: float | None = None
     name: str | None = None
+    s_max_mva: float | None = None
 
     def __post_init__(self):
         self.cost = tuple(float(c) for c in self.cost)
+        if self.s_max_mva is not None and self.s_max_mva <= 0.0:
+            raise ValueError(
+                f"generator at {self.bus!r}: s_max_mva must be positive, "
+                f"got {self.s_max_mva}"
+            )
         if self.p_min_mw > self.p_max_mw:
             raise ValueError(
                 f"generator at {self.bus!r}: p_min_mw={self.p_min_mw} > "
