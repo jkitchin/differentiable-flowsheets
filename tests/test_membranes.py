@@ -127,6 +127,42 @@ class TestGradients:
         check_grads(f, (6e6, 600.0), order=1, modes=["rev"], rtol=1e-4)
 
 
+class TestCountercurrentSolveCost:
+    """Countercurrent shooting stops at convergence instead of running every iteration.
+
+    Reference values are from the earlier fixed-count solver (40 Newton steps per stage,
+    40 bisection steps for the area); the faster solver must reproduce them.
+    """
+
+    GPU = 3.348e-10
+    F = 1000 / 22.414 * 1000 / 3600  # 1000 Nm^3/h in mol/s
+    Fi = jnp.array([0.4 * F, 0.6 * F])
+    Q = jnp.array([100.0, 5.0]) * GPU
+
+    def test_stage_matches_fixed_count_solver(self):
+        perm = M.countercurrent(self.Fi, self.Q, 100.0, 5e5, 1.05e5, 40)[1]
+        np.testing.assert_allclose(perm, [0.3487682804065479, 0.048684585979673164], rtol=1e-10)
+
+    @pytest.mark.slow  # ~3 s, mostly compiling the jitted area solve
+    def test_area_for_stage_cut_matches_fixed_count_solver(self):
+        A = jax.jit(lambda P: M.area_for_stage_cut(self.Fi, self.Q, P, 1.05e5, 0.3,
+                                                   "countercurrent", 40))
+        for P, ref in [(3e5, 3320.8473734128875), (13e5, 324.49176521775985)]:
+            assert float(A(P)) == pytest.approx(ref, rel=1e-10)
+
+    def test_illinois_needs_few_evaluations(self):
+        # A dozen false-position steps reach round-off where bisection would need about 40.
+        f = lambda x: x**3 + x - 1.0
+        root = M._illinois_increasing(f, 0.0, 1.0, n_iter=12)
+        assert abs(float(f(root))) < 1e-13
+
+    @pytest.mark.slow
+    def test_area_for_stage_cut_grad(self):
+        f = lambda P, theta: M.area_for_stage_cut(self.Fi, self.Q, P, 1.05e5, theta,
+                                                  "countercurrent", 40)
+        check_grads(f, (5e5, 0.3), order=1, modes=["rev"], eps=1e-4, rtol=1e-4)
+
+
 class TestGasPermeator:
     def test_conserves_and_reports(self):
         feed = make_stream({"CO2": 0.13, "N2": 0.87}, T=313.0, P=2e5)
