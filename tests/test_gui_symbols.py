@@ -119,3 +119,20 @@ def test_every_category_the_catalog_uses_has_a_symbol(drawing):
     used = {spec.get("category") for spec in catalog().values()} - {None, ""}
     missing = used - set(drawing["categories"])
     assert not missing, f"categories with no symbol: {sorted(missing)}"
+
+
+def test_every_operation_in_the_catalog_is_drawn_by_name(drawing):
+    """Stricter than the test above, and for the reason it cannot see.
+
+    The category fallback keeps a new unit from drawing as a box, but it
+    also hides the gap: every unit in a category gets the same picture.
+    The `refinery` category falls back to a column, and eight refinery
+    units that are drums, settlers, compressors and reactors once all
+    drew as columns, which nothing reported.
+    """
+    named = drawing["operations"]
+    missing = sorted(set(catalog()) - set(named))
+    assert not missing, (
+        f"drawn by category rather than by name: {missing}. Add them to "
+        "OPERATION_SYMBOLS in symbols.js and run `make gui-build`."
+    )

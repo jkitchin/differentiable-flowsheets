@@ -63,3 +63,14 @@ test('units that share equipment share a symbol', () => {
   assert.equal(symbolFor('Ultrafiltration'), symbolFor('MembraneSeparator'))
   assert.equal(symbolFor('Turboexpander'), symbolFor('GasTurbine'))
 })
+
+test('refinery units draw as their equipment, not all as columns', () => {
+  // The refinery category falls back to `column`, which used to be the
+  // picture for eight units that are not columns.
+  assert.equal(symbolFor('PreflashDrum', 'refinery'), 'flash_drum')
+  assert.equal(symbolFor('Desalter', 'refinery'), 'settler')
+  assert.equal(symbolFor('WetGasCompressor', 'refinery'), 'compressor')
+  assert.equal(symbolFor('IsomerizationReactor', 'refinery'), 'fixed_bed')
+  assert.notEqual(symbolFor('IsomerizationReactor'), symbolFor('PSAUnit'))
+  assert.equal(symbolFor('AmineTreater'), symbolFor('AmineAbsorber'))
+})
