@@ -10,6 +10,9 @@ SOURCES = {'iapws': 'IAPWS R12-08, viscosity of ordinary water (Huber et al., J.
           'Phys. Chem. Ref. Data 38, 101 (2009)), with mu_2 = 1, on the '
           'saturated-liquid density of IAPWS SR1-86(1992) (Wagner & Pruss, '
           'J. Phys. Chem. Ref. Data 22, 783 (1993))',
+ 'iapws_sr186': 'IAPWS SR1-86(1992), saturated-liquid density of ordinary '
+                'water (Wagner & Pruss, J. Phys. Chem. Ref. Data 22, 783 '
+                '(1993), eq. 2.3); within 0.001 % of IAPWS-95 below 400 K',
  'nist_water_fit': 'Quartic in T fitted by difflow to NIST WebBook (SRD 69) '
                    'saturated-liquid water thermal conductivity, 273.16-630 '
                    'K, weighted by 1/k (IAPWS 2011: Huber et al., J. Phys. '
@@ -2046,15 +2049,9 @@ LIQUID_DATA = {'1_butanol': {'CAS': '71-36-3',
                   'form': 'IAPWS2008_SAT',
                   'range_stated': True,
                   'source': 'iapws'},
-           'rho': {'Tmax': 647.1,
-                   'Tmin': 273.15,
-                   'coeffs': [647.1,
-                              322.0,
-                              1094.0233,
-                              -1813.2295,
-                              3863.9557,
-                              -2479.813,
-                              18.02],
-                   'form': 'PPDS10',
-                   'range_stated': False,
-                   'source': 'vdi_ppds'}}}
+           'rho': {'Tmax': 647.0,
+                   'Tmin': 273.16,
+                   'coeffs': [18.015],
+                   'form': 'IAPWS_SR186',
+                   'range_stated': True,
+                   'source': 'iapws_sr186'}}}
