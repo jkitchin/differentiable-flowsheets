@@ -205,9 +205,20 @@
 
   // A mixer mixes however many streams it is handed, so its inlet count
   // belongs to the flowsheet and not to the class -- which makes it the
-  // canvas's to change. Every other unit's ports are fixed by its
+  // canvas's to change. A unit with optional inlets (an absorber's lean
+  // solvent) can gain them and lose them again, from the end, since
+  // inlets are positional. Every other unit's ports are fixed by its
   // equations and there is nothing to offer.
   let variadic = $derived(Boolean(spec?.ports?.variadic))
+  let maxInlets = $derived(spec?.ports?.inlets?.length ?? 0)
+  let minInlets = $derived(
+    maxInlets - (spec?.ports?.optional_inlets?.length ?? 0))
+  let canAddInlet = $derived(
+    variadic || (node?.data?.inlets?.length ?? 0) < maxInlets)
+  function canRemoveInlet(i, n) {
+    if (variadic) return n > 1
+    return i === n - 1 && n > minInlets
+  }
 
   function addInlet() {
     onedit(() => post('/api/inlet', { unit: unit.name }))
@@ -313,8 +324,8 @@
 -->
 {#snippet ports()}
   <h3>inlets</h3>
-  <ul class:ports={variadic}>
-    {#each node.data.inlets as s (s)}
+  <ul class:ports={variadic || maxInlets > minInlets}>
+    {#each node.data.inlets as s, i (s)}
       <li class:open={isOpen(node.data.openInlets, s)}>
         {s}
         {#if isOpen(node.data.openInlets, s)}
@@ -324,14 +335,14 @@
                            : 'name the species in the header first'}
                   onclick={() => feedInlet(s)}>feed it</button>
         {/if}
-        {#if variadic && node.data.inlets.length > 1}
+        {#if canRemoveInlet(i, node.data.inlets.length)}
           <button class="drop" title="remove this inlet"
                   disabled={busy} onclick={() => removeInlet(s)}>&minus;</button>
         {/if}
       </li>
     {/each}
   </ul>
-  {#if variadic}
+  {#if canAddInlet}
     <button class="add-port" disabled={busy} onclick={addInlet}>
       Add inlet
     </button>

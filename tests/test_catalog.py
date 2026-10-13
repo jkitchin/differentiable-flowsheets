@@ -410,6 +410,36 @@ class TestBuildability:
         payload = cat["Flash"].to_dict()
         assert payload["buildable"] is False
         assert payload["constructor_extras"] == ["thermo"]
+        assert payload["numeric_extras"] == []
+
+    def test_a_number_in_the_constructor_does_not_block_building(self):
+        """``GasPipe(beta)`` holds the same kind of value a Params field
+        would, so it must not cost the pipe its place in the palette."""
+        pytest.importorskip("difflow_gas")
+        cat = catalog()
+        assert cat["GasPipe"].constructor_extras == ["beta"]
+        assert cat["GasPipe"].numeric_extras == ["beta"]
+        assert cat["GasPipe"].is_buildable
+        assert cat["CompressorBoost"].numeric_extras == ["ratio", "direction"]
+        assert cat["CompressorBoost"].is_buildable
+        # a tuple of signs is not a number a form can invent
+        assert "signs" not in cat["AffineFlow"].numeric_extras
+        assert not cat["AffineFlow"].is_buildable
+
+    def test_the_class_answer_agrees_with_the_editor_on_numbers(self):
+        """Every unit the number rule makes buildable drops in the editor."""
+        pytest.importorskip("difflow_gas")
+        from difflow.gui import FlowsheetSession
+
+        cat = catalog()
+        live = FlowsheetSession().catalog()
+        by_numbers = [
+            n for n, s in cat.items()
+            if s.numeric_extras
+            and not set(s.constructor_extras) - set(s.numeric_extras)
+        ]
+        assert by_numbers
+        assert [n for n in by_numbers if not live[n]["buildable"]] == []
 
 
 # =============================================================================

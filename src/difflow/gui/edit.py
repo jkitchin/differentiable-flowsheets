@@ -27,6 +27,7 @@ from difflow.serialize import (
     _build_operation,
     _encode_value,
     constructor_extras,
+    is_number_annotation,
 )
 
 
@@ -206,18 +207,8 @@ def known_extras(flowsheet, cls: type, bindings: dict | None = None) -> dict:
 PLACEHOLDER = 1.0
 
 
-def _is_number(annotation) -> bool:
-    """Whether a dataclass field annotation admits a plain number.
-
-    Read off the text of the annotation rather than by comparing types:
-    the interesting ones are unions (``float | jax.Array``) and strings
-    (under ``from __future__ import annotations``), and both defeat an
-    identity test while reading perfectly well.
-    """
-    text = str(annotation)
-    if any(bad in text for bad in ("Callable", "dict", "list", "tuple")):
-        return False
-    return "float" in text or "int" in text
+#: one definition, shared with the catalog's ``is_buildable``
+_is_number = is_number_annotation
 
 
 def placeholder_extras(cls: type, have: dict) -> tuple[dict, list[str]]:
@@ -578,8 +569,22 @@ def variadic(ports: dict) -> bool:
     return bool(ports.get("variadic"))
 
 
+def optional_inlets(ports: dict) -> list[str]:
+    """Trailing inlets the unit runs without (an absorber's lean solvent)."""
+    return list(ports.get("optional_inlets") or [])
+
+
+def min_inlets(ports: dict) -> int:
+    """Inlets a unit cannot drop below: all but its optional ones."""
+    return len(ports.get("inlets") or []) - len(optional_inlets(ports))
+
+
 def add_inlet(flowsheet, name: str, ports: dict) -> dict:
-    """Give a variadic unit one more inlet, dangling.
+    """Give a variadic unit one more inlet, or a unit its optional one.
+
+    An absorber runs on its gas alone, building the lean solvent from its
+    parameters, and takes the loop's lean solvent on a second inlet when
+    there is one; that second inlet is added here, like a mixer's third.
 
     A ``Mixer`` mixes however many streams it is handed, so its inlet
     count is a property of the flowsheet and not of the class --- which
@@ -591,10 +596,16 @@ def add_inlet(flowsheet, name: str, ports: dict) -> dict:
     it draws as a feed node waiting to be filled in.
     """
     u = unit(flowsheet, name)
-    if not variadic(ports):
+    if not variadic(ports) and not optional_inlets(ports):
         n = len(u.inlet_names)
         raise EditError(
             f"{name!r} takes exactly {n} inlet{'s' if n != 1 else ''}; "
+            "only a mixer-like unit can take more."
+        )
+    most = len(ports.get("inlets") or [])
+    if not variadic(ports) and len(u.inlet_names) >= most:
+        raise EditError(
+            f"{name!r} takes at most {most} inlet{'s' if most != 1 else ''}; "
             "only a mixer-like unit can take more."
         )
     # Count up to the first free ordinal rather than letting `unique`
@@ -610,7 +621,7 @@ def add_inlet(flowsheet, name: str, ports: dict) -> dict:
 
 
 def remove_inlet(flowsheet, name: str, stream: str, ports: dict) -> dict:
-    """Take one inlet off a variadic unit, if nothing is on it.
+    """Take one inlet off a variadic unit, or an optional one off the end.
 
     Refused rather than cascaded when the port is wired or fed. Deleting
     a port and silently deleting the feed behind it are two edits, and
@@ -619,13 +630,22 @@ def remove_inlet(flowsheet, name: str, stream: str, ports: dict) -> dict:
     what is in the way and the user removes that first.
     """
     u = unit(flowsheet, name)
-    if not variadic(ports):
-        raise EditError(
-            f"{name!r} has a fixed set of inlets; {stream!r} cannot be removed."
-        )
     if stream not in u.inlet_names:
         have = ", ".join(u.inlet_names) or "none"
         raise EditError(f"{name!r} has no inlet {stream!r} (has: {have})")
+    if not variadic(ports) and not optional_inlets(ports):
+        raise EditError(
+            f"{name!r} has a fixed set of inlets; {stream!r} cannot be removed."
+        )
+    if not variadic(ports):
+        # Inlets are positional, so only the last one can go, and only
+        # down to the inlets the unit cannot run without.
+        if (len(u.inlet_names) <= min_inlets(ports)
+                or stream != u.inlet_names[-1]):
+            raise EditError(
+                f"{name!r} needs its inlet {stream!r}; only an optional "
+                "inlet at the end can be removed."
+            )
     if len(u.inlet_names) <= 1:
         raise EditError(
             f"{name!r} is down to its last inlet. Delete the unit instead."
@@ -754,7 +774,10 @@ def default_ports(name: str, ports: dict, taken) -> tuple[list[str], list[str]]:
     inlets, outlets = [], []
     seen = set(taken)
     default_inlets = 2 if variadic(ports) else 1
-    for i in range(max(1, ports.get("n_inlets") or default_inlets)):
+    # Optional inlets start off: a dropped absorber builds its own lean
+    # solvent until someone wires one in with "Add inlet".
+    wanted = (ports.get("n_inlets") or default_inlets) - len(optional_inlets(ports))
+    for i in range(max(1, wanted)):
         s = unique(f"{name}_in" if i == 0 else f"{name}_in{i + 1}", seen)
         seen.add(s)
         inlets.append(s)

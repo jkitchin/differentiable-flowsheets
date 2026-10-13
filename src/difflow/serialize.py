@@ -459,6 +459,39 @@ def constructor_extras(cls: type) -> list[str]:
     return required
 
 
+def is_number_annotation(annotation) -> bool:
+    """Whether an annotation admits a plain number.
+
+    Read off the text of the annotation rather than by comparing types:
+    the interesting ones are unions (``float | jax.Array``) and strings
+    (under ``from __future__ import annotations``), and both defeat an
+    identity test while reading perfectly well.
+    """
+    text = str(annotation)
+    if any(bad in text for bad in ("Callable", "dict", "list", "tuple")):
+        return False
+    return "float" in text or "int" in text
+
+
+def numeric_extras(cls: type) -> list[str]:
+    """The :func:`constructor_extras` that are plain numbers.
+
+    ``GasPipe(beta)`` and ``Compressor(ratio)`` keep their numbers as
+    constructor arguments rather than in a ``Params`` they are handed.
+    A number is data whichever side of that line it sits on, so a form
+    can supply it just as it supplies a ``Params`` field; a ``thermo``
+    or a ``species_order`` it cannot.
+    """
+    import inspect
+
+    try:
+        sig = inspect.signature(cls.__init__)
+    except (TypeError, ValueError):
+        return []
+    return [a for a in constructor_extras(cls)
+            if is_number_annotation(sig.parameters[a].annotation)]
+
+
 def _encode_extras(operation: Any, unit_name: str) -> dict:
     """Write the non-Params constructor arguments of one operation."""
     out = {}

@@ -104,6 +104,11 @@ class PortSpec(ParamsMixin):
             "vapor"]``), or ``None`` when the unit does not say. A class's
             ``outlet_roles`` attribute, else the names its ``__call__``
             docstring gives the returned streams.
+        optional_inlets: the trailing ``inlets`` a unit runs without
+            (``AmineAbsorber``'s ``solvent_in``), from the class's
+            ``optional_inlets`` attribute. Declared rather than read off
+            ``Stream | None``: that annotation is also how a concentration
+            dict is written, and only the class knows which it means.
     """
 
     inlets: list[str] = field(default_factory=list)
@@ -111,11 +116,17 @@ class PortSpec(ParamsMixin):
     variadic: bool = False
     default_outlets: int | None = None
     outlet_roles: list[str] | None = None
+    optional_inlets: list[str] = field(default_factory=list)
 
     @property
     def n_inlets(self) -> int | None:
         """Number of inlets, or ``None`` if variadic."""
         return None if self.variadic else len(self.inlets)
+
+    @property
+    def min_inlets(self) -> int:
+        """Inlets the unit cannot run without."""
+        return len(self.inlets) - len(self.optional_inlets)
 
 
 @dataclass
@@ -176,8 +187,12 @@ class OperationSchema(ParamsMixin):
         parameters: the ``Params`` fields.
         params_class: name of the ``Params`` dataclass, if one was found.
         constructor_extras: constructor arguments the class requires
-            besides its ``Params`` --- a ``thermo``, an ``eos``. These
-            are objects, so a front end cannot supply them.
+            besides its ``Params`` --- a ``thermo``, an ``eos``, or the
+            plain numbers of a unit that takes no ``Params``
+            (``GasPipe(beta)``).
+        numeric_extras: those of ``constructor_extras`` that are plain
+            numbers, which a front end can supply like a ``Params``
+            field. The rest are objects, which it cannot.
         call_parameters: arguments ``__call__`` takes besides its
             streams --- a Splitter's ``split_frac``, a PFR's
             ``volumetric_flow``. A flowsheet passes them from
@@ -202,6 +217,7 @@ class OperationSchema(ParamsMixin):
     parameters: list[ParameterSpec] = field(default_factory=list)
     params_class: str | None = None
     constructor_extras: list[str] = field(default_factory=list)
+    numeric_extras: list[str] = field(default_factory=list)
     call_parameters: list[ParameterSpec] = field(default_factory=list)
 
     @property
@@ -217,9 +233,13 @@ class OperationSchema(ParamsMixin):
         *optional* callable left at its default is no obstacle to
         building the unit, only to filling that one field. What blocks
         a form is a required callable, or a constructor argument that
-        is an object rather than data.
+        is an object rather than data. A constructor argument that is a
+        plain number --- ``GasPipe``'s ``beta`` --- is data, and blocks
+        nothing more than the same number in a ``Params`` would.
         """
-        return not self.constructor_extras and not any(
+        objects = [a for a in self.constructor_extras
+                   if a not in self.numeric_extras]
+        return not objects and not any(
             p.required and p.is_callable for p in self.parameters
         )
 
@@ -250,6 +270,7 @@ class OperationSchema(ParamsMixin):
             "params_class": self.params_class,
             "declarative": self.is_declarative,
             "constructor_extras": list(self.constructor_extras),
+            "numeric_extras": list(self.numeric_extras),
             "buildable": self.is_buildable,
             "ports": {
                 "inlets": list(self.ports.inlets),
@@ -259,6 +280,7 @@ class OperationSchema(ParamsMixin):
                 "default_outlets": self.ports.default_outlets,
                 "outlet_roles": (None if self.ports.outlet_roles is None
                                  else list(self.ports.outlet_roles)),
+                "optional_inlets": list(self.ports.optional_inlets),
             },
             "parameters": [dataclasses.asdict(p) for p in self.parameters],
             "call_parameters": [
@@ -363,6 +385,7 @@ def _ports(cls: type) -> PortSpec:
         return PortSpec()
 
     inlets, variadic = [], False
+    declared = _declared_optional_inlets(cls, sig)
     for name, param in sig.parameters.items():
         if name == "self":
             continue
@@ -373,7 +396,7 @@ def _ports(cls: type) -> PortSpec:
             continue
         if param.kind is inspect.Parameter.VAR_KEYWORD:
             continue
-        if _is_stream(param.annotation):
+        if _is_stream(param.annotation) or name in declared:
             inlets.append(name)
 
     # outlets are the Stream entries of the return tuple; the trailing
@@ -387,7 +410,38 @@ def _ports(cls: type) -> PortSpec:
                     n_outlets=n_outlets,
                     variadic=variadic,
                     default_outlets=getattr(cls, "default_outlets", None),
-                    outlet_roles=_outlet_roles(cls, n_outlets))
+                    outlet_roles=_outlet_roles(cls, n_outlets),
+                    optional_inlets=[n for n in inlets if n in declared])
+
+
+def _declared_optional_inlets(cls: type, sig) -> list[str]:
+    """A class's ``optional_inlets`` that its ``__call__`` really takes.
+
+    Each must be a parameter with a default and come after every required
+    inlet: inlets are positional, so an optional one can only be left off
+    the end. A declaration that breaks either rule is a bug in the class,
+    and raising says so where it is made rather than drawing a port the
+    unit will refuse.
+    """
+    declared = list(getattr(cls, "optional_inlets", ()) or ())
+    if not declared:
+        return []
+    params = [p for n, p in sig.parameters.items() if n != "self"]
+    names = [p.name for p in params]
+    for name in declared:
+        if name not in names:
+            raise TypeError(f"{cls.__name__}.optional_inlets names {name!r}, "
+                            "which __call__ does not take")
+        if sig.parameters[name].default is inspect.Parameter.empty:
+            raise TypeError(f"{cls.__name__}.optional_inlets names {name!r}, "
+                            "which has no default")
+    last_required = max((i for i, p in enumerate(params)
+                         if _is_stream(p.annotation)
+                         and p.name not in declared), default=-1)
+    if any(names.index(n) < last_required for n in declared):
+        raise TypeError(f"{cls.__name__}.optional_inlets must come after "
+                        "every required inlet")
+    return declared
 
 
 #: a docstring line naming one returned value: ``liquid: Liquid outlet``
@@ -467,13 +521,14 @@ def _call_parameters(cls: type) -> list[ParameterSpec]:
     except (TypeError, ValueError):
         return []
     docs = parse_attributes(call.__doc__)
+    declared = set(getattr(cls, "optional_inlets", ()) or ())
     specs = []
     for name, param in sig.parameters.items():
         if name == "self" or param.kind in (
             inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD
         ):
             continue
-        if _is_stream(param.annotation):
+        if _is_stream(param.annotation) or name in declared:
             continue
         has_default = param.default is not inspect.Parameter.empty
         ann = param.annotation
@@ -591,7 +646,7 @@ def describe_class(
     usable on a plugin's units before they are wired in.
     """
     from difflow.report.metadata import get_metadata
-    from difflow.serialize import constructor_extras
+    from difflow.serialize import constructor_extras, numeric_extras
 
     params_cls = _params_class(cls)
     doc = (description or cls.__doc__ or "").strip()
@@ -614,6 +669,7 @@ def describe_class(
         parameters=_parameters(params_cls, meta),
         params_class=params_cls.__name__ if params_cls else None,
         constructor_extras=constructor_extras(cls),
+        numeric_extras=numeric_extras(cls),
         call_parameters=_call_parameters(cls),
     )
 
