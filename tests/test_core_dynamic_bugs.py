@@ -156,7 +156,6 @@ class TestBug122WegsteinArguments:
     """Wegstein acceleration should pass (x_old, x_prev, g_prev, g_curr)
     not (x_prev, x_prev, g_prev, g_curr)."""
 
-    @pytest.mark.slow
     def test_wegstein_convergence_on_flowsheet(self):
         """Test that Wegstein converges on a simple flowsheet with recycle.
 

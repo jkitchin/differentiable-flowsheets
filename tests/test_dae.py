@@ -499,7 +499,6 @@ class TestDAEGradients:
         grad = jax.grad(solve_for_z)(jnp.array(5.0))
         assert jnp.allclose(grad, 1.0, atol=1e-4)
 
-    @pytest.mark.slow
     def test_gradient_through_dae_integration(self):
         """Can compute gradient through DAE integration."""
         pendulum = SimplePendulum(length=1.0)

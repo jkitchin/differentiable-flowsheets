@@ -789,7 +789,6 @@ class TestGroupSeparation:
         feed = make_stream(flows={"H2O": 55.5, **flows}, T=298.15, P=101325.0)
         return train(feed)
 
-    @pytest.mark.slow
     def test_each_group_reaches_its_own_product(self):
         from difflow.streams import get_flows
 

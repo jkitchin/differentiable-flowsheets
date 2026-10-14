@@ -38,14 +38,12 @@ def setup():
     return net, layout, x_true, reference
 
 
-@pytest.mark.slow
 def test_the_true_state_satisfies_the_equations(setup):
     net, layout, x_true, _ = setup
     residuals = power_flow_residuals(x_true, net, layout)
     assert float(jnp.max(jnp.abs(residuals))) < 1e-10
 
 
-@pytest.mark.slow
 def test_estimate_lands_on_a_state_that_satisfies_the_equations(setup):
     net, layout, x_true, _ = setup
     sigma = measurement_sigma(layout, sigma_va=0.02)
@@ -63,7 +61,6 @@ def test_estimate_lands_on_a_state_that_satisfies_the_equations(setup):
     ) < 1e-8
 
 
-@pytest.mark.slow
 def test_estimate_is_closer_to_the_truth_than_the_raw_readings(setup):
     net, layout, x_true, _ = setup
     sigma = measurement_sigma(layout, sigma_va=0.02)
@@ -84,7 +81,6 @@ def test_estimate_is_closer_to_the_truth_than_the_raw_readings(setup):
     assert total_estimated < total_raw
 
 
-@pytest.mark.slow
 def test_names_come_from_the_layout(setup):
     net, layout, x_true, _ = setup
     sigma = measurement_sigma(layout, sigma_va=0.02)
@@ -93,7 +89,6 @@ def test_names_come_from_the_layout(setup):
     assert list(result.names) == layout.names
 
 
-@pytest.mark.slow
 def test_default_sigma_leaves_angles_unmeasured(setup):
     net, layout, _, _ = setup
     sigma = measurement_sigma(layout)
@@ -148,7 +143,6 @@ def test_bad_data_needs_a_layout(setup):
         perturb(x_true, sigma, jax.random.PRNGKey(0), bad_data={"vm_5": 3.0})
 
 
-@pytest.mark.slow
 def test_estimated_values_reads_in_engineering_units(setup):
     net, layout, x_true, reference = setup
     sigma = measurement_sigma(layout, sigma_va=0.02)
@@ -160,7 +154,6 @@ def test_estimated_values_reads_in_engineering_units(setup):
     assert values["pg_mw"]["g2"] == pytest.approx(163.0, abs=10.0)
 
 
-@pytest.mark.slow
 def test_monitoring_campaign_flags_the_scan_with_bad_data(setup):
     """What a control centre runs: an estimate per scan against one model.
 

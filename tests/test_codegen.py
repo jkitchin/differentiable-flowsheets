@@ -69,7 +69,6 @@ def run_generated(source: str):
 
 
 class TestGeneratedScript:
-    @pytest.mark.slow
     def test_generated_script_reproduces_the_solve(self, flowsheet):
         """Source that runs but computes something else is worse than none."""
         rebuilt = run_generated(codegen.to_python(flowsheet))
@@ -272,7 +271,6 @@ class TestCodeContext:
         assert "Flash(FlashParams(species_order=['water', 'ethanol']), thermo)" \
             in source, "inlining it would build a second, different object"
 
-    @pytest.mark.slow
     def test_the_generated_script_runs_and_solves(self, flowsheet, thermo):
         """The whole point of the preamble."""
         flowsheet.view = {"code_context": CONTEXT}

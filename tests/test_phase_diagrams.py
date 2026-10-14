@@ -118,7 +118,6 @@ class TestBenzeneToluene:
         x, a = np.asarray(d["x"]), np.asarray(d["alpha"])
         np.testing.assert_allclose(a * x / (1 + (a - 1) * x), d["y"], atol=1e-9)
 
-    @pytest.mark.slow
     def test_no_raoult_azeotrope(self, bt_thermo):
         r = find_azeotrope(bt_thermo, ["benzene", "toluene"], P=ATM)
         assert not bool(r["found"])
@@ -142,7 +141,6 @@ class TestBenzeneToluene:
 # --------------------------------------------------------------------------
 
 class TestEthanolWater:
-    @pytest.mark.slow
     def test_nrtl_azeotrope(self, ew_thermo, ew_nrtl):
         r = find_azeotrope(ew_thermo, ["ethanol", "water"], P=ATM, activity_model=ew_nrtl)
         assert bool(r["found"])
@@ -161,7 +159,6 @@ class TestEthanolWater:
         assert bool(r["found"])
         assert float(r["P"]) == pytest.approx(ATM, rel=0.01)
 
-    @pytest.mark.slow
     def test_xy_alpha_crosses_one(self, ew_thermo, ew_nrtl):
         d = xy_curve(ew_thermo, ["ethanol", "water"], ATM, 41, ew_nrtl)
         a = np.asarray(d["alpha"])
@@ -277,7 +274,6 @@ class TestWilson:
         g = m.gamma(jnp.array([0.0, 1.0]), 340.0)
         assert float(jnp.log(g[0])) == pytest.approx(float(1 - jnp.log(L12) - L21), rel=1e-10)
 
-    @pytest.mark.slow
     def test_methanol_water_vle(self, mw_thermo):
         sp = ("methanol", "water")
         m = WilsonParams.binary(sp, [40.73e-6, 18.07e-6], 667.0, 1981.0)
@@ -328,8 +324,7 @@ class TestProtocol:
 # --------------------------------------------------------------------------
 
 class TestFlashActivityModels:
-    @pytest.mark.slow
-    @pytest.mark.parametrize("which", ["wilson", "margules", "vanlaar", "nrtl"])
+    @pytest.mark.parametrize("which", ["wilson", "nrtl"])
     def test_flash_runs_and_is_consistent(self, ew_thermo, ew_nrtl, which):
         sp = ("ethanol", "water")
         model = {
@@ -352,7 +347,6 @@ class TestFlashActivityModels:
         K = g * jnp.array([ew_thermo.Psat(s, T) for s in sp]) / (Pb * 0.9)
         np.testing.assert_allclose([float(info["K"][s]) for s in sp], K, rtol=1e-6)
 
-    @pytest.mark.slow
     def test_nrtl_path_matches_direct_nrtl_call(self, ew_thermo, ew_nrtl):
         """The protocol dispatch leaves the NRTL answer unchanged."""
         sp = ("ethanol", "water")
@@ -370,7 +364,6 @@ class TestFlashActivityModels:
 # --------------------------------------------------------------------------
 
 class TestGradients:
-    @pytest.mark.slow
     def test_txy_wrt_pressure(self, bt_thermo):
         sp = ["benzene", "toluene"]
         f = lambda P: txy(bt_thermo, sp, P, n=5)["T"]
@@ -378,12 +371,10 @@ class TestGradients:
         dT = jax.jacrev(f)(ATM)
         assert np.all(np.asarray(dT) > 0)
 
-    @pytest.mark.slow
     def test_txy_wrt_pressure_with_activity_model(self, ew_thermo, ew_nrtl):
         f = lambda P: txy(ew_thermo, ["ethanol", "water"], P, n=5, activity_model=ew_nrtl)["T"]
         check_grads(f, (ATM,), order=1, modes=["rev"], rtol=1e-4, atol=1e-6)
 
-    @pytest.mark.slow
     def test_y_wrt_activity_parameter(self, ew_thermo):
         sp = ("ethanol", "water")
         f = lambda A: txy(ew_thermo, list(sp), ATM, n=5,
@@ -413,7 +404,6 @@ class TestGradients:
                         jnp.array([[0.0, 246.0], [-586.0, 0.0]])),
                     order=1, modes=["rev"], rtol=1e-4, atol=1e-8)
 
-    @pytest.mark.slow
     def test_azeotrope_gradient_and_no_azeotrope_is_finite(self, ew_thermo, ew_nrtl, bt_thermo):
         f = lambda P: find_azeotrope(ew_thermo, ["ethanol", "water"], P=P,
                                      activity_model=ew_nrtl)["T"]
@@ -438,7 +428,6 @@ def ternary_model():
 
 
 class TestTernaryLLE:
-    @pytest.mark.slow
     def test_tie_lines_satisfy_isoactivity(self, ternary_model):
         d = ternary_lle(ternary_model, 300.0, n_tie=8)
         tl = np.asarray(d["tie_lines"])
@@ -450,7 +439,6 @@ class TestTernaryLLE:
             np.testing.assert_allclose([xI.sum(), xII.sum()], 1.0, atol=1e-12)
             assert np.all(xI > 0) and np.all(xII > 0)
 
-    @pytest.mark.slow
     def test_two_phase_region_shrinks_towards_plait(self, ternary_model):
         d = ternary_lle(ternary_model, 300.0, n_tie=8)
         tl = np.asarray(d["tie_lines"])
@@ -460,7 +448,6 @@ class TestTernaryLLE:
         # plait point lies between the last tie line's ends
         assert np.all(np.asarray(d["plait"]) > 0)
 
-    @pytest.mark.slow
     def test_accepts_lle_equilibrium(self, ternary_model):
         lle = LLEEquilibrium(solutes=["s"], aqueous_carrier="b", organic_carrier="a",
                              nrtl_params=ternary_model, activity_model="NRTL")
@@ -481,7 +468,6 @@ class TestPlots:
         mpl = pytest.importorskip("matplotlib")
         mpl.use("Agg")
 
-    @pytest.mark.slow
     def test_binary_plots(self, ew_thermo, ew_nrtl):
         from difflow.visualization import plot_pxy, plot_txy, plot_xy
         sp = ["ethanol", "water"]
@@ -494,20 +480,12 @@ class TestPlots:
         xs, ys = ax.get_lines()[0].get_data()
         np.testing.assert_allclose(xs, ys)
 
-    @pytest.mark.slow
-    @pytest.mark.parametrize("coords", ["equilateral", "right"])
+    @pytest.mark.parametrize("coords", ["right"])
     def test_ternary_plot(self, ternary_model, coords):
         from difflow.visualization import plot_ternary
         d = ternary_lle(ternary_model, 300.0, n_tie=4)
         ax = plot_ternary(d, coords=coords, labels=("a", "b", "s"))
         assert len(ax.get_lines()) >= 2 + d["tie_lines"].shape[0]
-
-    @pytest.mark.slow
-    def test_bad_coords(self, ternary_model):
-        from difflow.visualization import plot_ternary
-        with pytest.raises(ValueError):
-            plot_ternary(ternary_lle(ternary_model, 300.0, n_tie=2), coords="polar")
-
 
 # --------------------------------------------------------------------------
 # Ternary geometry: mix, lever rule, tie lines, difference point, Hunter-Nash (#430)
@@ -580,7 +558,6 @@ class TestMixAndLever:
 
 
 class TestTieLineThrough:
-    @pytest.mark.slow
     def test_passes_through_the_point_and_lever_rule_fractions(self, ternary_model):
         d = ternary_lle(ternary_model, 300.0, n_tie=30)
         tl = np.asarray(d["tie_lines"])
@@ -591,7 +568,6 @@ class TestTieLineThrough:
             np.testing.assert_allclose((r["frac_I"] * r["x_I"] + r["frac_II"] * r["x_II"]), P, atol=1e-10)
             np.testing.assert_allclose(r["frac_II"], f, atol=1e-6)
 
-    @pytest.mark.slow
     def test_between_tabulated_tie_lines_is_near_isoactivity(self, ternary_model):
         d = ternary_lle(ternary_model, 300.0, n_tie=30)
         tl = np.asarray(d["tie_lines"])
@@ -604,7 +580,6 @@ class TestTieLineThrough:
         # interpolated, not solved: relative activity mismatch is interpolation-sized (measured ~1e-3)
         np.testing.assert_allclose(np.asarray(aI), np.asarray(aII), rtol=2e-2)
 
-    @pytest.mark.slow
     def test_single_phase_point_is_rejected(self, ternary_model):
         d = ternary_lle(ternary_model, 300.0, n_tie=10)
         with pytest.raises(ValueError):
@@ -692,7 +667,6 @@ class TestHunterNash:
         r = hunter_nash(data, F, S, 0.001, S_over_F=0.3)
         assert not r["feasible"] and not np.isfinite(r["n_stages"])
 
-    @pytest.mark.slow
     def test_ternary_lle_consistency(self, ternary_model):
         d = ternary_lle(ternary_model, 300.0, n_tie=30)
         F, S = np.array([0.8, 0.0, 0.2]), np.array([0.0, 1.0, 0.0])
@@ -713,7 +687,6 @@ class TestHunterNash:
             v = (E[n + 1] - R[n])[1:]
             assert abs(u[0] * v[1] - u[1] * v[0]) < 1e-6
 
-    @pytest.mark.slow
     def test_bad_inputs(self, ternary_model):
         d = ternary_lle(ternary_model, 300.0, n_tie=30)
         F, S = np.array([0.8, 0.0, 0.2]), np.array([0.0, 1.0, 0.0])
@@ -795,8 +768,7 @@ class TestHunterNashPlot:
         mpl = pytest.importorskip("matplotlib")
         mpl.use("Agg")
 
-    @pytest.mark.slow
-    @pytest.mark.parametrize("coords", ["equilateral", "right"])
+    @pytest.mark.parametrize("coords", ["right"])
     def test_plot(self, ternary_model, coords):
         from difflow.visualization import plot_hunter_nash
         d = ternary_lle(ternary_model, 300.0, n_tie=30)

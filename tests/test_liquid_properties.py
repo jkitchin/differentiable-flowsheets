@@ -104,7 +104,6 @@ class TestEquationsMatchSource:
                     expected, rel=1e-9), (name, prop, T)
 
 
-@pytest.mark.release
 class TestAgainstCoolProp:
     @pytest.mark.parametrize("name", sorted(REF["coolprop"]))
     def test_species(self, name):
@@ -202,7 +201,6 @@ class TestWaterAgainstNIST:
         np.testing.assert_allclose(ours[lo], rho[lo], rtol=1e-5)
         np.testing.assert_allclose(ours[hi], rho[hi], rtol=9e-4)
 
-    @pytest.mark.slow
     def test_gradient(self):
         corr = get_liquid_properties("water").mu
         check_grads(lambda t: evaluate_correlation(corr, t), (320.0,), order=2,

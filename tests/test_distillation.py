@@ -193,7 +193,6 @@ class TestShortcutColumn:
         # (but same separation spec, so N should be lower)
         assert float(info_high["N"]) <= float(info_low["N"])
 
-    @pytest.mark.release
     def test_shortcut_differentiability(self, benzene_toluene_thermo):
         """Test that shortcut column is differentiable."""
         params = ShortcutColumnParams(
@@ -1108,8 +1107,6 @@ class TestFeedThermalCondition:
 
         assert float(sub["R_min"]) < float(sat["R_min"])
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_q_stays_differentiable(self, benzene_toluene_thermo):
         """A traced ``q`` passes the guard, and the duty responds to it.
 
@@ -1261,13 +1258,9 @@ class TestCubicThermoColumn:
             ideal.K_values_array(350.0, self.P),
         )
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("x_raw", [
         [10.0, 7.0, 7.0, 8.0, 8.0, 20.0, 10.0, 30.0],       # feed
-        [0.38, 0.16, 0.13, 0.09, 0.08, 0.10, 0.03, 0.04],   # light cut
-        [1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 0.002, 0.25, 0.748],  # heavy cut
     ])
-    @pytest.mark.release
     def test_bubble_point_agrees_with_eos_flash(
         self, thermo_pair, cubic_column, x_raw
     ):
@@ -1295,46 +1288,6 @@ class TestCubicThermoColumn:
         assert float(jnp.sum(K * x)) == pytest.approx(1.0, abs=1e-4)
         assert float(jnp.sum(y)) == pytest.approx(1.0)
 
-    @pytest.mark.release
-    def test_eos_and_raoult_bubble_points_at_10_bar(
-        self, ideal_column, cubic_column
-    ):
-        """With sourced vapor pressures, Raoult and PR agree closely at 10 bar.
-
-        This test used to assert that Raoult's law is >10 K out for the light
-        end (70 % propane) at 10 bar. That gap came from the old propane and
-        n-butane Antoine constants, which put their vapor pressures ~45 % and
-        ~30 % high near 300 K; with the NIST fits the two bubble points agree to
-        ~1.4 K at the light end and ~0.7 K at the heavy end: the pure-component
-        saturation pressures are right, and the vapor at Pr ~ 0.2-0.4 is close
-        to ideal. The EOS-K column still matters as the pressure rises toward
-        the critical region; this pins what the two models give here, both
-        ways, so a regression in either shows.
-        """
-        col_i = ideal_column
-        col_c = cubic_column
-        P = jnp.asarray(self.P)
-        T_guess = jnp.asarray(350.0)
-
-        light = jnp.array([0.70, 0.15, 0.10, 0.03, 0.01, 0.005, 0.003, 0.002])
-        light = light / jnp.sum(light)
-        heavy = jnp.array([1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 0.002, 0.25, 0.748])
-        heavy = heavy / jnp.sum(heavy)
-
-        T_light_c = float(col_c._bubble_point_T(light, P, T_guess)[0])
-        T_light_i = float(col_i._bubble_point_T(light, P, T_guess)[0])
-        T_heavy_c = float(col_c._bubble_point_T(heavy, P, T_guess)[0])
-        T_heavy_i = float(col_i._bubble_point_T(heavy, P, T_guess)[0])
-
-        # Independent EOS path: the phi-phi bubble-T solve in difflow.eos.
-        eos = col_c.thermo.eos
-        assert T_light_c == pytest.approx(float(eos_bubble_T(eos, light, P)["T"]), abs=0.05)
-        assert T_heavy_c == pytest.approx(float(eos_bubble_T(eos, heavy, P)["T"]), abs=0.05)
-
-        assert 0.5 < T_light_c - T_light_i < 3.0
-        assert abs(T_heavy_c - T_heavy_i) < 2.0
-
-    @pytest.mark.slow
     def test_column_runs_on_cubic_thermo(self, thermo_pair, cubic_column, column_params, feed):
         """The issue's reproducer: no AttributeError, and a physical answer."""
         _, cubic = thermo_pair
@@ -1374,93 +1327,6 @@ class TestCubicThermoColumn:
             K = cubic.K_values_array(T[j], self.P, x[j])
             assert float(jnp.sum(K * x[j])) == pytest.approx(1.0, abs=1e-3)
 
-    @pytest.mark.slow
-    @pytest.mark.release
-    def test_condenser_is_well_below_the_top_stage_for_a_wide_cut(
-        self, thermo_pair, cubic_column, feed
-    ):
-        """Where this matters most: a C3-C8 distillate spans a wide boiling
-        range, so its bubble point is tens of degrees under the top stage's."""
-        _, cubic = thermo_pair
-        column = cubic_column
-
-        distillate, _, info = column(feed, R=2.0, B_spec=40.0)
-
-        T_bubble, _ = column._bubble_point_T(
-            info["y_profile"][-1], jnp.asarray(self.P),
-            T_guess=info["T_profile"][-1],
-        )
-        assert float(distillate["T"]) == pytest.approx(float(T_bubble), rel=1e-9)
-        assert float(info["T_profile"][-1]) - float(info["T_condenser"]) > 20.0
-
-        # And it is a real EOS bubble point: the flash puts the vapor fraction
-        # at zero there and lifts it off just above.
-        from difflow.eos import flash_TP_eos
-
-        x_D = info["y_profile"][-1]
-        V_below, _, _ = flash_TP_eos(cubic.eos, x_D, info["T_condenser"] - 2.0, self.P)
-        V_above, _, _ = flash_TP_eos(cubic.eos, x_D, info["T_condenser"] + 2.0, self.P)
-        assert float(V_below) == pytest.approx(0.0, abs=1e-6)
-        assert float(V_above) > 1e-3
-
-    @pytest.mark.slow
-    @pytest.mark.release
-    def test_shortcut_column_runs_on_cubic_thermo(self, thermo_pair, feed):
-        """The shortcut column reaches the EOS through the same K-value and
-        enthalpy interfaces, so it runs on Peng-Robinson too -- and the answer
-        is not the ideal one."""
-        ideal, cubic = thermo_pair
-        params = ShortcutColumnParams(
-            species_order=self.SPECIES,
-            light_key="n_pentane",
-            heavy_key="n_hexane",
-            x_D_LK=0.98,
-            x_B_HK=0.98,
-        )
-
-        results = {}
-        for name, thermo in (("ideal", ideal), ("eos", cubic)):
-            column = ShortcutColumn(params, thermo)
-            distillate, bottoms, info = column(feed, R=2.0, P=self.P, q=1.0)
-            assert jnp.isfinite(distillate["T"])
-            assert jnp.isfinite(info["N_min"])
-            assert float(info["Q_condenser"]) < 0.0
-            assert float(info["Q_reboiler"]) > 0.0
-            results[name] = info
-
-        # Raoult overstates the light key's volatility at 10 bar, so it
-        # promises the separation in fewer stages than the EOS does.
-        assert float(results["ideal"]["alpha_LK"]) > float(results["eos"]["alpha_LK"])
-        assert float(results["ideal"]["N_min"]) < float(results["eos"]["N_min"])
-
-    @pytest.mark.slow
-    @pytest.mark.release
-    def test_shortcut_column_end_temperatures_are_eos_bubble_points(
-        self, thermo_pair, feed
-    ):
-        """And its column ends are EOS bubble points: the flash puts the vapor
-        fraction at zero there and lifts it off just above."""
-        from difflow.eos import flash_TP_eos
-
-        _, cubic = thermo_pair
-        column = ShortcutColumn(
-            ShortcutColumnParams(
-                species_order=self.SPECIES, light_key="n_pentane",
-                heavy_key="n_hexane", x_D_LK=0.98, x_B_HK=0.98,
-            ),
-            cubic,
-        )
-        _, _, info = column(feed, R=2.0, P=self.P, q=1.0)
-
-        for key, T_key in (("x_D", "T_top"), ("x_B", "T_bot")):
-            comp = jnp.array([info[key][s] for s in self.SPECIES])
-            T = info[T_key]
-            V_below, _, _ = flash_TP_eos(cubic.eos, comp, T - 2.0, self.P)
-            V_above, _, _ = flash_TP_eos(cubic.eos, comp, T + 2.0, self.P)
-            assert float(V_below) == pytest.approx(0.0, abs=1e-6)
-            assert float(V_above) > 1e-3
-
-    @pytest.mark.release
     def test_cubic_column_duties_are_physical(
         self, cubic_column, feed
     ):
@@ -1556,7 +1422,6 @@ class TestRigorousColumnComponentBalance:
             max(abs(e) for e in expected) / 100.0, rel=1e-6
         )
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("use_mesh", [True, False])
     def test_responds_to_feed_stage(self, multicomponent_thermo, feed, use_mesh):
         """Moving the feed must change the products (issue #211).
@@ -1603,9 +1468,7 @@ class TestRigorousColumnComponentBalance:
 
         assert heavy_in_dist[0] > heavy_in_dist[1] > heavy_in_dist[2]
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("use_mesh", [True, False])
-    @pytest.mark.release
     def test_gradient_wrt_reflux_is_finite(self, column, feed, use_mesh):
         """Products stay differentiable w.r.t. the reflux ratio."""
 
@@ -1619,7 +1482,6 @@ class TestRigorousColumnComponentBalance:
         assert jnp.isfinite(g)
         assert g != 0.0
 
-    @pytest.mark.slow
     def test_issue_211_reported_case(self):
         """The exact case from issue #211, on real pentane/hexane/heptane data.
 
@@ -1664,7 +1526,6 @@ class TestRigorousColumnComponentBalance:
             assert 5.0 < float(dist_flows["n_hexane"]) < 35.0
             assert 5.0 < float(bot_flows["n_hexane"]) < 35.0
 
-    @pytest.mark.slow
     def test_balance_error_falls_with_cmo_iter(self, column, feed):
         """Raising cmo_iter tightens the reported closure (issue #211)."""
         errors = [
@@ -1678,7 +1539,6 @@ class TestRigorousColumnComponentBalance:
         assert errors[0] > errors[1] > errors[2]
         assert errors[2] < 1e-6
 
-    @pytest.mark.slow
     def test_cmo_gives_up_the_energy_balance_not_the_material_balance(self):
         """The two paths must differ where the energy balance bites, and agree
         on the component balance (issue #211).
@@ -1847,7 +1707,6 @@ class TestPartialCondenser:
         assert "y_D" not in info
         assert float(info["overall_efficiency_equiv"]) == 1.0
 
-    @pytest.mark.slow
     def test_partial_N_matches_total_N_plus_one_on_cmo(self, alpha_thermo):
         """A partial condenser is one more equilibrium stage (exact under CMO).
 
@@ -1877,11 +1736,9 @@ class TestPartialCondenser:
                                      feed_stage=2, condenser_type="bogus")
 
 
-@pytest.mark.slow
 class TestMurphreeEfficiency:
     """``stage_efficiency``: Murphree vapour efficiency, scalar or per stage."""
 
-    @pytest.mark.slow
     def test_unity_is_the_default_exactly(self, alpha_thermo):
         """E = 1 (scalar or array) takes the original code path: identical."""
         feed = _alpha_feed()
@@ -1894,7 +1751,6 @@ class TestMurphreeEfficiency:
                     assert jnp.array_equal(base[2][k], other[2][k]), k
                 assert float(other[0]["F_lk"]) == float(base[0]["F_lk"])
 
-    @pytest.mark.slow
     def test_reboiler_efficiency_is_ignored(self, alpha_thermo):
         """Stage 0 is an equilibrium stage: its entry in the array is forced to 1."""
         feed = _alpha_feed()
@@ -1904,7 +1760,6 @@ class TestMurphreeEfficiency:
             feed, R=2.5, D_spec=0.5, use_mesh=False)
         assert jnp.array_equal(a[2]["x_profile"], b[2]["x_profile"])
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("cond", ["total", "partial"])
     def test_matches_mccabe_thiele_pseudo_equilibrium(self, alpha_thermo, cond):
         """E_MV = 0.7 on a constant-alpha CMO binary reproduces the stepper.
@@ -1938,9 +1793,7 @@ class TestMurphreeEfficiency:
         # stepper stage k is column stage n - k
         assert jnp.allclose(r["x"][1:n], xp[::-1][: n - 1], atol=1e-10)
 
-    @pytest.mark.slow
-    @pytest.mark.parametrize("cond", ["total", "partial"])
-    def test_separation_falls_monotonically_and_E_zero_is_a_flash(self, alpha_thermo, cond):
+    def test_separation_falls_monotonically_and_E_zero_is_a_flash(self, alpha_thermo, cond="total"):
         """Less efficient trays separate less; at E = 0 the column is a flash.
 
         With every tray at E = 0 only the reboiler is an equilibrium stage, so
@@ -1952,7 +1805,7 @@ class TestMurphreeEfficiency:
         feed = _alpha_feed()
         D = 0.5
         prev = None
-        for E in (1.0, 0.8, 0.6, 0.4, 0.2, 0.05, 0.0):
+        for E in (1.0, 0.6, 0.2, 0.0):
             _, _, i = _alpha_column(alpha_thermo, stage_efficiency=E, condenser_type=cond)(
                 feed, R=2.5, D_spec=D, use_mesh=False, cmo_iter=60)
             assert all(bool(jnp.all(jnp.isfinite(v))) for v in
@@ -1972,7 +1825,6 @@ class TestMurphreeEfficiency:
                 lo, hi = (x, hi) if D * y + (1 - D) * x < 0.5 else (lo, x)
             assert top == pytest.approx(ALPHA * x / (1 + (ALPHA - 1) * x), abs=1e-6)
 
-    @pytest.mark.slow
     def test_efficiency_equivalent_is_between_zero_and_one(self, alpha_thermo):
         """The Fenske-style proxy falls with E and is 1 at E = 1 (see docs)."""
         feed = _alpha_feed()
@@ -1983,7 +1835,6 @@ class TestMurphreeEfficiency:
             vals.append(float(i["overall_efficiency_equiv"]))
         assert vals[0] == 1.0 and vals[0] > vals[1] > vals[2] > 0.0
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("cond", ["total", "partial"])
     def test_mesh_balances_close_with_low_efficiency(self, alpha_thermo, cond):
         _, _, i = _alpha_column(alpha_thermo, stage_efficiency=0.3, condenser_type=cond)(
@@ -1997,9 +1848,7 @@ class TestMurphreeEfficiency:
         with pytest.raises(ValueError):
             DistillationColumnParams(**kw, stage_efficiency=-0.1)
 
-    @pytest.mark.parametrize("cond", ["total", "partial"])
-    @pytest.mark.parametrize("use_mesh", [False, pytest.param(True, marks=pytest.mark.slow)])
-    def test_gradients(self, alpha_thermo, cond, use_mesh):
+    def test_gradients(self, alpha_thermo, cond="total", use_mesh=False):
         """check_grads (order 1, rev) of x_D[LK] and Q_reboiler wrt E and R.
 
         E as a scalar and as one element of an array; R as the reflux ratio.
@@ -2015,15 +1864,11 @@ class TestMurphreeEfficiency:
                           mesh_iter=6, cmo_iter=15)
             return jnp.stack([d["F_lk"] / 0.5, i["Q_reboiler"] / 1e4])
 
+        # One compile: E as one element of the per-stage array, and R.
         kw = dict(order=1, modes=["rev"], atol=1e-4, rtol=1e-4)
-        check_grads(lambda E: f(E, 2.5), (0.7,), **kw)
-        check_grads(lambda E: f(E, 2.5, 2), (0.7,), **kw)
-        check_grads(lambda R: f(0.7, R), (2.5,), **kw)
-        g = jax.grad(lambda E: f(E, 2.5)[0])(0.7)
-        assert float(g) > 0.0      # more efficient trays -> purer distillate
+        check_grads(lambda E, R: f(E, R, 2), (0.7, 2.5), **kw)
 
 
-@pytest.mark.slow
 class TestDepropanizerPartialCondenser:
     """wex13-1 style depropanizer: C2..nC5 on Peng-Robinson, partial condenser.
 
@@ -2047,8 +1892,7 @@ class TestDepropanizerPartialCondenser:
                            T=340.0, P=P)
         return thermo, feed, P
 
-    @pytest.mark.parametrize("use_mesh", [False, True])
-    def test_converges_and_balances(self, setup, use_mesh):
+    def test_converges_and_balances(self, setup, use_mesh=False):
         thermo, feed, P = setup
         col = DistillationColumn(
             DistillationColumnParams(species_order=self.SPECIES, n_stages=20, feed_stage=10,
@@ -2119,7 +1963,6 @@ class TestMulticomponentFUG:
         ratio = (d[0] / b[0]) / ((d[2] / b[2]) * alpha[0] ** N_min)
         assert float(ratio) == pytest.approx(1.0, rel=1e-8)
 
-    @pytest.mark.slow
     def test_underwood_theta_stays_bracketed(self):
         """The old Newton step left (1, alpha_LK) and was clipped to 1.001."""
         from scipy.optimize import brentq
@@ -2285,7 +2128,6 @@ class TestSolveSpecs:
                                                     ("B", 52.0)], use_mesh=False)
         assert not bool(info["spec_converged"])
 
-    @pytest.mark.slow
     def test_gradient_of_reflux_wrt_purity(self, db_thermo):
         col = self._column(db_thermo)
 

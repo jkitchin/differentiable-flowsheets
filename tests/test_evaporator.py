@@ -368,9 +368,7 @@ def multi(N=3, feed="forward", **kw):
     return MultiEffectEvaporator(MultiEffectEvaporatorParams(**base))
 
 
-@pytest.mark.slow
 class TestMultiEffect:
-    @pytest.mark.slow
     @pytest.mark.parametrize("arrangement", ["forward", "backward", "parallel"])
     def test_design_closes_and_has_equal_areas(self, arrangement):
         conc, vap, info = multi(3, arrangement, x_product=0.3)(naoh_feed())
@@ -389,7 +387,6 @@ class TestMultiEffect:
         assert np.all(np.diff(Tw) < 0) and np.all(T < Th)
         assert float(vap["F_NaOH"]) == 0.0
 
-    @pytest.mark.slow
     def test_forward_feed_concentration_profile(self):
         info = multi(3, "forward", x_product=0.3)(naoh_feed())[2]
         x = np.asarray(info["x"])
@@ -400,7 +397,6 @@ class TestMultiEffect:
         par = multi(3, "parallel", x_product=0.3)(naoh_feed())[2]
         np.testing.assert_allclose(np.asarray(par["x"]), 0.3)
 
-    @pytest.mark.slow
     def test_one_effect_equals_the_single_effect_unit(self):
         feed = naoh_feed()
         _, _, s = single(x_product=0.3)(feed)
@@ -477,7 +473,6 @@ class TestMultiEffect:
         assert ier == 1, msg
         np.testing.assert_allclose(sol, u_mod, rtol=1e-6)
 
-    @pytest.mark.slow
     def test_steam_economy_rises_with_n(self):
         """About N x 0.8-1.0 for a water-like solution with a preheated feed.
 
@@ -496,14 +491,12 @@ class TestMultiEffect:
         for N, e in enumerate(eco, start=1):
             assert 0.78 * N <= e <= 1.06 * N, (N, e)
 
-    @pytest.mark.slow
     def test_backward_feed_beats_forward_for_a_cold_feed(self):
         feed = naoh_feed(T=300.0)
         f = multi(3, "forward", x_product=0.3)(feed)[2]
         b = multi(3, "backward", x_product=0.3)(feed)[2]
         assert float(b["steam_economy"]) > float(f["steam_economy"])
 
-    @pytest.mark.slow
     def test_total_area_grows_with_n(self):
         feed = naoh_feed()
         areas = [float(multi(N, "forward", U=[2500.0], x_product=0.3)(feed)[2]["total_area"])
@@ -518,7 +511,6 @@ class TestMultiEffect:
         assert m_w_in - m_w_out == pytest.approx(float(info["V_total"]))
         assert float(info["x_product"]) == pytest.approx(0.3)
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("arrangement", ["forward", "backward", "parallel"])
     def test_rating_inverts_design(self, arrangement):
         feed = naoh_feed()
@@ -529,7 +521,6 @@ class TestMultiEffect:
         assert float(r["x_product"]) == pytest.approx(0.3, rel=1e-6)
         assert float(r["steam"]) == pytest.approx(float(d["steam"]), rel=1e-6)
 
-    @pytest.mark.slow
     def test_rating_with_unequal_areas_and_parallel_split(self):
         feed = naoh_feed()
         _, _, info = multi(3, "forward", A=[80.0, 100.0, 120.0])(feed)
@@ -539,7 +530,6 @@ class TestMultiEffect:
         assert bool(p["converged"])
         assert float(p["x_product"]) > 0.1
 
-    @pytest.mark.slow
     def test_scalar_U_and_A_broadcast(self):
         a = multi(3, "forward", U=[2000.0], x_product=0.3)(naoh_feed())[2]
         b = multi(3, "forward", U=[2000.0] * 3, x_product=0.3)(naoh_feed())[2]
@@ -655,7 +645,6 @@ def _steam_and_area(arrangement, N, U1, xF, Ps, design=True):
 class TestGradients:
     X0 = (2500.0, 0.10, 300e3)
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("design", [True, False])
     def test_single_effect(self, design):
         def f(U, xF, Ps):
@@ -666,23 +655,19 @@ class TestGradients:
 
         check_grads(f, self.X0, order=1, modes=["rev"], rtol=1e-4, atol=1e-4)
 
-    @pytest.mark.slow
     def test_multi_effect_forward_design(self):
         f = lambda U, xF, Ps: _steam_and_area("forward", 3, U, xF, Ps)[:2]
         check_grads(f, self.X0, order=1, modes=["rev"], rtol=1e-4, atol=1e-4)
 
-    @pytest.mark.slow
     def test_multi_effect_forward_rating(self):
         f = lambda U, xF, Ps: _steam_and_area("forward", 2, U, xF, Ps, design=False)[jnp.array([0, 2])]
         check_grads(f, self.X0, order=1, modes=["rev"], rtol=1e-4, atol=1e-4)
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("arrangement", ["backward", "parallel"])
     def test_multi_effect_other_arrangements(self, arrangement):
         f = lambda U, xF, Ps: _steam_and_area(arrangement, 3, U, xF, Ps)[:2]
         check_grads(f, self.X0, order=1, modes=["rev"], rtol=1e-4, atol=1e-4)
 
-    @pytest.mark.slow
     def test_gradient_signs(self):
         """Steam falls with U? No: steam is set by the duty; AREA falls with U."""
         g = jax.jacrev(lambda U: _steam_and_area("forward", 2, U, 0.10, 300e3)[1])(2500.0)
@@ -838,7 +823,6 @@ class TestPublishedExamples:
         assert float(info["steam_economy"]) == pytest.approx(0.78, rel=0.01)
         assert float(info["A"]) / 0.09290304 == pytest.approx(930.0, rel=0.03)
 
-    @pytest.mark.slow
     def test_geankoplis_8_5_1_triple_effect(self):
         """Geankoplis 4e Ex. 8.5-1: 22 680 kg/h of 10 % sugar at 26.7 C to
         50 %, forward feed, steam 205.5 kPa, 13.4 kPa in effect 3,

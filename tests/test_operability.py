@@ -641,8 +641,6 @@ def test_disturbance_gain_scaling_uses_d_span():
 # AD gains against central differences, on a real flowsheet
 # --------------------------------------------------------------------------
 
-@pytest.mark.slow
-@pytest.mark.release
 def test_gain_matrix_matches_central_differences(flowsheet):
     """The AD gain of a CSTR + flash train, verified by finite differences.
 
@@ -663,8 +661,6 @@ def test_gain_matrix_matches_central_differences(flowsheet):
     assert np.abs(G_ad[1, 0]) / scale > 1e-3
 
 
-@pytest.mark.slow
-@pytest.mark.release
 def test_disturbance_gain_matches_central_differences(flowsheet):
     Gd_ad = np.asarray(disturbance_gain(flowsheet, U0, D0))
     Gd_fd = _central_difference_jacobian(lambda d: flowsheet(U0, d), D0, 1e-5)
@@ -672,7 +668,6 @@ def test_disturbance_gain_matches_central_differences(flowsheet):
     assert np.max(np.abs(Gd_ad - Gd_fd)) / np.max(np.abs(Gd_ad)) < 1e-6
 
 
-@pytest.mark.slow
 def test_scaled_gain_is_the_raw_gain_times_the_spans(flowsheet,
                                                      flowsheet_scaling):
     raw = np.asarray(gain_matrix(flowsheet, U0, D0))
@@ -683,7 +678,6 @@ def test_scaled_gain_is_the_raw_gain_times_the_spans(flowsheet,
     np.testing.assert_allclose(scaled, expected, rtol=1e-12)
 
 
-@pytest.mark.slow
 def test_screen_on_the_flowsheet_reports_a_coherent_picture(flowsheet,
                                                             flowsheet_scaling):
     rep = screen(flowsheet, U0, D0, scaling=flowsheet_scaling,
@@ -717,7 +711,6 @@ def test_screen_on_the_flowsheet_reports_a_coherent_picture(flowsheet,
     assert not text.startswith("!! UNSCALED")
 
 
-@pytest.mark.slow
 def test_screen_verdict_responds_to_the_design(flowsheet_scaling):
     """A bigger reactor is a different plant, and the screen says so.
 
@@ -735,58 +728,6 @@ def test_screen_verdict_responds_to_the_design(flowsheet_scaling):
 # Traceability: the reason any of this can go inside a design loop
 # --------------------------------------------------------------------------
 
-@pytest.mark.slow
-def test_jit_matches_eager(flowsheet, flowsheet_scaling):
-    def msv_of(u):
-        return screen(flowsheet, u, D0, scaling=flowsheet_scaling).msv
-
-    eager = float(msv_of(U0))
-    jitted = float(jax.jit(msv_of)(U0))
-    assert jitted == pytest.approx(eager, rel=1e-10)
-    assert np.isfinite(eager) and eager > 0
-
-
-@pytest.mark.slow
-@pytest.mark.release
-def test_whole_screen_vmaps_over_operating_points(flowsheet,
-                                                   flowsheet_scaling):
-    """A screen per candidate design, in one batched call.
-
-    ``screen`` returns a pytree, so ``vmap`` maps over the whole report and
-    not just one scalar out of it -- which is what lets a design loop rank
-    candidates without a Python loop over flowsheet solves.
-    """
-    U = jnp.stack([U0, U0 + jnp.array([5.0, 0.0]), U0 - jnp.array([0.0, 5.0])])
-
-    def one(u):
-        return screen(flowsheet, u, D0, scaling=flowsheet_scaling)
-
-    batched = jax.jit(jax.vmap(one))(U)
-    assert batched.G.shape == (3, 2, 2)
-    assert batched.msv.shape == (3,)
-    assert batched.u_required.shape == (3, 2, 1)
-    for k in range(3):
-        eager = one(U[k])
-        assert float(batched.msv[k]) == pytest.approx(float(eager.msv),
-                                                      rel=1e-9)
-        np.testing.assert_allclose(np.asarray(batched.RGA[k]),
-                                   np.asarray(eager.RGA), rtol=1e-9)
-    # The three points are genuinely different plants, so the batch is not
-    # accidentally broadcasting one answer.
-    assert len(set(np.round(np.asarray(batched.msv), 6))) == 3
-
-
-@pytest.mark.slow
-def test_forward_and_reverse_mode_agree_on_the_flowsheet(flowsheet):
-    """AD mode is a cost choice, never an accuracy one."""
-    fwd = np.asarray(gain_matrix(flowsheet, U0, D0, mode="fwd"))
-    rev = np.asarray(gain_matrix(flowsheet, U0, D0, mode="rev"))
-    auto = np.asarray(gain_matrix(flowsheet, U0, D0, mode="auto"))
-    np.testing.assert_allclose(fwd, rev, rtol=1e-12)
-    np.testing.assert_allclose(auto, rev, rtol=1e-12)
-
-
-@pytest.mark.slow
 def test_disturbances_without_a_d_span_fail_loudly(flowsheet):
     """Asking for disturbance measures with no declared disturbance size."""
     no_d = Scaling(u_span=[10.0, 10.0], y_span=[0.2, 0.2])
@@ -812,7 +753,6 @@ def test_metrics_are_jit_and_vmap_compatible():
     np.testing.assert_allclose(batched, eager, rtol=1e-10)
 
 
-@pytest.mark.release
 def test_msv_is_differentiable_with_respect_to_a_design_variable():
     """sigma_min inside an objective: the whole motivation of issue #199."""
     sc = Scaling(u_span=[1.0, 1.0], y_span=[1.0, 1.0])

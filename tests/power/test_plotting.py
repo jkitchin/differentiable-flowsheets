@@ -36,7 +36,6 @@ def test_every_case_draws(case):
     assert len(ax.lines) >= net.n_bus + net.n_branch
 
 
-@pytest.mark.slow
 def test_annotations_reach_the_axes():
     net = dp.cases.case9()
     result = dp.solve_power_flow(net)
@@ -53,7 +52,6 @@ def test_annotations_reach_the_axes():
     assert all(bus in texts for bus in net.bus_ids)
 
 
-@pytest.mark.slow
 def test_prices_and_highlights_are_drawn():
     net = dp.cases.case5()
     result = dp.solve_acopf(net)

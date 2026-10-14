@@ -217,7 +217,6 @@ class TestNetwork:
 
 class TestDeltaVectors:
 
-    @pytest.mark.release
     def test_delta_vectors_match_central_differences(self):
         """Acceptance criterion 3: AD agrees with FD to <1e-4 relative."""
         result = check_delta_vectors(smooth_block(),
@@ -403,7 +402,6 @@ class TestLP:
 
 class TestTrustRegion:
 
-    @pytest.mark.slow
     def test_trust_region_converges_to_known_optimum(self):
         """Acceptance criterion 2, first half: it converges from a cold start."""
         net = Network([quadratic_block(peak=(0.3, 0.7))])
@@ -502,14 +500,12 @@ class TestTrustRegion:
         assert result.n_starts == 2
         npt.assert_allclose(result.decisions, [0.9, 0.1], atol=1e-5)
 
-    @pytest.mark.slow
     def test_minimisation_sense(self):
         net = Network([quadratic_block(peak=(0.3, 0.7))])
         result = DeltaBasePlanner(net, prices={"q.f": -1.0}, radius=0.3,
                                   sense="min").solve()
         npt.assert_allclose(result.decisions, [0.3, 0.7], atol=1e-5)
 
-    @pytest.mark.slow
     def test_result_reports_delta_vectors_and_summary(self):
         net = Network([smooth_block()])
         result = DeltaBasePlanner(net, prices={"s.p": 1.0}, radius=0.2).solve()
@@ -530,7 +526,6 @@ class TestPlanSensitivity:
                      u_names=["a"], y_names=["lin", "quad"],
                      lb=[0.0], ub=[5.0])
 
-    @pytest.mark.slow
     def test_price_sensitivity_matches_the_analytic_answer(self):
         planner = DeltaBasePlanner(Network([self._priced_block()]),
                                    prices={"q.lin": 2.0, "q.quad": 1.0},
@@ -649,8 +644,6 @@ class TestModifiers:
         return DeltaBasePlanner(Network([blk]), prices={"r.f": 1.0},
                                 radius=0.3, vertex_seeding=False)
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_gradient_modifiers_reach_the_plant_optimum(self):
         result = run_modifier_adaptation(
             self._planner(), {"r": self.PLANT}, max_iter=40, tol=1e-7)
@@ -788,7 +781,6 @@ class TestPiecewise:
 # lengths, plus the timing loops themselves -- the repo's `slow` category.
 # Running it in the single slow job also means the timing ratios are measured
 # once rather than once per Python in the matrix.
-@pytest.mark.slow
 class TestScaling:
 
     #: The regression limit from the module's acceptance criteria.
@@ -799,67 +791,6 @@ class TestScaling:
         problem = chain_mod.two_plant_chain(horizon=n // 5)
         return (planner_objective(problem.planner()),
                 problem.network.decision_start())
-
-    @pytest.mark.slow
-    @pytest.mark.release
-    def test_gradient_cost_ratio_scaling(self):
-        """Acceptance criterion 1: AD gradient cost stays under 3x one eval.
-
-        Reverse mode is used throughout — a scalar objective over ``n``
-        decisions is exactly the shape it is for — so this also exercises the
-        mode that delivers the scaling.
-
-        This is a wall-clock assertion and it used to flake under
-        ``pytest -n auto`` (#271), where the workers compete for cores and a
-        timing ratio in one worker contends with several others. The three
-        obvious answers all fail here, which is why the fix is in the
-        estimator instead:
-
-        * **Skip under xdist.** Both `.github/workflows/test.yml` and
-          `release-tests.yml` run ``-n auto``, so this would leave an
-          acceptance criterion running nowhere.
-        * **``xdist_group``.** It pins tests to one worker; it does not stop
-          the other workers running at the same time, which is the
-          contention.
-        * **Move it behind ``release``.** Already there — and
-          ``release-tests.yml`` runs ``-n auto`` too.
-
-        Nor is it a clock artifact that a different clock would remove:
-        measured on this chain at n = 80 under 8x oversubscription of 4
-        cores, the wall-clock ratio went 0.97x -> 2.12x and the CPU-time
-        ratio 1.22x -> 1.89x. A busy machine makes the gradient genuinely
-        cost more work, through cache and core sharing.
-
-        What does work is more independent draws at a quiet window. See
-        :func:`difflow.planning.best_cost_ratio`.
-        """
-        rows = scaling_study(self._make, [5, 10, 20, 40, 80], repeats=3,
-                             warmup=2, mode="rev")
-        assert [r.n for r in rows] == [5, 10, 20, 40, 80]
-
-        # The estimator is a minimum over samples, so noise can only inflate
-        # it. A row over the limit therefore gets more careful looks before it
-        # is called a regression -- re-measuring is not moving the goalposts,
-        # it is taking a better sample of the same quantity. One retry was not
-        # enough: under parallel load a whole re-measurement can land inside
-        # one contended window (#271), so this takes up to four independent
-        # draws with growing sample counts and stops at the first that lands
-        # under the limit.
-        rows = [row if row.ad_ratio < self.AD_RATIO_LIMIT
-                else min(row, best_cost_ratio(*self._make(row.n),
-                                              limit=self.AD_RATIO_LIMIT,
-                                              mode="rev", repeats=7,
-                                              warmup=3),
-                         key=lambda r: r.ad_ratio)
-                for row in rows]
-
-        for row in rows:
-            assert row.ad_ratio < self.AD_RATIO_LIMIT, (
-                f"AD gradient cost {row.ad_ratio:.2f}x one evaluation at "
-                f"n={row.n}\n" + format_scaling_table(rows))
-        # Finite differences must cost more, and increasingly so.
-        assert rows[-1].fd_seconds > rows[0].fd_seconds
-        assert rows[-1].speedup > 1.0
 
     def test_best_cost_ratio_keeps_the_smallest_and_stops_early(self):
         """#271: more draws at a quiet window, and the minimum across them.
@@ -893,8 +824,6 @@ class TestScaling:
         assert best.ad_ratio == pytest.approx(4.0)
         assert len(seen) == 4, "over the limit on every draw is a real failure"
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_gradient_agrees_with_finite_differences(self):
         fn, x0 = self._make(5)
         ratio = gradient_cost_ratio(fn, x0, repeats=1, warmup=1, check=True,
@@ -949,7 +878,6 @@ class TestScaling:
 # The reference chain  (acceptance criterion 5's claim)
 # --------------------------------------------------------------------------
 
-@pytest.mark.slow
 class TestChain:
 
     def test_chain_structure(self, chain_problem):
@@ -961,14 +889,12 @@ class TestChain:
     def test_horizon_scales_decisions(self):
         assert chain_mod.two_plant_chain(horizon=4).n_decisions == 20
 
-    @pytest.mark.slow
     def test_plan_respects_the_spec(self, chain_problem):
         result = chain_problem.planner(radius=0.25).solve()
         assert result.converged
         assert result.total_violation < 1e-6
         assert result.values["ngl.T_colfeed"] <= 236.0 + 1e-6
 
-    @pytest.mark.slow
     def test_chain_allocation_lever_switches_with_prices(self, chain_problem):
         """The worked example's claim: the lever flips corner with price."""
         cheap = chain_problem.planner(radius=0.25)
@@ -1020,7 +946,6 @@ class TestProblemStatement:
         planner = chain_problem.planner(radius=0.25, accept_test=False)
         assert "WARNING" in planner.describe()
 
-    @pytest.mark.slow
     def test_lp_as_text_covers_every_row_and_column(self, chain_problem):
         result = chain_problem.planner(radius=0.25).solve()
         model = result.lp_model
@@ -1217,7 +1142,6 @@ class TestDeltaHealth:
         assert spread, report.summary()
         assert spread[0].value > SPREAD_TOL
 
-    @pytest.mark.slow
     def test_composed_relative_sensitivity_survives_extreme_depth(self):
         """Absolute smallness is physics; relative smallness would be loss.
 

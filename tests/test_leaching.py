@@ -169,7 +169,6 @@ class TestConstantSolvent:
 
 
 class TestMassBalance:
-    @pytest.mark.slow
     @pytest.mark.parametrize("kw", [
         dict(underflow_model="constant_solution", underflow=1.6, n_stages=3.7),
         dict(underflow_model="constant_solvent", underflow=1.4, n_stages=2.5),
@@ -186,12 +185,10 @@ class TestMassBalance:
         assert bool(info["converged"]) and bool(info["feasible"])
 
 
-@pytest.mark.slow
 class TestVariableUnderflow:
     Y = [0.0, 0.1, 0.2, 0.4]
     S = [1.5, 1.8, 2.2, 3.0]
 
-    @pytest.mark.slow
     def test_constant_table_equals_closed_form(self):
         feed, solv = streams(V=130.0, fresh_sugar=1.0)
         a = Leacher(prm(n_stages=4.0, underflow=1.7))(feed, solv)[2]
@@ -266,7 +263,6 @@ class TestDesign:
         _, _, i = Leacher(prm(underflow=2.0, recovery=0.9, design="stages"))(feed, solv)
         assert not bool(i["feasible"]) and np.isnan(float(i["n_stages"]))
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("kw", [
         dict(underflow=2.0),
         dict(underflow_model="variable", underflow_y=[0.0, 0.1, 0.2, 0.4], underflow_s=[1.5, 1.8, 2.2, 3.0]),
@@ -317,7 +313,6 @@ class TestGradients:
         g = lambda n: Leacher(prm(n_stages=n, underflow=1.5))(feed, solv)[2]["recovery"]
         check_grads(g, (3.0,), order=1, modes=["rev"])
 
-    @pytest.mark.slow
     def test_variable_wrt_solvent_and_table(self):
         Y = jnp.array([0.0, 0.1, 0.2, 0.4])
 
@@ -326,7 +321,6 @@ class TestGradients:
             return Leacher(p)(self.feed, make_stream({"water": v}, T, P))[2]["recovery"]
         check_grads(f, (150.0, jnp.array([1.5, 1.8, 2.2, 3.0])), order=1, modes=["rev"], rtol=1e-4, atol=1e-6)
 
-    @pytest.mark.slow
     def test_design_gradients(self):
         f = lambda r: Leacher(prm(underflow=1.5, recovery=r, design="stages"))(  # noqa: E731
             self.feed, self.solv)[2]["n_stages"]

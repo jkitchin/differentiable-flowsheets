@@ -49,7 +49,6 @@ def test_monomers_per_basis_unit_comes_from_the_declared_stoichiometry(name):
     assert ext.monomers_per_basis_unit == ext.monomers_per_ree / ext.basis_units_per_ree
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("name", DIMERIC + ("naphthenic_acid",))
 def test_mass_action_layer_evaluates_the_correlation_on_the_record_basis(name):
     """A section given 2C M formal reproduces the correlation at C M dimer.
@@ -110,7 +109,6 @@ def _same_solvent_both_levels(name, extractant_conc, re_to_acid):
     return ext, elements, pH, feed, solvent, corr, closed
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("name", DIMERIC)
 def test_same_solvent_gives_the_same_D_and_loading_at_both_levels(name):
     """The #374 boundary, through the one class cascade code calls."""

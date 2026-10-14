@@ -77,7 +77,6 @@ def test_ybus_matches_hand_assembly_on_a_triangle():
     np.testing.assert_allclose(y, want, atol=1e-12)
 
 
-@pytest.mark.slow
 def test_ybus_is_symmetric_without_phase_shifters():
     for case in ("case3", "case5", "case9", "case14"):
         y = np.asarray(dp.cases.load_case(case).ybus())
@@ -111,7 +110,6 @@ def test_polynomial_cost_and_its_derivative():
     )
 
 
-@pytest.mark.release
 def test_marginal_cost_agrees_with_autodiff():
     coefficients = (0.002, 0.11, 5.0, 150.0)
     for p in (0.0, 37.5, 210.0):

@@ -144,7 +144,6 @@ class TestMakeObjectiveFnVariesWithParams:
 class TestMakeObjectiveFnGradients:
     """JAX gradients should flow through the parameter update."""
 
-    @pytest.mark.release
     def test_grad_wrt_volume_is_positive(self, cstr_flowsheet):
         """d(F_B)/d(V) should be positive at V=1."""
         def obj_fn(streams):
@@ -158,7 +157,6 @@ class TestMakeObjectiveFnGradients:
         assert jnp.isfinite(g), "Gradient is not finite"
         assert float(g) > 0.0, "Expected positive gradient d(F_B)/d(V)"
 
-    @pytest.mark.release
     def test_grad_is_finite_and_nonzero(self, cstr_flowsheet):
         """Gradient must be finite and non-zero (not a constant function)."""
         def obj_fn(streams):
@@ -205,7 +203,6 @@ class TestApplyParamsErrors:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.slow
 class TestFeedStreamParams:
     """``feed:<name>.<field>`` keys make feed rate and composition levers."""
 
@@ -269,7 +266,6 @@ class TestFeedStreamParams:
 
         assert large > small
 
-    @pytest.mark.slow
     def test_gradient_through_a_feed_lever(self, cstr_flowsheet):
         """The whole point: d(product)/d(feed rate) must be finite and right."""
         objective = cstr_flowsheet.make_objective_fn(

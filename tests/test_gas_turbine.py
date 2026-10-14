@@ -109,7 +109,6 @@ class TestGasCompressor:
         lo = GasCompressor(GasCompressorParams(18.0, 0.70), thermo)(air)[1]["W"]
         assert float(lo) > float(hi)
 
-    @pytest.mark.release
     def test_work_differentiable(self, thermo):
         air = make_stream(dict(AIR_COMPOSITION), 288.15, P_ATM)
         def W(rp):
@@ -145,7 +144,6 @@ class TestGasTurbine:
         assert float(lo[1]["W"]) < float(hi[1]["W"])
         assert float(lo[0]["T"]) > float(hi[0]["T"])
 
-    @pytest.mark.release
     def test_work_differentiable(self, thermo):
         hot = self._hot_products(thermo)
         def W(Pout):
@@ -200,7 +198,6 @@ class TestCombustor:
         prod, _ = comb(fuel, air)
         assert float(prod["P"]) == pytest.approx(0.96 * 18 * P_ATM)
 
-    @pytest.mark.release
     def test_air_scale_differentiable_wrt_TIT(self, thermo):
         fuel = make_stream({"methane": 1.0}, 298.15, 18 * P_ATM)
         air = make_stream(dict(AIR_COMPOSITION), 700.0, 18 * P_ATM)
@@ -234,14 +231,11 @@ class TestBraytonCycle:
         assert float(r["eta_thermal"]) == pytest.approx(0.568, abs=0.02)
         assert float(r["eta_thermal"]) > float(r["eta_gt_only"])
 
-    @pytest.mark.slow
     def test_higher_TIT_raises_efficiency(self):
         cool = brayton_cycle(self.FUEL, BraytonCycleParams(TIT_K=1500.0))
         hot = brayton_cycle(self.FUEL, BraytonCycleParams(TIT_K=1700.0))
         assert float(hot["eta_thermal"]) > float(cool["eta_thermal"])
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_efficiency_differentiable_wrt_pressure_ratio(self):
         def eta(rp):
             return brayton_cycle(self.FUEL, BraytonCycleParams(pressure_ratio=rp))["eta_thermal"]

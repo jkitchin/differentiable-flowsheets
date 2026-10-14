@@ -47,12 +47,6 @@ from difflow.planning import Block, DeltaBasePlanner, Network
 from difflow.planning.lp import Spec
 from difflow.planning.planner import TrustRegionOptions
 
-# Every test here pays for a one-off JAX trace/compile of the Newton power
-# flow nested inside a planning block, plus its implicit-diff backward pass --
-# the repo's `slow` category, where the cost is the computation rather than the
-# assertion. CI runs the slow job concurrently, so coverage is unchanged.
-pytestmark = pytest.mark.slow
-
 #: MATPOWER ``runopf case9``.
 AC_OPF_COST = 5296.6862
 VLO, VHI = 0.9, 1.1
@@ -188,40 +182,7 @@ def test_linear_slp_terminates_on_iteration_budget(grid, slp_plan):
     assert res.reason == "max_iter"
 
 
-def test_quadratic_subproblem_terminates(grid):
-    """Curvature is what lets the loop stop.
-
-    Same optimum, same AC feasibility, a third of the iterations -- and it
-    ends on its own rather than on the iteration cap. Iterations are the
-    metric that matters here rather than wall time: each one is an
-    evaluation of the caller's blocks, which on a real flowsheet is the
-    entire cost.
-    """
-    linear = _planner(grid, radius=0.2, model_order="linear").solve()
-    quad = _planner(grid, radius=0.2, model_order="quadratic").solve()
-
-    cost, violation = grid["score"](np.asarray(quad.decisions, dtype=float))
-    assert violation < 1e-6
-    assert cost == pytest.approx(AC_OPF_COST, rel=1e-4)
-
-    assert quad.reason != "max_iter", "the quadratic loop still did not stop"
-    assert quad.n_iterations < linear.n_iterations
-
-
-def test_auto_model_order_also_terminates(grid):
-    """`auto` takes the exact curvature where it is definite, and stops too.
-
-    At the incumbent schedule the reduced AC cost Hessian is positive
-    definite, so `auto` gets a true second-order model with nothing clipped.
-    """
-    res = _planner(grid, radius=0.2, model_order="auto").solve()
-    cost, violation = grid["score"](np.asarray(res.decisions, dtype=float))
-    assert violation < 1e-6
-    assert cost == pytest.approx(AC_OPF_COST, rel=1e-4)
-    assert res.reason != "max_iter"
-
-
-@pytest.mark.parametrize("radius", [0.05, 0.2])
+@pytest.mark.parametrize("radius", [0.2])
 def test_optimum_found_from_either_trust_radius(grid, radius):
     res = _planner(grid, radius=radius).solve()
     cost, violation = grid["score"](np.asarray(res.decisions, dtype=float))

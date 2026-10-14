@@ -323,7 +323,6 @@ class TestReport:
         ranks = [CLASS_ORDER.index(k) for k in keys if k in CLASS_ORDER]
         assert ranks == sorted(ranks)
 
-    @pytest.mark.slow
     def test_cli_runs(self):
         out = subprocess.run(
             [sys.executable, "-m", "difflow_ree.provenance"],
@@ -334,7 +333,6 @@ class TestReport:
         assert "difflow_ree data provenance" in out.stdout
         assert "UNTAGGED" not in out.stdout  # nothing should be untagged
 
-    @pytest.mark.slow
     def test_cli_explain(self):
         out = subprocess.run(
             [

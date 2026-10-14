@@ -181,7 +181,6 @@ def _trace_species_outlet(cls):
     return f
 
 
-@pytest.mark.slow
 def test_clipping_inside_the_map_would_break_the_gradient():
     """Why the unaccelerated path does not clip (#263).
 

@@ -16,7 +16,6 @@ from difflow.streams import make_stream, total_flow
 class TestBug136_CompressionSpecificPower:
     """Bug #136: specific_power should be in kWh/tonne CO2."""
 
-    @pytest.mark.slow
     def test_specific_power_units(self):
         """Check specific_power is in a reasonable range (50-150 kWh/tonne)."""
         from difflow_cc.units.compression import CompressionTrain, CompressionTrainParams
@@ -37,7 +36,6 @@ class TestBug136_CompressionSpecificPower:
         # Literature values for CO2 compression 2 bar -> 150 bar: ~80-130 kWh/tonne
         assert 30 < sp < 300, f"specific_power = {sp} kWh/tonne, expected 30-300"
 
-    @pytest.mark.slow
     def test_specific_power_manual_calculation(self):
         """Verify unit conversion: W / (kg/s) / 3600 = kWh/tonne."""
         from difflow_cc.units.compression import CompressionTrain, CompressionTrainParams

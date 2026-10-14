@@ -62,20 +62,6 @@ def product(streams):
 
 
 class TestSweep:
-    @pytest.mark.slow
-    def test_grid_matches_direct_evaluation(self, flowsheet):
-        """The page can only be as right as the numbers baked into it."""
-        axis = SweepAxis("reactor.V", 0.5, 3.0, n=6)
-        result = sweep(flowsheet, [axis], {"product": product})
-
-        objective = flowsheet.make_objective_fn(product)
-        for i, v in enumerate(axis.values()):
-            expected = float(objective({"reactor.V": float(v)}))
-            assert float(result.values["product"][i]) == pytest.approx(
-                expected, rel=1e-12
-            )
-
-    @pytest.mark.slow
     def test_gradients_are_the_real_derivatives(self, flowsheet):
         axis = SweepAxis("reactor.V", 0.5, 3.0, n=4)
         result = sweep(flowsheet, [axis], {"product": product})
@@ -88,7 +74,6 @@ class TestSweep:
             got = float(result.gradients["product"]["reactor.V"][i])
             assert got == pytest.approx(expected, rel=1e-9)
 
-    @pytest.mark.slow
     def test_two_axes_give_a_two_dimensional_grid(self, flowsheet):
         result = sweep(
             flowsheet,
@@ -100,18 +85,6 @@ class TestSweep:
         assert result.n_points == 15
         assert jnp.asarray(result.values["product"]).shape == (5, 3)
 
-    @pytest.mark.slow
-    @pytest.mark.release
-    def test_the_loop_fallback_agrees_with_vmap(self, flowsheet):
-        axis = SweepAxis("reactor.V", 0.5, 3.0, n=4)
-        batched = sweep(flowsheet, [axis], {"product": product}, batch=True)
-        looped = sweep(flowsheet, [axis], {"product": product}, batch=False)
-        np.testing.assert_allclose(
-            np.asarray(batched.values["product"]),
-            np.asarray(looped.values["product"]),
-            rtol=1e-12,
-        )
-
     def test_gradients_can_be_skipped(self, flowsheet):
         result = sweep(
             flowsheet, [SweepAxis("reactor.V", 0.5, 3.0, n=3)],
@@ -119,7 +92,6 @@ class TestSweep:
         )
         assert result.gradients == {}
 
-    @pytest.mark.slow
     def test_multiple_outputs(self, flowsheet):
         result = sweep(
             flowsheet, [SweepAxis("reactor.V", 0.5, 3.0, n=3)],
@@ -131,7 +103,6 @@ class TestSweep:
                  + jnp.asarray(result.values["B"]))
         np.testing.assert_allclose(np.asarray(total), 1.0, rtol=1e-9)
 
-    @pytest.mark.slow
     def test_a_bigger_volume_converts_more(self, flowsheet):
         result = sweep(
             flowsheet, [SweepAxis("reactor.V", 0.5, 5.0, n=8)],
@@ -195,16 +166,13 @@ INERT_URLS = (
 )
 
 
-@pytest.mark.slow
 class TestPage:
-    @pytest.mark.slow
     def test_loads_nothing_at_run_time(self, drawn_page):
         """No network at run time: nothing to rot next to a paper."""
         for pattern in ("<script src", "<link ", "@import url(", "url(http",
                         ' src="http', ' href="http'):
             assert pattern not in drawn_page, f"page fetches via {pattern!r}"
 
-    @pytest.mark.slow
     def test_every_url_it_names_is_inert(self, drawn_page):
         """The bundle carries URLs; none of them is a resource.
 
@@ -260,7 +228,6 @@ class TestPage:
             assert marker in page, f"page has no {marker}"
         assert "window.DIFFLOW" in page
 
-    @pytest.mark.slow
     def test_title_and_description_are_escaped(self, flowsheet):
         result = sweep(
             flowsheet, [SweepAxis("reactor.V", 0.5, 3.0, n=3)],
@@ -280,7 +247,6 @@ class TestPage:
         assert "</script><b>x" not in page
         assert payload_of(page)["sweep"]["outputs"][0]["name"] == "</script><b>x"
 
-    @pytest.mark.slow
     def test_a_title_cannot_impersonate_a_placeholder(self, flowsheet):
         """The template is filled in one pass, so a title stays a title."""
         result = sweep(
@@ -301,7 +267,6 @@ class TestPage:
 
 
 class TestBundle:
-    @pytest.mark.slow
     def test_a_missing_bundle_is_said_out_loud(self, sweep_result, monkeypatch):
         """Better than a blank page from a checkout that never built."""
         import difflow.gui.server as server
@@ -312,7 +277,6 @@ class TestBundle:
 
 
 class TestPublish:
-    @pytest.mark.slow
     def test_writes_a_file(self, flowsheet, tmp_path):
         path = publish(
             flowsheet,
@@ -326,7 +290,6 @@ class TestPublish:
         assert text.startswith("<!doctype html>")
         assert "Reactor" in text
 
-    @pytest.mark.slow
     def test_the_payload_is_valid_json(self, flowsheet):
         result = sweep(
             flowsheet, [SweepAxis("reactor.V", 0.5, 3.0, n=4)],

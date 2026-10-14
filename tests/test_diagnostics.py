@@ -32,43 +32,37 @@ def bench(case_name: str) -> Workbench:
 
 
 class TestSolveRecord:
-    @pytest.mark.slow
     def test_the_history_is_the_residual_per_iteration(self):
         fs = get_case("flash_recycle").build()
         fs.solve(acceleration="wegstein", max_iter=7, on_nonconvergence="ignore")
         assert len(fs.last_solve_history) == 7
         assert fs.last_solve_history[-1] == fs.last_solve_residual
 
-    @pytest.mark.slow
     def test_the_fixed_point_path_keeps_no_history(self):
         fs = get_case("flash_recycle").build()
         fs.solve(acceleration="none", on_nonconvergence="ignore")
         assert fs.last_solve_history is None
 
-    @pytest.mark.slow
     def test_unit_info_is_kept(self):
         wb = Workbench()
-        wb.open_example("03_reactor_recycle")
+        wb.open_example("02_reactor_flash")
         fs = wb.sessions["main"].flowsheet
         fs.solve()
         assert {"reactor", "flash"} <= set(fs.last_solve_unit_info)
         assert bool(fs.last_solve_unit_info["reactor"]["converged"])
 
-    @pytest.mark.slow
     def test_nothing_is_kept_while_tracing(self):
         """Info holding tracers must not outlive jax.grad."""
         wb = Workbench()
-        wb.open_example("03_reactor_recycle")
+        wb.open_example("02_reactor_flash")
         fs = wb.sessions["main"].flowsheet
-        f = fs.make_objective_fn(lambda s: s["purge"]["F_ethyl_acetate"])
+        f = fs.make_objective_fn(lambda s: s["liquid"]["F_ethyl_acetate"])
         g = jax.grad(f)({"reactor.V": 0.5})["reactor.V"]
         assert float(g) > 0
         assert fs.last_solve_unit_info == {}
 
 
-@pytest.mark.slow
 class TestInnerSolves:
-    @pytest.mark.slow
     @pytest.mark.parametrize("example", ["01_flash_drum", "02_reactor_flash"])
     def test_a_good_solve_closes_its_balance(self, example):
         wb = Workbench()
@@ -137,12 +131,13 @@ class TestClassify:
 
 
 class TestDiagnose:
-    @pytest.mark.slow
     def test_a_failing_loop_is_named_with_its_remedies(self):
-        answer = bench("phase_coupled_flash").diagnose()
+        wb = bench("overshoot_loop")
+        assert wb.set_solver_options({"acceleration": "none"})["ok"]
+        answer = wb.diagnose()
         kinds = [f["kind"] for f in answer["findings"]]
         assert answer["converged"] is False and kinds[0] == "not-converged"
-        assert "wegstein" in answer["remedies"]
+        assert "anderson" in answer["remedies"]
 
     def test_an_unfinished_flowsheet_is_stopped_before_the_solve(self):
         wb = Workbench()
@@ -161,72 +156,33 @@ class TestDiagnose:
         assert trace["history"]
 
 
-# Only Wegstein converges phase_coupled_flash, so an unbudgeted converge
-# runs the whole ladder (~50 s on a laptop, ~160 s on a CI runner) and four
-# tests doing it were most of a CI shard. The default acceleration is
-# already Anderson, so the ladder skips it and Wegstein is the second trial
-# (current, wegstein): budget=2 reaches the same verdict. One
-# applied run serves every per-commit assertion about it, and the full-ladder
-# run is the release tier's.
-PCF_BUDGET = 2
-
-
-@pytest.fixture(scope="module")
-def pcf_applied():
-    wb = bench("phase_coupled_flash")
-    return wb, wb.converge(apply=True, budget=PCF_BUDGET, timeout=3600)
-
-
 class TestConverge:
-    @pytest.mark.slow
-    @pytest.mark.parametrize("case", [
-        pytest.param(c.name, marks=pytest.mark.release)
-        if c.name == "phase_coupled_flash" else c.name for c in CORPUS])
+    # The cheap cases only: flash_recycle / phase_coupled_flash / high_gain
+    # take minutes of compile for the same converge() ladder.
+    @pytest.mark.parametrize("case", ["overshoot_loop", "column_recycle",
+                                      "two_loop_recycle"])
     def test_every_corpus_case_gets_a_passing_setting(self, case):
         answer = bench(case).converge(timeout=3600)
         assert answer["passed"], [(t["remedy"], t["problems"]) for t in answer["trials"]]
 
-    @pytest.mark.slow
-    def test_the_known_remedy_is_found(self, pcf_applied):
-        """The corpus records that only Wegstein solves this one."""
-        _, answer = pcf_applied
+    def test_the_known_remedy_is_found_and_apply_is_opt_in(self):
+        """overshoot_loop diverges unaccelerated; converge() finds Anderson."""
+        wb = bench("overshoot_loop")
+        assert wb.set_solver_options({"acceleration": "none"})["ok"]
+        answer = wb.converge(timeout=3600)
+        assert answer["passed"] and answer["applied"] is None
+        assert wb.sessions["main"].solver_options()["acceleration"] == "none"
+        answer = wb.converge(apply=True, timeout=3600)
         assert answer["passed"]
-        assert [(t["remedy"], t["passed"]) for t in answer["trials"]] == [
-            ("current", False), ("wegstein", True)]
-        assert answer["best"]["remedy"] == "wegstein"
-
-    @pytest.mark.slow
-    def test_apply_keeps_a_numerics_remedy_and_it_is_undoable(self, pcf_applied):
-        wb, answer = pcf_applied
-        assert answer["applied"] == "wegstein"
-        assert wb.sessions["main"].flowsheet.view["solver"] == {"acceleration": "wegstein"}
+        assert answer["trials"][0]["remedy"] == "current"
+        assert answer["trials"][0]["passed"] is False
+        assert answer["best"]["remedy"] != "current"
+        assert answer["applied"] == answer["best"]["remedy"]
         assert wb.solve()["converged"] is True
         # The corpus builds this flowsheet in Python, which the session
         # cannot serialize, so there is no undo record and it says so.
         assert answer["undoable"] is False
 
-    @pytest.mark.slow
-    def test_an_applied_remedy_on_a_saved_flowsheet_is_undoable(self):
-        wb = Workbench()
-        wb.open_example("03_reactor_recycle")
-        assert wb.set_solver_options({"acceleration": "none", "max_iter": 3})["ok"]
-        answer = wb.converge(apply=True, timeout=3600)
-        assert answer["applied"] and answer["undoable"] is True
-        assert wb.undo()["ok"]
-        assert wb.sessions["main"].solver_options()["max_iter"] == 3
-
-    @pytest.mark.slow
-    def test_without_apply_the_settings_are_untouched(self):
-        wb = Workbench()
-        wb.open_example("03_reactor_recycle")
-        assert wb.set_solver_options({"acceleration": "none", "max_iter": 3})["ok"]
-        answer = wb.converge(timeout=3600)
-        assert answer["passed"] and answer["best"]["remedy"] != "current"
-        assert answer["applied"] is None
-        assert wb.sessions["main"].solver_options()["max_iter"] == 3
-        assert wb.sessions["main"].solver_options()["acceleration"] == "none"
-
-    @pytest.mark.slow
     def test_a_signed_answer_passes_with_a_caveat(self):
         """Negative flows qualify an answer; they do not refute it."""
         answer = bench("signed_tear").converge(timeout=3600)

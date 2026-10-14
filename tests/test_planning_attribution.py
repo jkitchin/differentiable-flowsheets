@@ -192,7 +192,6 @@ def test_flagged_only_drops_insignificant_terms():
     assert np.any(np.asarray(loose.lam[k]))
 
 
-@pytest.mark.slow
 def test_modifiers_and_exposure_through_the_planner():
     blk = make_block()
     u, t = history(14)

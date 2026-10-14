@@ -88,7 +88,6 @@ def test_smoothed_power_uses_absolute_flow():
     assert 0 < w0 < float(smoothed_power_w(EPS_FLOW * 10, 1.3))
 
 
-@pytest.mark.release
 def test_smoothed_power_is_differentiable_at_zero():
     import jax
 

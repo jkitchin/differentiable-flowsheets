@@ -18,8 +18,6 @@ import difflow_power as dp
 from difflow_power.residuals import power_state_layout
 
 
-@pytest.mark.slow
-@pytest.mark.release
 def test_loss_factors_match_finite_differences():
     net = dp.cases.case9()
     factors = dp.loss_sensitivity(net)
@@ -35,7 +33,6 @@ def test_loss_factors_match_finite_differences():
         )
 
 
-@pytest.mark.slow
 def test_the_slack_buss_own_loss_factor_is_zero():
     """Load added at the slack is served at the slack: nothing moves."""
     net = dp.cases.case9()
@@ -45,7 +42,6 @@ def test_the_slack_buss_own_loss_factor_is_zero():
     )
 
 
-@pytest.mark.slow
 def test_loss_factors_are_negative_beside_a_scheduled_generator():
     """A real effect, not a sign error.
 
@@ -60,7 +56,6 @@ def test_loss_factors_are_negative_beside_a_scheduled_generator():
     assert float(factors[net.bus_index["5"]]) > 0.0     # a load pocket
 
 
-@pytest.mark.release
 def test_demand_sensitivity_matches_finite_differences():
     net = dp.cases.case9()
     layout = power_state_layout(net)
@@ -78,7 +73,6 @@ def test_demand_sensitivity_matches_finite_differences():
     assert float(jacobian[row, i]) < 0.0      # load sags the voltage
 
 
-@pytest.mark.slow
 def test_reactive_demand_moves_voltages_more_than_real_does():
     """Transmission is reactance-dominated, so vars drive magnitude."""
     net = dp.cases.case9()
@@ -91,7 +85,6 @@ def test_reactive_demand_moves_voltages_more_than_real_does():
     )
 
 
-@pytest.mark.slow
 def test_ac_shift_factors_are_close_to_the_dc_ptdf():
     """Same quantity, one exact and one linearised.
 
@@ -105,7 +98,6 @@ def test_ac_shift_factors_are_close_to_the_dc_ptdf():
     assert float(jnp.max(jnp.abs(-ac - dc))) < 0.1
 
 
-@pytest.mark.release
 def test_branch_flow_sensitivity_matches_finite_differences():
     net = dp.cases.case9()
     factors = dp.branch_flow_sensitivity(net)
@@ -121,7 +113,6 @@ def test_branch_flow_sensitivity_matches_finite_differences():
     assert float(factors[k, i]) == pytest.approx(finite, rel=1e-5)
 
 
-@pytest.mark.release
 def test_parameter_sensitivity_matches_finite_differences():
     net = dp.cases.case9()
     layout = power_state_layout(net)
@@ -141,7 +132,6 @@ def test_parameter_sensitivity_matches_finite_differences():
     assert float(jacobian[row, j]) == pytest.approx(finite, rel=1e-4)
 
 
-@pytest.mark.slow
 def test_tap_sensitivity_is_available_on_a_case_with_transformers():
     net = dp.cases.case14()
     jacobian = dp.parameter_sensitivity(net, "tap")
@@ -159,7 +149,6 @@ def test_unknown_parameter_is_rejected():
         dp.parameter_sensitivity(dp.cases.case3(), "resistance")
 
 
-@pytest.mark.slow
 def test_voltage_stability_margin_falls_as_the_network_is_loaded():
     """It goes to zero at the nose of the P-V curve."""
     base = dp.cases.case9()

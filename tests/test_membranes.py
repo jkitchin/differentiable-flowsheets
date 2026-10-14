@@ -76,7 +76,6 @@ class TestPlugFlowAgainstHand:
         assert float(jnp.sum(perm)) == pytest.approx(theta, rel=1e-7)
         assert float(ret[0] / jnp.sum(ret)) == pytest.approx(x_o, abs=1e-7)
 
-    @pytest.mark.slow
     def test_countercurrent_matches_x_integration(self):
         x_o = 0.25
 
@@ -117,7 +116,6 @@ class TestGradients:
         f = lambda A, pl: M.cross_flow(F2, Q2, A, 1.0, pl, 40)[1][0]
         check_grads(f, (150.0, 0.25), order=1, modes=["rev"], rtol=1e-4)
 
-    @pytest.mark.slow
     def test_countercurrent_grad(self):
         f = lambda A: jnp.sum(M.countercurrent(F2, Q2, A, 1.0, PR, 40)[1])
         check_grads(f, (150.0,), order=1, modes=["rev"], rtol=1e-4)
@@ -143,7 +141,7 @@ class TestCountercurrentSolveCost:
         perm = M.countercurrent(self.Fi, self.Q, 100.0, 5e5, 1.05e5, 40)[1]
         np.testing.assert_allclose(perm, [0.3487682804065479, 0.048684585979673164], rtol=1e-10)
 
-    @pytest.mark.slow  # ~3 s, mostly compiling the jitted area solve
+
     def test_area_for_stage_cut_matches_fixed_count_solver(self):
         A = jax.jit(lambda P: M.area_for_stage_cut(self.Fi, self.Q, P, 1.05e5, 0.3,
                                                    "countercurrent", 40))
@@ -156,7 +154,6 @@ class TestCountercurrentSolveCost:
         root = M._illinois_increasing(f, 0.0, 1.0, n_iter=12)
         assert abs(float(f(root))) < 1e-13
 
-    @pytest.mark.slow
     def test_area_for_stage_cut_grad(self):
         f = lambda P, theta: M.area_for_stage_cut(self.Fi, self.Q, P, 1.05e5, theta,
                                                   "countercurrent", 40)

@@ -11,7 +11,7 @@ from difflow.economics.indices import DEFAULT_CURRENT_YEAR
 @pytest.fixture()
 def wb():
     bench = Workbench()
-    bench.open_example("03_reactor_recycle")
+    bench.open_example("02_reactor_flash")
     assert bench.solve()["converged"]
     return bench
 
@@ -24,17 +24,15 @@ def test_declared_bases_name_real_correlations():
         assert basis["type"] in table, name
 
 
-@pytest.mark.slow
 def test_the_price_is_the_economics_module_price(wb):
     answer = wb.tea()
     reactor = answer["units"][0]
     expected = float(capital.reactor_cost(0.5, "cstr_jacketed", DEFAULT_CURRENT_YEAR))
     assert reactor["purchased_cost"] == pytest.approx(expected, rel=1e-12)
     assert answer["total_capital_investment"] == pytest.approx(expected * 4.74 * 1.15)
-    assert {u["unit"] for u in answer["uncosted"]} == {"mixer", "flash", "splitter"}
+    assert {u["unit"] for u in answer["uncosted"]} == {"flash"}
 
 
-@pytest.mark.slow
 def test_capex_is_a_differentiable_quantity(wb):
     wb.tea()
     values = wb.evaluate(["capex"])["values"]
@@ -45,7 +43,6 @@ def test_capex_is_a_differentiable_quantity(wb):
     assert d == pytest.approx((pts[1]["capex"] - pts[0]["capex"]) / (2 * h), rel=1e-5)
 
 
-@pytest.mark.slow
 def test_a_size_outside_the_correlation_is_flagged(wb):
     assert wb.update_unit("reactor", params={"V": 250.0})["ok"]
     answer = wb.tea(define=False)

@@ -42,7 +42,6 @@ def central_difference(f, x, h=1e-5):
 
 
 class TestMabDSPTrain:
-    @pytest.mark.slow
     def test_grad_overall_yield_matches_fd(self, harvest):
         # A 2 L Protein A column is capacity-limited for 100 g of mAb, so
         # the yield depends on its volume.
@@ -85,7 +84,6 @@ class TestMabDSPTrain:
             float(central_difference(purity, 0.9)), rel=1e-5
         )
 
-    @pytest.mark.slow
     def test_jit_and_vmap(self, harvest):
         def y(cv):
             p = mAbDSPParams(species_order=SPECIES, proa_column_volume=cv)

@@ -36,7 +36,6 @@ def test_the_palette_names_resolve_to_the_stream_entries():
     assert registry.get("FullSeparationTrain") is R.SeparationTrainUnit
 
 
-@pytest.mark.slow
 def test_extract_strip_wires_into_a_heater(feed):
     params = R.ExtractStripParams(extractant="D2EHPA", elements=EL,
                                   n_extraction_stages=5, n_stripping_stages=3)
@@ -58,7 +57,6 @@ def test_extract_strip_wires_into_a_heater(feed):
     assert "recovery" in fs.last_solve_unit_info["esc"]
 
 
-@pytest.mark.slow
 def test_extract_scrub_strip_returns_four_streams(feed):
     unit = R.ExtractScrubStripUnit(R.ExtractScrubStripParams(
         extractant="D2EHPA", elements=EL, target_elements=("Dy",)))
@@ -82,7 +80,6 @@ def test_split_shell_products_are_streams(feed):
         assert out == pytest.approx(float(feed[f"F_{e}"]), rel=1e-9), e
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("kw,names", [
     ({}, ("light_REE", "middle_REE", "heavy_REE", "CeO2")),
     ({"include_ce_removal": False}, ("light_REE", "middle_REE", "heavy_REE")),

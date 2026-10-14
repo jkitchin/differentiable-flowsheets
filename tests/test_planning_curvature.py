@@ -49,7 +49,6 @@ def cubic_block() -> Block:
 
 # -- 1. the curvature is correct ------------------------------------------
 
-@pytest.mark.slow
 def test_hvp_matches_exact_hessian():
     blk = quadratic_block()
     H = np.asarray(hessian_of(blk, "bowl"))
@@ -158,7 +157,6 @@ def test_bad_sense_rejected():
 
 # -- 4. the cost claim -----------------------------------------------------
 
-@pytest.mark.slow
 def test_hessian_costs_order_n_not_n_squared():
     """The exact Hessian is O(n) evaluations, so it scales like a Jacobian.
 

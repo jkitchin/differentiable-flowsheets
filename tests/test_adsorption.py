@@ -128,7 +128,6 @@ class TestFixedBed:
         # and the bed ends saturated
         assert float(jnp.min(out["q_profile"][-1])) == pytest.approx(1.0, abs=1e-3)
 
-    @pytest.mark.slow
     def test_favourable_front_is_constant_pattern(self):
         """A Langmuir front keeps its width: LUB is the same for two bed lengths."""
         kw = dict(v_s=0.01, epsilon=0.4, rho_b=1.0, c_feed=1.0, k_ldf=0.01, isotherm="langmuir",
@@ -184,7 +183,6 @@ class TestFixedBed:
             ad.fixed_bed_breakthrough(jnp.linspace(0, 10, 3), L=1.0, v_s=0.01, epsilon=0.4, rho_b=1.0,
                                       c_feed=1.0, k_ldf=0.05, isotherm="linear", K=1.0, method="euler")
 
-    @pytest.mark.slow
     def test_gradient_of_area_matches_fd(self):
         def area(q_max):
             out = ad.fixed_bed_breakthrough(self.T, L=1.0, v_s=0.01, epsilon=0.4, rho_b=1.0, c_feed=1.0,
@@ -195,7 +193,6 @@ class TestFixedBed:
         # d t_s / d q_max = (L/v) rho K c/(1 + K c)/c = 50 s per unit q_max
         assert g == pytest.approx(50.0, rel=5e-3)
 
-    @pytest.mark.slow
     def test_gradient_wrt_ldf_coefficient_matches_fd(self):
         T = jnp.linspace(0.0, 1000.0, 101)
 

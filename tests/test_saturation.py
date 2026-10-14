@@ -85,7 +85,7 @@ def test_vaporization_T_is_not_the_saturation_temperature():
 # -------------------------------------------------------------------- EOS
 
 
-@pytest.mark.slow  # ~75 s: three EOS saturation solves plus a reverse pass
+
 def test_eos_saturation_temperature_and_gradient():
     """Peng-Robinson T_sat of pure methane at 1 MPa: near the reference
     (PR's own saturation curve, within 0.3 K), with dT/dP from implicit
@@ -102,7 +102,6 @@ def test_eos_saturation_temperature_and_gradient():
     assert g == pytest.approx(fd, rel=1e-4)
 
 
-@pytest.mark.slow
 def test_eos_species_in_a_mixture_eos_and_pressure_roundtrip():
     eos = PengRobinson({s: get_critical_props(s) for s in ("methane", "propane")})
     T = saturation_temperature("propane", 1e6, model="eos", eos=eos)

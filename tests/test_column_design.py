@@ -549,7 +549,6 @@ class TestEndToEnd:
                                      feed_stage=7, condenser_type="total", P=101325.0)
         return DistillationColumn(p, IdealThermo(sd))
 
-    @pytest.mark.slow
     def test_chain_is_differentiable_in_R(self, column):
         feed = make_stream({"benzene": 40.0 / 3.6, "toluene": 60.0 / 3.6}, T=365.0, P=101325.0)
 

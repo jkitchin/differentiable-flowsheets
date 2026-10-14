@@ -168,7 +168,6 @@ class TestThroughACascade:
         g = float(jax.grad(self._raffinate_Nd)(-5.0))
         assert np.isfinite(g) and g < 0.0
 
-    @pytest.mark.slow
     def test_the_cascade_vmaps_over_a_sample(self):
         out = jax.vmap(self._raffinate_Nd)(jnp.linspace(-5.3, -4.5, 24))
         assert out.shape == (24,) and bool(jnp.all(jnp.isfinite(out)))
@@ -182,7 +181,6 @@ class TestTracedStageCount:
             REEExtractorParams(n_stages=0.5, extractant="D2EHPA",
                                elements=("Nd",))
 
-    @pytest.mark.slow
     def test_a_traced_stage_count_is_allowed(self):
         """(#270) The operating point had to move twice over, and both moves
         are about having a gradient to measure rather than about the window.

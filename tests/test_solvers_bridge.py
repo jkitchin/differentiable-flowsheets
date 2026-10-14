@@ -210,7 +210,6 @@ def central_diff(fn, x, i, h):
 # =============================================================================
 
 
-@pytest.mark.slow
 @needs_asdex
 def test_variable_and_constraint_layout():
     """x is [decisions | stream state]; g is [unit residuals | specs]."""
@@ -237,7 +236,6 @@ def test_variable_and_constraint_layout():
     assert np.asarray(bd.cl)[4] == 8.0
 
 
-@pytest.mark.slow
 @needs_asdex
 def test_residuals_vanish_at_the_sequential_modular_solution():
     """x0 comes from the SM solve, so the model rows start satisfied."""
@@ -247,7 +245,6 @@ def test_residuals_vanish_at_the_sequential_modular_solution():
 
 
 @needs_asdex
-@pytest.mark.release
 def test_objective_gradient_matches_central_difference():
     f, _g, bd = free_T_problem(
         objective=lambda s, d: -2.0 * s["product"]["F_B"]
@@ -262,7 +259,6 @@ def test_objective_gradient_matches_central_difference():
 
 
 @needs_asdex
-@pytest.mark.release
 def test_constraint_jacobian_matches_central_differences():
     _f, g, bd = free_T_problem()
     ad = np.asarray(jax.jacobian(g)(bd.x0))
@@ -274,7 +270,6 @@ def test_constraint_jacobian_matches_central_differences():
 
 
 @needs_asdex
-@pytest.mark.release
 def test_parameters_are_differentiable_but_are_not_columns_of_x():
     f, g, bd = as_nlp(
         make_flowsheet(),
@@ -290,7 +285,6 @@ def test_parameters_are_differentiable_but_are_not_columns_of_x():
     assert np.max(np.abs(dp)) > 0.0
 
 
-@pytest.mark.slow
 @needs_asdex
 def test_flowsheet_builder_callable_is_accepted():
     """The escape hatch for anything the address grammar cannot reach."""
@@ -418,7 +412,6 @@ def as_mask(pattern, shape, symmetric=False):
     return mask
 
 
-@pytest.mark.slow
 @needs_asdex
 def test_the_default_pattern_is_not_dense():
     """The regression this module was rewritten for.
@@ -439,7 +432,6 @@ def test_the_default_pattern_is_not_dense():
     assert "sparsity='global'" in repr(bd)
 
 
-@pytest.mark.slow
 def test_the_topology_fallback_is_dense_in_the_hessian_and_says_so():
     """The behaviour the default replaced, kept reachable and kept honest: it
     is still a valid superset, it is still what you get when graph analysis
@@ -451,8 +443,6 @@ def test_the_topology_fallback_is_dense_in_the_hessian_and_says_so():
     assert len(bd.hess_pattern[0]) == bd.n * (bd.n + 1) // 2  # dense triangle
 
 
-@pytest.mark.slow
-@pytest.mark.release
 def test_objective_vars_tightens_the_topology_path():
     """The escape hatch the warning points at: name the objective's variables
     and the structural Hessian stops being the whole triangle. It is still the
@@ -507,7 +497,6 @@ def test_the_derived_pattern_is_inside_the_topology_pattern():
     assert fine.sum() < broad.sum()
 
 
-@pytest.mark.slow
 @needs_asdex
 def test_hessian_pattern_grows_linearly_with_the_flowsheet():
     """Why dense fails 'all the time': the dense triangle is O(n^2) and n grows
@@ -634,7 +623,6 @@ def test_validate_patterns_accepts_the_derived_pattern():
     )
 
 
-@pytest.mark.slow
 @needs_asdex
 def test_sampled_validation_is_column_exact():
     """Above the dense limit the check samples columns instead of skipping.
@@ -750,7 +738,6 @@ def test_probing_drops_real_entries_of_the_jacobian():
     assert (true_at_x0 <= ours).all()
 
 
-@pytest.mark.slow
 @needs_pounce
 @needs_asdex
 def test_probed_pattern_breaks_the_solve_that_the_adapter_completes():
@@ -808,7 +795,6 @@ def test_the_adapter_never_reaches_pounce_without_a_pattern(monkeypatch):
 # =============================================================================
 
 
-@pytest.mark.slow
 @needs_pounce
 @needs_asdex
 def test_solve_reaches_the_analytic_optimum_at_fixed_temperature():
@@ -818,7 +804,6 @@ def test_solve_reaches_the_analytic_optimum_at_fixed_temperature():
     assert float(x[0]) == pytest.approx(analytic_volume(8.0, 350.0), rel=1e-6)
 
 
-@pytest.mark.slow
 @needs_pounce
 @needs_asdex
 def test_optimum_is_a_converged_flowsheet():
@@ -845,7 +830,6 @@ def test_optimum_is_a_converged_flowsheet():
     assert np.max(np.abs(np.asarray(g(jnp.asarray(res.x)))[:4])) < 1e-7
 
 
-@pytest.mark.slow
 @needs_pounce
 @needs_asdex
 def test_sparse_colored_ad_gives_the_same_answer_as_dense():
@@ -855,7 +839,6 @@ def test_sparse_colored_ad_gives_the_same_answer_as_dense():
     assert np.allclose(np.asarray(x_dense), np.asarray(x_sparse), rtol=1e-7)
 
 
-@pytest.mark.slow
 @needs_pounce
 @needs_asdex
 def test_mult_g_is_d_objective_d_bound_for_a_ge_spec():
@@ -875,7 +858,6 @@ def test_mult_g_is_d_objective_d_bound_for_a_ge_spec():
     assert fd > 0.0  # a tighter product spec costs volume
 
 
-@pytest.mark.slow
 @needs_pounce
 @needs_asdex
 def test_mult_g_is_d_objective_d_bound_for_a_le_spec():
@@ -901,7 +883,6 @@ def test_mult_g_is_d_objective_d_bound_for_a_le_spec():
     assert float(np.asarray(info["mult_g"])[-1]) == pytest.approx(-fd, rel=1e-5)
 
 
-@pytest.mark.slow
 @needs_pounce
 @needs_asdex
 def test_inactive_constraint_has_zero_sensitivity():
@@ -926,7 +907,6 @@ def test_inactive_constraint_has_zero_sensitivity():
 
 @needs_pounce
 @needs_asdex
-@pytest.mark.release
 def test_differentiable_problem_backward_matches_a_finite_difference():
     """pounce.jax.solve has no pattern arguments and would probe, so the
     differentiable entry point is JaxProblem. d(optimal volume)/d(T_spec)."""
@@ -998,7 +978,6 @@ def test_unit_residual_view_requires_a_square_system():
     assert float(z[0] + z[1]) == pytest.approx(FEED_A, rel=1e-9)
 
 
-@pytest.mark.slow
 def test_residual_from_system_wraps_the_section_scope_convention():
     """difflow's r(z; args) form -- what solve_residual_system takes and what
     difflow_ree's mass-action section returns."""
@@ -1054,7 +1033,6 @@ def test_residual_from_system_rejects_a_non_square_system():
         as_residual(lambda z, a: z)
 
 
-@pytest.mark.slow
 def test_residual_view_of_a_ree_mass_action_section():
     """The second residual test case the issue asks for: a whole section that
     already is a residual, never wrapped in a Flowsheet."""
@@ -1092,7 +1070,6 @@ def test_residual_view_of_a_ree_mass_action_section():
 # =============================================================================
 
 
-@pytest.mark.slow
 @needs_discopt
 def test_discopt_implicit_derivative_matches_the_implicit_function_theorem():
     """dm.implicit compiles g(u, v) = 0 to a custom_root node; the derivative
@@ -1120,7 +1097,6 @@ def test_discopt_implicit_derivative_matches_the_implicit_function_theorem():
     assert np.max(np.abs(dv_dFA)) > 0.1  # the derivative is not trivially zero
 
 
-@pytest.mark.slow
 @needs_discopt
 def test_discopt_solve_through_a_difflow_block_finds_the_right_feed():
     """End to end: choose the feed rate that gives F_B = 5, with every
@@ -1327,7 +1303,6 @@ def test_solve_with_pounce_is_a_wrapper_over_pounce_problem(monkeypatch):
     assert len(built) == 2 and len(solved) == 3
 
 
-@pytest.mark.slow
 @needs_pounce
 @needs_asdex
 def test_pounce_problem_solves_repeatedly():

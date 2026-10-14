@@ -505,7 +505,6 @@ class TestThickenerLibrary:
         assert float(d["limiting_flux"]) == pytest.approx(0.05 * 20.0 / float(A), rel=1e-12)
         assert 20.0 <= float(d["limiting_concentration"]) <= 150.0
 
-    @pytest.mark.slow
     def test_check_grads_in_Cu_Q0_and_curve_parameters(self):
         C0 = 20.0
 
@@ -609,7 +608,6 @@ class TestKynchAndTalmageFitch:
         assert float(d["z_u"]) == pytest.approx(self.C0 * self.Z0 / 100.0)
         assert float(A) == pytest.approx(0.2 * float(d["t_u"]) / self.Z0, rel=1e-12)
 
-    @pytest.mark.slow
     def test_gradient_in_Cu(self):
         t, z, _ = self.curve(80)
         f = lambda C_u: thickener_area_talmage_fitch(0.2, self.C0, self.Z0, C_u, t, z, 300.0)
@@ -665,7 +663,6 @@ class TestSettlerUnit:
         _, _, i = Settler(p)(thick_feed())
         assert float(i["area_required"]) > 0.0
 
-    @pytest.mark.slow
     def test_species_balance_all_methods(self):
         t, z, _ = TestKynchAndTalmageFitch().curve(120)
         C_u = 120.0
@@ -725,7 +722,6 @@ class TestSettlerUnit:
         _, _, i3 = Settler(SettlerParams(area=float(i["area"]), **common))(feed)
         assert float(i3["overflow_rate"]) == pytest.approx(float(i["overflow_rate"]), rel=1e-12)
 
-    @pytest.mark.slow
     def test_check_grads_of_the_area(self):
         def area(Cu, m_s, sd):              # sd scales the particle size, d_p = 25 micron * sd
             p = SettlerParams(underflow_concentration=Cu, d_p=25e-6 * sd, rho_p=RHO_S, richardson_zaki_n=4.65,
@@ -739,7 +735,6 @@ class TestSettlerUnit:
         # fixed water raises C0 as well as F_s, so the sign of that derivative is not asserted)
         assert float(g[0]) > 0 and float(g[2]) < 0
 
-    @pytest.mark.slow
     def test_check_grads_of_data_route_in_Cu(self):
         cd = np.linspace(10.0, 250.0, 25)
         vd = v_exp(cd)
@@ -916,7 +911,6 @@ class TestFlowsheets:
         out = fs.solve()
         assert float(out["clean"]["F_solid"] + out["dust"]["F_solid"]) == pytest.approx(0.1, rel=1e-12)
 
-    @pytest.mark.slow
     def test_dryer_exhaust_to_cyclone(self):
         """Documented hand-off: Dryer(entrainment=f) puts the fines in info['fines'], NOT in air_out
         (dry_air_flow counts every non-water F_* as dry air); dust_laden_gas() merges them for the cyclone."""

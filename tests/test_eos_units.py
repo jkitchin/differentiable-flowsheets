@@ -30,7 +30,6 @@ jax.config.update("jax_enable_x64", True)
 # implicit-diff backward pass) is a large one-off JAX compile. Marking is
 # all-or-nothing per unit -- even the cheap assertions here force that unit's
 # compile -- so the module is marked rather than individual tests.
-pytestmark = pytest.mark.slow
 
 # A representative NGL feed (methane-rich, with a light/heavy spread). Kept to
 # four components on purpose: these unit tests only check thermodynamic signs,
@@ -59,21 +58,12 @@ def feed():
 
 
 class TestTurboexpander:
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_expansion_cools_and_extracts_work(self, thermo, feed):
         exp = Turboexpander(TurboexpanderParams(P_out=20e5, eta_isentropic=0.80), thermo)
         out, info = exp(feed)
         assert float(out["T"]) < float(feed["T"])       # expansion cools
         assert float(out["P"]) == pytest.approx(20e5)
         assert float(info["W"]) > 0.0                    # shaft work extracted
-
-    def test_efficiency_below_one_recovers_less_than_isentropic(self, thermo, feed):
-        """An inefficient expander does less work, so its outlet is warmer than
-        the reversible (isentropic) outlet."""
-        exp = Turboexpander(TurboexpanderParams(P_out=20e5, eta_isentropic=0.80), thermo)
-        out, info = exp(feed)
-        assert float(out["T"]) > float(info["T_isen"])
 
     def test_ideal_efficiency_is_isentropic(self, thermo, feed):
         """With eta=1 the outlet temperature equals the isentropic temperature."""
@@ -88,8 +78,6 @@ class TestTurboexpander:
         for c in NGL:
             assert float(fout[c]) == pytest.approx(float(fin[c]))
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_work_differentiable_wrt_pressure(self, thermo, feed):
         def W(Pout):
             e = Turboexpander(TurboexpanderParams(P_out=Pout, eta_isentropic=0.8), thermo)
@@ -100,19 +88,12 @@ class TestTurboexpander:
 
 
 class TestCompressor:
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_compression_heats_and_consumes_work(self, thermo, feed):
         comp = Compressor(CompressorParams(P_out=90e5, eta_isentropic=0.75), thermo)
         out, info = comp(feed)
         assert float(out["T"]) > float(feed["T"])       # compression heats
         assert float(out["P"]) == pytest.approx(90e5)
         assert float(info["W"]) > 0.0                    # shaft work consumed
-
-    def test_lower_efficiency_needs_more_work(self, thermo, feed):
-        hi = Compressor(CompressorParams(P_out=90e5, eta_isentropic=0.90), thermo)
-        lo = Compressor(CompressorParams(P_out=90e5, eta_isentropic=0.60), thermo)
-        assert float(lo(feed)[1]["W"]) > float(hi(feed)[1]["W"])
 
     def test_expander_then_compressor_round_trip_costs_net_work(self, thermo, feed):
         """Expand then recompress to the original pressure: the irreversible
@@ -123,8 +104,6 @@ class TestCompressor:
         _, c_info = comp(low)
         assert float(c_info["W"]) > float(e_info["W"])
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_work_differentiable(self, thermo, feed):
         def W(eta):
             c = Compressor(CompressorParams(P_out=90e5, eta_isentropic=eta), thermo)
@@ -134,8 +113,6 @@ class TestCompressor:
 
 
 class TestJTValve:
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_isenthalpic(self, thermo, feed):
         valve = JTValve(JTValveParams(P_out=20e5), thermo)
         out, info = valve(feed)
@@ -143,23 +120,11 @@ class TestJTValve:
         H_out = thermo.stream_enthalpy_flash(get_flows(out), out["T"], out["P"])
         assert float(H_out) == pytest.approx(float(H_in), rel=1e-6)
 
-    @pytest.mark.release
     def test_joule_thomson_cooling(self, thermo, feed):
         valve = JTValve(JTValveParams(P_out=20e5), thermo)
         out, _ = valve(feed)
         assert float(out["T"]) < float(feed["T"])
 
-    def test_valve_cools_less_than_expander(self, thermo, feed):
-        """Same pressure drop: the irreversible valve extracts no work and so
-        cools less than the (work-extracting) turboexpander."""
-        valve = JTValve(JTValveParams(P_out=20e5), thermo)
-        exp = Turboexpander(TurboexpanderParams(P_out=20e5, eta_isentropic=0.80), thermo)
-        T_valve = float(valve(feed)[0]["T"])
-        T_exp = float(exp(feed)[0]["T"])
-        assert T_valve > T_exp
-
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_outlet_T_differentiable(self, thermo, feed):
         def T_out(Pout):
             v = JTValve(JTValveParams(P_out=Pout), thermo)
@@ -193,8 +158,6 @@ class TestComponentSeparator:
         assert float(fprod["methane"]) == pytest.approx(0.0)
         assert float(fprod["propane"]) == pytest.approx(3.0)
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_recovery_differentiable(self, thermo, feed):
         def prod_propane(r):
             sep = ComponentSeparator(

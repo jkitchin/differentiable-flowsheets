@@ -118,7 +118,6 @@ def test_every_entry_has_a_source_and_valid_alpha():
 # ------------------------------------------------------------ physical facts
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("pair,x_ref,T_ref,tol_x,tol_T", NRTL_AZEOTROPES)
 def test_nrtl_azeotrope(pair, x_ref, T_ref, tol_x, tol_T):
     az = _az(pair, get_nrtl_params(pair))
@@ -127,13 +126,11 @@ def test_nrtl_azeotrope(pair, x_ref, T_ref, tol_x, tol_T):
     assert float(az["T"]) == pytest.approx(T_ref, abs=tol_T)
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("pair", NRTL_NO_AZEOTROPE)
 def test_nrtl_no_azeotrope(pair):
     assert not bool(_az(pair, get_nrtl_params(pair))["found"])
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("pair,x_ref,T_ref,tol_x,tol_T", UNIQUAC_AZEOTROPES)
 def test_uniquac_azeotrope(pair, x_ref, T_ref, tol_x, tol_T):
     az = _az(pair, get_uniquac_params(pair))
@@ -142,7 +139,6 @@ def test_uniquac_azeotrope(pair, x_ref, T_ref, tol_x, tol_T):
     assert float(az["T"]) == pytest.approx(T_ref, abs=tol_T)
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("pair", UNIQUAC_NO_AZEOTROPE)
 def test_uniquac_no_azeotrope(pair):
     assert not bool(_az(pair, get_uniquac_params(pair))["found"])
@@ -176,7 +172,6 @@ def test_benzene_toluene_near_ideal(getter):
         assert jnp.all(jnp.abs(jnp.log(g)) < 0.05)
 
 
-@pytest.mark.slow
 def test_water_butanol_splits_into_two_liquids():
     """The DECHEMA set (alpha 0.44) predicts the known miscibility gap.
 
@@ -285,7 +280,6 @@ def test_uniquac_gamma_gradients():
     check_grads(f, (0.4, 353.0), order=1, modes=["rev", "fwd"])
 
 
-@pytest.mark.slow
 def test_azeotrope_composition_gradient_in_pressure():
     """The ethanol-water azeotrope shifts with P; the derivative is finite
     and matches a central difference (implicit differentiation through the

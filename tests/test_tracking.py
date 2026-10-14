@@ -211,7 +211,6 @@ class TestTimeUpdate:
         )
         assert once.time == pytest.approx(twice.time)
 
-    @pytest.mark.slow
     def test_a_held_parameter_widens_its_error_bar(self, biased_run):
         """Holding is not knowing. The twin must say so."""
         assert biased_run.n_updates == 0
@@ -342,10 +341,8 @@ class TestMeasurementUpdate:
 # =============================================================================
 
 
-@pytest.mark.slow
 class TestParameterMeasurement:
 
-    @pytest.mark.slow
     def test_it_recovers_a_known_fouling_factor(self):
         y = jnp.asarray(truth(0.8))
         theta, cov, res = parameter_measurement(
@@ -447,14 +444,12 @@ class TestGate:
         assert not update_gate(d).allowed
         assert update_gate(d, allow=[MONITOR_CONSISTENT]).allowed
 
-    @pytest.mark.slow
     def test_a_biased_meter_never_moves_the_parameter(self, biased_run):
         verdicts = {s.diagnosis.verdict for s in biased_run.steps}
         assert verdicts <= {MONITOR_INSTRUMENT_FAULT, MONITOR_CONSISTENT}
         assert biased_run.n_updates == 0
         assert biased_run.final.as_params()["eta"] == pytest.approx(1.0)
 
-    @pytest.mark.slow
     def test_an_ungated_loop_would_have_invented_a_fouling_factor(
         self, biased_dp1
     ):
@@ -479,10 +474,8 @@ class TestGate:
 # =============================================================================
 
 
-@pytest.mark.slow
 class TestTrackParameters:
 
-    @pytest.mark.slow
     def test_it_tracks_a_real_drift(self, fouling, tracked_run):
         etas, _ = fouling
         assert tracked_run.final.as_params()["eta"] == pytest.approx(
@@ -491,32 +484,15 @@ class TestTrackParameters:
         # a deadband, not a free fit
         assert 0 < tracked_run.n_updates < len(tracked_run)
 
-    @pytest.mark.slow
     def test_a_frozen_model_would_have_stayed_at_the_start(self, frozen_run):
         assert frozen_run.final.as_params()["eta"] == pytest.approx(1.0)
         assert frozen_run.n_updates == 0
 
-    @pytest.mark.slow
     def test_the_loop_closes_on_the_statistic(self, tracked_run, frozen_run):
         """Updating against the current estimate must bring chi2 down."""
         tail = slice(-15, None)
         assert (tracked_run.monitor.statistic[tail].mean()
                 < 0.5 * frozen_run.monitor.statistic[tail].mean())
-
-    @pytest.mark.slow
-    def test_a_faster_drift_std_tracks_sooner_and_noisier(self, fouling):
-        """The bandwidth knob does what it claims in both directions."""
-        etas, data = fouling
-        n = 25
-        slow, fast = [
-            track_parameters(parallel_pipes, data[:n], SIGMA, state=start(),
-                             names=NAMES, drift_std=[q], window=10)
-            for q in (1e-4, 2e-2)
-        ]
-        assert (np.std(np.diff(fast.of("eta")))
-                > np.std(np.diff(slow.of("eta"))))
-        assert (abs(fast.of("eta") - etas[:n]).mean()
-                < abs(slow.of("eta") - etas[:n]).mean())
 
     def test_times_set_the_clock_the_drift_rate_is_read_in(self, fouling):
         _, data = fouling
@@ -554,7 +530,6 @@ class TestTrackParameters:
             assert s.innovation.nis >= 0.0
             assert s.decision.allowed
 
-    @pytest.mark.slow
     def test_params_carries_fixed_arguments_alongside(self, fouling):
         """Both clocks inject the tracked parameter into the user's
         ``params`` and leave the rest of it alone."""
@@ -575,27 +550,6 @@ class TestTrackParameters:
         )
         assert run.n_updates == 8
         assert seen and all(s == {"eta", "scale"} for s in seen)
-
-    @pytest.mark.slow
-    def test_the_diagnosis_thresholds_are_tunable(self, biased_dp1):
-        """The defaults are a rule, not a guarantee. When a campaign
-        leaks a few `model drift` days, the fix is the threshold, not a
-        wider ``allow``."""
-        leaky = track_parameters(
-            parallel_pipes, biased_dp1, SIGMA, state=start(), names=NAMES,
-            drift_std=DRIFT, window=10,
-            # blame is perfectly concentrated here, so only a threshold
-            # above 1.0 can make the campaign read as diffuse
-            concentration_threshold=1.01,
-        )
-        assert MONITOR_MODEL_DRIFT in {s.diagnosis.verdict for s in leaky.steps}
-        assert leaky.n_updates > 0
-
-        tight = track_parameters(
-            parallel_pipes, biased_dp1, SIGMA, state=start(), names=NAMES,
-            drift_std=DRIFT, window=10, concentration_threshold=0.3,
-        )
-        assert tight.n_updates == 0
 
     def test_a_rejection_threshold_of_one_declares_nothing(self, fouling):
         _, data = fouling

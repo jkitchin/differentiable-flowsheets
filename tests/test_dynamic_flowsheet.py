@@ -601,7 +601,6 @@ class TestGradients:
         assert grad.shape == y0.shape
         assert jnp.all(jnp.isfinite(grad))
 
-    @pytest.mark.release
     def test_gradient_wrt_parameter(self, species_order, feed_stream):
         """Can compute gradient with respect to rate parameter."""
         def rate_fn(C, T, params):
@@ -904,7 +903,6 @@ class TestIntegratorArgs:
         fs.simulate((0.0, 50.0), y0=y0, method="diffrax:tsit5", args={"F": jnp.array(4.0)})
         assert len(traces) == n_after_first  # no retrace
 
-    @pytest.mark.slow
     def test_grad_with_respect_to_a_disturbance(self, simple_cstr):
         fs = self._flowsheet_with_args_feed(simple_cstr)
         y0 = fs.initial_state(args={"F": jnp.array(1.0)})
@@ -926,8 +924,6 @@ class TestIntegratorArgs:
         assert float(s["fresh"]["F_A"]) == 2.0
 
 
-@pytest.mark.slow
-@pytest.mark.release
 class TestCubicEOSFeedEffluentFlowsheet:
     """The #390 acceptance case: a dynamic flowsheet of difflow's own units.
 

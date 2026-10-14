@@ -80,7 +80,6 @@ class TestTearPressureInference:
         assert fs.infer_tear_T and fs.infer_tear_P
         assert fs.default_P == 101325.0 and fs.default_T == 300.0
 
-    @pytest.mark.slow
     def test_pressurized_loop_stays_at_loop_pressure(self):
         fs = methanol_loop()
         st = fs.solve()
@@ -95,12 +94,10 @@ class TestTearPressureInference:
 
         assert float(jax.grad(P_out)(P_LOOP)) == pytest.approx(1.0, abs=1e-8)
 
-    @pytest.mark.slow
     def test_temperature_is_inferred_too(self):
         st = methanol_loop(fresh=_fresh(T=480.0)).solve()
         assert float(st["recycle"]["T"]) == pytest.approx(480.0)
 
-    @pytest.mark.slow
     def test_explicit_default_pins_the_old_way(self):
         # A pinned 1 atm start is what the Mixer's min-pressure rule then
         # locks the loop at: the reason inference is the default.
@@ -259,7 +256,6 @@ class TestMixer:
         assert float(H(11.0, T)) == pytest.approx(float(H_in), rel=1e-10)
         assert float(out["P"]) == 1e5
 
-    @pytest.mark.slow
     def test_gradient(self, thermo):
         check_grads(lambda T1: self._mix(thermo, T1)["T"], (300.0,), order=1,
                     modes=["rev", "fwd"])
@@ -318,7 +314,6 @@ class TestStoichiometricReactor:
             conversion=[0.7, 0.6]))
         assert float(rx(feed)[1]["min_outlet_flow"]) < 0
 
-    @pytest.mark.slow
     def test_gradients(self):
         def f(X, F_CO):
             rx = StoichiometricReactor(StoichiometricReactorParams(

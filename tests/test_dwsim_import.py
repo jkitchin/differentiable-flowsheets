@@ -248,7 +248,6 @@ _KNOWN_DIFFERENCES = {
 }
 
 
-@pytest.mark.release
 class TestAgainstRealDWSIM:
     def test_every_mapped_name_exists_in_dwsim(self, real_import):
         assert real_import["missing"] == []

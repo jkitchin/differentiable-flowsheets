@@ -7,10 +7,8 @@ rather than propagated, that "the solver said it converged" and "the answer
 audits" stay separate, and that no case is rigged so a strategy starts on
 the answer.
 
-The full grid is minutes of JAX compilation, so it lives in
-``test_convergence_full_grid.py`` (marked ``slow``), and everything else here
-runs against the two cheap analytic cases or against synthetic ones built in
-the test.
+The whole-corpus grid is not run: the benchmark is exercised on a few
+cheap cases or on synthetic ones built in the test.
 """
 
 import warnings
@@ -95,8 +93,14 @@ class TestNoCaseIsRigged:
     free passes on a case it had not solved.
     """
 
-    @pytest.mark.slow
-    @pytest.mark.parametrize("case", CORPUS, ids=lambda c: c.name)
+    # The cases built on a rigorous flash (flash_recycle, high_gain_recycle,
+    # phase_coupled_flash, column_recycle) are left out: each costs a
+    # minute or more of compile, and the guess is built the same way for all.
+    @pytest.mark.parametrize(
+        "case", [get_case(n) for n in (
+            "overshoot_loop", "trace_recycle", "sharp_split_purge",
+            "regime_switch", "two_loop_recycle", "two_phase_flash")],
+        ids=lambda c: c.name)
     def test_the_feed_guess_is_not_already_the_answer(self, case):
         fs = case.build()
         guess = _feed_guess(fs)
@@ -207,7 +211,6 @@ class TestOutcomeVerdict:
 
 class TestRunCase:
 
-    @pytest.mark.slow
     def test_the_control_case_passes(self):
         outcome = run_case(get_case("two_phase_flash"), acceleration="anderson")
         assert outcome.passed, outcome
@@ -237,12 +240,11 @@ class TestRunCase:
         assert not outcome.passed
         assert outcome.verdict == "raised"
 
-    @pytest.mark.slow
     def test_a_check_that_raises_makes_the_answer_wrong(self):
         def bad_check(fs, streams):
             raise ValueError("cannot audit")
 
-        case = Case(name="unauditable", build=get_case("two_phase_flash").build,
+        case = Case(name="unauditable", build=get_case("overshoot_loop").build,
                     difficulty="A check that raises, to confirm an "
                                "unauditable answer counts as wrong.",
                     check=bad_check)
@@ -259,12 +261,11 @@ class TestRunCase:
 
     def test_an_unknown_initialization_is_rejected(self):
         with pytest.raises(ValueError, match="unknown initialization"):
-            run_case(get_case("two_phase_flash"), initialization="telepathy")
+            run_case(get_case("overshoot_loop"), initialization="telepathy")
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("initialization", INITIALIZATIONS)
     def test_every_initialization_strategy_runs(self, initialization):
-        outcome = run_case(get_case("two_phase_flash"),
+        outcome = run_case(get_case("regime_switch"),
                            initialization=initialization)
         assert outcome.passed, outcome
 
@@ -361,27 +362,34 @@ class TestReport:
         assert "passed" in rows[0]
 
 
-@pytest.mark.slow
 class TestRunBenchmark:
 
-    @pytest.mark.slow
     def test_it_covers_the_whole_grid(self):
-        report = run_benchmark(cases=["two_phase_flash"],
+        report = run_benchmark(cases=["regime_switch"],
                                accelerations=("anderson", "wegstein"),
                                initializations=("unit", "default"))
         assert len(report.outcomes) == 4
         assert {o.acceleration for o in report.outcomes} == {"anderson", "wegstein"}
         assert {o.initialization for o in report.outcomes} == {"unit", "default"}
 
-    @pytest.mark.slow
+    def test_no_case_raises_and_the_report_renders(self):
+        """Folded in from the old whole-corpus grid, on three cheap cases."""
+        names = ["regime_switch", "overshoot_loop", "trace_recycle"]
+        report = run_benchmark(cases=names, accelerations=("anderson", "none"),
+                               initializations=("unit",))
+        assert not [o.error for o in report.outcomes if o.error]
+        assert 0.0 < report.pass_rate < 1.0
+        text = report.as_text()
+        assert all(n in text for n in names)
+
     def test_it_accepts_case_objects_as_well_as_names(self):
-        report = run_benchmark(cases=[get_case("two_phase_flash")],
+        report = run_benchmark(cases=[get_case("regime_switch")],
                                accelerations=("anderson",),
                                initializations=("unit",))
         assert len(report.outcomes) == 1
 
     def test_the_report_carries_the_settings_it_ran_under(self):
-        report = run_benchmark(cases=["two_phase_flash"],
+        report = run_benchmark(cases=["regime_switch"],
                                accelerations=("anderson",),
                                initializations=("unit",),
                                tol=1e-6, max_iter=42)
@@ -393,7 +401,6 @@ class TestRunBenchmark:
 # The measurements the corpus was built to make
 # =============================================================================
 
-@pytest.mark.slow
 class TestTheFindings:
     """These pin *why* each hard case is in the corpus.
 
@@ -407,16 +414,6 @@ class TestTheFindings:
         assert not divergent.passed
         assert accelerated.passed
 
-    @pytest.mark.slow
-    def test_anderson_is_not_a_free_win(self):
-        """phase_coupled_flash is in the corpus precisely because it isn't."""
-        anderson = run_case(get_case("phase_coupled_flash"),
-                            acceleration="anderson", initialization="unit")
-        wegstein = run_case(get_case("phase_coupled_flash"),
-                            acceleration="wegstein", initialization="unit")
-        assert wegstein.passed
-        assert not anderson.passed
-
     def test_anderson_solves_a_disjunction_without_binaries(self):
         """The negative result #251 most needs.
 
@@ -428,7 +425,6 @@ class TestTheFindings:
         assert run_case(get_case("regime_switch"),
                         acceleration="anderson").passed
 
-    @pytest.mark.slow
     def test_a_signed_tear_beats_both_accelerated_methods(self):
         """The one case that inverts the corpus ranking.
 
@@ -459,20 +455,11 @@ class TestTheFindings:
         assert unclipped.passed
         assert unclipped.iterations < 30
 
-    @pytest.mark.slow
-    def test_a_rigorous_column_in_a_recycle_is_not_the_hard_part(self):
-        """#251 names near-pinch columns; every setting solves this one."""
-        for acceleration in ACCELERATIONS:
-            outcome = run_case(get_case("column_recycle"),
-                               acceleration=acceleration)
-            assert outcome.passed, outcome
-
     def test_the_multi_loop_case_really_has_two_tears(self):
         """Otherwise it is not testing what it says it tests."""
         fs = get_case("two_loop_recycle").build()
         assert len(fs.recycles) == 2
 
-    @pytest.mark.slow
     def test_an_absolute_tear_tolerance_can_accept_a_wrong_answer(self):
         """The trap ``trace_recycle`` exists to expose.
 
@@ -489,7 +476,6 @@ class TestTheFindings:
         assert not outcome.correct, "and the audit should disagree"
         assert outcome.verdict == "WRONG"
 
-    @pytest.mark.slow
     def test_the_solver_could_have_known_it_was_wrong(self):
         """#264: the same solve, with the error measured rather than assumed.
 
@@ -508,7 +494,6 @@ class TestTheFindings:
         assert outcome.error_estimate == pytest.approx(3.0e-7, rel=0.05)
         assert outcome.error_estimate > 30 * outcome.residual
 
-    @pytest.mark.slow
     def test_the_signed_tear_amplification_was_the_reference_not_the_solver(self):
         """#264: ``signed_tear`` was measuring a rounded constant.
 

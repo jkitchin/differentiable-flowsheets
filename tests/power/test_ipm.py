@@ -23,7 +23,6 @@ from difflow_power.ipm import (
 )
 
 
-@pytest.mark.slow
 def test_unconstrained_quadratic():
     nlp = NLP(objective=lambda x, p: jnp.sum((x - 3.0) ** 2), n=3)
     result = solve_nlp(nlp, jnp.zeros(3))
@@ -31,7 +30,6 @@ def test_unconstrained_quadratic():
     np.testing.assert_allclose(result.x, 3.0, atol=1e-8)
 
 
-@pytest.mark.slow
 def test_equality_constrained_quadratic_matches_the_kkt_algebra():
     """min |x|^2 s.t. sum(x) = 1 has x = 1/n and lambda = -2/n."""
     n = 4
@@ -76,7 +74,6 @@ def test_inactive_bound_has_a_zero_multiplier():
     assert not bool(result.active()[0])
 
 
-@pytest.mark.slow
 def test_linear_objective_converges_despite_zero_curvature():
     """A pure LP: the Hessian is zero, so the inertia correction has to
     supply every bit of curvature the Newton system needs.
@@ -121,7 +118,6 @@ def test_infeasible_problem_is_reported_not_raised():
     assert "DID NOT CONVERGE" in result.summary()
 
 
-@pytest.mark.slow
 def test_sensitivity_matches_the_analytic_answer_on_both_sides():
     """min (x-3)^2 + (y-2)^2 s.t. x + y = p, x >= 2.
 

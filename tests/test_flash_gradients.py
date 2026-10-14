@@ -72,8 +72,6 @@ def binary_thermo():
 class TestEOSFlashGradients:
     """Gradient tests for EOS-based flash."""
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_gradient_wrt_temperature(self, eos_flash):
         """Gradient of vapor fraction w.r.t. feed temperature.
 
@@ -98,8 +96,6 @@ class TestEOSFlashGradients:
             f"dV/dT should be positive (got {float(grad_val)})"
         )
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_gradient_wrt_pressure(self, eos_flash):
         """Gradient of vapor fraction w.r.t. feed pressure.
 
@@ -124,8 +120,6 @@ class TestEOSFlashGradients:
             f"dV/dP should be negative (got {float(grad_val)})"
         )
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_gradient_wrt_composition(self, eos_flash):
         """Gradient of vapor-phase methane purity w.r.t. feed methane flow.
 
@@ -148,8 +142,6 @@ class TestEOSFlashGradients:
         assert float(grad_val) != 0.0, "Gradient should be non-zero"
 
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_second_derivative_matches_fd(self):
         """d2x/dP2 through ``flash_TP_eos`` matches a central difference of the
         gradient (issue #444). The derivative used to come from unrolling the
@@ -178,8 +170,6 @@ class TestEOSFlashGradients:
 class TestPHFlashGradients:
     """Gradient tests for PH (isenthalpic) flash."""
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_gradient_wrt_feed_temperature(self, binary_thermo):
         """Gradient of vapor fraction w.r.t. feed temperature in PH flash.
 
@@ -214,7 +204,6 @@ class TestPHFlashGradients:
 class TestFlashCompositionGradients:
     """Gradient of ideal Flash w.r.t. feed composition."""
 
-    @pytest.mark.release
     def test_gradient_wrt_light_fraction(self, binary_thermo):
         """Gradient of vapor fraction w.r.t. amount of light component.
 
@@ -271,7 +260,6 @@ class TestSinglePhaseReverseMode:
         assert jnp.isfinite(rev)
         npt.assert_allclose(rev, fwd, rtol=1e-10)
 
-    @pytest.mark.slow
     def test_jt_valve_reverse_gradient(self):
         from difflow import JTValve, JTValveParams
         from difflow.database import get_species_data

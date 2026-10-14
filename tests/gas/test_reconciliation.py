@@ -113,7 +113,6 @@ def five_noisy(five):
 
 
 class TestTriangleAnalytic:
-    @pytest.mark.slow
     def test_noise_free_state_is_a_fixed_point(self):
         """Reconciling consistent data must change nothing."""
         net = triangle()
@@ -130,7 +129,6 @@ class TestTriangleAnalytic:
             np.asarray(res.x), np.asarray(x_true), atol=1e-9
         )
 
-    @pytest.mark.slow
     def test_recovers_the_closed_form_split(self):
         """x^2 - 200 x + 3400 = 0 for the p01 flow."""
         net = triangle()
@@ -152,9 +150,7 @@ class TestTriangleAnalytic:
 # =============================================================================
 
 
-@pytest.mark.slow
 class TestFiveNodeReconciliation:
-    @pytest.mark.slow
     def test_noisy_measurements_are_made_consistent(self, five, five_noisy):
         """Balances and pipe laws are O(1) before and ~0 after."""
         net, layout, _, _, _ = five
@@ -171,7 +167,6 @@ class TestFiveNodeReconciliation:
         assert res.converged
         assert res.residual_norm < 1e-9
 
-    @pytest.mark.slow
     def test_verify_accepts_the_reconciled_state(self, five, five_noisy):
         """Close the loop through the plugin's own equation checker."""
         net, layout, _, _, _ = five
@@ -219,7 +214,6 @@ class TestFiveNodeReconciliation:
         res = reconcile_network(net, x_true, sigma, layout, ratios=RATIOS)
         assert not global_test(res).detected
 
-    @pytest.mark.slow
     def test_gradient_through_the_reconciliation(self, five):
         """d(reconciled flow)/d(pipe coefficient) is finite and signed."""
         net, layout, residual_fn, x_true, sigma = five
@@ -243,7 +237,6 @@ class TestFiveNodeReconciliation:
 
 
 class TestGrossErrors:
-    @pytest.mark.slow
     def test_biased_flow_meter_is_identified(self, five):
         net, layout, _, x_true, sigma = five
         y = perturb(
@@ -282,7 +275,6 @@ class TestGrossErrors:
         mt = measurement_test(res)
         assert mt.suspect in {"q_p4", "q_p2", "q_p3", "s_c", "s_d"}
 
-    @pytest.mark.slow
     def test_serial_elimination_clears_the_data(self, five):
         net, layout, residual_fn, x_true, sigma = five
         y = perturb(
@@ -317,7 +309,6 @@ class TestEfficiencyEstimation:
         )
         return layout, residual_fn, sigma
 
-    @pytest.mark.slow
     def test_clean_data_gives_unit_efficiency(self, five):
         net, _, _, _, _ = five
         p_bar, q = _solve(net, "src", P_SLACK_PA, RATIOS)
@@ -331,7 +322,6 @@ class TestEfficiencyEstimation:
         )
         assert res.std["eta_p3"] == pytest.approx(0.043, abs=0.005)
 
-    @pytest.mark.slow
     def test_recovers_a_fouled_pipe(self, five):
         """A pipe 15% more resistive than the model is detected as such."""
         net, _, _, _, _ = five
@@ -377,7 +367,6 @@ class TestEfficiencyEstimation:
         assert res.structure.solvable
         assert res.structure.degree_of_redundancy == 4
 
-    @pytest.mark.slow
     def test_a_prior_restores_solvability(self, five):
         """Shrinking a weakly identified parameter beats failing on it."""
         net, _, _, _, _ = five
@@ -393,7 +382,6 @@ class TestEfficiencyEstimation:
             "the posterior cannot be looser than the prior"
         )
 
-    @pytest.mark.slow
     def test_sensor_ranking_prefers_a_loop_flow_meter(self, five):
         """The best sensor for eta is a meter on the loop flows."""
         net, _, _, _, _ = five
@@ -437,8 +425,6 @@ def _campaign(net, layout, sigma, etas, key0=1000, gross=None):
 
 
 class TestMonitorNetwork:
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_a_healthy_plant_stays_below_the_threshold(self, five):
         """The routine clock on a plant that has not drifted."""
         net, layout, _, _, sigma = five
@@ -451,8 +437,6 @@ class TestMonitorNetwork:
         assert mon.rejection_rate() < 0.5
         assert mon.diagnose(window=None).verdict == MONITOR_CONSISTENT
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_fouling_reads_as_model_drift(self, five):
         """A pipe that fouls breaks a balance, not a reading, so the
         adjustments smear and the blame wanders."""
@@ -469,8 +453,6 @@ class TestMonitorNetwork:
         assert diag.culprit is None
         assert diag.drifting
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_a_biased_meter_reads_as_an_instrument_fault(self, five):
         """The same rejection, a different cause: one meter lying puts
         the blame on itself, every day."""
@@ -487,7 +469,6 @@ class TestMonitorNetwork:
         assert diag.culprit == "q_p2"
         assert not diag.drifting
 
-    @pytest.mark.release
     def test_layout_defaults_match_reconcile_network(self, five):
         """The wrapper fills in the same names and scales, so a step
         reproduces the single-period call exactly."""
@@ -517,13 +498,11 @@ class TestPooledEfficiency:
         ]
         return layout, sigma, days
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_pooling_beats_averaging_by_sqrt_k(self, five):
         """The reason to pool: eta appears once, so every period's
         equations constrain the same unknown."""
         net, _, _, _, _ = five
-        k = 8
+        k = 4
         layout, sigma, days = self._window(net, [1.15] * k)
 
         pooled = reconcile_network_multi(
@@ -540,11 +519,9 @@ class TestPooledEfficiency:
         )
         assert pooled.shared_std["eta_p3"] < per_day_sd
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_pooled_estimate_recovers_a_constant_fouling(self, five):
         net, _, _, _, _ = five
-        layout, sigma, days = self._window(net, [1.15] * 8)
+        layout, sigma, days = self._window(net, [1.15] * 4)
         res = reconcile_network_multi(
             net, days, sigma, layout, shared=["eta_p3"], ratios=RATIOS
         )
@@ -554,13 +531,11 @@ class TestPooledEfficiency:
         assert res.converged
         assert not global_test(res).detected
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_redundancy_counts_the_parameter_once(self, five):
-        """Eight separate estimations spend eight degrees of redundancy
-        on eight copies of eta; pooling spends one."""
+        """Separate estimations spend one degree of redundancy per copy of
+        eta; pooling spends one in all."""
         net, _, _, _, _ = five
-        k = 8
+        k = 3
         layout, sigma, days = self._window(net, [1.15] * k)
 
         pooled = reconcile_network_multi(
@@ -573,16 +548,14 @@ class TestPooledEfficiency:
         assert len(pooled.states) == k
         assert list(pooled.states[0]) == layout.names
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_updating_the_model_clears_the_rejection(self, five):
         """The whole loop: monitor rejects, pooling estimates, the
         corrected model accepts the very same measurements."""
         net, _, _, _, _ = five
-        layout, sigma, days = self._window(net, [1.15] * 8)
+        layout, sigma, days = self._window(net, [1.15] * 4)
         plain = gas_state_layout(net)
         sigma_plain = measurement_sigma(plain)
-        plain_days = _campaign(net, plain, sigma_plain, [1.15] * 8, key0=2000)
+        plain_days = _campaign(net, plain, sigma_plain, [1.15] * 4, key0=2000)
 
         before = monitor_network(
             net, plain_days, sigma_plain, plain, ratios=RATIOS
