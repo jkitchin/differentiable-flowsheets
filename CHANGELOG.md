@@ -733,6 +733,9 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Breaking
 
+- **Python 3.11 is no longer supported**: `requires-python` is `>=3.12`, and CI (per-commit, nightly
+  Full suite, publish, book) runs on 3.12 only.
+
 - **Antoine constants corrected and sourced; flash bubble/dew helpers honour
   the thermo model; `IdealThermo` vapour enthalpy made monotone.** Results that
   depend on these move, by design:

@@ -99,26 +99,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # One interpreter on a pull request, both of them on main.
-        #
-        # The jobs run concurrently, so this does not make a pull request
-        # finish sooner -- it costs the same wall-clock as one job. What it
-        # saves is job-minutes, and this being a public repository those are
-        # free. The reason to do it anyway is contention: the jobs draw on the
-        # same runner pool as every other repository on the account, and two
-        # of them have almost never been the ones to fail.
-        #
-        # Almost, not never. Every recorded exception was 3.10: over 134
-        # full-matrix runs, three had 3.10 fail while 3.11 passed (all on
-        # main, 2026-07-17/18), and 3.10 has since been dropped -- it was
-        # pinned to jax 0.6.2 / lineax 0.1.0, a frozen stack three JAX
-        # minors behind what 3.12 resolves, and the divergence was the
-        # failure, not the Python version. 3.11 and 3.12 sit one minor
-        # apart and have never disagreed here. If they start to, delete
-        # the condition and keep the list.
-        python-version: >-
-          ${{ fromJSON(github.event_name == 'pull_request'
-              && '["3.11"]' || '["3.11", "3.12"]') }}
+        # 3.11 was dropped on 2026-10-14 (requires-python is >=3.12); the
+        # nightly Full suite lost its 3.11 shard 4/12 to runner shutdowns.
+        python-version: ["3.12"]
         # Sharding costs job-minutes and buys wall-clock, and it buys less
         # of it each time. Three shards were ~7 min when the suite was
         # smaller; at ~70 runner-minutes three put one shard at the 30 min
@@ -181,7 +164,7 @@ jobs:
 
   # Verify the package imports with NO optional dependencies installed. The job
   # this replaces installed ".[dev]" and re-ran the full suite, making it an
-  # exact duplicate of test (3.11) rather than a minimal-install check.
+  # exact duplicate of test (3.12) rather than a minimal-install check.
   test-minimal:
     name: Test minimal install
     runs-on: ubuntu-latest
@@ -193,7 +176,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
 
       - name: Install with no extras
