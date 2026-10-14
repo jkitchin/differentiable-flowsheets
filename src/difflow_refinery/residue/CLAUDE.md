@@ -24,7 +24,7 @@ treat gas, ideal product split (gas / distillate / residue). A library.
 - Conversion moves ALL of a parent's atoms to `m = nC_i/nC_j` lighter molecules
   with `m - 1` H2; the HDT cracking leak is off (`crack_k=0`) so nothing double counts.
 - Constants and the refractory-S share table are ILLUSTRATIVE (ARDS ranges, pinned
-  by release tests); R1-R5 references are unverified.
+  by tests); R1-R5 references are unverified.
 
 Docs: `docs/unit-operations-refinery.md` ("Residue desulfurization and fuel oil").
-Tests: `tests/refinery/test_residue.py` (gradient and CDU route: release + slow).
+Tests: `tests/refinery/test_residue.py` (the unit-level gradient and CDU route were cut for cost; beds are checked individually).

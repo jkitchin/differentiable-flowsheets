@@ -158,7 +158,7 @@ is written down. Example 40, section 10, uses it. A library.
   reverse-only stage narrow (one cotangent per output of that stage).
 
 Docs: `docs/unit-operations-refinery.md` ("Chaining units"). Tests:
-`tests/refinery/test_plant.py` (per commit), `tests/refinery/test_plant_chain.py` (release, slow).
+`tests/refinery/test_plant.py` (per commit), (`test_plant_chain.py` was removed for cost; the chain is pinned on toy stages in `test_plant.py`).
 
 Subpackages carry their own CLAUDE.md: `alkylation/` is above; `vacuum/`,
 `reforming/`, `hydroprocessing/` (shared by `hydrotreating/`, `hydrocracking/`,

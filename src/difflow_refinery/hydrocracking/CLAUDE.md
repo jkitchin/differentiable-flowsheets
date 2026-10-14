@@ -30,4 +30,4 @@ Invariants (do not weaken them):
   recycle, so an unconverged tear shows in them.
 - Recycle at fixed catalyst and T LOWERS per-pass conversion (a recycle
   reactor is less efficient than plug flow); what it buys is selectivity.
-- Full-unit tests compile 2-6 min each: slow.
+- The whole unit compiles in ~9 CPU-min (the cracking beds run under a `lax.scan`, so fewer beds do not shrink it), so there is no whole-unit test: the pieces (beds, fractionator, tears, adjoint gradient) are tested separately.

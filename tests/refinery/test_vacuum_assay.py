@@ -123,15 +123,12 @@ def thermo():
     return ColumnThermo(characterize(heavy_crude()).components)
 
 
-@pytest.mark.slow
 class TestThermo:
-    @pytest.mark.slow
     def test_heat_of_vaporization_is_plausible(self, thermo):
         # J/kg at 350 C: a few hundred kJ/kg for gas oils
         dh = thermo.dh_vap(623.15) / thermo.c.MW * 1000.0
         assert jnp.all((dh[:10] > 1.5e5) & (dh[:10] < 4.0e5))
 
-    @pytest.mark.slow
     def test_liquid_cp_is_plausible(self, thermo):
         cp = jax.jacfwd(lambda T: thermo.h_liquid(T))(623.15) / thermo.c.MW * 1000.0
         assert jnp.all((cp > 2.0e3) & (cp < 3.6e3))
@@ -169,7 +166,6 @@ class TestTBP:
         for f in (0.05, 0.3, 0.7, 0.9):
             assert float(tbp_fraction(a, tbp_temperature(a, f))) == pytest.approx(f, rel=1e-10)
 
-    @pytest.mark.slow
     def test_derivative_is_single_valued_at_a_data_point(self):
         """C1 at the knots, so a cut boundary on a TBP point has one slope."""
         a = heavy_crude()
@@ -191,7 +187,6 @@ def char(request):
 
 
 class TestCharacterize:
-    @pytest.mark.slow
     def test_mass_closes(self, char):
         assert float(jnp.sum(char.yields) + char.light_ends) == pytest.approx(1.0, abs=1e-12)
 
@@ -211,7 +206,6 @@ class TestCharacterize:
         assert float(char.components.MW[-1]) == 1800.0
         assert float(char.components.SG[-1]) == pytest.approx(1.08)
 
-    @pytest.mark.slow
     def test_watson_k_reproduces_bulk_gravity(self):
         """Constant Kw, fitted so the whole crude -- cuts and lump, volumes
         adding -- has its bulk SG. Since #301 the fit is over the shared
@@ -224,7 +218,6 @@ class TestCharacterize:
         # The vacuum view reports the Kw of the characterization it slices.
         assert np.allclose(characterize(a).components.Kw[:-1], characterize(a).Kw, rtol=1e-12)
 
-    @pytest.mark.slow
     def test_contaminants_reproduce_bulk_values(self):
         a = heavy_crude()
         ch = characterize(a, cuts_C=np.arange(0.0, 800.1, 10.0))
@@ -243,7 +236,6 @@ class TestCharacterize:
                 light_crude() if float(c.SG[0]) < 0.86 else heavy_crude(), 370.0))),
             rel=0.05)
 
-    @pytest.mark.slow
     def test_characterization_is_differentiable_in_a_tbp_point(self):
         a = heavy_crude()
 

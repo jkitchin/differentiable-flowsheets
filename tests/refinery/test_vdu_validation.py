@@ -63,8 +63,6 @@ from .reference import vdu_case as vc
 
 jax.config.update("jax_enable_x64", True)
 
-pytestmark = pytest.mark.release
-
 REF = json.loads((Path(__file__).parent / "reference" / "vdu_reference.json").read_text())
 FEED = np.asarray(REF["case"]["feed_mol_s"])
 PRODUCTS = ("overhead", "lvgo", "hvgo", "slop", "residue")
@@ -110,13 +108,10 @@ def _check_column(info, ref):
                                                                rel=1e-6)
 
 
-@pytest.mark.slow
 class TestColumnAgainstReference:
-    @pytest.mark.slow
     def test_equilibrium_beds(self, equilibrium):
         _check_column(equilibrium, REF["column"])
 
-    @pytest.mark.slow
     def test_murphree_beds(self, murphree):
         """LVGO 80 %, HVGO 70 %, wash 50 %, stripping 40 %, on a 520 C LVGO
         end point: the efficiency path, where the beds' below-stage vapour
@@ -131,7 +126,6 @@ class TestColumnAgainstReference:
         assert b["hvgo.rate"] < 0.5 * a["hvgo.rate"]
 
 
-@pytest.mark.slow
 class TestWhatTheModelChoicesCost:
     """Not a comparison with difflow: the reference re-solved with the two
     numerical choices difflow's model states, undone. Pinned so the docs'
@@ -156,12 +150,10 @@ class TestWhatTheModelChoicesCost:
             assert 1e-5 < self._rel("published_branches", k) < 2e-3, k
 
 
-@pytest.mark.slow
 class TestGradientsAgainstReference:
     """``jax.jacfwd`` through difflow's solve against central differences of
     the reference column, re-solved by IPOPT at each perturbed point."""
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("knob", ["furnace_T", "flash_zone_P", "steam_per_feed"])
     def test_sensitivities(self, comp, knob):
         fd = REF["sensitivities"][knob]["d"]
@@ -184,7 +176,6 @@ class TestGradientsAgainstReference:
             assert g == pytest.approx(fd[k], rel=2e-4, abs=floor), (knob, k)
 
 
-@pytest.mark.slow
 def test_regeneration_reproduces_the_committed_reference(tmp_path):
     """Optional: rebuild the reference (without the variants or finite
     differences) and check it lands on the committed numbers. Needs Pyomo

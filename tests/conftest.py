@@ -269,22 +269,21 @@ def pytest_collection_modifyitems(config, items):
     return result
 
 
-#: Seconds a test NOT marked ``slow`` may spend in its call phase, read from
-#: ``DIFFLOW_TEST_BUDGET`` (unset: no limit). The per-commit suite checks
-#: correctness, and anything that has to solve something expensive to do it
-#: belongs to the nightly run -- mark it ``slow``. The Tests workflow sets a
-#: budget so that a test that grows into an expensive solve fails the commit
-#: that made it grow, instead of creeping the shards back to their timeout.
-#: The budget is generous on purpose: the first test in a file pays that
-#: file's JIT compile, which is several times its steady-state cost.
+#: Seconds a test may spend in its call phase, read from
+#: ``DIFFLOW_TEST_BUDGET`` (unset: no limit). There is one suite and it runs on
+#: every commit, so a test that has to solve something expensive is shrunk (a
+#: smaller configuration, one representative case) or cut. The Tests workflow
+#: sets a budget so that a test that grows into an expensive solve fails the
+#: commit that made it grow, instead of creeping the shards back to their
+#: timeout. The budget is generous on purpose: the first test in a file pays
+#: that file's JIT compile, which is several times its steady-state cost.
 _BUDGET = float(os.environ.get("DIFFLOW_TEST_BUDGET", "0") or 0)
 _OVER_BUDGET = []
 
 
 def pytest_runtest_logreport(report):
-    """Record non-``slow`` tests whose call phase ran past :data:`_BUDGET`."""
-    if (_BUDGET and report.when == "call" and report.duration > _BUDGET
-            and "slow" not in report.keywords):
+    """Record tests whose call phase ran past :data:`_BUDGET`."""
+    if _BUDGET and report.when == "call" and report.duration > _BUDGET:
         _OVER_BUDGET.append((report.duration, report.nodeid))
 
 
@@ -293,7 +292,7 @@ def pytest_terminal_summary(terminalreporter):
         terminalreporter.section(f"over the {_BUDGET:g}s per-test budget (DIFFLOW_TEST_BUDGET)")
         for duration, nodeid in sorted(_OVER_BUDGET, reverse=True):
             terminalreporter.line(f"{duration:8.1f}s  {nodeid}")
-        terminalreporter.line("Mark these @pytest.mark.slow, or make them cheaper.")
+        terminalreporter.line("Make these cheaper (a smaller configuration, fewer cases) or cut them.")
 
 
 def pytest_sessionfinish(session, exitstatus):
