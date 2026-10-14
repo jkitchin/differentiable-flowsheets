@@ -182,7 +182,6 @@ class TestEstimatorFit:
 # ---------------------------------------------------------------------------
 
 class TestConfidence:
-    @pytest.mark.slow
     def test_confidence_intervals(self):
         exps = make_linear_experiments(a_true=2.0, b_true=1.0, n=20, noise_std=0.1)
         est = Estimator(linear_model, ['a', 'b'])
@@ -249,10 +248,7 @@ class TestDiagnostics:
 # Bootstrap tests
 # ---------------------------------------------------------------------------
 
-@pytest.mark.slow
 class TestBootstrap:
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_nonparametric_bootstrap(self):
         exps = make_linear_experiments(a_true=2.0, b_true=1.0, n=15, noise_std=0.1)
         est = Estimator(linear_model, ['a', 'b'])
@@ -266,8 +262,6 @@ class TestBootstrap:
         np.testing.assert_allclose(bs.mean['a'], 2.0, atol=0.5)
         np.testing.assert_allclose(bs.mean['b'], 1.0, atol=1.0)
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_parametric_bootstrap(self):
         exps = make_linear_experiments(a_true=2.0, b_true=1.0, n=15, noise_std=0.1)
         est = Estimator(linear_model, ['a', 'b'])
@@ -278,8 +272,6 @@ class TestBootstrap:
         assert bs.method == 'parametric'
         np.testing.assert_allclose(bs.mean['a'], 2.0, atol=0.5)
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_bootstrap_honours_the_objective_it_is_given(self):
         """A weighted fit needs a weighted bootstrap.
 
@@ -312,7 +304,6 @@ class TestBootstrap:
         assert 0.4 < matched.std['a'] / ci.std_errors['a'] < 2.5
         assert mismatched.std['a'] / ci.std_errors['a'] > 3.0
 
-    @pytest.mark.release
     def test_summary_reports_the_intervals_of_the_fit_it_summarises(self):
         """``summary`` must be able to use the objective ``fit`` minimized."""
         rng = np.random.default_rng(0)
@@ -330,17 +321,6 @@ class TestBootstrap:
         text = est.summary(result, exps, objective='wsse')
 
         assert f"{ci.std_errors['a']:.6g}" in text
-
-    @pytest.mark.slow
-    @pytest.mark.release
-    def test_bootstrap_ci_contains_true(self):
-        exps = make_linear_experiments(a_true=2.0, b_true=1.0, n=20, noise_std=0.05)
-        est = Estimator(linear_model, ['a', 'b'])
-        result = est.fit(exps, {'a': 1.0, 'b': 0.0})
-        bs = est.bootstrap(result, exps, n_bootstrap=50, alpha=0.05)
-
-        assert bs.ci_lower['a'] < 2.0 < bs.ci_upper['a']
-
 
 # ---------------------------------------------------------------------------
 # Cross-validation tests

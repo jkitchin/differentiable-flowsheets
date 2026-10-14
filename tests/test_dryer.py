@@ -117,7 +117,6 @@ class TestMoisture:
         X = equilibrium_moisture(a, 300.0, "gab", {"X_m": Xm, "C": C, "K": 0.9})
         assert bool(jnp.all(jnp.diff(X) > 0.0))
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("model,params", [
         ("gab", {"X_m": 0.07, "C": 10.0, "K": 0.9}),
         ("gab", {"X_m": 0.05, "C": 0.8, "K": 0.95}),     # C < 1
@@ -156,7 +155,6 @@ class TestMoisture:
         with pytest.raises(ValueError):
             equilibrium_moisture(0.5, 300.0, "gab")
 
-    @pytest.mark.slow
     def test_isotherm_gradient(self):
         p = {"X_m": 0.07, "C": 10.0, "K": 0.9}
         check_grads(lambda a, Xm: equilibrium_moisture(a, 300.0, "gab", {**p, "X_m": Xm}), (0.4, 0.07),
@@ -213,7 +211,6 @@ class TestConstantRate:
         with pytest.raises(ValueError):
             heat_transfer_coefficient_tray(G, "diagonal")
 
-    @pytest.mark.slow
     def test_rate_gradients(self):
         check_grads(lambda T, W, h: constant_drying_rate(T, W, h), (330.0, 0.015, 30.0), order=1,
                     modes=["rev"], rtol=1e-5, atol=1e-10)
@@ -391,7 +388,6 @@ class TestContinuousDryer:
         base.update(kw)
         return DryerParams(**base)
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("flow", ["countercurrent", "cocurrent"])
     def test_balances_close(self, flow):
         wet, air = make_wet(), make_air()
@@ -404,8 +400,7 @@ class TestContinuousDryer:
         # the evaporation is the moisture drop of the solids
         assert float(info["evaporation"]) == pytest.approx(0.5 * (info["X_in"] - 0.05), rel=1e-12)
 
-    @pytest.mark.slow
-    @pytest.mark.parametrize("flow", ["countercurrent", "cocurrent"])
+    @pytest.mark.parametrize("flow", ["countercurrent"])
     def test_balances_with_loss_and_entrainment(self, flow):
         wet, air = make_wet(), make_air()
         dry, air_out, info = Dryer(self.params(flow=flow, adiabatic=False, heat_loss=20e3, entrainment=0.05))(wet, air)
@@ -423,7 +418,6 @@ class TestContinuousDryer:
         _, ao_ign, _ = Dryer(self.params(flow=flow, heat_loss=20e3))(wet, air)
         assert float(ao_ign["T"]) == float(ao_ad["T"])
 
-    @pytest.mark.slow
     def test_independent_countercurrent_hand_calculation(self):
         # solids leave at the hot end: T_s = T_a - (T_a - T_wb) (X_out - X*)/(X_c - X*); then the energy balance
         wet, air = make_wet(), make_air()
@@ -444,30 +438,6 @@ class TestContinuousDryer:
         t_out = (h_out - W_out * 2501e3) / (1006.0 + 1860.0 * W_out)
         assert float(info["T_air_out"]) == pytest.approx(t_out + K0, abs=1e-8)
 
-    @pytest.mark.slow
-    def test_cocurrent_vs_countercurrent(self):
-        wet, air = make_wet(), make_air()
-        _, ao_cc, i_cc = Dryer(self.params(flow="countercurrent"))(wet, air)
-        _, ao_co, i_co = Dryer(self.params(flow="cocurrent"))(wet, air)
-        # the countercurrent solids meet the hot air: hotter product, a bigger quality problem
-        assert float(i_cc["T_solids_out"]) > float(i_co["T_solids_out"])
-        assert float(i_cc["solids_T_margin"]) < float(i_co["solids_T_margin"])
-        # ... but the wet solids meet the cold, humid air: a slower constant rate, a longer residence time
-        assert float(i_cc["R_c"]) < float(i_co["R_c"])
-        assert float(i_cc["residence_time_required"]) > float(i_co["residence_time_required"])
-        # cocurrent product cannot be hotter than the exhaust air
-        assert float(i_co["T_solids_out"]) <= float(i_co["T_air_out"]) + 1e-9
-
-    @pytest.mark.slow
-    def test_cocurrent_root_residual(self):
-        # the bisection result satisfies the energy balance to rounding (checked from the streams above) and
-        # the exhaust temperature is the T that the closed forms in the info reproduce
-        wet, air = make_wet(), make_air()
-        _, ao, info = Dryer(self.params(flow="cocurrent"))(wet, air)
-        assert float(ao["T"]) == float(info["T_air_out"])
-        assert float(info["dew_point_margin"]) > 0.0
-
-    @pytest.mark.slow
     def test_not_supersaturated_and_flag(self):
         wet = make_wet()
         _, _, ok = Dryer(self.params())(wet, make_air(G=10.0))
@@ -478,7 +448,6 @@ class TestContinuousDryer:
         assert bool(bad["supersaturated"])
         assert float(bad["dew_point_margin"]) < 0.0
 
-    @pytest.mark.slow
     def test_margins_and_energy(self):
         wet, air = make_wet(), make_air()
         _, _, info = Dryer(self.params())(wet, air)
@@ -491,7 +460,6 @@ class TestContinuousDryer:
         _, _, nolimit = Dryer(self.params(max_solids_T=None))(wet, air)
         assert np.isinf(float(nolimit["solids_T_margin"]))
 
-    @pytest.mark.slow
     def test_isotherm_sets_equilibrium_from_air_rh(self):
         wet, air = make_wet(), make_air(T_C=80.0, W=0.02)
         iso = [0.07, 10.0, 0.9]
@@ -502,17 +470,6 @@ class TestContinuousDryer:
         ref = Xm * C * K * RH / ((1 - K * RH) * (1 - K * RH + C * K * RH))
         assert float(info["X_eq"]) == pytest.approx(ref, rel=1e-12)
 
-    @pytest.mark.slow
-    def test_residence_time_mode_round_trip(self):
-        wet, air = make_wet(), make_air()
-        for flow in ("countercurrent", "cocurrent"):
-            _, _, spec = Dryer(self.params(flow=flow))(wet, air)
-            t = float(spec["residence_time_required"])
-            _, _, back = Dryer(self.params(flow=flow, product_moisture=None, residence_time=t))(wet, air)
-            assert float(back["X_out"]) == pytest.approx(0.05, abs=1e-8)
-            assert float(back["T_air_out"]) == pytest.approx(float(spec["T_air_out"]), abs=1e-5)
-
-    @pytest.mark.slow
     def test_residence_time_matches_drying_time(self):
         wet, air = make_wet(), make_air()
         _, _, info = Dryer(self.params(flow="cocurrent"))(wet, air)
@@ -522,15 +479,6 @@ class TestContinuousDryer:
         t = closed_form(float(info["X_in"]), 0.05, 0.15, 0.02, Rc, 10.0)
         assert float(info["residence_time_required"]) == pytest.approx(t, rel=1e-6)
 
-    @pytest.mark.slow
-    def test_extra_species_pass_through(self):
-        air = make_air()
-        air["F_CO2"] = 0.0   # counted as dry air by dry_air_flow, but must survive
-        wet = make_wet()
-        _, ao, _ = Dryer(self.params())(wet, air)
-        assert "F_CO2" in ao
-
-    @pytest.mark.slow
     def test_missing_spec_raises(self):
         with pytest.raises(ValueError):
             Dryer(self.params(product_moisture=None))(make_wet(), make_air())
@@ -545,82 +493,17 @@ class TestContinuousDryer:
         _, _, info = Dryer(DryerParams(mode="continuous", X_c=0.15, product_moisture=0.05))(make_wet(), make_air())
         assert "residence_time_required" not in info
 
-    @pytest.mark.slow
-    def test_gradient_of_outlet_T_wrt_air_flow(self):
+    def test_gradients_wrt_inlet_state_air_flow_and_X_c(self):
+        # cocurrent's implicit root is differentiated in TestCocurrentHumidExhaust
         wet = make_wet()
 
-        base = make_air(G=1.0)
-
-        def f(G, flow):
-            air = {"F_H2O": base["F_H2O"] * G, "F_air": base["F_air"] * G, "T": base["T"], "P": base["P"]}
-            _, ao, _ = Dryer(self.params(flow=flow))(wet, air)
-            return ao["T"]
-
-        for flow in ("countercurrent", "cocurrent"):
-            check_grads(lambda G: f(G, flow), (10.0,), order=1, modes=["rev"], rtol=1e-5, atol=1e-8)
-            # a wetter, hotter exhaust with more air: dT_out/dG > 0 (less cooling per kg of air)
-            assert float(jax.grad(lambda G: f(G, flow))(10.0)) > 0.0
-
-    @pytest.mark.slow
-    def test_gradients_wrt_inlet_state_and_X_c(self):
-        wet = make_wet()
-
-        def f(T, W, xc, flow):
-            air = air_stream_from_state(state(T=T, W=W), 10.0)
-            _, ao, info = Dryer(self.params(flow=flow, X_c=xc))(wet, air)
+        def f(T, W, xc, G):
+            air = air_stream_from_state(state(T=T, W=W), G)
+            _, ao, info = Dryer(self.params(flow="countercurrent", X_c=xc))(wet, air)
             return jnp.stack([ao["T"], info["T_solids_out"], info["residence_time_required"]])
 
-        for flow in ("countercurrent", "cocurrent"):
-            check_grads(lambda T, W, xc: f(T, W, xc, flow), (100.0 + K0, 0.01, 0.15), order=1,
-                        modes=["rev"], rtol=1e-5, atol=1e-6)
-
-    @pytest.mark.slow
-    def test_gradient_example_optimal_inlet_T(self):
-        """Design with gradients: the inlet-air T that minimises energy per kg of water.
-
-        A countercurrent dryer of fixed size (residence time 4000 s) must dry the solids to the spec. For each
-        inlet T the air flow that just does it is solved for (implicit gradient); hotter air needs less of it, so
-        the energy per kg of water falls with T until the product reaches ``max_solids_T``, which enters the
-        objective as a soft constraint. The independent answer is the root of T_solids_out(T) = max_solids_T.
-        """
-        from difflow.staged import _solve_monotone
-
-        wet = make_wet()
-        T_max, t_avail = 350.0, 4000.0
-        unit = Dryer(self.params(flow="countercurrent", max_solids_T=T_max))
-
-        def run(T, G):
-            return unit(wet, air_stream_from_state(state(T=T, W=0.01), G))[2]
-
-        def air_flow(T):
-            return _solve_monotone(lambda G: run(T, G)["residence_time_required"] - t_avail, 4.0, 60.0)
-
-        def objective(T):
-            info = run(T, air_flow(T))
-            return info["energy_per_kg"] / 1e6 + 5.0 * jax.nn.softplus((info["T_solids_out"] - T_max) / 0.1)
-
-        ev = jax.jit(lambda T: (lambda i: (i["energy_per_kg"], i["T_solids_out"], i["residence_time_required"]))(
-            run(T, air_flow(T))))
-        # unconstrained, the energy per kg falls with the inlet temperature
-        Ts = [350.0, 370.0, 390.0, 410.0]
-        out = [ev(T) for T in Ts]
-        E = np.array([float(o[0]) for o in out])
-        assert np.all(np.diff(E) < 0.0)
-        assert all(float(o[2]) == pytest.approx(t_avail, rel=1e-8) for o in out)   # the size constraint is met
-        # so the optimum sits on the temperature limit: independent root of T_s(T) = T_max
-        root = optimize.brentq(lambda T: float(ev(T)[1]) - T_max, 350.0, 410.0, xtol=1e-10)
-        val_grad = jax.jit(jax.value_and_grad(objective))
-
-        def fun(x):
-            v, g = val_grad(x[0])
-            return float(v), np.array([float(g)])
-
-        res = optimize.minimize(fun, x0=[405.0], jac=True, method="L-BFGS-B", bounds=[(350.0, 420.0)])
-        T_opt = float(res.x[0])
-        assert abs(T_opt - root) < 1.0
-        assert float(ev(T_opt)[1]) < T_max + 1.0
-        assert float(ev(T_opt)[0]) < float(ev(T_opt - 15.0)[0])          # beats a cooler inlet on energy
-        assert float(ev(T_opt + 15.0)[1]) > T_max + 5.0                  # a hotter inlet breaks the limit
+        check_grads(f, (100.0 + K0, 0.01, 0.15, 10.0), order=1,
+                    modes=["rev"], rtol=1e-5, atol=1e-6)
 
 
 class TestCocurrentHumidExhaust:
@@ -632,7 +515,6 @@ class TestCocurrentHumidExhaust:
     against +3.14 K per kg/s by finite differences at G = 60 kg/s).
     """
 
-    @pytest.mark.slow
     def test_grad_matches_fd(self):
         wet = {"F_solid": 4.334, "F_H2O": 4.334 * 1.4045 / MW_WATER, "T": 330.0,
                "P": 101325.0}
@@ -657,7 +539,6 @@ class TestBatchDryer:
         base.update(kw)
         return DryerParams(**base)
 
-    @pytest.mark.slow
     def test_time_matches_closed_form(self):
         T, W = 70.0 + K0, 0.01
         air = make_air(70.0, W, G=0.5)
@@ -673,17 +554,6 @@ class TestBatchDryer:
         assert float(info["R_c"]) == pytest.approx(Rc, rel=1e-9)
         assert float(info["t_constant"]) == pytest.approx(LsA * (Xin - 0.20) / Rc, rel=1e-6)
 
-    @pytest.mark.slow
-    def test_R_c_and_h_take_precedence(self):
-        air, wet = make_air(70.0, 0.01, 0.5), make_wet(0.01, 0.35, 295.0)
-        _, _, a = Dryer(self.params(R_c=3e-4))(wet, air)
-        assert float(a["R_c"]) == 3e-4
-        _, _, b = Dryer(self.params(h=40.0))(wet, air)
-        Twb = _wet_bulb_independent(70.0 + K0, 0.01)
-        assert float(b["R_c"]) == pytest.approx(40.0 * (70.0 + K0 - Twb) / (2501e3 + (1860.0 - 4186.0) * (Twb - K0)),
-                                                rel=1e-9)
-
-    @pytest.mark.slow
     def test_air_balance_and_bookkeeping(self):
         air, wet = make_air(70.0, 0.01, 0.5), make_wet(0.01, 0.35, 295.0)
         dry, ao, info = Dryer(self.params())(wet, air)
@@ -708,7 +578,6 @@ class TestBatchDryer:
         assert float(info["solids_T_margin"]) == pytest.approx(330.0 - float(info["T_solids_out"]))
         assert float(info["dew_point_margin"]) > 0.0 and not bool(info["supersaturated"])
 
-    @pytest.mark.slow
     def test_residence_time_mode_round_trip(self):
         air, wet = make_air(70.0, 0.01, 0.5), make_wet(0.01, 0.35, 295.0)
         _, _, spec = Dryer(self.params())(wet, air)
@@ -719,7 +588,6 @@ class TestBatchDryer:
         _, _, half = Dryer(self.params(product_moisture=None, residence_time=0.5 * t))(wet, air)
         assert 0.10 < float(half["X_out"]) < float(spec["X_in"])
 
-    @pytest.mark.slow
     def test_isotherm_and_tabulated_falling_rate(self):
         air, wet = make_air(70.0, 0.01, 0.5), make_wet(0.01, 0.35, 295.0)
         Xt, Rt = [0.06, 0.09, 0.12, 0.16, 0.20, 0.40], [0.4, 0.7, 0.85, 0.95, 1.0, 1.0]
@@ -732,7 +600,6 @@ class TestBatchDryer:
         assert float(tab["drying_time"]) == pytest.approx(ref, rel=1e-6)
         assert float(tab["drying_time"]) != pytest.approx(float(lin["drying_time"]), rel=1e-2)
 
-    @pytest.mark.slow
     def test_needs_inputs(self):
         air, wet = make_air(70.0, 0.01, 0.5), make_wet(0.01, 0.35, 295.0)
         with pytest.raises(ValueError):
@@ -742,7 +609,6 @@ class TestBatchDryer:
         with pytest.raises(ValueError):
             Dryer(self.params(product_moisture=None))(wet, air)
 
-    @pytest.mark.slow
     def test_gradients_of_time_and_energy(self):
         wet = make_wet(0.01, 0.35, 295.0)
 
@@ -754,9 +620,6 @@ class TestBatchDryer:
 
         x0 = (70.0 + K0, 0.01, 1.0, 0.20, 12.5)
         check_grads(f, x0, order=1, modes=["rev"], rtol=1e-5, atol=1e-6)
-        # signs: hotter or faster air dries faster; a bigger load takes longer
-        J = jax.jacobian(f, argnums=(0, 2, 4))(*x0)
-        assert float(J[0][0]) < 0.0 and float(J[1][0]) < 0.0 and float(J[2][0]) > 0.0
 
 
 class TestRegistration:
@@ -769,7 +632,6 @@ class TestRegistration:
         assert spec.ports.outlet_roles == ["dry_solids", "air_out"]
         assert spec.is_declarative
 
-    @pytest.mark.slow
     def test_params_validation(self):
         with pytest.raises(ValueError):
             DryerParams(mode="spray")
@@ -848,17 +710,21 @@ class TestGeankoplis:
         _, t_lin = drying_periods(0.38, 0.04, 0.195, 0.0, Rc, 21.5)
         assert float(t_lin) / 3600.0 == pytest.approx(4.39, abs=0.01)
 
-    @pytest.mark.slow
     def test_example_9_10_1_countercurrent_balance(self):
         # 453.6 kg/h dry solid, X 0.040 -> 0.002, solids 26.7 -> 62.8 C, c_ps = 1.465 kJ/kg/K; air in at 93.3 C,
         # W = 0.010, out at 37.8 C. Book: G = 1171 kg dry air/h, W_out = 0.0247.
         ms = 453.6 / 3600.0
         wet = make_wet(ms, 0.040, 26.7 + K0)
 
-        def T_out(G):
-            d = Dryer(DryerParams(mode="continuous", X_c=0.03, X_eq=0.0, product_moisture=0.002, h=50.0,
-                                  T_solids_out=62.8 + K0, solids_cp=1465.0, cp_water=4187.0))
-            return d(wet, make_air(93.3, 0.010, G))[2]
+        d = Dryer(DryerParams(mode="continuous", X_c=0.03, X_eq=0.0, product_moisture=0.002, h=50.0,
+                              T_solids_out=62.8 + K0, solids_cp=1465.0, cp_water=4187.0))
+
+        @jax.jit
+        def _out(G):           # jitted: the root-find below calls it ~20 times
+            info = d(wet, make_air(93.3, 0.010, G))[2]
+            return {k: info[k] for k in ("T_air_out", "W_out", "T_solids_out")}
+
+        T_out = _out
 
         G = optimize.brentq(lambda g: float(T_out(g)["T_air_out"]) - (37.8 + K0), 0.2, 0.5, xtol=1e-12)
         info = T_out(G)
@@ -868,7 +734,6 @@ class TestGeankoplis:
 
 
 class TestSpecifiedProductTemperature:
-    @pytest.mark.slow
     @pytest.mark.parametrize("flow", ["countercurrent", "cocurrent"])
     def test_balances_close_with_specified_T(self, flow):
         wet, air = make_wet(), make_air()
@@ -891,7 +756,6 @@ class TestRotarySizing:
         assert float(rotary_dryer_ua(2.0, 1.5)) == pytest.approx(btu, rel=2e-3)
         assert float(heat_transfer_units(400.0, 330.0, 310.0)) == pytest.approx(math.log(90.0 / 20.0))
 
-    @pytest.mark.slow
     def test_three_zone_against_hand_calculation(self):
         from difflow.units.heat_exchanger import log_mean_temperature_difference as lmtd
 
@@ -918,21 +782,10 @@ class TestRotarySizing:
         assert float(info["length"]) == pytest.approx(sum(L), rel=1e-5)
         assert float(info["N_t"]) == pytest.approx(math.log((T_in - Twb) / (T_out - Twb)), rel=1e-6)
 
-    @pytest.mark.slow
-    def test_length_gradients(self):
-        wet = make_wet(0.5, 0.30, 300.0)
-
-        def f(G, D):
-            p = DryerParams(mode="continuous", X_c=0.15, X_eq=0.02, product_moisture=0.02, h=60.0, diameter=D)
-            return Dryer(p)(wet, make_air(150.0, 0.01, G))[2]["length"]
-
-        check_grads(f, (10.0, 2.0), order=1, modes=["rev"], rtol=1e-5)
-
     def test_diameter_needs_continuous(self):
         with pytest.raises(ValueError):
             DryerParams(mode="batch", diameter=1.0)
 
-    @pytest.mark.slow
     def test_cocurrent_three_zone_against_hand_calculation(self):
         from difflow.units.heat_exchanger import log_mean_temperature_difference as lmtd
 

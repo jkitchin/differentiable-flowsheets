@@ -357,7 +357,6 @@ def test_describe_delegates_the_parameter_schema_to_difflow_catalog():
 # =====================================================================
 
 
-@pytest.mark.slow
 def test_two_topologies_over_the_same_modules_give_different_correct_answers():
     """Connectivity is a decision variable, not source code."""
     elements = ("La", "Nd", "Sm")
@@ -431,7 +430,6 @@ def test_two_topologies_over_the_same_modules_give_different_correct_answers():
     )
 
 
-@pytest.mark.slow
 def test_train_json_round_trip_reproduces_the_solution():
     """A topology can be written, read back, and solved to the same answer."""
     train = _closed_train(_ess_module())
@@ -464,7 +462,6 @@ def test_round_trip_refuses_an_unknown_format_version():
 # =====================================================================
 
 
-@pytest.mark.slow
 def test_closed_loop_converges_and_conserves_every_component():
     """Nothing accumulates or vanishes around the torn organic loop."""
     feed = _feed()
@@ -498,7 +495,6 @@ def test_closed_loop_converges_and_conserves_every_component():
     assert float(barren["kerosene"]) == pytest.approx(100.0, rel=1e-12)
 
 
-@pytest.mark.slow
 def test_imperfect_stripping_degrades_raffinate_purity():
     """The central claim of #202, quantified.
 
@@ -567,7 +563,6 @@ def test_imperfect_stripping_degrades_raffinate_purity():
     assert closed_impurity / open_impurity == pytest.approx(21.91, rel=0.02)
 
 
-@pytest.mark.slow
 def test_the_degradation_comes_from_the_residue_not_from_the_loop():
     """Control: with stripping near-complete, closing the loop changes nothing.
 
@@ -590,7 +585,6 @@ def test_the_degradation_comes_from_the_residue_not_from_the_loop():
     )
 
 
-@pytest.mark.slow
 def test_regeneration_bleed_removes_the_accumulated_residue():
     """Saponification with solvent regeneration (#197) closes the loop physically.
 
@@ -738,7 +732,6 @@ def test_hydraulic_and_phase_ratio_limits_are_reported_when_declared():
     assert not constraints.feasible
 
 
-@pytest.mark.release
 def test_a_constraint_margin_is_differentiable():
     """An optimizer needs the derivative of the boundary, not just its sign."""
     feed = _feed()
@@ -901,8 +894,6 @@ def test_fenske_screen_rejects_a_topology_before_it_is_costed():
 # =====================================================================
 
 
-@pytest.mark.slow
-@pytest.mark.release
 def test_jit_and_grad_through_a_closed_loop_train_are_finite():
     """The loop is torn implicitly, so the whole train stays differentiable."""
     feed = _feed()

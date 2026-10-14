@@ -109,7 +109,6 @@ class TestAPI:
         assert float(p["Pr"]) == pytest.approx(float(gas_prandtl("air", 300.0)))
         assert float(p["alpha"]) == pytest.approx(float(p["k"] / (p["rho"] * p["cp"])))
 
-    @pytest.mark.slow
     def test_vectorized_jit_and_gradients(self):
         T = jnp.linspace(300.0, 600.0, 4)
         assert jax.jit(lambda t: gas_viscosity("air", t))(T).shape == (4,)

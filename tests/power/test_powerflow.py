@@ -29,7 +29,6 @@ from difflow_power.powerflow import (
 from difflow_power.residuals import power_state_layout
 
 
-@pytest.mark.release
 def test_case9_matches_matpower():
     result = dp.solve_power_flow(dp.cases.case9())
     assert result.converged
@@ -46,7 +45,6 @@ def test_case9_matches_matpower():
     assert result.max_mismatch_mw < 1e-9
 
 
-@pytest.mark.release
 def test_case14_matches_matpower():
     result = dp.solve_power_flow(dp.cases.case14())
     assert result.converged
@@ -57,7 +55,6 @@ def test_case14_matches_matpower():
         assert result.vm[gen.bus] == pytest.approx(gen.vm_setpoint, abs=1e-9)
 
 
-@pytest.mark.slow
 def test_case14_reproduces_the_case_files_own_solution():
     """The IEEE case file ships with its solved state in the bus rows.
 
@@ -80,7 +77,6 @@ def test_case14_reproduces_the_case_files_own_solution():
         assert result.vm[bus] == pytest.approx(value, abs=2e-3)
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("case", sorted(dp.cases.CASES))
 def test_every_case_converges_and_balances(case):
     net = dp.cases.load_case(case)
@@ -105,7 +101,6 @@ def test_specification_is_square():
         assert layout.n_residual + len(names) == layout.size
 
 
-@pytest.mark.slow
 def test_shared_bus_units_split_vars_by_capability():
     """case5 has two units on bus 1 with a 1:4.25 var range ratio."""
     net = dp.cases.case5()
@@ -125,7 +120,6 @@ def test_disagreeing_voltage_setpoints_on_one_bus_are_rejected():
         specification_from_network(net)
 
 
-@pytest.mark.slow
 def test_violations_are_reported_not_enforced():
     """A power flow is not an OPF: it solves the equations and no more."""
     net = dp.cases.case9().scaled_load(1.8)
@@ -154,7 +148,6 @@ def test_demand_override_beats_the_networks_own_loads():
     )
 
 
-@pytest.mark.slow
 def test_solution_differentiates_with_respect_to_demand():
     """Implicit function theorem, checked against finite differences."""
     net = dp.cases.case9()
@@ -179,7 +172,6 @@ def test_solution_differentiates_with_respect_to_demand():
     assert float(grad[4]) == pytest.approx(100.0, abs=5.0)
 
 
-@pytest.mark.slow
 def test_solution_differentiates_with_respect_to_a_setpoint():
     """The AVR knob an operator actually turns."""
     net = dp.cases.case9()

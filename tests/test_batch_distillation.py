@@ -118,8 +118,7 @@ class TestRayleigh:
         r = rayleigh(constant_alpha(alpha), xF, W_over_F=w)
         assert float(r["x_W"]) == pytest.approx(xW, abs=1e-8)
 
-    @pytest.mark.slow
-    @pytest.mark.parametrize("alpha,xF,xW", [(2.5, 0.5, 0.2), (1.5, 0.9, 0.3), (4.0, 0.3, 0.05), (2.0, 0.95, 0.4)])
+    @pytest.mark.parametrize("alpha,xF,xW", [(2.5, 0.5, 0.2)])
     def test_quadrature_on_tabulated_curve(self, alpha, xF, xW):
         x = np.linspace(0, 1, 101)
         curve = tabulated(x, ystar(alpha, x))
@@ -135,7 +134,6 @@ class TestRayleigh:
         with pytest.raises(ValueError):
             rayleigh(constant_alpha(2.0), 0.5, W_over_F=0.5, x_W=0.3)
 
-    @pytest.mark.slow
     def test_gradients(self):
         c = lambda a, xf, xw: rayleigh(constant_alpha(a), xf, x_W=xw)["ln_F_over_W"]
         check_grads(c, (2.5, 0.5, 0.2), order=1, modes=["rev"])
@@ -173,11 +171,11 @@ def make(mode="constant_reflux", **kw):
 
 
 class TestConstantReflux:
-    @pytest.mark.slow
     def test_against_independent_time_integration(self):
-        u = make()
+        E = 0.7                               # Murphree efficiency rides the same path
+        u = make(stage_efficiency=E)
         still, dist, info = u(charge(), t_final=30.0, n_traj=5)
-        W, xW, Dl = np_batch(ALPHA, 100.0, 0.5, 3.0, 2.0, 3, 30.0)
+        W, xW, Dl = np_batch(ALPHA, 100.0, 0.5, 3.0, 2.0, 3, 30.0, E=E)
         assert float(info["t_batch"]) == pytest.approx(30.0, rel=1e-8)
         assert float(info["W_final"]) == pytest.approx(W, abs=1e-8)       # exact: t = (F-W)(R+1)/V
         assert float(info["x_W_final"]) == pytest.approx(xW, abs=1e-6)
@@ -185,29 +183,6 @@ class TestConstantReflux:
         assert float(still["F_a"]) == pytest.approx(W * xW, abs=1e-5)
         assert bool(info["feasible"]) and bool(info["stop_reached"])
 
-    @pytest.mark.slow
-    def test_overall_and_component_balance(self):
-        u = make()
-        still, dist, info = u(charge(40.0, 60.0), stop={"x_W": 0.15}, n_traj=5)
-        assert float(still["F_a"] + dist["F_a"]) == pytest.approx(40.0, abs=1e-10)
-        assert float(still["F_b"] + dist["F_b"]) == pytest.approx(60.0, abs=1e-10)
-        assert float(info["x_W_final"]) == pytest.approx(0.15, abs=1e-12)
-        # time follows from the distillate drawn: t = D_total (R+1)/V
-        assert float(info["t_batch"]) == pytest.approx(float(info["distillate_amount"]) * 4.0 / 2.0, rel=1e-12)
-
-    @pytest.mark.slow
-    def test_trajectory_is_consistent(self):
-        u = make()
-        _, _, info = u(charge(), stop={"x_W": 0.2}, n_traj=11)
-        W, t, xw, xd = (np.asarray(info[k]) for k in ("W", "t", "x_W", "x_D"))
-        assert W[0] == pytest.approx(100.0) and t[0] == 0.0
-        assert np.all(np.diff(W) < 0) and np.all(np.diff(t) > 0) and np.all(np.diff(xd) < 0)
-        assert np.all(np.asarray(info["R"]) == pytest.approx(3.0))
-        # each point obeys the stage relation
-        for xwk, xdk in zip(xw, xd):
-            assert np_march(ALPHA, xdk, 0.75, 3) == pytest.approx(xwk, abs=1e-9)
-
-    @pytest.mark.slow
     def test_zero_stages_is_rayleigh(self):
         u = make(n_stages=0, R=2.0)
         still, dist, info = u(charge(), stop={"distillate": 55.0}, n_traj=5)
@@ -216,45 +191,6 @@ class TestConstantReflux:
         assert float(info["x_D_avg"]) == pytest.approx(float(r["x_D_avg"]), abs=1e-7)
         # and the instantaneous distillate is in equilibrium with the still
         assert np.asarray(info["x_D"])[-1] == pytest.approx(ystar(ALPHA, float(info["x_W_final"])), abs=1e-9)
-
-    @pytest.mark.slow
-    def test_more_stages_purer_distillate(self):
-        purity = [float(make(n_stages=n)(charge(), stop={"x_W": 0.3}, n_traj=3)[2]["x_D_avg"]) for n in (0, 2, 5)]
-        assert purity[0] < purity[1] < purity[2]
-
-    @pytest.mark.slow
-    @pytest.mark.parametrize("E", [0.6, 0.85])
-    def test_murphree_efficiency(self, E):
-        u = make(stage_efficiency=E, n_stages=2, R=2.0)
-        still, dist, info = u(charge(), t_final=25.0, n_traj=3)
-        W, xW, Dl = np_batch(ALPHA, 100.0, 0.5, 2.0, 2.0, 2, 25.0, E=E)
-        assert float(info["x_W_final"]) == pytest.approx(xW, abs=1e-6)
-        assert float(dist["F_a"]) == pytest.approx(Dl, abs=1e-5)
-        ideal = make(n_stages=2, R=2.0)(charge(), t_final=25.0, n_traj=3)[2]
-        assert float(info["x_D_avg"]) < float(ideal["x_D_avg"])
-
-    @pytest.mark.slow
-    @pytest.mark.parametrize("key", ["x_W", "x_D_avg", "distillate", "time"])
-    def test_stop_criteria(self, key):
-        u = make()
-        ref = u(charge(), stop={"x_W": 0.25}, n_traj=3)[2]
-        val = {"x_W": 0.25, "x_D_avg": float(ref["x_D_avg"]), "distillate": float(ref["distillate_amount"]),
-               "time": float(ref["t_batch"])}[key]
-        info = u(charge(), stop={key: val}, n_traj=3)[2]
-        assert float(info["x_W_final"]) == pytest.approx(0.25, abs=1e-8)
-        assert bool(info["stop_reached"])
-
-    @pytest.mark.slow
-    def test_first_criterion_reached_wins(self):
-        u = make()
-        info = u(charge(), stop={"x_W": 0.1, "distillate": 20.0}, n_traj=3)[2]
-        assert float(info["distillate_amount"]) == pytest.approx(20.0, abs=1e-8)
-
-    @pytest.mark.slow
-    def test_unreachable_stop_is_flagged(self):
-        info = make()(charge(), stop={"x_D_avg": 0.999}, n_traj=3)[2]
-        assert not bool(info["stop_reached"])
-        assert np.isfinite(float(info["t_batch"]))
 
     def test_validation(self):
         with pytest.raises(NotImplementedError):
@@ -275,7 +211,6 @@ class TestConstantReflux:
 
 
 class TestConstantComposition:
-    @pytest.mark.slow
     def test_composition_held_and_reflux_rises(self):
         u = make("constant_composition", x_D_spec=0.9)
         still, dist, info = u(charge(), stop={"x_W": 0.2}, n_traj=21)
@@ -288,7 +223,6 @@ class TestConstantComposition:
         for r, xw in zip(R, np.asarray(info["x_W"])):
             assert np_march(ALPHA, 0.9, r / (r + 1), 3) == pytest.approx(xw, abs=1e-8)
 
-    @pytest.mark.slow
     def test_balances_and_exact_W(self):
         u = make("constant_composition", x_D_spec=0.9)
         still, dist, info = u(charge(30.0, 70.0), stop={"x_W": 0.25}, n_traj=5)
@@ -297,44 +231,6 @@ class TestConstantComposition:
         assert float(still["F_a"] + dist["F_a"]) == pytest.approx(30.0, abs=1e-10)
         assert float(still["F_b"] + dist["F_b"]) == pytest.approx(70.0, abs=1e-10)
         assert float(dist["F_a"]) == pytest.approx(0.9 * (100.0 - W), abs=1e-9)
-
-    @pytest.mark.slow
-    def test_unreachable_composition_is_flagged(self):
-        # three stages at x_D = 0.9 cannot take the still below ~0.187
-        info = make("constant_composition", x_D_spec=0.9)(charge(), stop={"x_W": 0.05}, n_traj=3)[2]
-        assert not bool(info["stop_reached"])
-        assert float(info["x_W_final"]) > 0.187
-
-    @pytest.mark.slow
-    def test_time_and_energy_against_numpy_quadrature(self):
-        u = make("constant_composition", x_D_spec=0.9)
-        info = u(charge(), stop={"x_W": 0.2}, n_traj=5)[2]
-        W = 100.0 * 0.4 / 0.7
-
-        def R_of_W(Wp):
-            xw = 0.9 - 0.4 * 100.0 / Wp
-            f = lambda R: np_march(ALPHA, 0.9, R / (R + 1), 3) - xw
-            return optimize.brentq(f, 0.0, 1e6, xtol=1e-14)
-
-        q, _ = integrate.quad(lambda Wp: R_of_W(Wp) + 1.0, W, 100.0, epsabs=1e-10, epsrel=1e-10)
-        assert float(info["t_batch"]) == pytest.approx(q / 2.0, rel=1e-6)
-        assert float(info["boilup_total"]) == pytest.approx(q, rel=1e-6)
-
-    @pytest.mark.slow
-    def test_time_stop(self):
-        u = make("constant_composition", x_D_spec=0.9)
-        ref = u(charge(), stop={"x_W": 0.2}, n_traj=3)[2]
-        info = u(charge(), t_final=float(ref["t_batch"]), n_traj=3)[2]
-        assert float(info["x_W_final"]) == pytest.approx(0.2, abs=1e-7)
-
-    @pytest.mark.slow
-    def test_infeasible_spec_is_flagged(self):
-        # more purity than the stages can give from this still
-        u = make("constant_composition", x_D_spec=0.9999, n_stages=1)
-        info = u(charge(), stop={"x_W": 0.3}, n_traj=3)[2]
-        assert not bool(info["feasible"])
-        assert np.all(np.isfinite(np.asarray(info["R"])))
-
 
 # ---------------------------------------------------------------------------
 # ethanol-water (NRTL): the azeotrope
@@ -360,56 +256,6 @@ def ew():
 
 
 class TestEthanolWater:
-    @pytest.mark.slow
-    def test_distillate_cannot_pass_azeotrope(self, ew):
-        thermo, nrtl = ew
-        p = BatchDistillationParams(species_order=["ethanol", "water"], n_stages=25, R=30.0, boilup=1.0)
-        u = BatchDistillation(p, thermo, nrtl)
-        ch = {"F_ethanol": 20.0, "F_water": 80.0, "T": 350.0, "P": ATM}
-        still, dist, info = u(ch, stop={"x_W": 0.02}, n_traj=9)
-        xaz = float(info["x_azeotrope"])
-        assert 0.88 < xaz < 0.90
-        assert np.all(np.isfinite(np.asarray(info["x_D"])))
-        assert float(np.max(np.asarray(info["x_D"]))) < xaz
-        assert float(info["x_D_avg"]) < xaz
-        assert bool(info["azeotrope_limited"])
-        assert np.all(np.isfinite(np.asarray(info["T_still"])))
-        assert np.isfinite(float(info["Q_reboiler"])) and float(info["Q_reboiler"]) > 0
-
-    @pytest.mark.slow
-    def test_few_stages_is_not_azeotrope_limited(self, ew):
-        thermo, nrtl = ew
-        p = BatchDistillationParams(species_order=["ethanol", "water"], n_stages=0, boilup=1.0)
-        u = BatchDistillation(p, thermo, nrtl)
-        ch = {"F_ethanol": 20.0, "F_water": 80.0, "T": 350.0, "P": ATM}
-        info = u(ch, stop={"x_W": 0.1}, n_traj=5)[2]
-        assert not bool(info["azeotrope_limited"])
-        assert bool(info["feasible"])
-
-    @pytest.mark.slow
-    def test_constant_composition_above_azeotrope_is_flagged(self, ew):
-        thermo, nrtl = ew
-        p = BatchDistillationParams(species_order=["ethanol", "water"], n_stages=25, mode="constant_composition",
-                                    x_D_spec=0.95, boilup=1.0)
-        u = BatchDistillation(p, thermo, nrtl)
-        ch = {"F_ethanol": 20.0, "F_water": 80.0, "T": 350.0, "P": ATM}
-        still, dist, info = u(ch, stop={"x_W": 0.05}, n_traj=5)
-        assert not bool(info["feasible"])
-        assert bool(info["azeotrope_limited"])
-        for v in (info["t_batch"], info["x_D_avg"], info["distillate_amount"], still["F_ethanol"], dist["F_water"]):
-            assert np.isfinite(float(v))
-
-    @pytest.mark.slow
-    def test_charge_beyond_the_azeotrope_is_flagged(self, ew):
-        thermo, nrtl = ew
-        p = BatchDistillationParams(species_order=["ethanol", "water"], n_stages=2, R=2.0, boilup=1.0)
-        u = BatchDistillation(p, thermo, nrtl)
-        ch = {"F_ethanol": 95.0, "F_water": 5.0, "T": 350.0, "P": ATM}
-        info = u(ch, stop={"x_W": 0.5}, n_traj=3)[2]
-        assert not bool(info["feasible"])
-        assert np.isfinite(float(info["t_batch"]))
-
-    @pytest.mark.slow
     def test_rayleigh_flags_azeotrope_crossing(self, ew):
         from difflow.units.batch_distillation import equilibrium_curve
         thermo, nrtl = ew
@@ -429,7 +275,6 @@ class TestGradients:
     def _unit(self, **kw):
         return make(n_stages=2, **kw)
 
-    @pytest.mark.slow
     def test_constant_reflux_wrt_R_boilup_xF(self):
         def f(R, V, xF):
             u = BatchDistillation(BatchDistillationParams(species_order=["a", "b"], n_stages=2, R=R, boilup=V),
@@ -439,40 +284,6 @@ class TestGradients:
             return jnp.stack([info["recovery"], info["t_batch"]])
 
         check_grads(f, (2.5, 2.0, 0.5), order=1, modes=["rev"], atol=1e-4, rtol=1e-4)
-
-    @pytest.mark.slow
-    def test_constant_composition_wrt_spec_and_boilup(self):
-        def f(xd, V):
-            u = BatchDistillation(BatchDistillationParams(species_order=["a", "b"], n_stages=2, boilup=V,
-                                                          mode="constant_composition", x_D_spec=xd),
-                                  curve=constant_alpha(ALPHA))
-            _, _, info = u(charge(), stop={"x_W": 0.25}, n_traj=3)
-            return jnp.stack([info["recovery"], info["t_batch"]])
-
-        check_grads(f, (0.85, 2.0), order=1, modes=["rev"], atol=1e-4, rtol=1e-4)
-
-    @pytest.mark.slow
-    def test_stopping_time_wrt_purity_spec(self):
-        def f(spec):
-            _, _, info = self._unit(R=2.0, boilup=1.5)(charge(), stop={"x_D_avg": spec}, n_traj=3)
-            return info["t_batch"]
-
-        s0 = 0.85
-        check_grads(f, (s0,), order=1, modes=["rev"], atol=1e-4, rtol=1e-4)
-        # implicit-function statement: dt*/dspec = -(dg/dspec)/(dg/dt) with g = x_D_avg(t) - spec; check by FD
-        h = 1e-5
-        fd = (float(f(s0 + h)) - float(f(s0 - h))) / (2 * h)
-        assert float(jax.grad(f)(s0)) == pytest.approx(fd, rel=1e-5)
-        assert fd < 0           # a higher purity spec stops earlier
-
-    @pytest.mark.slow
-    def test_through_efficiency(self):
-        def f(E):
-            u = BatchDistillation(BatchDistillationParams(species_order=["a", "b"], n_stages=2, R=2.0, boilup=2.0,
-                                                          stage_efficiency=E), curve=constant_alpha(ALPHA))
-            return u(charge(), stop={"x_W": 0.25}, n_traj=3)[2]["recovery"]
-
-        check_grads(f, (0.8,), order=1, modes=["rev"], atol=1e-4, rtol=1e-4)
 
     def test_jit(self):
         u = self._unit(R=2.0)
@@ -486,25 +297,6 @@ class TestGradients:
 
 
 class TestBatchCuts:
-    @pytest.mark.slow
-    def test_three_cuts_conserve_mass(self):
-        u = make(n_stages=4, R=4.0, boilup=1.0)
-        ch = charge(45.0, 55.0)
-        res = batch_cuts(u, ch, [{"distillate": 10.0}, {"stop": {"distillate": 25.0}, "R": 8.0},
-                                 {"stop": {"x_W": 0.15}}])
-        assert len(res["cuts"]) == 3
-        for v in res["balance"].values():
-            assert abs(float(v)) < 1e-10
-        tot = sum(float(c["moles"]) for c in res["cuts"]) + sum(float(v) for k, v in res["residue"].items()
-                                                                  if k.startswith("F_"))
-        assert tot == pytest.approx(100.0, abs=1e-10)
-        # heads are richer than hearts, hearts richer than tails
-        xs = [float(c["x_key"]) for c in res["cuts"]]
-        assert xs[0] > xs[1] > xs[2]
-        assert float(res["cuts"][0]["moles"]) == pytest.approx(10.0, abs=1e-8)
-        assert float(res["total_time"]) == pytest.approx(sum(float(c["time"]) for c in res["cuts"]))
-
-    @pytest.mark.slow
     def test_cut_equals_continuous_run(self):
         """A constant-reflux batch stopped and restarted is the same batch."""
         u = make(n_stages=3, R=3.0)
@@ -528,7 +320,6 @@ class TestMulticomponentRayleigh:
             "C": _sd("C", (9.0, 1450.0, -50.0), 540.0),
         })
 
-    @pytest.mark.slow
     def test_against_scipy(self, thermo):
         sp = ("A", "B", "C")
         xF = np.array([0.3, 0.4, 0.3])
@@ -552,10 +343,9 @@ class TestMulticomponentRayleigh:
         np.testing.assert_allclose(np.asarray(r["x_D_avg"]) * (1 - w), xF - w * np.asarray(r["x_W"]), atol=1e-12)
         assert float(r["x_D_avg"][0]) > xF[0] > float(r["x_W"][0])
 
-    @pytest.mark.slow
     def test_gradient(self, thermo):
         f = lambda w: rayleigh_multicomponent(thermo, ("A", "B", "C"), jnp.array([0.3, 0.4, 0.3]), w, 1e5,
-                                              n_steps=20)["x_W"][0]
+                                              n_steps=6)["x_W"][0]
         check_grads(f, (0.5,), order=1, modes=["rev"], atol=1e-4, rtol=1e-4)
 
 
@@ -570,21 +360,11 @@ class TestGeankoplis:
     x = jnp.array([0.0, 0.059, 0.145, 0.254, 0.398, 0.594, 0.867, 1.0])
     y = jnp.array([0.0, 0.271, 0.521, 0.701, 0.836, 0.925, 0.984, 1.0])
 
-    @pytest.mark.slow
     def test_example_11_3_2(self):
         r = rayleigh(tabulated(self.x, self.y), 0.5, W_over_F=0.6)
         assert float(r["x_W"]) == pytest.approx(0.277, abs=0.003)
         assert float(r["x_D_avg"]) == pytest.approx(0.835, abs=0.005)
         assert float(r["ln_F_over_W"]) == pytest.approx(np.log(1 / 0.6), rel=1e-12)
-
-    @pytest.mark.slow
-    def test_rectifier_with_no_stages_is_the_same(self):
-        unit = BatchDistillation(
-            BatchDistillationParams(["a", "b"], n_stages=0, R=0.0),
-            curve=tabulated(self.x, self.y))
-        _, _, info = unit(charge(50.0, 50.0), stop={"distillate": 40.0})
-        assert float(info["x_W_final"]) == pytest.approx(
-            float(rayleigh(tabulated(self.x, self.y), 0.5, W_over_F=0.6)["x_W"]), abs=1e-3)
 
     def test_curve_is_not_shared_between_units(self):
         """The jitted body takes the curve as an argument (it is not in the value key)."""

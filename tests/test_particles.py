@@ -347,7 +347,6 @@ class TestGasPFRPhysicalBed:
         assert self._params(alpha=123.0).effective_alpha == 123.0
         assert self._params().effective_alpha == 0.0
 
-    @pytest.mark.slow
     def test_reactor_pressure_drop_matches_explicit_alpha(self):
         from difflow import make_stream
         from difflow.units.pfr import GasPFR

@@ -194,7 +194,6 @@ class TestSeriesParallel:
         np.testing.assert_allclose(np.asarray(par.split(0.045)), 0.015, rtol=1e-10)
         assert float(par.head(0.045)) == pytest.approx(float(a.head(0.015)), rel=1e-10)
 
-    @pytest.mark.slow
     def test_operating_points_of_combinations(self):
         a = PumpCurve(H_COEFFS)
         sysc = system_curve(LIFT, pipe())
@@ -225,7 +224,6 @@ class TestSeriesParallel:
         assert float(par.npshr(Q)) == pytest.approx(float(a.npshr(Q / 2)), rel=1e-9)
         assert float(pumps_in_series(a, a).npshr(Q)) == pytest.approx(float(a.npshr(Q)), rel=1e-12)
 
-    @pytest.mark.slow
     def test_parallel_check_valve_shuts_weak_pump(self):
         """Regression (Ch 4 gap 8): the weak pump used to get a negative flow."""
         a = CentrifugalPump(CentrifugalPumpParams(head_coeffs=[40.0, 0.0, -3e3], rho=1000.0, eta_max=0.7, Q_bep=0.06))
@@ -247,7 +245,6 @@ class TestSeriesParallel:
         qn = pumps_in_parallel(a, b, check_valves=False).split(0.03)
         assert float(qn[1]) < 0
 
-    @pytest.mark.slow
     def test_parallel_check_valve_both_running(self):
         a = PumpCurve([40.0, 0.0, -3e3])
         b = PumpCurve([25.0, 0.0, -3e3])
@@ -419,14 +416,12 @@ class TestGradients:
         curve = PumpCurve(H_COEFFS, speed_ratio=sN, diameter_ratio=sD)
         return operating_point(curve, system_curve(LIFT, pipe(D=D4 * sP)))
 
-    @pytest.mark.slow
     def test_check_grads_Q_star_wrt_impeller_speed_and_pipe_diameter(self):
         x0 = jnp.array([1.0, 1.0, 1.0])
         check_grads(self._Q, (x0,), order=1, modes=["rev", "fwd"], rtol=1e-4, atol=1e-8)
         g = np.asarray(jax.grad(self._Q)(x0))
         assert np.all(g > 0)  # bigger impeller, faster, bigger pipe all raise the flow
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("i", [0, 1, 2])
     def test_gradient_matches_finite_difference(self, i):
         x0 = jnp.array([1.0, 1.0, 1.0])
@@ -435,7 +430,6 @@ class TestGradients:
         fd = (self._Q(x0 + e) - self._Q(x0 - e)) / (2 * h)
         assert float(jax.grad(self._Q)(x0)[i]) == pytest.approx(float(fd), rel=1e-5)
 
-    @pytest.mark.slow
     def test_grad_wrt_pump_and_system_parameters(self):
         def Q(p):
             h0, lift, L = p
@@ -444,7 +438,6 @@ class TestGradients:
 
         check_grads(Q, (jnp.array([40.0, LIFT, L_PIPE]),), order=1, modes=["rev"], rtol=1e-4, atol=1e-8)
 
-    @pytest.mark.slow
     def test_grad_through_series_parallel(self):
         def Q(s, par):
             c = PumpCurve(H_COEFFS, speed_ratio=s)
@@ -454,7 +447,6 @@ class TestGradients:
         for par in (False, True):
             check_grads(lambda s: Q(s[0], par), (jnp.array([1.0]),), order=1, modes=["rev"], rtol=1e-4, atol=1e-8)
 
-    @pytest.mark.slow
     def test_economic_pipe_diameter_with_vfd_speed(self):
         """Fixed duty 15 L/s: for each pipe diameter the VFD speed is set so the operating
         point hits the duty; the annualised cost then has an interior optimum in D."""
@@ -507,7 +499,6 @@ class TestRegistration:
             assert hasattr(difflow, n)
 
 
-@pytest.mark.slow
 def test_operating_point_warns_on_reverse_flow():
     """A valveless parallel pair with a weak pump can put Q* < 0; say so."""
     import warnings as _w

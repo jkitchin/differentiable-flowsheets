@@ -380,7 +380,6 @@ def model_2d():
 # =============================================================================
 
 
-@pytest.mark.slow
 def test_mhe_full_information_matches_kalman():
     """No constraints, linear model, whole record in one window.
 
@@ -416,7 +415,6 @@ def test_mhe_full_information_matches_kalman():
     assert np.max(np.abs(np.asarray(mhe.x) - np.asarray(kf.x))) > 1e-3
 
 
-@pytest.mark.slow
 def test_mhe_matches_kalman_with_multirate_gaps():
     """The ``sigma = inf`` convention has to mean the same in both."""
     a = np.array([[0.9, 0.15], [-0.1, 0.85]])
@@ -450,7 +448,6 @@ def test_mhe_matches_kalman_with_multirate_gaps():
                        atol=1e-9)
 
 
-@pytest.mark.slow
 def test_a_failed_window_says_why_it_failed():
     # "converged = False" on its own sends you guessing. The status is
     # optimistix's own verdict, so a starved step budget is
@@ -484,7 +481,6 @@ def test_a_failed_window_says_why_it_failed():
     assert "nonlinear_max_steps_reached" in starved.windows[0].summary()
 
 
-@pytest.mark.slow
 def test_mhe_recovers_states_better_than_the_raw_measurements():
     a = np.array([[0.95, 0.05], [0.0, 0.9]])
     c = np.array([[1.0, 0.0]])
@@ -513,8 +509,6 @@ def test_mhe_recovers_states_better_than_the_raw_measurements():
     assert "moving-horizon solves" in run.summary()
 
 
-@pytest.mark.slow
-@pytest.mark.release
 def test_mhe_objective_is_a_chi_squared_statistic():
     """Whitened, so the optimal objective is chi-squared on M readings.
 
@@ -589,7 +583,6 @@ def test_mhe_objective_is_a_chi_squared_statistic():
 # =============================================================================
 
 
-@pytest.mark.slow
 def test_a_delayed_assay_constrains_the_state_it_was_drawn_from():
     """Placing a late assay at ``now`` instead is measurably wrong.
 
@@ -628,7 +621,6 @@ def test_a_delayed_assay_constrains_the_state_it_was_drawn_from():
 # =============================================================================
 
 
-@pytest.mark.slow
 def test_a_bound_keeps_a_concentration_physical():
     """The same data: unconstrained goes negative, bounded does not."""
     times = np.arange(5.0)
@@ -663,7 +655,6 @@ def test_a_bound_keeps_a_concentration_physical():
     assert float(jnp.min(constrained.x)) > -1e-3
 
 
-@pytest.mark.slow
 def test_the_first_state_can_never_leave_its_bounds():
     """x_0 is reparameterised, so no iterate violates its bounds."""
     model = linear_model(jnp.array([[1.0]]), jnp.array([[1.0]]),
@@ -684,8 +675,6 @@ def test_the_first_state_can_never_leave_its_bounds():
 # =============================================================================
 
 
-@pytest.mark.slow
-@pytest.mark.release
 def test_estimate_is_jittable_and_differentiable():
     model = linear_model(jnp.array([[0.9]]), jnp.array([[1.0]]))
     records = [Measurement(time=float(k), values=[1.0 + 0.1 * k],
@@ -766,7 +755,6 @@ def drift_run():
     return model, window, run, a_true
 
 
-@pytest.mark.slow
 def test_joint_estimation_tracks_a_drifting_parameter(drift_run):
     _, _, run, a_true = drift_run
     est = np.asarray(run.parameters["a"])
@@ -783,7 +771,6 @@ def test_joint_estimation_tracks_a_drifting_parameter(drift_run):
     assert est[-1] < est[8] - 0.1
 
 
-@pytest.mark.slow
 def test_parameters_come_back_as_a_planning_ready_mapping(drift_run):
     model, _, run, a_true = drift_run
     last = run.windows[-1]
@@ -798,7 +785,6 @@ def test_parameters_come_back_as_a_planning_ready_mapping(drift_run):
     assert model.param_names == ["a"]
 
 
-@pytest.mark.slow
 def test_an_unobservable_parameter_is_flagged_before_the_solve():
     """A state with no path to any sensor cannot be estimated."""
     decoupled = linear_model(
@@ -866,7 +852,6 @@ def test_arrival_cost_whitens_and_reports():
     assert "arrival cost" in arrival.summary(["a", "b"])
 
 
-@pytest.mark.slow
 def test_advancing_the_arrival_cost_reproduces_the_filter():
     """On a linear model the smoothing update *is* the EKF recursion."""
     a = np.array([[0.9, 0.1], [0.0, 0.8]])

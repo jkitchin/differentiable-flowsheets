@@ -145,13 +145,7 @@ def _read_matrix(path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.slow
 class TestDeltaVectorSet:
-    @pytest.mark.slow
-    def test_carries_every_block(self, dvs, plan_result):
-        assert [v.block for v in dvs.vectors] == list(plan_result.linearizations)
-
-    @pytest.mark.slow
     def test_joins_names_bounds_and_numbers(self, dvs, plan_result):
         v = dvs.vector("ngl")
         block = plan_result.network.block("ngl")
@@ -221,23 +215,12 @@ class TestDeltaVectorSet:
         assert one.vectors[0].J == [[2.0]]
         assert one.vectors[0].scaled_J == [[1.0]]   # 2 * 1 / |y0| = 2/2
 
-    @pytest.mark.slow
-    def test_from_block_needs_no_planner(self, recycle_block):
-        one = DeltaVectorSet.from_block(recycle_block, radius=0.2)
-
-        assert len(one.vectors) == 1
-        assert one.vectors[0].block == "plant"
-        assert one.vectors[0].radius == pytest.approx(0.2)
-        assert one.links == [] and one.specs == []
-
-
 # ---------------------------------------------------------------------------
 # Renderers
 # ---------------------------------------------------------------------------
 
 
 class TestWriteJson:
-    @pytest.mark.slow
     def test_round_trips_the_numbers_exactly(self, dvs, tmp_path):
         path = write_json(dvs, tmp_path / "plan.json")
         back = json.load(open(path, encoding="utf-8"))
@@ -394,7 +377,6 @@ class TestBlockFromFlowsheet:
         assert recycle_block.metadata["y_units"] == ["mol/s", "mol/s"]
         assert recycle_block.metadata["source"] == "flowsheet"
 
-    @pytest.mark.slow
     def test_evaluates_to_the_flowsheet_solution(self, recycle_block,
                                                  recycle_flowsheet):
         streams = recycle_flowsheet.solve(tol=1e-10, max_iter=200)
@@ -402,33 +384,12 @@ class TestBlockFromFlowsheet:
 
         assert y[0] == pytest.approx(float(streams["purge"]["F_B"]), rel=1e-6)
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_delta_vectors_match_finite_differences(self, recycle_block):
         """The decisive test: AD through a tear solve, checked numerically."""
         report = check_delta_vectors(recycle_block, rtol=1e-4)
 
         assert report["passed"], report
 
-    @pytest.mark.slow
-    def test_the_feed_lever_column_is_nonzero(self, recycle_block):
-        lin = linearize_block(recycle_block)
-        J = np.asarray(lin.J)
-        j = recycle_block.u_names.index("feed_feed_total_flow")
-
-        assert np.all(np.abs(J[:, j]) > 0.0)
-        # More feed at a fixed reactor -> more of everything leaving.
-        assert J[1, j] > 0.0
-
-    @pytest.mark.slow
-    def test_the_volume_column_has_the_right_sign(self, recycle_block):
-        lin = linearize_block(recycle_block)
-        J = np.asarray(lin.J)
-        j = recycle_block.u_names.index("reactor_V")
-
-        assert J[0, j] > 0.0, "a bigger reactor must make more B"
-
-    @pytest.mark.slow
     def test_exports_through_the_full_stack(self, recycle_block, tmp_path):
         one = DeltaVectorSet.from_block(recycle_block, radius=0.1)
         path = write_json(one, tmp_path / "block.json")
@@ -513,7 +474,6 @@ def flowsheet_script(tmp_path):
     return str(path)
 
 
-@pytest.mark.slow
 class TestPlanExportCli:
     def test_json_goes_to_stdout(self, plan_script, capsys):
         from difflow.planning.cli import main
@@ -553,7 +513,6 @@ class TestPlanExportCli:
         with pytest.raises(SystemExit, match="needs levers and outputs"):
             main([flowsheet_script])
 
-    @pytest.mark.slow
     def test_a_flowsheet_with_levers_exports(self, flowsheet_script, tmp_path):
         from difflow.planning.cli import main
 

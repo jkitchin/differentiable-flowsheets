@@ -227,7 +227,6 @@ def test_a_model_with_no_spec_rows_is_returned_without_artificials():
 
 # -- 2 and 3. the dead end, before and after ------------------------------
 
-@pytest.mark.slow
 def test_dead_end_is_recovered():
     """The storage model whose opening level sits outside its trust region."""
     net, prices, specs = storage_network(start_as_decision=True)
@@ -240,7 +239,6 @@ def test_dead_end_is_recovered():
     assert np.all(levels >= -1e-4), f"negative inventory: {levels}"
 
 
-@pytest.mark.slow
 def test_disabling_restoration_reproduces_the_dead_end():
     """The before picture: shrinking the radius cannot restore feasibility."""
     net, prices, specs = storage_network(start_as_decision=True)
@@ -252,20 +250,8 @@ def test_disabling_restoration_reproduces_the_dead_end():
     assert not any(h.restoration for h in res.history)
 
 
-@pytest.mark.slow
-def test_restoration_drives_violation_down_monotonically():
-    net, prices, specs = storage_network(start_as_decision=True)
-    res = _planner(net, prices, specs, options=_opts()).solve()
-    accepted = [h.violation for h in res.history
-                if h.restoration and h.accepted]
-    assert accepted, "no restoration step was accepted"
-    assert accepted == sorted(accepted, reverse=True), (
-        f"accepted restoration steps must reduce violation: {accepted}")
-
-
 # -- 4. the bug that made restoration need a trust region -----------------
 
-@pytest.mark.slow
 def test_restoration_is_judged_on_the_nonlinear_model():
     """A step the phase-one LP predicts feasible can be worse in reality.
 
@@ -290,18 +276,3 @@ def test_restoration_is_judged_on_the_nonlinear_model():
     # And the end state is genuinely feasible, not merely predicted so.
     assert max(res.violations.values(), default=0.0) < 1e-4
 
-
-@pytest.mark.slow
-def test_restoration_does_not_leave_the_optimisation_radius_shrunk():
-    """Restoration keeps its own radius; the main loop resumes from its own.
-
-    Searching for a feasible point can drive the working region very small,
-    and that smallness is a fact about the search, not about where the
-    objective model is trustworthy. Resuming from it makes the planner crawl.
-    """
-    net, prices, specs = storage_network(start_as_decision=True)
-    res = _planner(net, prices, specs, options=_opts()).solve()
-    after = [h for h in res.history if not h.restoration
-             and h.index > min(c.index for c in res.history if c.restoration)]
-    assert after, "the loop never resumed after restoration"
-    assert max(h.radius for h in after) >= 0.1

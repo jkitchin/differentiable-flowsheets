@@ -76,7 +76,6 @@ CASES = {
 }
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("name", CASES)
 def test_wrapper_jits_and_differentiates(name):
     f = CASES[name]()

@@ -11,7 +11,7 @@ Ergun check), with plain Python arithmetic that shares no code with
 ``difflow.particles``. That checks the equations and, above all, the unit
 conversions; it does not check the correlations against data.
 
-The subject of these tests is the answer, so they are marked ``release``.
+The subject of these tests is the answer.
 """
 
 import math
@@ -28,7 +28,6 @@ from difflow.particles import (
     terminal_velocity,
 )
 
-pytestmark = pytest.mark.release
 
 G_CGS = 980.665   # cm/s^2
 

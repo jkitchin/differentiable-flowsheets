@@ -151,7 +151,6 @@ def test_verify_reports_a_unit_outside_its_circle():
     )
 
 
-@pytest.mark.slow
 def test_a_full_inverter_trades_watts_for_vars():
     """At available = rating, any var output costs real output."""
     net = _case9_with(dp.renewable_generator("5", 120.0, 120.0))
@@ -167,7 +166,6 @@ def test_a_full_inverter_trades_watts_for_vars():
     )
 
 
-@pytest.mark.slow
 def test_more_wind_than_the_system_can_absorb_is_curtailed():
     net = _case9_with(dp.renewable_generator("5", 300.0, 300.0))
     result = dp.solve_acopf(net)
@@ -179,8 +177,6 @@ def test_more_wind_than_the_system_can_absorb_is_curtailed():
     assert all(f"pg_{g}_min" in result.binding() for g in ("g1", "g2", "g3"))
 
 
-@pytest.mark.slow
-@pytest.mark.release
 @pytest.mark.parametrize("available", [60.0, 0.0])
 def test_resource_value_matches_finite_differences(available):
     """The envelope theorem, checked by re-solving.

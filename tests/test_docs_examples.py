@@ -64,7 +64,6 @@ def _cases():
 
 
 @pytest.mark.parametrize("block", list(_cases()))
-@pytest.mark.release
 def test_doc_example_runs(block):
     """Every runnable example in a covered section executes without error."""
     namespace: dict = {}

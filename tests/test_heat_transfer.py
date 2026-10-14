@@ -196,7 +196,6 @@ class TestInternal:
             assert np.isfinite(float(f(Re)))
         assert float(f(500.0)) < float(f(3000.0)) < float(f(3e4))
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("method", ["gnielinski", "dittus_boelter", "sieder_tate"])
     def test_check_grads_across_the_transition(self, method):
         # Re 2000-10000 spans laminar, blend and turbulent. check_grads w.r.t. Re and Pr.
@@ -270,7 +269,6 @@ class TestExternal:
         with pytest.raises(ValueError):
             ht.flat_plate_nusselt(1e5, 0.7, "bad")
 
-    @pytest.mark.slow
     def test_flat_plate_mixed_continuous_and_differentiable(self):
         Re = np.linspace(2e5, 1.5e6, 3001)
         Nu = np.asarray(ht.flat_plate_nusselt(jnp.asarray(Re), 0.7))

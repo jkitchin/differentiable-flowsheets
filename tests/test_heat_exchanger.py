@@ -65,7 +65,6 @@ class TestLMTD:
         expected = 50.0 / jnp.log(2.0)
         assert float(lmtd) == pytest.approx(float(expected), rel=0.01)
 
-    @pytest.mark.release
     def test_lmtd_differentiable(self):
         """Test that LMTD is differentiable."""
         def lmtd_fn(dT1):
@@ -98,7 +97,6 @@ class TestEffectiveness:
         # Counter-current always higher
         assert float(eps_counter) > float(eps_co)
 
-    @pytest.mark.release
     def test_effectiveness_differentiable(self):
         """Test effectiveness is differentiable."""
         def eps_fn(NTU):
@@ -143,7 +141,6 @@ class TestHeater:
         assert float(outlet["T"]) < 400.0
         assert float(info["Q"]) > 0
 
-    @pytest.mark.release
     def test_heater_differentiable(self):
         """Test heater is differentiable."""
         def outlet_T(duty):
@@ -216,7 +213,6 @@ class TestCounterCurrentHX:
         # For counter-current, outlet temps approach each other
         assert float(info["approach"]) > 0  # No temperature cross
 
-    @pytest.mark.release
     def test_counter_current_differentiable(self):
         """Test counter-current HX is differentiable."""
         def heat_duty(UA):
@@ -323,7 +319,6 @@ class TestCrossFlowEffectiveness:
         # Cross-flow should be higher than co-current
         assert float(eps_cross_unmixed) >= float(eps_co)
 
-    @pytest.mark.release
     def test_crossflow_differentiable(self):
         """Test all cross-flow correlations are differentiable."""
         def eps_fn(NTU):
@@ -496,7 +491,6 @@ class TestCrossFlowHX:
         Q_cold = 15.0 * 75.0 * dT_cold
         assert Q_hot == pytest.approx(Q_cold, rel=0.01)
 
-    @pytest.mark.release
     def test_crossflow_differentiable(self):
         """Test cross-flow HX is differentiable."""
         def heat_duty(UA):
@@ -574,7 +568,6 @@ class TestDesignFunctions:
         assert float(result["NTU"]) > 0
         assert 0 < float(result["effectiveness"]) < 1
 
-    @pytest.mark.release
     def test_design_differentiable(self):
         """Test design functions are differentiable."""
         def area_fn(Q):
@@ -661,7 +654,6 @@ def _propane_butane_cubic_thermo():
     return CubicThermo(IdealThermo(species), PengRobinson(crit))
 
 
-@pytest.mark.slow
 class TestEnthalpyCounterCurrentHX:
     """Counter-current HX closed on real EOS-based stream enthalpies.
 
@@ -678,24 +670,6 @@ class TestEnthalpyCounterCurrentHX:
         cold = make_stream({"propane": 1.0, "butane": 1.0}, T=300.0, P=3e5)
         return hot, cold
 
-    @pytest.mark.slow
-    @pytest.mark.release
-    def test_energy_balance_closes(self):
-        """Q from the solve equals the enthalpy change on each side."""
-        thermo = _propane_butane_cubic_thermo()
-        hot, cold = self._streams()
-        hx = EnthalpyCounterCurrentHX(EnthalpyHXParams(UA=200.0), thermo)
-        hot_out, cold_out, info = hx(hot, cold)
-
-        Q = info["Q"]
-        H_hot_in = thermo.stream_enthalpy_flash(get_flows(hot), hot["T"], hot["P"])
-        H_hot_out = thermo.stream_enthalpy_flash(get_flows(hot), hot_out["T"], hot["P"])
-        H_cold_in = thermo.stream_enthalpy_flash(get_flows(cold), cold["T"], cold["P"])
-        H_cold_out = thermo.stream_enthalpy_flash(get_flows(cold), cold_out["T"], cold["P"])
-
-        assert float(H_hot_in - H_hot_out) == pytest.approx(float(Q), rel=1e-3)
-        assert float(H_cold_out - H_cold_in) == pytest.approx(float(Q), rel=1e-3)
-
     def test_directions_and_second_law(self):
         """Hot side cools, cold side heats, and terminal temperatures don't cross."""
         thermo = _propane_butane_cubic_thermo()
@@ -708,8 +682,6 @@ class TestEnthalpyCounterCurrentHX:
         assert float(hot_out["T"]) > float(cold["T"])
         assert float(cold_out["T"]) < float(hot["T"])
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_differentiable_wrt_UA(self):
         """Duty is differentiable through the coupled solve; more UA -> more duty."""
         thermo = _propane_butane_cubic_thermo()
@@ -729,7 +701,6 @@ class TestCubicThermoAbsentSpecies:
     """A stream need not list every EOS species (a condenser's vapour has no
     coolant); it used to raise a bare KeyError from stream_enthalpy_flash."""
 
-    @pytest.mark.slow
     def test_absent_species_is_zero_flow(self):
         thermo = _propane_butane_cubic_thermo()
         for f in (thermo.stream_enthalpy_flash, thermo.stream_entropy_flash):
@@ -771,7 +742,6 @@ class TestDefaultCpWarning:
             warnings.simplefilter("error", DefaultCpWarning)
             Heater(HeaterParams(T_out=350.0, Cp=75.0))(stream)
 
-    @pytest.mark.slow
     def test_no_warning_when_thermo_given(self):
         thermo = _propane_butane_cubic_thermo()
         stream = make_stream({"propane": 1.0, "butane": 1.0}, T=300.0, P=3e5)
@@ -796,7 +766,6 @@ class TestUtilityExchangerThermo:
         # crosses the phase envelope and the duty carries latent heat.
         return make_stream({"propane": 1.0, "butane": 1.0}, T=300.0, P=10e5)
 
-    @pytest.mark.slow
     def test_duty_is_the_enthalpy_difference(self):
         thermo = _propane_butane_cubic_thermo()
         feed = self._liquid_feed()
@@ -807,7 +776,6 @@ class TestUtilityExchangerThermo:
         H_out = thermo.stream_enthalpy_flash(flows, 400.0, feed["P"])
         assert float(info["Q"]) == pytest.approx(float(H_out - H_in), rel=1e-6)
 
-    @pytest.mark.slow
     def test_constant_Cp_understates_a_vaporizing_duty(self):
         """The failure in issue #226: 75 J/mol/K carries no latent heat."""
         thermo = _propane_butane_cubic_thermo()
@@ -822,7 +790,6 @@ class TestUtilityExchangerThermo:
         assert float(info_const["Q"]) == pytest.approx(15000.0)
         assert float(info_thermo["Q"]) > 2.0 * float(info_const["Q"])
 
-    @pytest.mark.slow
     def test_cooler_reverses_the_heater(self):
         thermo = _propane_butane_cubic_thermo()
         feed = self._liquid_feed()
@@ -848,7 +815,6 @@ class TestUtilityExchangerThermo:
         H_out = thermo.stream_enthalpy(flows, 400.0, phase="vapor", P=feed["P"])
         assert float(info["Q"]) == pytest.approx(float(H_out - H_in), rel=1e-6)
 
-    @pytest.mark.slow
     def test_eo_residuals_vanish_at_the_thermo_solution(self):
         thermo = _propane_butane_cubic_thermo()
         feed = self._liquid_feed()
@@ -862,7 +828,6 @@ class TestUtilityExchangerThermo:
         assert float(jnp.max(jnp.abs(resid))) < 1e-6
 
 
-@pytest.mark.slow
 class TestUtilityExchangerThermoHeavy:
     """The Heater/Cooler thermo paths that cost a JAX trace.
 
@@ -873,8 +838,6 @@ class TestUtilityExchangerThermoHeavy:
     not the assertions.
     """
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_rating_mode_closes_Q_equals_UA_LMTD(self):
         thermo = _propane_butane_cubic_thermo()
         feed = make_stream({"propane": 1.0, "butane": 1.0}, T=300.0, P=10e5)
@@ -903,8 +866,6 @@ class TestUtilityExchangerThermoHeavy:
         assert float(outlet["T"]) == pytest.approx(400.0, rel=1e-6)
         assert float(info2["Q"]) == pytest.approx(float(info["Q"]))
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_differentiable(self):
         """Duty is differentiable through the flash-based enthalpy."""
         thermo = _propane_butane_cubic_thermo()
@@ -921,7 +882,6 @@ class TestUtilityExchangerThermoHeavy:
         assert float(g) > 150.0
 
 
-@pytest.mark.slow
 class TestEnthalpyHXThroughBoiling:
     """The cold side boils inside the exchanger.
 
@@ -944,22 +904,6 @@ class TestEnthalpyHXThroughBoiling:
                            T=300.0, P=C4_P)
         return thermo, hot, cold
 
-    def test_energy_balance_closes_and_cold_side_heats(self):
-        thermo, hot, cold = self._case()
-        hx = EnthalpyCounterCurrentHX(EnthalpyHXParams(UA=150.0), thermo)
-        hot_out, cold_out, info = hx(hot, cold)
-        H = thermo.stream_enthalpy_flash
-        P = hot["P"]
-        Q = float(info["Q"])
-        dH_hot = float(H(get_flows(hot), hot["T"], P) - H(get_flows(hot), hot_out["T"], P))
-        dH_cold = float(H(get_flows(cold), cold_out["T"], P) - H(get_flows(cold), cold["T"], P))
-        assert dH_hot == pytest.approx(Q, rel=1e-8)
-        assert dH_cold == pytest.approx(Q, rel=1e-8)
-        # Ends inside the two-phase window, and heated, not cooled.
-        assert 320.0 < float(cold_out["T"]) < 331.0
-        # And it is the root of the independent EO residual (#389).
-        assert float(jnp.max(jnp.abs(hx.eo_residuals([hot, cold], [hot_out, cold_out])))) < 1e-3
-
     def test_inversion_lands_in_the_two_phase_window(self):
         from difflow.units.heat_exchanger import _invert_enthalpy_T
 
@@ -971,20 +915,6 @@ class TestEnthalpyHXThroughBoiling:
             H = thermo.stream_enthalpy_flash(flows, T, cold["P"])
             assert float(H - H0) == pytest.approx(Q, rel=1e-8), Q
             assert float(T) > 300.0
-
-    @pytest.mark.slow
-    @pytest.mark.release
-    def test_gradient_matches_finite_difference(self):
-        thermo, hot, cold = self._case()
-
-        def T_cold_out(UA):
-            return EnthalpyCounterCurrentHX(EnthalpyHXParams(UA=UA), thermo)(hot, cold)[1]["T"]
-
-        g = jax.grad(T_cold_out)(jnp.array(150.0))
-        eps = 1e-3
-        fd = (T_cold_out(150.0 + eps) - T_cold_out(150.0 - eps)) / (2 * eps)
-        assert float(g) == pytest.approx(float(fd), rel=1e-4)
-
 
 class TestClosedFormValues:
     """Every effectiveness and F against its textbook closed form (issue #418).

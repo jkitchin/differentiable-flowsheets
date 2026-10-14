@@ -182,7 +182,6 @@ class TestPublishedCorrelations:
         got = econ.compressor_cost(1000.0, "centrifugal", target_year=2010)
         assert float(got) == pytest.approx(expected, rel=1e-12)
 
-    @pytest.mark.slow
     def test_costs_rise_and_are_differentiable_over_each_range(self):
         for name, p in self.entries():
             sizes = jnp.geomspace(p.S_min, p.S_max, 7)
@@ -486,7 +485,6 @@ class TestAnnuityFactorsAtZeroRate:
 class TestDifferentiability:
     """Tests for JAX differentiability."""
 
-    @pytest.mark.release
     def test_reactor_cost_differentiable(self):
         """Test reactor cost is differentiable."""
         def cost_fn(V):
@@ -499,7 +497,6 @@ class TestDifferentiability:
         assert jnp.isfinite(grad)
         assert float(grad) > 0  # Cost increases with volume
 
-    @pytest.mark.release
     def test_npv_differentiable(self):
         """Test NPV is differentiable with respect to cash flows."""
         def npv_fn(cf):
@@ -513,7 +510,6 @@ class TestDifferentiability:
         assert jnp.isfinite(grad)
         assert float(grad) > 0  # NPV increases with cash flow
 
-    @pytest.mark.release
     def test_utility_cost_differentiable(self):
         """Test utility costs are differentiable."""
         def cost_fn(duty):
@@ -526,7 +522,6 @@ class TestDifferentiability:
         assert jnp.isfinite(grad)
         assert float(grad) > 0
 
-    @pytest.mark.release
     def test_annualized_cost_differentiable(self):
         """Test annualized cost is differentiable."""
         def tac_fn(capex):
@@ -546,7 +541,6 @@ class TestDifferentiability:
         crf = float(econ.capital_recovery_factor(jnp.array(0.10), jnp.array(20.0)))
         assert abs(float(grad) - crf) < 0.01
 
-    @pytest.mark.release
     def test_equipment_cost_jit(self):
         """Test equipment cost can be JIT compiled."""
         @jax.jit
@@ -558,7 +552,6 @@ class TestDifferentiability:
         cost = cost_fn(V)
         assert jnp.isfinite(cost)
 
-    @pytest.mark.release
     def test_profitability_vmap(self):
         """Test profitability metrics work with vmap."""
         def npv_fn(investment):

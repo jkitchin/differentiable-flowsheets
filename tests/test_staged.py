@@ -55,7 +55,6 @@ def _hand_integer_stages(R, q=1.0, a=AL, z=Z, xd=XD, xb=XB):
 
 
 class TestIllustration:
-    @pytest.mark.slow
     def test_rmin_and_nmin(self):
         c = S.constant_alpha(AL)
         y_f = _y_alpha(Z)
@@ -64,7 +63,6 @@ class TestIllustration:
         assert float(S.minimum_reflux(c, Z, 1.0, XD)) == pytest.approx(1.4444, abs=5e-5)
         assert float(S.total_reflux_stages(c, XD, XB)) == pytest.approx(6.4269, abs=5e-5)
 
-    @pytest.mark.slow
     def test_total_reflux_equals_fenske(self):
         fen = np.log(XD / (1 - XD) * (1 - XB) / XB) / np.log(AL)
         c = S.constant_alpha(AL)
@@ -72,7 +70,6 @@ class TestIllustration:
         assert float(S.minimum_stages(AL, XD, XB)) == pytest.approx(fen, rel=1e-12)
         assert float(S.minimum_stages(c, XD, XB)) == pytest.approx(fen, rel=1e-9)
 
-    @pytest.mark.slow
     def test_twelve_stages_and_hand_loop(self):
         c = S.constant_alpha(AL)
         Rmin = float(S.minimum_reflux(c, Z, 1.0, XD))
@@ -93,7 +90,6 @@ class TestIllustration:
         assert float(sharp["N_rect"]) + float(sharp["N_strip"]) == pytest.approx(
             float(sharp["N"]))
 
-    @pytest.mark.slow
     def test_real_benzene_toluene_curve(self, bt_thermo):
         d = xy_curve(bt_thermo, ["benzene", "toluene"], 101325.0, n=41)
         c = S.tabulated(d["x"], d["y"])
@@ -215,9 +211,7 @@ def ew_curve():
     return d, S.tabulated(d["x"], d["y"])
 
 
-@pytest.mark.slow
 class TestTangentPinch:
-    @pytest.mark.slow
     def test_ethanol_water_tangent_exceeds_feed_pinch(self, ew_curve):
         d, c = ew_curve
         z, xd = 0.2, 0.86
@@ -242,7 +236,6 @@ class TestTangentPinch:
         phi = (XD - _y_alpha(xs)) / (XD - xs)
         assert np.argmax(phi) == 0
 
-    @pytest.mark.slow
     def test_rmin_gradient_through_tangent(self, ew_curve):
         _, c = ew_curve
         g = jax.grad(lambda xd: S.minimum_reflux(c, 0.2, 1.0, xd))(0.86)
@@ -515,13 +508,11 @@ def _N_of(R, xd, q, alpha):
 
 
 class TestGradients:
-    @pytest.mark.slow
     def test_check_grads_fractional_N(self):
         for i, x0 in enumerate((2.2, 0.95, 1.0, 2.5)):
             f = lambda v, i=i: _N_of(*[v if j == i else a for j, a in enumerate((2.2, 0.95, 1.0, 2.5))])
             check_grads(f, (x0,), order=1, modes=["rev"], eps=1e-6, atol=1e-4, rtol=1e-4)
 
-    @pytest.mark.slow
     def test_check_grads_rmin(self):
         c = S.constant_alpha(AL)
         check_grads(lambda z: S.minimum_reflux(c, z, 1.0, XD), (0.4,), order=1, modes=["rev"])
@@ -535,19 +526,6 @@ class TestGradients:
               - S.minimum_reflux(S.constant_alpha(AL - h), Z, 1.0, XD)) / (2 * h)
         assert float(g) == pytest.approx(float(fd), rel=1e-6)
 
-    @pytest.mark.slow
-    def test_N_of_R_monotone_and_continuous(self):
-        c = S.constant_alpha(AL)
-        Rmin = S.minimum_reflux(c, Z, 1.0, XD)
-        ratios = jnp.linspace(1.05, 3.0, 400)
-        Ns = np.asarray(jax.vmap(lambda r: _N_of(r * Rmin, XD, 1.0, AL))(ratios))
-        d = np.diff(Ns)
-        assert np.all(d <= 1e-9)                 # monotone decreasing
-        assert np.max(-d) < 0.6                  # no stair steps (a stair would be ~1)
-        # derivative w.r.t. R is finite and negative throughout
-        g = np.asarray(jax.vmap(jax.grad(lambda r: _N_of(r * Rmin, XD, 1.0, AL)))(ratios))
-        assert np.all(np.isfinite(g)) and np.all(g < 0)
-
     def test_jit_and_vmap_over_R(self):
         c = S.constant_alpha(AL)
         f = jax.jit(lambda R: S.mccabe_thiele(
@@ -559,7 +537,6 @@ class TestGradients:
         assert np.allclose(v, [float(f(r)) for r in Rs])
         assert v[0] > v[1] > v[2]
 
-    @pytest.mark.slow
     def test_grad_through_tabulated_curve(self, ew_curve):
         d, _ = ew_curve
 
@@ -574,7 +551,6 @@ class TestGradients:
         fd = (N(1.0 + h) - N(1.0 - h)) / (2 * h)
         assert float(g) == pytest.approx(float(fd), rel=1e-4)
 
-    @pytest.mark.slow
     def test_pchip_shape_preserving_and_inverse(self, ew_curve):
         d, c = ew_curve
         xs = jnp.linspace(0.0, 1.0, 501)

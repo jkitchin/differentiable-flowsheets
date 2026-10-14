@@ -79,7 +79,6 @@ def _H_two_phase(thermo, T, P, beta):
 
 
 class TestTurboexpanderNearDewPoint:
-    @pytest.mark.slow
     def test_isentropic_temperature_matches_independent_root(self, ch4):
         """G05-1: methane 300 K, 100 -> 10 bar."""
         out, info = Turboexpander(
@@ -98,7 +97,6 @@ class TestTurboexpanderNearDewPoint:
         assert float(info["T_isen"]) < float(out["T"]) < 300.0
         assert abs(float(info["residual_isen"])) < 1e-8
 
-    @pytest.mark.slow
     def test_expansion_into_dome_reports_liquid(self, ch4):
         """Expanding cold methane deep enough condenses part of it."""
         _, info = Turboexpander(
@@ -109,8 +107,6 @@ class TestTurboexpanderNearDewPoint:
         assert float(info["T_out"]) == pytest.approx(_T_sat(ch4, 5e5), abs=1e-6)
         assert float(info["W"]) > 0.0
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_gradients_match_finite_differences(self, ch4):
         def W(P_bar):
             return Turboexpander(
@@ -120,9 +116,7 @@ class TestTurboexpanderNearDewPoint:
         check_grads(W, (jnp.array(10.0),), order=1, modes=["rev"], eps=1e-3)
 
 
-@pytest.mark.slow
 class TestJTValveTwoPhase:
-    @pytest.mark.slow
     @pytest.mark.parametrize(
         "T_in, P_in, P_out", [(200.0, 60e5, 10e5), (220.0, 80e5, 20e5)]
     )
@@ -139,7 +133,6 @@ class TestJTValveTwoPhase:
         H_out = _H_two_phase(ch4, T_out, P_out, beta)
         assert abs(H_out - H_in) < 1e-6 * abs(H_in)
 
-    @pytest.mark.slow
     def test_unbracketed_target_is_flagged(self, ch4):
         """A target outside T_bounds returns converged=False and warns."""
         valve = JTValve(JTValveParams(P_out=10e5, T_bounds=(160.0, 1000.0)), ch4)
@@ -152,8 +145,6 @@ class TestJTValveTwoPhase:
             warnings.simplefilter("error", EOSUnitConvergenceWarning)
             JTValve(JTValveParams(P_out=10e5), ch4)(make_stream(CH4, T=200.0, P=60e5))
 
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_saturation_slope_and_quality_gradients(self, ch4):
         """Inside the dome dT/dP is the saturation (Clausius-Clapeyron) slope."""
         feed = make_stream(CH4, T=200.0, P=60e5)
@@ -173,7 +164,6 @@ class TestJTValveTwoPhase:
 
 
 class TestCompressorFlag:
-    @pytest.mark.slow
     def test_compressor_converged(self, ch4):
         _, info = Compressor(CompressorParams(P_out=30e5, eta_isentropic=0.75), ch4)(
             make_stream(CH4, T=300.0, P=10e5))
@@ -183,14 +173,12 @@ class TestCompressorFlag:
 
 
 class TestSpecFlash:
-    @pytest.mark.slow
     def test_ps_flash_round_trip(self, ch4):
         S0 = ch4.stream_entropy_flash(CH4, 180.0, 30e5)
         res = flash_PS_eos(ch4, CH4, 30e5, S0)
         assert float(res["T"]) == pytest.approx(180.0, abs=1e-6)
         assert bool(res["converged"])
 
-    @pytest.mark.slow
     def test_ph_flash_mixture_matches_tp_flash(self):
         """For a mixture the vapour fraction is the TP-flash one at the found T."""
         sp = ["methane", "propane"]
@@ -205,7 +193,6 @@ class TestSpecFlash:
         H1 = th.stream_enthalpy_flash(flows, res["T"], 5e5)
         assert float(H1) == pytest.approx(float(H0), rel=1e-8)
 
-    @pytest.mark.slow
     def test_phflash_unit_eos_path_splits_streams(self, ch4):
         """PHFlash with a CubicThermo returns the two-phase split."""
         flash = PHFlash(FlashParams(species_order=["methane"]), ch4)

@@ -120,7 +120,6 @@ def arbitrary_state(network, seed=0):
     return vm, va, pg, qg
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("case", ALL_CASES)
 def test_residuals_match_independent_polar_restatement(case):
     """The complex-rectangular implementation equals the polar form."""
@@ -148,7 +147,6 @@ def test_residuals_are_not_trivially_zero(case):
     assert float(jnp.max(jnp.abs(r))) > 1e-3
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("case", ALL_CASES)
 def test_jacobian_has_full_row_rank(case):
     """The reference row is what makes the Jacobian full rank.

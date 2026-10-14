@@ -62,7 +62,6 @@ class TestWallStateShellH:
         return st.ShellAndTubeDesign(make_params(hot_isothermal=True, shell_h=condensing(dT_fn),
                                                  tube_length=3.0, tol=1e-13, **kw))
 
-    @pytest.mark.slow
     def test_loop_closes_and_differs_from_fixed_guess(self):
         d = self.design(lambda g: g["dT_film"])
         r = d(STEAM, COLD, Q=6.0e5)
@@ -110,7 +109,6 @@ class TestWallStateShellH:
         assert float(r["h_o"]) == pytest.approx(float(ht.mostinski(r["q_flux"], 4600.0, 1000.0)), rel=1e-9)
         assert float(r["h_o"]) > 0.0
 
-    @pytest.mark.slow
     def test_gradients(self):
         d = self.design(lambda g: g["dT_film"])
         f = lambda Q: d(STEAM, COLD, Q=Q, warn=False)["area"]
@@ -263,7 +261,6 @@ class TestShellsInSeries:
         # rounding the tube count up and the baffles down leaves the rated duty within a few percent
         assert float(rt["Q"]) == pytest.approx(CROSS_Q, rel=0.1)
 
-    @pytest.mark.slow
     def test_gradients_N2(self):
         d = st.ShellAndTubeDesign(cross_params(2))
         f = lambda Q: d(CROSS_HOT, CROSS_COLD, Q=Q, warn=False)["area"]
@@ -282,7 +279,6 @@ class TestShellsInSeries:
 # 7. Kern range flag
 # ---------------------------------------------------------------------------
 
-@pytest.mark.slow
 class TestKernRange:
     def test_laminar_shell_flag_and_warning(self):
         # a viscous shell fluid at low flow: Re_s of a few hundred

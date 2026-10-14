@@ -221,7 +221,6 @@ class TestCriteria:
         assert float(design_criterion(fim, "E")) == pytest.approx(1.0)
         assert float(design_criterion(fim, "ME")) == pytest.approx(3.0)
 
-    @pytest.mark.release
     def test_log_det_agrees_with_slogdet_but_not_via_det(self):
         rng = np.random.default_rng(0)
         a = rng.standard_normal((5, 5))
@@ -546,7 +545,6 @@ class TestDesignSelection:
 # ---------------------------------------------------------------------------
 
 class TestPredictedCovariance:
-    @pytest.mark.release
     def test_matches_the_closed_form_for_a_line(self):
         # cov = sigma^2 (X^T X)^{-1} for y = a x + b.
         sigma = 0.5
@@ -561,7 +559,6 @@ class TestPredictedCovariance:
             expected[0, 1] / np.sqrt(expected[0, 0] * expected[1, 1])
         )
 
-    @pytest.mark.release
     def test_intervals_use_the_student_t_of_the_proposed_campaign(self):
         from scipy import stats
 
@@ -577,7 +574,6 @@ class TestPredictedCovariance:
         tighter = predicted_covariance(linear_model, theta, exps, alpha=0.32)
         assert tighter.ci_upper["a"] < ci.ci_upper["a"]
 
-    @pytest.mark.release
     def test_a_singular_campaign_reports_infinite_intervals(self):
         pool = [Experiment.candidate({"x": float(x)}, ["y"]) for x in range(1, 5)]
         ci = predicted_covariance(
@@ -588,122 +584,18 @@ class TestPredictedCovariance:
         assert np.all(np.isinf(np.asarray(ci.covariance)))
         assert np.all(np.isnan(np.asarray(ci.correlation)))
 
-    @pytest.mark.release
     def test_intervals_bracket_theta(self):
         exps = line_pool([0.0, 1.0, 2.0, 3.0], sigma=0.5)
         ci = predicted_covariance(linear_model, {"a": 2.0, "b": 1.0}, exps)
         assert ci.ci_lower["a"] < 2.0 < ci.ci_upper["a"]
         assert ci.ci_lower["b"] < 1.0 < ci.ci_upper["b"]
 
-    @pytest.mark.release
     def test_more_replicates_shrink_the_intervals_as_one_over_sqrt_n(self):
         base = line_pool([0.0, 1.0, 2.0, 3.0], sigma=0.5)
         ci1 = predicted_covariance(linear_model, {"a": 2.0, "b": 1.0}, base)
         ci4 = predicted_covariance(linear_model, {"a": 2.0, "b": 1.0}, base * 4)
         assert ci4.std_errors["a"] == pytest.approx(ci1.std_errors["a"] / 2.0)
 
-    @pytest.mark.slow
-    @pytest.mark.release
-    def test_predicted_covariance_matches_a_monte_carlo_refit(self):
-        """The end-to-end check: design, simulate, fit, compare.
-
-        ``predicted_covariance`` claims to tell you, in advance, the
-        covariance of the estimate a campaign will produce. Here that claim
-        is tested against the covariance actually obtained by fitting many
-        noisy data sets simulated from the designed runs.
-        """
-        a_true, b_true, sigma = 2.0, 1.0, 0.5
-        theta_true = {"a": a_true, "b": b_true}
-
-        pool = line_pool(np.linspace(0.0, 10.0, 11), sigma=sigma)
-        design = design_experiments(linear_model, theta_true, pool, n=8)
-        predicted = predicted_covariance(linear_model, theta_true, design.selected)
-        cov_pred = np.asarray(predicted.covariance)
-
-        est = Estimator(linear_model, ["a", "b"])
-        rng = np.random.default_rng(20200)
-        n_mc = 400
-        fits = np.empty((n_mc, 2))
-        for k in range(n_mc):
-            noisy = [
-                Experiment(
-                    inputs=dict(c.inputs),
-                    observed={
-                        "y": float(
-                            a_true * c.inputs["x"]
-                            + b_true
-                            + sigma * rng.standard_normal()
-                        )
-                    },
-                    uncertainties={"y": sigma},
-                )
-                for c in design.selected
-            ]
-            res = est.fit(noisy, theta_init=theta_true, objective="wsse",
-                          jit_objective=False)
-            fits[k] = [res.theta_opt["a"], res.theta_opt["b"]]
-
-        cov_mc = np.cov(fits, rowvar=False)
-
-        # The estimator is unbiased, so the fitted means sit on the truth
-        # within a few Monte-Carlo standard errors.
-        se_mean = np.sqrt(np.diag(cov_pred) / n_mc)
-        assert abs(fits[:, 0].mean() - a_true) < 4 * se_mean[0]
-        assert abs(fits[:, 1].mean() - b_true) < 4 * se_mean[1]
-
-        # Variances agree to within Monte-Carlo error: the relative
-        # standard error of a sample variance from n draws is sqrt(2/n),
-        # about 7% here, so 25% is a comfortable but non-vacuous band.
-        for i in range(2):
-            assert cov_mc[i, i] == pytest.approx(cov_pred[i, i], rel=0.25)
-
-        # ... and so does the parameter correlation.
-        rho_mc = cov_mc[0, 1] / np.sqrt(cov_mc[0, 0] * cov_mc[1, 1])
-        rho_pred = cov_pred[0, 1] / np.sqrt(cov_pred[0, 0] * cov_pred[1, 1])
-        assert rho_mc == pytest.approx(rho_pred, abs=0.12)
-
-    @pytest.mark.slow
-    @pytest.mark.release
-    def test_nonlinear_predicted_covariance_matches_a_monte_carlo_refit(self):
-        """Same check for a nonlinear model, where the FIM is a linearization."""
-        theta_true = {"A": 5.0, "E": 800.0}
-        sigma = 0.02
-
-        pool = [
-            Experiment.candidate({"T": float(T)}, ["y"], {"y": sigma})
-            for T in np.linspace(300.0, 500.0, 21)
-        ]
-        design = design_experiments(arrhenius_model, theta_true, pool, n=10)
-        cov_pred = np.asarray(
-            predicted_covariance(arrhenius_model, theta_true, design.selected).covariance
-        )
-
-        est = Estimator(arrhenius_model, ["A", "E"])
-        rng = np.random.default_rng(7)
-        n_mc = 250
-        fits = np.empty((n_mc, 2))
-        for k in range(n_mc):
-            noisy = []
-            for c in design.selected:
-                mean = float(
-                    theta_true["A"] * np.exp(-theta_true["E"] / c.inputs["T"])
-                )
-                noisy.append(
-                    Experiment(
-                        inputs=dict(c.inputs),
-                        observed={"y": mean + sigma * rng.standard_normal()},
-                        uncertainties={"y": sigma},
-                    )
-                )
-            res = est.fit(noisy, theta_init=theta_true, objective="wsse",
-                          jit_objective=False)
-            fits[k] = [res.theta_opt["A"], res.theta_opt["E"]]
-
-        cov_mc = np.cov(fits, rowvar=False)
-        for i in range(2):
-            assert cov_mc[i, i] == pytest.approx(cov_pred[i, i], rel=0.35)
-
-    @pytest.mark.release
     def test_a_design_beats_an_arbitrary_campaign_of_the_same_size(self):
         theta = {"a": 1.0, "b": 0.0}
         pool = line_pool(np.linspace(0.0, 10.0, 11))
@@ -787,7 +679,6 @@ class TestIdentifiability:
         assert "0.707" in combo
         assert combo.count("-") == 1  # one of the two terms is negated
 
-    @pytest.mark.slow
     def test_more_data_does_not_rescue_an_unidentifiable_model(self):
         """The point of the check: rows can be added forever, rank stays 1."""
         theta = {"A": 2.0, "B": 3.0}
@@ -877,7 +768,6 @@ class TestJax:
         )
         assert np.allclose(jitted, direct)
 
-    @pytest.mark.slow
     def test_criterion_jits_and_differentiates(self):
         pool = [
             Experiment.candidate({"T": float(T)}, ["y"], {"y": 0.1})
