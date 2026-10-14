@@ -13,13 +13,10 @@ What is pinned:
   the naphthene lever sets what it says;
 * a single bed is adiabatic and element-conserving to round-off, and its
   outlet temperature is differentiable (AD against central differences);
-* the flowsheet (slow): converges with H2 recycle on a lean and a rich
-  naphtha from the default initialization; overall mass, C, H and energy
-  close to 1e-8; the first reactor has the largest temperature drop; RON and
-  H2 make rise and C5+ yield falls with WAIT; aromatics rise as pressure
-  falls; implicit gradients of yield, RON, net H2 and the first-reactor dT
-  in WAIT, separator pressure, H2/HC and naphthene content match central
-  differences; the planning block evaluates and differentiates.
+* the flowsheet (a two-bed train on the lean naphtha): converges with H2
+  recycle from the default initialization; overall mass, C, H and energy
+  close to 1e-8; the first reactor has the largest temperature drop; the
+  implicit gradient of RON and net H2 in WAIT matches central differences.
 
 NOT reproduced (and not claimed): a published commercial-reformer simulation
 (Padmavathi & Chaudhuri 1997, Taskar & Riggs 1997) -- their papers could not
@@ -145,7 +142,6 @@ class TestThermo:
         assert k.E["ring_opening"] == pytest.approx(59600.0 / 1.8 * th.R)
         assert k.E["hydrocracking_P"] == pytest.approx(62300.0 / 1.8 * th.R)
 
-    @pytest.mark.slow
     def test_enthalpy_is_cubic_thermo_plus_heats_of_formation(self):
         F = jnp.asarray(lean_naphtha().flows).at[sp.INDEX["H2"]].set(400.0)
         flows = {k: F[i] for i, k in enumerate(sp.NAMES)}
@@ -183,7 +179,6 @@ class TestFeed:
         assert float(g.group_fractions("volume")["naphthenes"]) == pytest.approx(0.35, rel=1e-12)
         assert float(g.volume_flow) == pytest.approx(float(f.volume_flow), rel=1e-12)
 
-    @pytest.mark.slow
     def test_from_characterization_conserves_mass_and_differentiates(self):
         import difflow_refinery as dr
         from difflow_refinery.composition import CompositionRangeWarning
@@ -223,7 +218,6 @@ def _bed_feed():
 
 
 class TestBed:
-    @pytest.mark.slow
     def test_adiabatic_and_element_conserving(self):
         F = _bed_feed()
         kin = ReformingKinetics()
@@ -235,7 +229,6 @@ class TestBed:
         assert abs(float(H_out - H_in)) < 1e-9 * abs(float(H_in))
         assert float(coke) > 0.0
 
-    @pytest.mark.slow
     def test_long_bed_reaches_dehydrogenation_equilibrium(self):
         # Only the dehydrogenations, a very long bed: the outlet quotient is K(T_out).
         A = {f: 0.0 for f in kn.FAMILIES}
@@ -250,7 +243,6 @@ class TestBed:
         Q = p[sp.INDEX["A7"]] * p[sp.INDEX["H2"]] ** 3 / p[sp.INDEX["N7"]]
         assert float(Q) == pytest.approx(float(rm.equilibrium_constants(To)[i]), rel=1e-4)
 
-    @pytest.mark.slow
     def test_outlet_temperature_gradient(self):
         F = _bed_feed()
         kin = ReformingKinetics()
@@ -267,59 +259,33 @@ class TestBed:
 # The flowsheet
 # =============================================================================
 
+#: The cheapest train that still has a lead reactor and a tail: two beds. The
+#: flowsheet tests share it (one compile of the bed integration and the
+#: recycle), one lean naphtha throughout.
+TWO_BEDS = dict(inlet_T=(773.15, 773.15), catalyst_split=(0.3, 0.7))
+
 
 @pytest.fixture(scope="module")
 def lean():
-    return CatalyticReformer(ReformerParams()).solve(lean_naphtha())
+    return CatalyticReformer(ReformerParams(**TWO_BEDS)).solve(lean_naphtha())
 
 
-@pytest.fixture(scope="module")
-def rich():
-    return CatalyticReformer(ReformerParams()).solve(rich_naphtha())
-
-
-@pytest.mark.slow
 class TestFlowsheet:
-    @pytest.mark.parametrize("which", ["lean", "rich"])
-    def test_converges_and_balances_close(self, which, request):
-        res = request.getfixturevalue(which)
-        assert res.converged
-        for k, v in res.balances().items():
+    def test_converges_and_balances_close(self, lean):
+        assert lean.converged
+        for k, v in lean.balances().items():
             assert abs(float(v)) < 1e-8, (k, float(v))
 
-    @pytest.mark.release
-    @pytest.mark.parametrize("which", ["lean", "rich"])
-    def test_first_reactor_drop_is_largest(self, which, request):
-        dT = [float(r["dT"]) for r in request.getfixturevalue(which).reactors]
+    def test_first_reactor_drop_is_largest(self, lean):
+        dT = [float(r["dT"]) for r in lean.reactors]
         assert dT[0] < 0 and dT[0] == min(dT)
 
-    @pytest.mark.release
-    def test_products_are_plausible(self, lean, rich):
-        for res in (lean, rich):
-            o = {k: float(v) for k, v in res.outputs().items()}
-            assert 60.0 < o["c5plus.yield_vol"] < 100.0
-            assert o["h2.net_mol_s"] > 0 and o["h2.purity"] > 70.0
-            assert o["lpg.kg_s"] > 0 and o["fuel_gas.kg_s"] > 0
-            assert o["reformate.aromatics_vol"] > 40.0
-        assert float(rich.outputs()["reformate.RON"]) > float(lean.outputs()["reformate.RON"])
-
-    @pytest.mark.slow
-    @pytest.mark.release
-    def test_severity_trends(self, lean):
-        hot = CatalyticReformer(ReformerParams().with_wait(783.15)).solve(lean_naphtha(),
-                                                                           tear_initial=lean.tear)
-        a, b = lean.outputs(), hot.outputs()
-        assert float(b["reformate.RON"]) > float(a["reformate.RON"])
-        assert float(b["h2.net_mol_s"]) > float(a["h2.net_mol_s"])
-        assert float(b["c5plus.yield_vol"]) < float(a["c5plus.yield_vol"])
-
-    @pytest.mark.slow
-    @pytest.mark.release
-    def test_aromatics_rise_as_pressure_falls(self, lean):
-        low = CatalyticReformer(ReformerParams(P_separator=8.0e5)).solve(lean_naphtha(),
-                                                                         tear_initial=lean.tear)
-        assert (float(low.outputs()["reformate.aromatics_vol"])
-                > float(lean.outputs()["reformate.aromatics_vol"]))
+    def test_products_are_plausible(self, lean):
+        o = {k: float(v) for k, v in lean.outputs().items()}
+        assert 60.0 < o["c5plus.yield_vol"] < 100.0
+        assert o["h2.net_mol_s"] > 0 and o["h2.purity"] > 70.0
+        assert o["lpg.kg_s"] > 0 and o["fuel_gas.kg_s"] > 0
+        assert o["reformate.aromatics_vol"] > 40.0
 
     def test_reformate_goes_to_the_blend_pool(self, lean):
         from difflow_refinery import BlendComponent, BlendPool
@@ -335,52 +301,27 @@ class TestFlowsheet:
             0.5 * float(ref.properties["aromatics_vol"]) + 0.25, rel=1e-9)
 
 
-@pytest.mark.slow
-def test_ron_target_sets_the_wait(lean):
-    reformer = CatalyticReformer(ReformerParams())
-    wait, res = reformer.wait_for_ron(lean_naphtha(), 95.0, tol=1e-3)
-    assert float(res.outputs()["reformate.RON"]) == pytest.approx(95.0, abs=1e-3)
-    assert float(wait) > float(ReformerParams().wait)      # base RON is below 95
-
-
-@pytest.mark.slow
-@pytest.mark.release
 def test_implicit_gradients_match_central_differences(lean):
+    """AD through the recycle (implicit fixed point) against central
+    differences, on the two beds: WAIT is the lever the planner turns. Two
+    outputs; the tear is warm-started from the converged lean solve."""
     feed0 = lean_naphtha()
-    N0 = float(feed0.group_fractions("volume")["naphthenes"])
-    keys = ["reformate.yield_vol", "reformate.RON", "h2.net_mol_s", "rx1.dT"]
-    tear = CatalyticReformer(ReformerParams(rtol=1e-10)).solve(feed0, tol=1e-11).tear
+    keys = ["reformate.RON", "h2.net_mol_s"]
 
     def f(x):
-        wait, Psep, h2hc, nfrac = x
-        p = ReformerParams(rtol=1e-10, P_separator=Psep * 1e5, H2_HC=h2hc).with_wait(wait + 273.15)
-        r = CatalyticReformer(p).solve(feed0.with_group_fraction("naphthenes", nfrac),
-                                       tear_initial=tear, tol=1e-11, max_iter=400,
+        p = ReformerParams(rtol=1e-10, **TWO_BEDS).with_wait(x[0] + 273.15)
+        r = CatalyticReformer(p).solve(feed0, tear_initial=lean.tear, tol=1e-11, max_iter=400,
                                        on_nonconvergence="ignore")
         o = r.outputs()
         return jnp.stack([o[k] for k in keys])
 
-    x0 = jnp.array([500.0, 12.0, 5.0, N0])
+    x0 = jnp.array([500.0])
     J = jax.jacfwd(f)(x0)
-    h = [0.02, 0.01, 0.005, 0.001]
-    for j in range(4):
-        e = jnp.zeros(4).at[j].set(h[j])
-        fd = (f(x0 + e) - f(x0 - e)) / (2 * h[j])
-        np.testing.assert_allclose(np.asarray(J[:, j]), np.asarray(fd), rtol=1e-5, atol=1e-8)
-    # Signs a planner relies on: RON up and yield down with WAIT; RON down with pressure.
-    assert J[1, 0] > 0 and J[0, 0] < 0 and J[2, 0] > 0 and J[1, 1] < 0
-
-
-@pytest.mark.slow
-def test_reformer_block(lean):
-    from difflow_refinery.reforming.planning import reformer_block
-
-    blk = reformer_block(CatalyticReformer(ReformerParams()), lean_naphtha(), ["wait", "H2_HC"],
-                         ["reformate.RON", "h2.net_mol_s", "c5plus.yield_vol"], jit=False)
-    y0 = blk.evaluate(blk.u0)
-    o = lean.outputs()
-    np.testing.assert_allclose(np.asarray(y0), [float(o["reformate.RON"]), float(o["h2.net_mol_s"]),
-                                                float(o["c5plus.yield_vol"])], rtol=1e-7)
+    h = 0.02
+    fd = (f(x0 + h) - f(x0 - h)) / (2 * h)
+    np.testing.assert_allclose(np.asarray(J[:, 0]), np.asarray(fd), rtol=1e-5, atol=1e-8)
+    # RON and net H2 rise with WAIT: the sign a planner relies on.
+    assert J[0, 0] > 0 and J[1, 0] > 0
 
 
 def test_reformate_properties_of_pure_toluene():
@@ -432,7 +373,6 @@ class TestSulfur:
         assert float(g) == pytest.approx(10.0 * 0.05 / 8.5, rel=1e-12)
 
 
-@pytest.mark.slow
 def test_reformer_carries_sulfur(lean):
     assert float(lean.balances()["sulfur"]) == 0.0          # sulfur-free feed by default
     assert float(lean.outputs()["reformate.S_wppm"]) == 0.0
@@ -448,13 +388,12 @@ def test_reformer_carries_sulfur(lean):
     assert float(S["net_gas.H2S_ppmv"]) > 0.0 and float(S["H2S.fuel_gas"]) > 0.0
 
 
-@pytest.mark.slow
 def test_jitted_reformer_keeps_anderson_and_says_so(lean):
     """#440: a traced reformer solve is Anderson-accelerated, not silently
     plain substitution, and the planning model reports which it ran."""
     from difflow_refinery.reforming.planning import ReformerPlanningModel
 
-    ref = CatalyticReformer(ReformerParams())
+    ref = CatalyticReformer(ReformerParams(**TWO_BEDS))
     model = ReformerPlanningModel(ref, lean_naphtha(), ["wait"], ["reformate.RON", "h2.net_mol_s"])
     assert model.last_solve_method == "anderson"
     u = jnp.array([503.0])

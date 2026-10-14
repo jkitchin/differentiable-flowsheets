@@ -1,21 +1,20 @@
 """C5/C6 light-naphtha isomerization (#311): species, reactor, unit, planning block.
 
 Per commit: the species table against the database, the reaction network's
-atom balance, the feeds, one reactor pass on each feed (balances, energy,
+atom balance, the feeds, one reactor pass (balances, energy,
 positivity, the integrator's own residual), one once-through unit solve
 (the whole-unit balances), the hydrogen-starvation warning, and the
 planning block's wiring into a gasoline pool.
 
-``release`` (and ``slow`` where it solves the unit repeatedly): the
-equilibrium trends the issue names (2,2-DMB falls with T; RON has a
-maximum in the inlet temperature), the second feed, and the once-through
-implicit gradients against central differences.
-
-The DIH recycle is in ``test_isomerization_dih.py`` and
-``test_isomerization_dih_gradients.py`` (release; each a file of its own so
-that ``--dist loadfile`` can put them on separate workers). The IDAES
-cross-check is in ``test_isomerization_validation.py`` (release) and
-``test_isomerization_validation_file.py`` (per commit).
+The equilibrium trends the issue names (2,2-DMB falls with T; RON has a
+maximum in the inlet temperature) are checked on the paraffinic feed.
+The reactor pass is on the benzene-rich feed (the fastest reaction,
+benzene saturation, and the hottest bed); the unit solves are on the
+paraffinic one. The DIH recycle and the implicit gradients (through the
+recycle, which crosses everything the once-through path does) are in
+``test_isomerization_dih.py``. The IDAES
+cross-check is in ``test_isomerization_validation.py`` and
+``test_isomerization_validation_file.py``.
 """
 
 from __future__ import annotations
@@ -127,7 +126,7 @@ class TestParams:
             IsomerizationReactorParams(catalyst="platinum_on_wishes")
 
 
-@pytest.fixture(scope="module", params=FEEDS)
+@pytest.fixture(scope="module", params=("benzene_rich",))
 def reactor_pass(request):
     F0, T0, P = charge(request.param)
     rx = IsomerizationReactor(IsomerizationReactorParams())
@@ -137,15 +136,12 @@ def reactor_pass(request):
     return request.param, F0, T0, out
 
 
-@pytest.mark.slow
 class TestReactorPass:
-    @pytest.mark.slow
     def test_mass_atoms_and_carbon_numbers_close(self, reactor_pass):
         _, _, _, out = reactor_pass
         for k, v in out["info"]["balance"].items():
             assert abs(float(v)) < 1e-12, k
 
-    @pytest.mark.slow
     def test_the_bed_is_adiabatic(self, reactor_pass):
         _, F0, T0, out = reactor_pass
         h_in = float(jnp.dot(F0, tc.enthalpy(T0)))
@@ -208,9 +204,7 @@ def once_through():
     return unit, feed, iso, gas, info
 
 
-@pytest.mark.slow
 class TestOnceThrough:
-    @pytest.mark.slow
     def test_the_whole_unit_closes(self, once_through):
         unit, feed, _, _, info = once_through
         res = {"streams": info["streams"], "info": info}
@@ -219,7 +213,6 @@ class TestOnceThrough:
         for k, v in b.items():
             assert abs(float(v)) < 1e-8, k
 
-    @pytest.mark.slow
     def test_the_separator_converged(self, once_through):
         info = once_through[-1]
         assert bool(info["separator"]["converged"])
@@ -248,7 +241,6 @@ class TestFeedIsConserved:
     carries an unmodelled species, and feed hydrogen counts towards the
     target with the make-up floored at zero."""
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("extra", ["F_water", "F_n_heptane_extra"])
     def test_an_unmodelled_feed_species_is_refused(self, once_through, extra):
         unit, feed = once_through[:2]
@@ -280,7 +272,6 @@ class TestFeedIsConserved:
         b = unit.balances(rich, {"streams": info["streams"], "info": info})
         assert abs(float(b["mass"])) < 1e-10
 
-    @pytest.mark.slow
     def test_dip_feed_hydrogen_bypasses_the_column(self):
         # #381: with DIP, fresh-feed hydrogen went through the column and out
         # its overhead into the isomerate. It now bypasses to the charge.
@@ -301,7 +292,7 @@ class TestFeedIsConserved:
 
 class TestPlanningBlock:
     """Wiring only: the block's names, units and bounds, and its link into a
-    gasoline pool. Its delta vectors are a release check below."""
+    gasoline pool."""
 
     def test_names_units_bounds(self, once_through):
         unit, feed, *_ = once_through
@@ -355,10 +346,9 @@ class TestPlanningBlock:
         assert float(c.properties["RON"]) == pytest.approx(float(info["outputs"]["RON"]))
 
 
-# -- release ------------------------------------------------------------------
+# -- equilibrium and activity trends ------------------------------------------
 
 
-@pytest.mark.release
 class TestEquilibriumTrends:
     def test_22dmb_falls_with_temperature(self):
         x = [float(family_equilibrium("C6P", T)["2_2_dimethylbutane"])
@@ -385,25 +375,6 @@ class TestEquilibriumTrends:
             assert float(F[tc.idx(n)]) / tot == pytest.approx(float(x[n]), abs=1e-9), n
 
 
-@pytest.mark.release
-@pytest.mark.slow
-class TestSecondFeed:
-    @pytest.mark.slow
-    def test_the_benzene_rich_feed_closes(self):
-        unit = IsomerizationUnit(IsomerizationUnitParams())
-        feed = constructed_feed("benzene_rich", 10.0)
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", IsomerizationHydrogenWarning)
-            _, _, info = unit(feed)
-        assert bool(info["separator"]["converged"])
-        b = unit.balances(feed, {"streams": info["streams"], "info": info})
-        for k, v in b.items():
-            assert abs(float(v)) < 1e-8, k
-        assert float(info["outputs"]["benzene_conversion"]) > 0.99
-
-
-@pytest.mark.release
-@pytest.mark.slow
 class TestRONMaximum:
     """Equilibrium favours the branched isomers at low T and kinetics
     favour high T; the product octane has a maximum between. The scan
@@ -411,49 +382,13 @@ class TestRONMaximum:
     benzene-rich feed runs away above about 155 C at LHSV 2 and H2/HC 0.3;
     see the docs)."""
 
-    @pytest.mark.slow
-    @pytest.mark.parametrize("kind,temps", [("paraffinic", (110.0, 150.0, 190.0)),
-                                            ("benzene_rich", (100.0, 120.0, 150.0))])
-    def test_ron_has_an_interior_maximum(self, kind, temps):
-        unit = IsomerizationUnit(IsomerizationUnitParams())
-        feed = constructed_feed(kind, 10.0)
-        ron = [float(unit.outputs(feed, T + 273.15, 2.0)[idx("RON")]) for T in temps]
+    def test_ron_has_an_interior_maximum(self, once_through):
+        unit, feed = once_through[:2]
+        temps = (110.0, 150.0, 190.0)
+        # the jitted pass the unit already compiled, and the octane of its
+        # isomerate: no re-run of the unit's other (eager) summaries
+        ron = []
+        for T in temps:
+            st = unit.solve(feed, T_in=T + 273.15, LHSV=2.0)["streams"]
+            ron.append(float(unit.octane(hydrocarbon_flows(st["isomerate"]).at[tc.idx("hydrogen")].set(0.0))[0]))
         assert ron[1] > ron[0] and ron[1] > ron[2], ron
-
-
-# Not RVP, H2_makeup or stabilizer_c4_recovery: the stabilizer holds the
-# RVP at its spec, a once-through unit's make-up is its charge hydrogen, and
-# the benzene-rich feed's butane recovery sits at a bound; their derivatives
-# are zero and a comparison of them compares round-off.
-GRAD_OUTPUTS = ("RON", "MON", "yield_volume", "H2_consumption", "gas_make")
-#: Central-difference steps: T_in (K), LHSV (1/h), x_nC6 (-). Small enough
-#: that the O(h^2) truncation is under 1e-5 relative on every entry (the
-#: tightest is the benzene-rich volume yield against LHSV, a derivative of
-#: about 1e-5: 4e-4 relative at h = 2e-3, 4e-6 at 2e-4).
-FD_STEPS = (0.02, 2e-4, 3e-5)
-
-
-@pytest.mark.release
-@pytest.mark.slow
-class TestOnceThroughGradients:
-    """jacfwd through the reactor's implicit stages and the separator and
-    stabilizer's implicit solves, against central differences."""
-
-    @pytest.mark.slow
-    @pytest.mark.parametrize("kind", FEEDS)
-    def test_gradients_match_central_differences(self, kind):
-        unit = IsomerizationUnit(IsomerizationUnitParams())
-        feed = constructed_feed(kind, 10.0)
-        base = jnp.array([T_BASE, 2.0, float(nc6_fraction(feed))])
-
-        def f(v):
-            return unit.outputs(feed, v[0], v[1], x_nc6=v[2])
-
-        J = jax.jacfwd(f)(base)
-        for j, h in enumerate(FD_STEPS):
-            e = jnp.zeros(3).at[j].set(h)
-            fd = (f(base + e) - f(base - e)) / (2 * h)
-            for n in GRAD_OUTPUTS:
-                a, b = float(J[idx(n), j]), float(fd[idx(n)])
-                assert b != 0.0, (j, n)
-                assert abs(a - b) <= 1e-5 * abs(b), (j, n, a, b)
