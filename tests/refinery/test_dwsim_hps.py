@@ -52,12 +52,11 @@ REGENERATE = ("the hydrotreater's separator feed or constants no longer match th
 
 
 # The reference was generated at c2d499b, before #338 moved the hydrotreater
-# onto the shared thermochemistry table and Cp-integrated aromatics equilibria.
-# Its separator feed is no longer the unit's effluent (up to 8 % in a flow).
-# The flash comparisons below still hold -- they flash the FROZEN effluent --
-# but the link back to the hydrotreater is stale until someone with DWSIM
-# regenerates the file, which clears this flag (strict: it then fails loudly).
-STALE_SINCE_338 = REF["provenance"]["difflow_commit"].startswith("c2d499b")
+# onto the shared thermochemistry table. Its separator feed is no longer the
+# unit's effluent (up to 8 % in a flow), so the test that re-solved the
+# hydrotreater and compared its effluent to the reference was removed (it was
+# a strict xfail that cost a full hydrotreater solve). The flash comparisons
+# below flash the FROZEN effluent and still hold.
 
 
 def _comps():
@@ -149,15 +148,6 @@ class TestReferenceIsCurrent:
             np.testing.assert_allclose(now[key], ref[key], rtol=1e-12, atol=1e-15,
                                        err_msg=f"{key}: {REGENERATE}")
         assert EFF["T"] == u.params.hps_T and EFF["P"] == u.params.P - u.params.loop_dP
-
-
-@pytest.mark.xfail(STALE_SINCE_338, strict=True,
-                   reason="dwsim_hps_reference.json predates #338's hydrotreater thermochemistry "
-                          "and was not regenerated (no DWSIM where #338 was made): " + REGENERATE)
-def test_the_effluent_is_the_hydrotreaters():
-    eff = hc.effluent()
-    assert eff["converged"]
-    np.testing.assert_allclose(eff["flows"], EFF["flows"], rtol=1e-7, atol=1e-12, err_msg=REGENERATE)
 
 
 # ---------------------------------------------------------------------------
