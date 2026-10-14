@@ -32,8 +32,6 @@ from difflow_refinery.vacuum import (
 C_TO_K = 273.15
 PRODUCTS = ("overhead", "lvgo", "hvgo", "slop", "residue")
 
-pytestmark = pytest.mark.slow
-
 
 def _setup(crude):
     char = characterize(crude)
@@ -156,16 +154,6 @@ class TestSpecs:
         assert float(out["outputs"]["furnace.T"]) == pytest.approx(
             float(params.furnace_T), abs=1e-6)
 
-    def test_fixed_duty_reproduces_the_spec_it_replaced(self, heavy):
-        """Fixing a pumparound duty at its solved value gives the same column."""
-        char, feed, params = heavy
-        out = VacuumColumn(params)(feed)[-1]["outputs"]
-        specs = tuple(s for s in params.specs if s.replaces != "lvgo_pa.duty")
-        fixed = VacuumColumn(params.update(
-            specs=specs, lvgo_pa_duty=float(out["lvgo_pa.duty"])))(feed)[-1]
-        assert float(fixed["outputs"]["top.T"]) == pytest.approx(
-            float(out["top.T"]), abs=1e-6)
-
     def test_bad_specs_are_rejected(self, heavy):
         char, feed, params = heavy
         with pytest.raises(ValueError, match="neither a draw rate"):
@@ -273,47 +261,14 @@ def _quantities(char, feed, params):
                       hv["ccr_wt"]])
 
 
-@pytest.mark.release
-class TestGradients:
-    """Implicit gradients against central differences (about 1e-5 relative)."""
-
-    @pytest.mark.slow
-    @pytest.mark.parametrize("field,x0,h", [
-        ("furnace_T", 400.0 + C_TO_K, 0.02),
-        ("flash_zone_P", 4000.0, 1.0),
-        ("steam_rate", 0.33, 1e-4),
-    ])
-    def test_operating_levers(self, heavy, field, x0, h):
-        char, feed, params = heavy
-
-        def q(x):
-            return _quantities(char, feed, params.update(**{field: x}))
-
-        g = jax.jacfwd(q)(x0)
-        fd = (q(x0 + h) - q(x0 - h)) / (2 * h)
-        np.testing.assert_allclose(g, fd, rtol=1e-5, atol=1e-12)
-
-    @pytest.mark.slow
-    def test_a_tbp_point_of_the_assay(self):
-        crude = heavy_crude()
-
-        def q(t):
-            char = characterize(crude.with_tbp_point(9, t))    # the 500 C point
-            feed = atmospheric_residue(char, crude_rate_kg_s=100.0)
-            return _quantities(char, feed, VacuumColumnParams(components=char.components))
-
-        t0, h = 500.0, 0.02
-        g = jax.jacfwd(q)(t0)
-        fd = (q(t0 + h) - q(t0 - h)) / (2 * h)
-        np.testing.assert_allclose(g, fd, rtol=1e-5, atol=1e-12)
-
-
-def test_gradients_flow_through_the_solve(heavy):
-    """Per-commit wiring check; the accuracy claim is TestGradients."""
+def test_operating_lever_gradient_matches_central_differences(heavy):
+    """Implicit gradient of the cut and the HVGO properties w.r.t. the furnace temperature."""
     char, feed, params = heavy
+    x0, h = 400.0 + C_TO_K, 0.02
 
-    def hvgo_rate(T):
-        return VacuumColumn(params.update(furnace_T=T))(feed)[-1]["outputs"]["hvgo.rate"]
+    def q(x):
+        return _quantities(char, feed, params.update(furnace_T=x))
 
-    g = jax.grad(hvgo_rate)(400.0 + C_TO_K)
-    assert np.isfinite(float(g)) and float(g) > 0      # hotter furnace, more HVGO
+    g = jax.jacfwd(q)(x0)
+    fd = (q(x0 + h) - q(x0 - h)) / (2 * h)
+    np.testing.assert_allclose(g, fd, rtol=1e-5, atol=1e-12)

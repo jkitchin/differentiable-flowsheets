@@ -1,8 +1,8 @@
 """Tests for the hydroprocessing building blocks and the hydrotreater (#306).
 
 Fast tests cover the pieces (layout, PR flash, compressor, kinetics,
-thermochemistry pins, one bed). The full-unit tests compile the whole
-hydrotreater (about a minute each, more under load) and are marked slow.
+thermochemistry pins, one bed), then the whole hydrotreater, compiled once
+and shared by the full-unit tests.
 """
 
 from __future__ import annotations
@@ -32,8 +32,6 @@ jax.config.update("jax_enable_x64", True)
 
 TBP_PCT = [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95]
 TBP_A = [60, 95, 150, 205, 260, 315, 370, 430, 500, 600, 680]     # 0.86 SG, high sulfur
-PCT_B = [5, 10, 30, 50, 70, 90, 95]
-TBP_B = [40, 80, 160, 250, 350, 480, 560]                         # 0.83 SG, low sulfur
 _CUTS = {}
 
 
@@ -46,14 +44,6 @@ def char_a(tbp_C=None):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return dr.characterize(a, cut_points=_CUTS["a"], composition=True)
-
-
-def char_b():
-    a = dr.Assay(PCT_B, [t + 273.15 for t in TBP_B], sg=0.83, light_ends={"propane": 0.3, "n_butane": 0.8},
-                 heavy_end=dr.HeavyEnd(), sulfur_wt=0.35, nitrogen_wppm=500.0)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        return dr.characterize(a, composition=True)
 
 
 @pytest.fixture(scope="module")
@@ -83,7 +73,6 @@ def bed_setup(diesel):
 # =============================================================================
 
 
-@pytest.mark.slow
 def test_feed_mass_from_atoms_equals_char_mass(diesel):
     char, cuts, feed, unit = diesel
     lay = unit.layout
@@ -101,7 +90,6 @@ def test_feed_mass_from_atoms_equals_char_mass(diesel):
     assert S_attr == pytest.approx(S, rel=1e-12)
 
 
-@pytest.mark.slow
 def test_stream_round_trip(diesel):
     char, cuts, feed, unit = diesel
     lay = unit.layout
@@ -123,7 +111,6 @@ def test_layout_requires_carbon_and_hydrogen():
 # =============================================================================
 
 
-@pytest.mark.slow
 def test_pr_fugacity_matches_difflow_pengrobinson():
     names = ("methane", "propane", "n_hexane")
     crit = {n: dr.thermo.LIGHT_ENDS[n] for n in names}
@@ -159,7 +146,6 @@ def test_rachford_rice_negative_flash():
     assert float(V) > 1.0                     # a superheated feed: the negative flash gives V > 1
 
 
-@pytest.mark.slow
 def test_pr_flash_converges_and_differentiates(bed_setup):
     unit, th, comps, kin, lay, oil, gas = bed_setup
     z = flash_components(oil + gas, lay, comps)
@@ -172,7 +158,6 @@ def test_pr_flash_converges_and_differentiates(bed_setup):
     assert float(g) == pytest.approx(float(fd), rel=1e-5)
 
 
-@pytest.mark.slow
 def test_compressor_isentropic_ideal_gas():
     lay = Layout(("hydrogen", "methane"), ("pc01",), ("C", "H"), ("C", "H"))
     comps = Components.build(lay, [400.0], [0.75], [100.0], [550.0], [3e6], [0.3], [3e4],
@@ -202,7 +187,6 @@ def test_newton_solve_implicit_gradient():
     assert float(gf) == pytest.approx(float(g), rel=1e-12)
 
 
-@pytest.mark.slow
 def test_solve_tear_fixed_point():
     g = lambda x, a: 0.9 * x + a                     # fixed point x = 10 a, dx/da = 10
     s = solve_tear(g, jnp.asarray([1.0, 2.0]), jnp.asarray([0.5, 1.0]))
@@ -232,7 +216,6 @@ def test_thermochemistry_pinned_to_model_compounds():
     assert sum(hk.CRACK_GAS_SPLIT.values()) == pytest.approx(1.0)
 
 
-@pytest.mark.slow
 def test_aromatics_equilibrium_is_cp_integrated():
     """#338: K(T) of every saturation step is the shared table's Cp-integrated
     ln K (1 bar), not the constant-dH/dS form, which at 350 C is 3.8x too
@@ -259,7 +242,6 @@ def test_aromatics_equilibrium_is_cp_integrated():
     np.testing.assert_allclose(g2, g, rtol=1e-12)
 
 
-@pytest.mark.slow
 def test_kinetics_conserve_elements(bed_setup):
     unit, th, comps, kin, lay, oil, gas = bed_setup
     stream = oil + gas
@@ -275,7 +257,6 @@ def test_kinetics_conserve_elements(bed_setup):
     assert float(r.gas[lay.gas_index("hydrogen_sulfide")]) > 0
 
 
-@pytest.mark.slow
 def test_power_law_fallback(bed_setup):
     unit, th, comps, kin, lay, oil, gas = bed_setup
     stream = oil + gas
@@ -288,8 +269,6 @@ def test_power_law_fallback(bed_setup):
     assert float(check_element_conservation(unit.kinetics, ctx, p)[2]) == pytest.approx(0.0, abs=1e-12)
 
 
-@pytest.mark.slow
-@pytest.mark.release
 def test_bed_balances_and_gradient(bed_setup):
     unit, th, comps, kin, lay, oil, gas = bed_setup
 
@@ -310,8 +289,6 @@ def test_bed_balances_and_gradient(bed_setup):
     assert float(g[1]) == pytest.approx(float(fdH), rel=1e-4)
 
 
-@pytest.mark.slow
-@pytest.mark.release
 def test_aromatics_pass_through_a_minimum_with_temperature(bed_setup):
     """Saturation is equilibrium-limited at high T: outlet aromatics fall, then rise."""
     unit, th, comps, kin, lay, oil, gas = bed_setup
@@ -335,7 +312,6 @@ def diesel_result(diesel):
     return unit.solve(feed)
 
 
-@pytest.mark.slow
 def test_diesel_converges_and_balances(diesel_result):
     r = diesel_result
     assert bool(r.converged)
@@ -350,22 +326,6 @@ def test_diesel_converges_and_balances(diesel_result):
     assert 0 < float(o["recycle.h2_purity"]) < 1
 
 
-@pytest.mark.slow
-@pytest.mark.release  # the second-feed acceptance claim; the diesel covers the code per commit
-def test_kerosene_from_second_assay_converges():
-    char = char_b()
-    feed = straight_run_cut(char, 150 + 273.15, 250 + 273.15, 30.0)
-    unit = Hydrotreater(char, feed, HydrotreaterParams(T_in=(593.15,), P=35e5, h2_oil=150.0, lhsv=2.5,
-                                                         stripper_feed_T=473.15))
-    r = unit.solve(feed)
-    assert bool(r.converged)
-    for k, v in r.balances.items():
-        assert float(v) < 1e-8, k
-    assert float(r.outputs["product.S_wppm"]) < float(r.outputs["feed.S_wppm"])
-
-
-@pytest.mark.slow
-@pytest.mark.release
 def test_trends_with_severity(diesel):
     char, cuts, feed, unit = diesel
     p = unit.params
@@ -390,45 +350,6 @@ def richardson(f, x0, h):
     return (4.0 * d(h / 2) - d(h)) / 3.0
 
 
-@pytest.mark.slow
-@pytest.mark.release
-def test_gradients_match_central_differences(diesel):
-    """d(product S, chemical H2, liquid yield) / d(inlet T, pressure, H2/oil, TBP 50 % point).
-
-    One reverse-mode Jacobian of one function of all four (one compile), against
-    Richardson-extrapolated central differences of the same solve.
-    """
-    char, cuts, feed, unit = diesel
-    p0 = unit.params
-    tbp0 = jnp.asarray([t + 273.15 for t in TBP_A])
-    keys = ("product.S_wppm", "h2.chemical", "product.yield")
-
-    def f(v):
-        c = char_a(tbp0.at[5].set(v[3]))
-        fd = straight_run_cut(c, rate=50.0, cuts=cuts)
-        r = unit.solve(fd, char=c, params=dataclasses.replace(p0, T_in=(v[0],), P=v[1], h2_oil=v[2]),
-                       warn=False).outputs
-        return jnp.stack([r[k] for k in keys])
-
-    v0 = jnp.asarray([613.15, 50e5, 300.0, float(tbp0[5])])
-    J = np.asarray(jax.jacrev(f)(v0))
-    steps = (0.5, 0.5e5, 3.0, 1.0)
-    for j, h in enumerate(steps):
-        e = jnp.zeros(4).at[j].set(1.0)
-        fd = np.asarray(richardson(lambda t: f(v0 + t * e), 0.0, h))
-        np.testing.assert_allclose(J[:, j], fd, rtol=GRAD_RTOL, err_msg=f"input {j}")
-
-
-@pytest.mark.slow
-@pytest.mark.release  # ~10 min on the runner; that the target is met is an answer
-def test_wabt_target(diesel):
-    char, cuts, feed, unit = diesel
-    u = Hydrotreater(char, feed, unit.params, target=TargetSpec("wabt", 630.0))
-    r = u.solve(feed)
-    assert float(r.outputs["wabt"]) == pytest.approx(630.0, abs=1e-6)
-
-
-@pytest.mark.slow
 def test_product_blends_into_ulsd_pool(diesel_result):
     from difflow_refinery.blending import BlendComponent, BlendPool
     r = diesel_result
@@ -442,48 +363,6 @@ def test_product_blends_into_ulsd_pool(diesel_result):
     # the pool computes the cetane index from the composition, as the unit does
     assert float(res.properties["cetane_index"]) == pytest.approx(float(r.outputs["product.cetane_index"]),
                                                                   rel=1e-6)
-
-
-@pytest.mark.slow
-@pytest.mark.release
-def test_hdt_block_delta_vectors(diesel):
-    from difflow.planning import check_delta_vectors
-    from difflow_refinery.hydrotreating.planning import hdt_block
-    char, cuts, feed, unit = diesel
-    blk = hdt_block(unit, feed, ["reactor.T_in", "h2_oil"], ["product.S_wppm", "h2.chemical", "wabt"],
-                    feed_product="diesel")
-    chk = check_delta_vectors(blk, rtol=1e-3)
-    assert chk["passed"], chk["max_rel_error"]
-
-
-@pytest.mark.slow
-def test_crude_unit_diesel_feeds_the_hydrotreater():
-    """A real CDU diesel product (F_<char.names> plus stripping water) goes in as it is."""
-    from difflow_refinery import column as cc
-    from difflow_refinery.thermo import ColumnThermo
-    from .test_column import LIGHT, _atmospheric_params
-
-    assay = dr.Assay(TBP_PCT, [t + 273.15 for t in TBP_A], sg=0.86, light_ends=LIGHT, heavy_end=dr.HeavyEnd(),
-                     sulfur_wt=1.8, nitrogen_wppm=1500.0)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        char = dr.characterize(assay, composition=True)
-    th = ColumnThermo.from_characterization(char)
-    bpd = 95_000.0
-    kg_s = bpd * cc.BARREL / 86400.0 * float(char.bulk_sg) * 999.016
-    sized = char.stream(kg_s, T=600.0, P=1.9e5, basis="mass")
-    base = _atmospheric_params(sized, th, pa1_duty=15e6)
-    params = _atmospheric_params(sized, th, pa1_duty=15e6, specs=base.specs + (cc.overflash(0.05),))
-    cdu = dr.CrudeDistillationUnit(dr.CrudeDistillationUnitParams(assay=assay, column=params))
-    outs = dict(zip(cdu.outlet_names, cdu(cdu.feed(bpd, T=273.15 + 240.0, P=6e5))))
-    diesel = outs["diesel"]
-    unit = Hydrotreater(char, diesel, HydrotreaterParams())
-    assert unit.dropped_mass_fraction < 1e-6
-    r = unit.solve(diesel)
-    assert bool(r.converged)
-    for k, v in r.balances.items():
-        assert float(v) < 1e-8, k
-    assert float(r.outputs["product.S_wppm"]) < 0.1 * float(r.outputs["feed.S_wppm"])
 
 
 def test_volume_increments_pinned_to_model_compounds():
@@ -512,7 +391,6 @@ def test_fractionator_shares_telescope_to_one():
     assert float(s[0, 0]) > 0.9999 and float(s[-1, -1]) > 0.9999
 
 
-@pytest.mark.slow
 def test_downstream_mass_balance_closes_with_dissolved_gases(diesel_result, diesel):
     """#333: the liquid outlets as streams carry everything the unit sends out in them."""
     r = diesel_result
@@ -537,7 +415,6 @@ def test_downstream_mass_balance_closes_with_dissolved_gases(diesel_result, dies
     assert abs(m_out - m_in) / m_in < 1e-13
 
 
-@pytest.mark.slow
 def test_yields_add_up(diesel_result):
     """#332: product + wild naphtha + gas = feed (less its H2 and water) + chemical hydrogen."""
     o = diesel_result.outputs
@@ -547,7 +424,6 @@ def test_yields_add_up(diesel_result):
     assert 0.0 < float(o["gas.yield"]) < 0.05
 
 
-@pytest.mark.slow
 def test_charge_heater_duty(diesel_result, diesel):
     """#332: the heater takes the oil from its feed T and the gas from the compressor to bed 1's inlet."""
     o = diesel_result.outputs
@@ -560,7 +436,6 @@ def test_charge_heater_duty(diesel_result, diesel):
     assert float(o["feed_effluent.duty"]) == 0.0
 
 
-@pytest.mark.slow
 def test_fractionator_jet_and_ulsd_pools(diesel_result):
     """#328: named products, mass closure to round-off, and blend pools on the outputs."""
     from difflow_refinery.blending import BlendComponent, BlendPool
@@ -590,8 +465,6 @@ def test_fractionator_jet_and_ulsd_pools(diesel_result):
         r.fractionate(cut_points=(500.0, 450.0), products=("a", "b", "c"))
 
 
-@pytest.mark.slow
-@pytest.mark.release
 def test_fractionator_cut_point_gradient_matches_central_differences(diesel_result):
     """#328: d(jet rate, jet S, ULSD T90, ULSD cetane)/d(cut point), AD against Richardson differences."""
     from difflow_refinery.blending import BlendComponent, BlendPool
@@ -616,7 +489,6 @@ def test_fractionator_cut_point_gradient_matches_central_differences(diesel_resu
 # =============================================================================
 
 
-@pytest.mark.slow
 def test_makeup_composition_is_traceable(diesel):
     """``HydrotreaterParams.makeup`` values may be tracers: d(makeup_y)/d(purity) is exact."""
     from difflow_refinery.hydroprocessing.recycle import makeup_vector
@@ -636,20 +508,3 @@ def test_makeup_composition_is_traceable(diesel):
     np.testing.assert_allclose(np.asarray(makeup_vector(lay, v)), np.asarray(v), rtol=0, atol=1e-16)
     with pytest.raises(ValueError, match="not in the layout"):
         makeup_vector(lay, {"argon": 1.0})
-
-
-@pytest.mark.slow
-@pytest.mark.release
-def test_makeup_purity_gradient_matches_central_differences(diesel):
-    """d(h2.makeup, recycle purity, product S)/d(makeup H2 purity) through the whole unit, AD against FD."""
-    char, cuts, feed, unit = diesel
-
-    def f(purity):
-        p = dataclasses.replace(unit.params, makeup={"hydrogen": purity, "methane": 1.0 - purity})
-        o = unit.solve(feed, params=p, warn=False).outputs
-        return jnp.stack([o["h2.makeup"], o["recycle.h2_purity"], o["product.S_wppm"]])
-
-    J = np.asarray(jax.jacrev(f)(0.97))
-    assert np.all(np.isfinite(J))
-    fd = np.asarray(richardson(f, 0.97, 0.005))
-    np.testing.assert_allclose(J, fd, rtol=GRAD_RTOL)

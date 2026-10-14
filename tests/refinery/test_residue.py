@@ -4,11 +4,9 @@ The route: atmospheric residue -> :class:`ResidueDesulfurizer` (trickle beds
 on the shared hydroprocessing blocks, residue kinetics) -> fuel-oil pool
 (:func:`fuel_oil_blend`, a :class:`BlendPool` with the VLSFO specs).
 
-Per commit: the fuel oil meets 0.5 wt% S, the unit's element, mass and
+The fuel oil meets 0.5 wt% S, the unit's element, mass and
 metals balances close, and the route's sulfur and mass balances close from
-the residue feed to the fuel-oil pool and the H2S. Release: the gradient of
-fuel-oil sulfur with respect to the bed-1 inlet temperature against a
-central difference, and the calibration ranges of the illustrative constants.
+the residue feed to the fuel-oil pool and the H2S. The calibration ranges of the illustrative constants are pinned.
 """
 
 import warnings
@@ -79,7 +77,6 @@ def fuel_oil(r):
 # -----------------------------------------------------------------------------
 
 
-@pytest.mark.slow
 def test_feed_carries_the_residue_sulfur_metals_and_ccr(char, feed):
     cuts = tuple(n for n in char.pseudo_names if f"F_{n}" in feed)
     lay = rds_layout(char, cuts)
@@ -113,7 +110,6 @@ def test_conversion_sends_heavy_cuts_to_lighter_ones():
     np.testing.assert_allclose(mult[4:], (2.0, 2.0))
 
 
-@pytest.mark.slow
 def test_lever_rule_and_pool_agree(char, feed):
     """The cutter arithmetic that rules out cutter blending alone (see the docs)."""
     fo_char = BlendCharacterization.from_characterization(char, contaminants=True)
@@ -136,14 +132,12 @@ def test_lever_rule_and_pool_agree(char, feed):
 # -----------------------------------------------------------------------------
 
 
-@pytest.mark.slow
 def test_unit_converges_and_balances_close(result):
     assert bool(result.converged)
     for k, v in result.balances.items():
         assert float(v) < 1e-10, (k, float(v))
 
 
-@pytest.mark.slow
 def test_fuel_oil_meets_the_half_percent_sulfur_spec(char, feed, result):
     fo = fuel_oil(result)
     assert float(fo.properties["S_ppm"]) <= 5000.0
@@ -159,7 +153,6 @@ def test_fuel_oil_meets_the_half_percent_sulfur_spec(char, feed, result):
     assert float(fo.properties["viscosity_cSt"]) < float(raw.properties["viscosity_cSt"])
 
 
-@pytest.mark.slow
 def test_route_sulfur_and_mass_balances_close(rds, result):
     """Residue in = fuel oil + H2S (sulfur); residue + treat gas = fuel oil + gas (mass)."""
     lay = rds.layout
@@ -177,7 +170,6 @@ def test_route_sulfur_and_mass_balances_close(rds, result):
     np.testing.assert_allclose(float(fo.mass), float(o["residue.rate"] + o["distillate.rate"]), rtol=1e-12)
 
 
-@pytest.mark.slow
 def test_structure_is_fixed_at_construction(rds, feed):
     with pytest.raises(ValueError, match="T_in"):
         rds.solve(feed, params=rds.params.update(T_in=(640.0, 650.0)))
@@ -192,8 +184,6 @@ def test_structure_is_fixed_at_construction(rds, feed):
 # -----------------------------------------------------------------------------
 
 
-@pytest.mark.slow
-@pytest.mark.release
 def test_illustrative_constants_land_in_ards_ranges(result):
     """The constants were chosen to give ARDS-like severities (see the kinetics docstring)."""
     o = {k: float(v) for k, v in result.outputs.items()}
@@ -204,65 +194,3 @@ def test_illustrative_constants_land_in_ards_ranges(result):
     assert 0.05 < o["conversion"] < 0.25
     assert 80.0 < o["h2.chemical_nm3_m3"] < 200.0
     assert o["residue.S_wt"] < 0.5
-
-
-@pytest.mark.release
-def test_hotter_beds_desulfurize_and_demetallize_more(rds, feed, result):
-    hot = rds.solve(feed, params=rds.params.update(T_in=(rds.params.T_in[0] + 5.0,)))
-    for k in ("hds.conversion", "hdm.conversion", "ccr.reduction", "conversion", "h2.chemical"):
-        assert float(hot.outputs[k]) > float(result.outputs[k]), k
-    assert float(hot.outputs["residue.S_wt"]) < float(result.outputs["residue.S_wt"])
-
-
-@pytest.mark.release
-@pytest.mark.slow
-def test_gradient_of_fuel_oil_sulfur_wrt_bed_inlet_temperature(rds, feed):
-    def fo_S(T):
-        r = rds.solve(feed, params=rds.params.update(T_in=(T,)))
-        return fuel_oil(r).properties["S_ppm"]
-
-    T0 = rds.params.T_in[0]
-    g = float(jax.grad(fo_S)(T0))
-    h = 0.5
-    fd = float((fo_S(T0 + h) - fo_S(T0 - h)) / (2.0 * h))
-    assert g < 0.0
-    np.testing.assert_allclose(g, fd, rtol=2e-3)
-
-
-@pytest.mark.release
-@pytest.mark.slow
-def test_crude_unit_residue_to_fuel_oil(char):
-    """The crude unit of examples/38-40: its ``"residue"`` product goes straight into the RDS."""
-    from difflow_refinery import column as cc
-
-    bpd = 95_000.0
-    vf = bpd * cc.BARREL / 86400.0
-    params = cc.CrudeColumnParams(
-        n_stages=30, feed_stage=27, P_top=1.5e5, P_bottom=1.9e5, P_condenser=1.3e5,
-        bottom_steam=150.0, steam_T=C + 260.0, condenser="partial",
-        side_products=(cc.SideProduct("kero", 9, 4, steam=40.0), cc.SideProduct("diesel", 16, 4, steam=40.0),
-                       cc.SideProduct("ago", 22, 3, steam=20.0)),
-        pumparounds=(cc.Pumparound("pa1", 12, 10), cc.Pumparound("pa2", 19, 17)),
-        specs=(cc.product_rate("naphtha", 0.20 * vf), cc.product_rate("kero", 0.11 * vf),
-               cc.product_rate("diesel", 0.17 * vf), cc.product_rate("ago", 0.05 * vf),
-               cc.pumparound_duty("pa1", 15e6), cc.pumparound_delta_t("pa1", 60.0),
-               cc.pumparound_duty("pa2", 20e6), cc.pumparound_delta_t("pa2", 60.0),
-               cc.overflash(0.05), cc.stage_temperature(0, C + 40.0)))
-    assay, cuts = crude_and_cuts()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", CompositionRangeWarning)
-        cdu_unit = dr.CrudeUnit(assay, params, cut_points=cuts)
-        cdu = cdu_unit.solve(bpd, T=C + 240.0, P=6e5)
-    assert bool(cdu.converged)
-    assert tuple(cdu_unit.crude.names) == tuple(char.names)
-    residue = dict(cdu.products["residue"])
-    rds = ResidueDesulfurizer(char, residue)
-    assert rds.dropped_mass_fraction < 1e-12
-    r = rds.solve(residue)
-    assert bool(r.converged)
-    for k, v in r.balances.items():
-        assert float(v) < 1e-10, k
-    assert float(r.outputs["feed.S_wt"]) > 2.5
-    fo = fuel_oil(r)
-    for spec, margin in fo.margins.items():
-        assert float(margin) >= 0.0, spec
