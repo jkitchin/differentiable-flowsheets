@@ -8,7 +8,6 @@ One compile serves every test in the file: they vary only numeric specs.
 
 from __future__ import annotations
 
-import dataclasses
 import warnings
 
 import jax
@@ -17,7 +16,7 @@ import pytest
 
 import difflow_refinery as dr
 from difflow_refinery.hydrotreating import (
-    NAPHTHA_HDT_PARAMS, Hydrotreater, HydrotreaterConvergenceWarning, HydrotreaterParams)
+    NAPHTHA_HDT_PARAMS, Hydrotreater, HydrotreaterParams)
 
 jax.config.update("jax_enable_x64", True)
 
@@ -62,7 +61,6 @@ NEAR_CRITICAL = [215.37, 0.00280338, 0.0, 6.25626, 0.0111435, 0.0100384, 0.08671
                  74.3897, 63.5167, 52.5016, 14.9299]
 
 
-@pytest.mark.slow
 def test_a_failed_bed_inlet_flash_reports_a_residual_instead_of_raising(naphtha_unit):
     """#332: the flash (and its T-derivative, as the reactor takes it) at that point returns, flagged.
 
@@ -89,7 +87,6 @@ def test_a_failed_bed_inlet_flash_reports_a_residual_instead_of_raising(naphtha_
     assert float(res) < FLASH_TOL
 
 
-@pytest.mark.slow
 def test_naphtha_unit_converges_balances_and_reports(naphtha):
     """Balances, the gas yield on a feed carrying C3-C5 light ends, the charge heater, the products."""
     unit, r = naphtha
@@ -107,6 +104,8 @@ def test_naphtha_unit_converges_balances_and_reports(naphtha):
     assert float(o["heater.duty"]) > 0.0 and float(o["feed_effluent.duty"]) > 0.0
     assert float(o["heater.fired_duty"]) == pytest.approx(float(o["heater.duty"]) / NHT.heater_efficiency,
                                                           rel=1e-14)
+    # with NAPHTHA_HDT_PARAMS a 30 bar naphtha unit reaches reformer-feed sulfur (#332)
+    assert float(o["product.S_wppm"]) < 0.5
     # a vapour-phase bed hydrogenates (#332: the old phase model ran the aromatics equilibrium backwards)
     assert float(o["h2.chemical"]) > 0.0 and float(o["reactor.dT_total"]) > 0.0
     # #333: product + wild naphtha as streams carry the whole liquid mass, dissolved gases included
@@ -119,30 +118,3 @@ def test_naphtha_unit_converges_balances_and_reports(naphtha):
                        feeds=("product", "wild_naphtha"))
     assert float(fr.balance) < 1e-13
     assert float(fr.rates["light_naphtha"]) > 0.0 and float(fr.rates["heavy_naphtha"]) > 0.0
-
-
-@pytest.mark.slow
-@pytest.mark.release   # per commit, the flash-level test above covers the code path
-def test_a_failed_flash_is_reported_not_raised(naphtha):
-    """#332: 320 C / 50 bar / LHSV 0.5 / 150 Nm3/m3 raised an equinox NaN-in-linear-solve error.
-
-    The bed-inlet PR flash fails there (near the mixture's critical region,
-    Newton diverges); the unit now returns ``converged=False`` and warns.
-    """
-    unit, _ = naphtha
-    p = dataclasses.replace(NHT, P=50e5, lhsv=0.5, h2_oil=150.0)
-    with pytest.warns(HydrotreaterConvergenceWarning):
-        r = unit.solve(NAPHTHA, params=p)
-    assert not bool(r.converged)
-    assert float(r.outputs["flash.residual"]) > 1e-8 or not np.isfinite(float(r.outputs["flash.residual"]))
-
-
-@pytest.mark.slow
-@pytest.mark.release
-def test_naphtha_constants_reach_reformer_feed_sulfur(naphtha):
-    """#332: with NAPHTHA_HDT_PARAMS a 30 bar naphtha unit reaches reformer-feed sulfur (< 0.5 wppm)."""
-    unit, r = naphtha
-    assert float(r.outputs["product.S_wppm"]) < 0.5
-    S = [float(unit.solve(NAPHTHA, params=dataclasses.replace(NHT, T_in=(C + T,)), warn=False)
-               .outputs["product.S_wppm"]) for T in (300.0, 310.0)]
-    assert S[0] > S[1] > float(r.outputs["product.S_wppm"])

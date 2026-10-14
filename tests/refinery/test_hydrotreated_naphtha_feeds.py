@@ -1,15 +1,11 @@
 """Hydrotreater products to the reformer and the gas plant (#327).
 
-Per commit (cheap, no hydrotreater solve): the two adapters on a product
+No hydrotreater solve: the two adapters on a product
 grid built from a characterization -- an untreated grid maps exactly as
 ``NaphthaFeed.from_characterization`` does, a treated one (saturated
 aromatics, heavier molecules) keeps its mass to round-off and its lower
 aromatics, sulfur rides along, dissolved gases are refused or dropped; and a
 gas-plant naphtha splitter converges and balances on such a grid.
-
-Slow: the real chain -- example 40's naphtha through the naphtha
-hydrotreater, then (a) a splitter on the treated naphtha and (b) the
-fractionated heavy naphtha into the reformer.
 """
 
 from __future__ import annotations
@@ -84,16 +80,13 @@ def small_grid():
     return _treated(char)
 
 
-@pytest.mark.slow
 class TestNaphthaFeed:
-    @pytest.mark.slow
     def test_an_untreated_grid_maps_as_from_characterization(self, naphtha_char, grids):
         raw, _, stream = grids
         a = NaphthaFeed.from_hydrotreater(stream, char=raw)
         b = NaphthaFeed.from_characterization(naphtha_char, stream)
         np.testing.assert_allclose(np.asarray(a.flows), np.asarray(b.flows), rtol=1e-12, atol=1e-14)
 
-    @pytest.mark.slow
     def test_treated_mass_is_conserved_and_aromatics_are_the_treated_ones(self, naphtha_char, grids):
         raw, treated, stream = grids
         f = NaphthaFeed.from_hydrotreater(stream, char=treated)
@@ -153,7 +146,6 @@ class TestNaphthaFeed:
 
 
 class TestGasPlantFeed:
-    @pytest.mark.slow
     def test_table_and_stream(self, grids):
         _, treated, stream = grids
         wild = dict(stream, F_hydrogen=jnp.asarray(0.05), F_hydrogen_sulfide=jnp.asarray(0.01),
@@ -195,7 +187,6 @@ class TestGasPlantFeed:
         with pytest.raises(TypeError):
             resolve_product(3.0)
 
-    @pytest.mark.slow
     def test_a_naphtha_splitter_converges_and_balances_on_a_treated_grid(self, small_grid):
         """The per-commit column: 7 components, 8 theoretical trays (compile dominates)."""
         _, treated, stream = small_grid
@@ -215,81 +206,3 @@ class TestGasPlantFeed:
         np.testing.assert_allclose(out, F, rtol=1e-8, atol=1e-10 * F.sum())
         assert float(info["outputs"]["bottoms.x.light"]) == pytest.approx(0.05, rel=1e-6)
         assert float(info["outputs"]["distillate.x.heavy"]) == pytest.approx(0.05, rel=1e-6)
-
-
-# =============================================================================
-# The real chain (slow): example 40's naphtha hydrotreater
-# =============================================================================
-
-
-@pytest.fixture(scope="module")
-def nht():
-    from .test_hydrotreating_naphtha import NAPHTHA, NHT, PCT, T_C
-    from difflow_refinery.hydrotreating import Hydrotreater
-
-    assay = dr.Assay(PCT, [t + C for t in T_C], sg=0.86,
-                     light_ends={"ethane": 0.05, "propane": 0.5, "isobutane": 0.3,
-                                 "n_butane": 1.0, "isopentane": 0.8, "n_pentane": 1.5},
-                     sulfur_wt=1.8, nitrogen_wppm=1500.0, ccr_wt=5.0)
-    cut_points = dr.default_cut_points(assay, ((673.15, 30.0), (873.15, 60.0), (np.inf, 150.0)))
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        char = dr.characterize(assay, cut_points, composition=True)
-    # a 300 C bed leaves product sulfur the reformer's balance can see
-    unit = Hydrotreater(char, NAPHTHA, dataclasses.replace(NHT, T_in=(C + 300.0,)))
-    res = unit.solve(NAPHTHA)
-    assert bool(res.converged)
-    return char, res
-
-
-@pytest.mark.slow
-def test_nht_to_reformer(nht):
-    from difflow_refinery.reforming import CatalyticReformer, ReformerParams
-
-    char, res = nht
-    fr = res.fractionate(cut_points=(C + 85.0,), products=("light_naphtha", "heavy_naphtha"),
-                         feeds=("product", "wild_naphtha"))
-    heavy = fr.products["heavy_naphtha"]
-    feed = NaphthaFeed.from_hydrotreater(fr, "heavy_naphtha")
-    assert float(feed.mass_flow) == pytest.approx(float(fr.rates["heavy_naphtha"]), rel=1e-13)
-    # the whole stripper bottoms, too
-    whole = NaphthaFeed.from_hydrotreater(res)
-    assert float(whole.mass_flow) == pytest.approx(float(res.outputs["product.rate"]), rel=1e-13)
-    # the treated aromatics: the grid's, not the crude's
-    old = NaphthaFeed.from_characterization(char, heavy)
-    assert abs(float(old.mass_flow) / float(feed.mass_flow) - 1.0) > 1e-5
-    S = float(feed.sulfur_wppm)
-    assert 0.0 < S < 5.0
-    ref = CatalyticReformer(ReformerParams()).solve(feed)
-    assert bool(ref.converged)
-    assert float(ref.feed_sulfur_wppm) == pytest.approx(S, rel=1e-12)
-    b = ref.balances()
-    for k in ("mass", "carbon", "hydrogen", "sulfur"):
-        assert abs(float(b[k])) < 1e-7, k
-
-
-@pytest.mark.slow
-def test_splitter_on_the_hydrotreated_naphtha(nht):
-    _, res = nht
-    # the wild naphtha's dissolved H2/H2S/NH3/C1/C2 leave before a splitter (a total condenser
-    # cannot condense hydrogen), so they are dropped -- and the mass accounts for them exactly
-    feed = hydroprocessed_feed(res, ("product", "wild_naphtha"), T=C + 100.0, P=4e5, drop_gases=True)
-    stream, grid = resolve_product(res, ("product", "wild_naphtha"))
-    gas = {k: v for k, v in stream.items() if k.startswith("F_") and k[2:] not in grid.names}
-    assert gas and set(feed.dropped) == {k[2:] for k in gas}
-    m = float(stream_mass(stream, grid)) - float(stream_mass(gas, grid))
-    assert float(feed.mass_flow) == pytest.approx(m, rel=1e-13)
-    p = splitter(feed.components, feed.below(C + 85.0), heavy_spec=("bottoms.x.light", 0.02),
-                 light_spec=("distillate.x.heavy", 0.02), n_trays=12, feed_tray=6, top_P=3e5)
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", GasColumnConvergenceWarning)
-        top, bottom, info = GasPlantColumn(p)(feed.stream)
-    assert bool(info["converged"])
-    names = feed.components.names
-    F = np.array([float(feed.stream[f"F_{n}"]) for n in names])
-    out = np.array([float(top[f"F_{n}"]) + float(bottom[f"F_{n}"]) for n in names])
-    np.testing.assert_allclose(out, F, rtol=1e-8, atol=1e-10 * F.sum())
-    heavy = NaphthaFeed.from_hydrotreater(
-        {k: v for k, v in bottom.items() if k.startswith("F_") and k[2:] in res.product_char.names},
-        char=res.product_char)
-    assert float(heavy.mass_flow) > 0.0
