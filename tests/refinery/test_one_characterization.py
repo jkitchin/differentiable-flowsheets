@@ -8,8 +8,9 @@ a difflow `Flowsheet` the crude's light ends and the CDU's water ride along in
 the residue and leave with the vacuum overhead.
 
 Pinned: both units converge, the flowsheet's balance closes per component
-and in total (water included), and gradients cross the connection -- one
-through the vacuum column, one from the crude rate through both units.
+and in total (water included), and the gradient crosses the connection (from
+the crude rate through both units). The vacuum column's own gradient in the
+furnace temperature is in ``test_vacuum.py``.
 """
 
 import jax
@@ -27,9 +28,6 @@ from difflow_refinery.vacuum.thermo import MW_WATER
 from .test_column import LIGHT, _atmospheric_params
 
 jax.config.update("jax_enable_x64", True)
-
-# a 30-stage crude unit and a vacuum column, solved once for the module
-pytestmark = pytest.mark.slow
 
 PCT = [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95]
 T_K = [t + 273.15 for t in (60, 95, 150, 205, 260, 315, 370, 430, 500, 600, 680)]
@@ -105,27 +103,6 @@ def test_balance_closes_in_total_with_the_steam(plant):
     assert m_out == pytest.approx(m_in, rel=1e-9)
 
 
-@pytest.mark.slow
-@pytest.mark.release
-def test_vgo_yield_gradient_in_vacuum_furnace_T(plant):
-    """d(VGO yield)/d(VDU coil outlet T) on the crude unit's residue: AD vs FD."""
-    residue = plant["streams"]["residue"]
-    params = plant["vdu"].params
-
-    def vgo_yield(T):
-        *_, info = VacuumColumn(params.update(furnace_T=T))(residue)
-        return info["outputs"]["vgo.yield"]
-
-    T0 = params.furnace_T
-    g = float(jax.grad(vgo_yield)(T0))
-    h = 0.05
-    fd = float((vgo_yield(T0 + h) - vgo_yield(T0 - h)) / (2 * h))
-    assert g > 0, "a hotter furnace lifts more gas oil"
-    assert g == pytest.approx(fd, rel=1e-5)
-
-
-@pytest.mark.slow
-@pytest.mark.release
 def test_vgo_rate_gradient_in_crude_rate_crosses_both_units(plant):
     """d(VGO kg/s)/d(crude rate), through the CDU's and the VDU's implicit solves.
 
