@@ -376,9 +376,9 @@ different act with two costs:
   *is* the one `jax.grad` runs on, and the clip would sit inside the map
   `optx.fixed_point` implicitly differentiates. Wherever a tear flow converges
   to exactly zero — an ordinary species absent from a recycle —
-  `jnp.maximum(x, 0)` contributes a derivative of one half at its kink. On the
-  two-species loop in `tests/test_flowsheet_tear_clip.py` the forward answer
-  stays right and the gradient comes back 1.333 against an exact 2.0.
+  `jnp.maximum(x, 0)` contributes a derivative of one half at its kink. On a
+  two-species loop, measured when this was written, the forward answer
+  stayed right and the gradient came back 1.333 against an exact 2.0.
 
 What the asymmetry used to cost was silence: an accelerated solve on a signed
 tear failed with nothing in the output naming the projection as the reason.
@@ -1108,7 +1108,7 @@ And check a new case is not *rigged* — that no initialization strategy starts
 on the answer it is about to be scored against. `overshoot_loop` originally
 used $g(x) = 3F - 2x$, whose fixed point is $x = F$, exactly the `"feed"`
 guess; that strategy collected two passes on a case it had not solved.
-`TestNoCaseIsRigged` checks every case in the corpus against this.
+No test checks the corpus for this any more; check a new case by hand.
 
 ---
 

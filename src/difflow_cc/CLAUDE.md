@@ -14,9 +14,10 @@ the root CLAUDE.md, which keeps only what every session needs).
 - Economics: CAPEX/OPEX estimation, levelized cost of capture
 - Degradation: Amine oxidation, adsorbent capacity fade, membrane aging
 
-## Invariants (carbon-capture audit; tests in `tests/cc/test_audit_*.py`)
+## Invariants (carbon-capture audit)
 
-Do not weaken them; each has a regression test that failed before the fix.
+Do not weaken them; each fixed a real bug. The regression tests that caught
+them have been removed, so check them by hand before changing.
 
 - Amine solvent streams: `CO2_absorbed` is the TOTAL CO2 in the solvent
   (lean + captured). Absorber writes it, stripper reads/writes it, and a
@@ -27,14 +28,15 @@ Do not weaken them; each has a regression test that failed before the fix.
 - Absorber rich loading is bounded above by the rich-end pinch
   (`equilibrium_loading` at `y_CO2_in * P_absorber`, `T_op`), and by the
   stoichiometric capacity; `rich_loading_limit="stoichiometric"` is the
-  opt-out (#448, `tests/cc/test_amine_rich_pinch_loop.py`).
+  opt-out (#448).
 - `solve_amine_loop` (closed absorber-stripper loop, lean loading as the
   tear, bracketed bisection + implicit derivatives) is a library function,
   not a registered palette operation. On a flowsheet the loop closes through
   `SolventMakeup` (a palette op) into `AmineAbsorber`'s optional
   `solvent_in` (declared in `optional_inlets`): it fixes the circulation,
   without which a conserved-amine recycle has no unique steady state.
-  The flowsheet must agree with `solve_amine_loop` (`tests/cc/test_solvent_makeup.py`).
+  The flowsheet must agree with `solve_amine_loop`; `tests/cc/test_solvent_makeup.py`
+  checks only that the closed loop restores the circulation.
 - Membranes: exact complete-mixing balance per species (no reversed driving
   force, no ad-hoc caps); feed side at the stream pressure unless
   `feed_pressure` is given; `pressure_ratio > 1`.

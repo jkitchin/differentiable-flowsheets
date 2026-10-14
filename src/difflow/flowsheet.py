@@ -812,9 +812,7 @@ class Flowsheet:
                 to exactly zero --- an ordinary species absent from a
                 recycle --- ``jnp.maximum(x, 0)`` contributes a
                 derivative of one half at the kink, and the gradient
-                comes back wrong while the forward pass stays right. See
-                ``tests/test_flowsheet_tear_clip.py::
-                test_clipping_inside_the_map_would_break_the_gradient``.
+                comes back wrong while the forward pass stays right.
 
                 Under ``jax.grad`` or ``jit`` the clip applies only when an
                 acceleration was named (the traced Anderson/Wegstein
@@ -2050,7 +2048,7 @@ class Flowsheet:
         does for a concrete solve, but always as a :class:`ConvergenceWarning`:
         a traced solve never raises, ``on_nonconvergence="raise"`` included,
         because an exception inside a gradient makes the flowsheet
-        undifferentiable (``TestUnderTracing`` records this). The caller
+        undifferentiable. The caller
         compiles no check at all for ``"ignore"``.
         """
         def check(scaled, residual, steps):

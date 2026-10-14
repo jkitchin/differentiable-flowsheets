@@ -130,8 +130,8 @@ A pattern must be a **superset** of the true structure.
 | `"structural"` | flowsheet topology only | needs no `asdex`; warns about the rows it cannot see inside |
 | `"dense"` | no derivation at all | never wrong, and quadratic |
 
-Why this is not a micro-optimization — the `Heater -> CSTR` train from
-`tests/test_solvers_bridge.py`, `N` stages:
+Why this is not a micro-optimization — a `Heater -> CSTR` train of
+`N` stages, measured when this was written:
 
 | N | n | dense Jac | topology Jac | global Jac | dense Hess | topology Hess | global Hess |
 |---|---|-----------|--------------|------------|------------|---------------|-------------|
@@ -268,8 +268,8 @@ more unit of product costs — already negated and keyed by constraint name. The
 sign was measured, not assumed: on the CSTR problem a central difference of the
 converged objective with respect to the bound agrees with `-mult_g` to seven
 digits in **both** directions (`F_B >= 8` gives FD `+0.72494` against `mult_g
-= -0.72494`; `F_A <= 2` gives FD `-0.72494` against `mult_g = +0.72494`). Both
-are pinned in `tests/test_solvers_bridge.py`.
+= -0.72494`; `F_A <= 2` gives FD `-0.72494` against `mult_g = +0.72494`), measured
+when this was written.
 
 ### Differentiating through the whole design problem
 

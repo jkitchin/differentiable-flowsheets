@@ -937,8 +937,7 @@ was *below* D2EHPA's window, so `ExtractStripCircuit` and
 `ExtractScrubStripCircuit` warned on their own defaults --- the check working,
 and a warning nobody could act on without picking a different literal. Every
 such default is now taken from the record; the templates no longer warn on
-themselves. `tests/ree/test_kremser_temp_bugs.py::TestStripperKremser::test_stripping_at_low_pH`
-extrapolates on purpose and is still expected to warn.
+themselves.
 ```
 
 Tests: `tests/ree/test_ph_validity_range.py`.
@@ -1568,7 +1567,7 @@ mis-ranks extractants -- while looking entirely plausible, because every stage
 is internally consistent. It is the most likely way for a closed model to be
 wrong and still pass inspection.
 
-Here is the measurement, from `tests/ree/test_saponification.py`. Both sections
+Here is the measurement, taken when the model was written. Both sections
 get the **same** feed, the same solvent inventory and the same number of base
 equivalents; the only difference is where the base is.
 
@@ -1988,9 +1987,8 @@ a *missing* extractant was caught and a *stale* one was not.
 They are now computed at the record's own declared reference conditions, and
 `EXTRACTANT_CAPACITIES` is a mapping that derives on access rather than a dict
 of numbers. It indexes, iterates and `.items()` exactly as before, so no call
-site changed; what changed is that there is nothing left to hand-sync, and
-`tests/ree/test_capacity_derivation.py` asserts `K_L == D(reference)/q_max` for
-every element of every extractant.
+site changed; what changed is that there is nothing left to hand-sync:
+`K_L == D(reference)/q_max` for every element of every extractant.
 
 That derivation needs a **declared** basis, so every record states one:
 `reference_concentration` for the charge, and `reference_pH` (cation exchange)
@@ -2947,8 +2945,7 @@ free-extractant fraction and hence the extraction factor fall, and more
 Nd leaks past the extraction section into the La raffinate. Strip the
 solvent properly (`stripping_pH=1.5, n_stripping_stages=6`) and the two
 answers coincide to 1e-9: the difference is the residue, not the
-tearing. These are the numbers `tests/ree/test_separation_train.py`
-pins. This example used to run La/Dy on D2EHPA at pH 2.4 / 2.3 / 2.3,
+tearing. These numbers were measured when the example was written. This example used to run La/Dy on D2EHPA at pH 2.4 / 2.3 / 2.3,
 outside D2EHPA's fitted window of [0, 2], where the strip stripped
 nothing; its table predated the #270 refit.
 
@@ -3374,8 +3371,8 @@ The anchors publish totals. Between them they publish exactly one section:
 Avalon's solvent-extraction circuit, "over 1,000 mixer-settlers", at 33 % of
 total capital and US$101 million. difflow's section shares are `ESTIMATED` and
 are not derived from it, but they are held to it -- mixer-settlers alone come
-out below 33 %, the whole SX equipment group about a quarter above, and
-`tests/ree/test_capex_anchors.py` fails if that bracket breaks. The same figure
+out below 33 %, the whole SX equipment group about a quarter above (checked
+when the shares were set; no test checks the bracket any more). The same figure
 prices a mixer-settler at no more than about US$101,000 in 2011 dollars, which
 is worth knowing before accepting any per-stage price.
 

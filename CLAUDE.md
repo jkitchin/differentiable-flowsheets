@@ -17,25 +17,23 @@ say "do not weaken them" for a reason a regression test records.
 ```bash
 pip install -e ".[dev,examples,solvers]"
 
-make test                 # parallel, skips `slow`
-make test-all             # everything
+make test                 # parallel (the -m filter it passes is now a no-op)
 pytest tests/ -v -n auto --dist loadfile   # loadfile keeps a module's JAX cache in one worker
 pytest tests/test_cstr.py -v
-make test-durations       # re-measure .test_durations (CI shards on it)
 make convergence          # recycle-solver pass rate over the hard corpus
 make book                 # Jupyter Book (+ the "Ask" index); make ask-check
 make notebooks            # execute example notebooks
 make gui-build            # rebuild the editor bundle + docs-index.json
 ```
 
-Markers: `slow` is a cost label; `release` marks tests whose subject is the
-*answer* (physics, FD checks, published benchmarks). Both are deselected per
-commit (`make test`, the Tests workflow) and run by the nightly Full suite
-workflow. Per-commit tests check correctness cheaply: one that needs an
-expensive solve gets `slow`, and CI fails a non-slow test whose call runs
-past `DIFFLOW_TEST_BUDGET` (180 s). CI shards by measured duration
-(`pytest-split`): 2 shards per commit, 12 for the full suite (2 workers
-each: 4 heavy JAX files at once exhaust a 16 GB runner).
+Tests check the code, never the physics: per unit, one smoke test (it runs,
+outputs finite, right keys), one `jax.grad`-is-finite test, one test per
+input-validation path, and the simplest form of a fixed crash/NaN regression;
+plus API contracts (Params, flowsheet wiring, serialization, catalog, GUI
+routes, doc links). No comparisons to literature or reference data, no
+rederived answers, no trend or FD-accuracy checks, no `slow`/`release` tiers
+(the markers are registered but unused). CI fails a test whose call runs
+past `DIFFLOW_TEST_BUDGET` (180 s).
 
 ## Layout
 
@@ -97,8 +95,8 @@ params['V']; 'V' in params; params.update(V=2.0)   # ParamsMixin: dict-like, fun
 ## Recycle convergence (`difflow.convergence`; details in `docs/convergence.md`)
 
 - Passing is `converged AND correct`; the solver's flag alone is not a pass.
-- Every `Case.build` returns a FRESH flowsheet; no case may start on its answer
-  (`TestNoCaseIsRigged`); keep a control case that passes; a raise is an
+- Every `Case.build` returns a FRESH flowsheet; no case may start on its answer;
+  keep a control case that passes; a raise is an
   outcome, not an error; every case states its `difficulty`.
 - `tol` tests the STEP, not the error: at loop gain `g` the error is ~`1/(1-g)`
   larger. `solve` measures it (`last_solve_gain`, `last_solve_error_estimate`,
@@ -113,9 +111,8 @@ params['V']; 'V' in params; params.update(V=2.0)   # ParamsMixin: dict-like, fun
   control flow on traced values (`jnp.where`, `lax.cond`); register
   array-holding classes as PyTrees; float64.
 - Type hints on public APIs; NumPy-style docstrings with Args/Returns/Example.
-- Test the forward pass and the gradients (`jax.test_util.check_grads`).
-- Reference data (IDAES/DWSIM JSON in `tests/refinery/reference/`) is
-  REGENERATED when it goes stale, never loosened.
+- Test that the forward pass runs and the gradient is finite; see the test
+  policy under Commands.
 
 ## Adding a unit operation
 

@@ -753,9 +753,7 @@ def estimate_opex(
         n_operators: TOTAL operating headcount across all shifts, passed
             straight to :meth:`OperatingCosts.labor_cost`. The default 6 is
             deliberately the total, not per-shift: multiplying by a shift
-            count here was bug #123, and
-            ``tests/ree/test_ree_moderate_bugs.py::TestBug123_LaborCostOverestimate``
-            pins it. Do not "fix" it back. Six people covering 8000 h/year is
+            count here was bug #123. Do not "fix" it back. Six people covering 8000 h/year is
             a thin crew for continuous operation -- four rotating crews is
             the usual answer -- so pass a larger total if you want realistic
             staffing rather than editing the default.

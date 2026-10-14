@@ -79,8 +79,7 @@ class AmineDegradationParams(ParamsMixin):
 # dominant (Rochelle 2009; Sexton & Rochelle 2011; Davis & Rochelle 2009;
 # Lepaumier 2009: typical amine consumption ~0.3-2 kg/t CO2 captured, i.e.
 # tens of percent of inventory per year). The earlier constants gave ~1900x
-# the inventory per year for MEA. ``tests/cc/test_degradation_rates.py``
-# pins the annual fractions. The rates are per-pathway and not strictly the
+# the inventory per year for MEA. The rates are per-pathway and not strictly the
 # same order, so ``A`` carries different units for each pathway.
 DEGRADATION_KINETICS = {
     "MEA": {

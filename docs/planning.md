@@ -84,8 +84,6 @@ central differences cost exactly $2n$, tracking theory. (The ratio can dip below
 one on a compiled model: XLA prunes parts of the forward program the gradient
 does not need, so the two are not strictly nested.) The ratio between them therefore grows linearly in $n$,
 and planning (horizon x units x decisions) is precisely where $n$ gets large.
-`tests/test_planning.py::TestScaling::test_gradient_cost_ratio_scaling` locks
-this in as a regression test.
 
 Reverse mode is what delivers that scaling, and the mode is chosen from the
 block's shape rather than hard-coded:
@@ -764,7 +762,7 @@ the incumbent already pays for its first-order one.
 
 Where it helps, it helps enormously. Stepping a reduced AC power-flow model the
 whole way from an incumbent generator schedule to the optimal one
-(`tests/power/test_planning_opf.py`):
+(measured when this was written):
 
 | step | true cost | linear error | quadratic error |
 |---|---|---|---|
@@ -806,8 +804,7 @@ nine-bus network the reduced cost Hessian is positive definite at the incumbent
 operating point and strongly indefinite at heavily loaded ones, and the
 Hessians of the voltage and thermal limits are indefinite at nearly every point
 sampled. So the check belongs at the linearisation point each cycle, not once
-at commissioning. `test_definiteness_is_a_property_of_the_point` is the
-regression.
+at commissioning.
 
 Pass a mapping to take the curvature of the *priced objective* rather than of
 one output:
@@ -842,13 +839,13 @@ links.append((f"tank@t{t-1}.level_out", f"tank@t{t}.level_in"))
 ```
 
 `tests/test_planning_multiperiod.py` builds a four-period storage-arbitrage
-model this way — make cheaply, hold, sell into a price spike — and it plans
-correctly, holding inventory back and drawing the tank down into the spike.
+model this way — make cheaply, hold, sell into a price spike. When this was
+written it planned correctly, holding inventory back and drawing the tank down
+into the spike.
 The opening level is not constrained to zero; the first period simply uses a
 block with no `level_in` input, so the model *starts* feasible.
 
-Two traps, both found by building the model rather than by reading the code,
-and both pinned as regressions.
+Two traps, both found by building the model rather than by reading the code.
 
 **`Spec` is elastic by default, and that is wrong for a mass balance.** Elastic
 slack is right for a commercial specification — you can ship off-spec at a cost
@@ -895,7 +892,7 @@ rests on. Constraint rows stay first order.
 
 ### What it buys: termination
 
-On the AC-OPF comparison (`tests/power/test_planning_opf.py`), from the
+On the AC-OPF comparison (measured when this was written), from the
 incumbent generator schedule on case9:
 
 | `model_order` | AC cost | iterations | ended on |

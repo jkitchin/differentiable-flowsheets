@@ -202,8 +202,6 @@ nowhere near the optimum. The augmented Lagrangian absorbs the constraint
 multiplier into `lambda` instead of into the weight, so `rho` stays at its
 modest starting value, gradients stay the size of the multiplier, and the
 converged point is the exactly constrained one.
-`tests/test_stochastic.py::TestSolve::test_a_growing_penalty_would_have_frozen_here`
-is the regression test.
 
 ### Everything is rescaled, and the rescaling is exact
 

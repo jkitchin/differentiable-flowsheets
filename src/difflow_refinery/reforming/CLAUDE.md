@@ -29,4 +29,4 @@ the root CLAUDE.md, which keeps only what every session needs).
   #306's shared module later.
 
 Docs: `docs/unit-operations-refinery.md` (Catalytic reforming). Tests:
-`tests/refinery/test_reforming.py` (flowsheet tests `slow`).
+`tests/refinery/test_reforming.py`.

@@ -558,7 +558,7 @@ def _solve_T(fn, target, T0, n_iter=12):
     Newton step divided by zero, the clip bounced ``T`` between half and
     twice its value, and the answer was the single final step -- 1.3 K off
     the isentropic temperature and 3.6 % off the stage power on the DWSIM
-    case (``tests/refinery/test_dwsim_gasplant.py``)."""
+    case."""
     Ts = jax.lax.stop_gradient(T0)
     tg = jax.lax.stop_gradient(target)
     fs = lambda T: jax.lax.stop_gradient(fn(T))  # noqa: E731

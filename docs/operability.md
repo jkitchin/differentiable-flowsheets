@@ -78,7 +78,7 @@ operability screen: 2 outputs, 2 inputs, 1 disturbances
 ```
 
 `lambda_11 = 35.1` and `cond(G) = 141.7` are the numbers quoted for this column
-in the reference; `tests/test_operability.py` pins both.
+in the reference, and difflow reproduced both when this was written.
 
 ## Scaling comes first
 
@@ -294,9 +294,9 @@ its own: the obvious pairing is *sign-reversed* under closed loop and must be
 swapped, and a 1 mol/s feed excursion cannot be rejected with ±10 K on the two
 temperatures. Both are conclusions about the flowsheet, not about a controller.
 
-These gains are verified against central differences through the inner solves in
-`tests/test_operability.py::test_gain_matrix_matches_central_differences` — the
-AD Jacobian and a perturbation study agree to better than 1e-6 relative.
+When this was written, these gains were compared with central differences through
+the inner solves: the AD Jacobian and a perturbation study agreed to better than
+1e-6 relative.
 
 ## Inside a design loop
 
