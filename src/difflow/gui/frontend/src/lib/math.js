@@ -1,9 +1,9 @@
 /**
  * The `equations` a unit declares, rendered.
  *
- * KaTeX is bundled rather than pulled from a CDN: `publish.py` has a
- * `test_is_self_contained` that forbids an external `src=`, and the
- * editor is meant to work on a laptop with no network.
+ * KaTeX is bundled rather than pulled from a CDN: a published page must
+ * not load an external `src=`, and the editor is meant to work on a
+ * laptop with no network.
  *
  * It renders to **MathML**, not to KaTeX's own HTML. The HTML output is
  * laid out against KaTeX's fonts and looks wrong without them, which

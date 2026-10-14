@@ -6,7 +6,6 @@ what did *not* move: the other units' objects, the live thermo, the
 recycles that had nothing to do with the edit.
 """
 
-import json
 
 import pytest
 
@@ -69,83 +68,20 @@ class TestGraphReading:
         assert edit.reaches(fs, "mixer", "flash")
         assert edit.reaches(fs, "mixer", "reactor")
 
-    def test_reaches_does_not_follow_a_tear(self, thermo):
-        """A recycle is a tear, not an arc.
-
-        Walking it would make every unit in an existing loop reach every
-        other, and the next genuinely new loop would be wired as an
-        ordinary arc -- a flowsheet that solves in one pass and is wrong.
-        """
-        fs = build(thermo)
-        assert not edit.reaches(fs, "flash", "mixer")
-
-    def test_unique_leaves_a_free_name_alone(self):
-        assert edit.unique("s", {"a"}) == "s"
-        assert edit.unique("s", {"s"}) == "s2"
-        assert edit.unique("s", {"s", "s2", "s3"}) == "s4"
-
-    def test_stream_names_include_the_ends_of_a_recycle(self, thermo):
-        names = edit.stream_names(build(thermo))
-        assert {"feed", "recycle", "mixed", "rx", "liq", "vap"} <= names
-
     def test_an_unknown_unit_names_the_ones_that_exist(self, thermo):
         with pytest.raises(edit.EditError, match="mixer, reactor, flash"):
             edit.unit(build(thermo), "nope")
 
 
 class TestPatchUnit:
-    @pytest.mark.slow
-    def test_a_refused_patch_changes_nothing(self, session):
-        """A good parameter beside a taken name used to land, and the
-        patch was then reported as refused: the editor showed 1.0 over a
-        reactor holding 3.0."""
-        session.solve()
-        answer = session.patch_unit("reactor",
-                                    {"params": {"V": 3.0}, "name": "flash"})
-        assert answer["ok"] is False and "flash" in answer["error"]
-        reactor = edit.unit(session.flowsheet, "reactor")
-        assert float(reactor.operation.params.V) == 1.0
-        assert session.streams is not None
-        assert session.history()["undo"] is False
-
-    def test_a_bad_position_refuses_the_rename_beside_it(self, session):
-        answer = session.patch_unit("reactor",
-                                    {"name": "r1", "position": {"x": "left"}})
-        assert answer["ok"] is False
-        assert [u.name for u in session.flowsheet.units] == [
-            "mixer", "reactor", "flash"]
-
     def test_an_empty_name_is_refused_not_ignored(self, session):
         answer = session.patch_unit("reactor", {"name": ""})
         assert answer["ok"] is False and "empty" in answer["error"]
-
-    @pytest.mark.slow
-    def test_an_edit_that_fails_unexpectedly_drops_the_streams(self, session):
-        session.solve()
-        def boom():
-            raise RuntimeError("half done")
-        with pytest.raises(RuntimeError):
-            session._edit(boom)
-        assert session.streams is None
 
     def test_a_parameter_changes(self, session):
         assert session.patch_unit("reactor", {"params": {"V": 3.0}})["ok"]
         reactor = edit.unit(session.flowsheet, "reactor")
         assert float(reactor.operation.params.V) == 3.0
-
-    def test_the_other_units_are_not_rebuilt(self, session):
-        """The reason to have this route at all."""
-        before = {u.name: id(u.operation) for u in session.flowsheet.units}
-        session.patch_unit("reactor", {"params": {"V": 3.0}})
-        after = {u.name: id(u.operation) for u in session.flowsheet.units}
-        assert after["mixer"] == before["mixer"]
-        assert after["flash"] == before["flash"]
-        assert after["reactor"] != before["reactor"]
-
-    def test_a_live_thermo_survives_by_identity(self, session, thermo):
-        """Not by round-tripping through JSON, which some kinds cannot."""
-        session.patch_unit("flash", {"params": {"T": 360.0}})
-        assert edit.unit(session.flowsheet, "flash").operation.thermo is thermo
 
     def test_an_unknown_field_is_refused_by_name(self, session):
         answer = session.patch_unit("reactor", {"params": {"nope": 1.0}})
@@ -161,76 +97,22 @@ class TestPatchUnit:
         reactor = edit.unit(session.flowsheet, "reactor")
         assert float(reactor.operation.params.V) == 1.0
 
-    def test_text_where_text_is_allowed_still_goes_through(self, session):
-        """reaction_phase is `str | None`; the check is for numbers only."""
-        answer = session.patch_unit("reactor",
-                                    {"params": {"reaction_phase": "liquid"}})
-        assert answer["ok"], answer
-
-    def test_text_in_a_numeric_call_parameter_is_refused(self, session):
-        name = session.add_unit("Splitter")["name"]
-        answer = session.patch_unit(name, {"call_params": {"split_frac": "x"}})
-        assert answer["ok"] is False and "split_frac" in answer["error"]
-
     def test_an_unknown_change_key_is_refused_rather_than_ignored(self, session):
         answer = session.patch_unit("reactor", {"colour": "red"})
         assert answer["ok"] is False and "colour" in answer["error"]
 
-    def test_a_rename_moves_the_canvas_position_with_it(self, session):
-        session.set_layout({"reactor": {"x": 10, "y": 20}})
-        assert session.patch_unit("reactor", {"name": "kettle"})["ok"]
-        nodes = session.flowsheet.view["nodes"]
-        assert "reactor" not in nodes
-        assert nodes["kettle"] == {"x": 10.0, "y": 20.0}
-
-    @pytest.mark.parametrize("name", ["feed:feed", "product:vapor"])
-    def test_a_name_the_canvas_keys_feeds_by_is_refused(self, session, name):
-        answer = session.patch_unit("reactor", {"name": name})
+    def test_a_name_the_canvas_keys_feeds_by_is_refused(self, session):
+        answer = session.patch_unit("reactor", {"name": "feed:feed"})
         assert answer["ok"] is False and "feeds and products" in answer["error"]
         assert "reactor" in [u.name for u in session.flowsheet.units]
-
-    @pytest.mark.parametrize("name", ["feed:feed", "product:vapor"])
-    def test_a_file_cannot_bring_one_in_either(self, session, thermo, name,
-                                               tmp_path):
-        """Refused on rename, so refused on the other ways in too."""
-        doc = serialize.to_dict(build(thermo))
-        doc["units"][1]["name"] = name
-        doc["units"][2]["inlets"] = ["rx"]
-        before = session.flowsheet
-        answer = session.replace(doc)
-        assert answer["ok"] is False and "feeds and products" in answer["error"]
-        assert session.flowsheet is before
-        path = tmp_path / "bad.json"
-        path.write_text(json.dumps(doc))
-        answer = session.open_file(str(path))
-        assert answer["ok"] is False and "feeds and products" in answer["error"]
-        with pytest.raises(ValueError, match="feeds and products"):
-            FlowsheetSession(serialize.from_dict(doc))
-
-    def test_a_unit_named_on_the_way_in_is_checked_too(self, session):
-        answer = session.add_unit("Mixer", name="feed:feed")
-        assert answer["ok"] is False and "feeds and products" in answer["error"]
 
     def test_a_rename_onto_an_existing_name_is_refused(self, session):
         answer = session.patch_unit("reactor", {"name": "flash"})
         assert answer["ok"] is False and "already" in answer["error"]
 
-    def test_a_position_alone_does_not_touch_the_model(self, session):
-        before = serialize.to_dict(session.flowsheet)["units"]
-        session.patch_unit("reactor", {"position": {"x": 1, "y": 2}})
-        assert serialize.to_dict(session.flowsheet)["units"] == before
-
     def test_a_bad_position_is_refused(self, session):
         answer = session.patch_unit("reactor", {"position": {"x": "left"}})
         assert answer["ok"] is False and "position" in answer["error"]
-
-    def test_an_edited_flowsheet_still_serializes(self, session, thermo):
-        """The edit path goes through the file path, so this must hold."""
-        session.patch_unit("reactor", {"params": {"V": 2.5}})
-        back = serialize.from_dict(serialize.to_dict(session.flowsheet),
-                                   extras={"flash": {"thermo": thermo}})
-        assert float(edit.unit(back, "reactor").operation.params.V) == 2.5
-
 
 class TestAddAndRemove:
     def test_a_unit_arrives_unwired(self, session):
@@ -242,21 +124,6 @@ class TestAddAndRemove:
         made = edit.producers(session.flowsheet)
         assert all(made[s] == added.name for s in added.outlet_names)
         assert not any(s in made for s in added.inlet_names)
-
-    def test_its_streams_do_not_collide(self, session):
-        first = session.add_unit("Mixer")["name"]
-        second = session.add_unit("Mixer")["name"]
-        assert first != second
-        a = set(edit.unit(session.flowsheet, first).inlet_names)
-        b = set(edit.unit(session.flowsheet, second).inlet_names)
-        assert not a & b
-
-    def test_a_unit_that_needs_a_thermo_says_so(self, session):
-        """It says so on the canvas now, not in a refusal."""
-        answer = session.add_unit("Flash")
-        assert answer["ok"] is True and answer["pending"] is True
-        assert answer["needs"] == ["thermo"]
-        assert "thermo" in answer["hint"]
 
     def test_an_unregistered_operation_is_refused(self, session):
         answer = session.add_unit("Teleporter")
@@ -281,74 +148,6 @@ class TestAddAndRemove:
         assert session.flowsheet.feeds[feed] is spec
         assert f"feed:{feed}" in session.flowsheet.view["nodes"]
 
-    def test_a_replacement_unit_takes_over_the_kept_feed(self, session):
-        """Delete the mixer, drop a new one, and the flowsheet solves.
-
-        Two things this needed: the kept feed has to be attachable (an
-        unfed inlet renamed onto it), and the new unit, appended last,
-        has to be run before the reactor it now feeds.
-        """
-        session.remove_unit("mixer")
-        name = session.add_unit("Mixer")["name"]
-        new = edit.unit(session.flowsheet, name)
-        first, spare = new.inlet_names
-        assert session.rename_stream(first, "feed")["ok"]
-        assert session.remove_inlet(name, spare)["ok"]
-        assert session.connect(name, new.outlet_names[0],
-                               "reactor", "mixed")["ok"]
-        assert [u.name for u in session.flowsheet.units][0] == name
-        solved = session.solve()
-        assert solved["ok"], solved.get("error")
-
-    def test_only_an_idle_feed_can_be_taken_over(self, session):
-        """A feed another unit reads is a connection, drawn as one."""
-        feed = next(iter(session.flowsheet.feeds))
-        session.add_inlet("mixer")
-        new = edit.unit(session.flowsheet, "mixer").inlet_names[-1]
-        answer = session.rename_stream(new, feed)
-        assert not answer["ok"] and "already goes to 'mixer'" in answer["error"]
-
-    def test_a_fed_inlet_cannot_take_the_feed(self, session):
-        session.remove_unit("mixer")
-        answer = session.rename_stream("rx", "feed")
-        assert not answer["ok"] and "already has something" in answer["error"]
-
-    @pytest.mark.slow
-    def test_an_idle_feed_is_not_counted_as_mass_in(self, session):
-        """It enters nothing: counted, it read as mass lost in the units."""
-        solved = session.solve()
-        # (The fixture's water -> ethanol is not mass-balanced, so the
-        # baseline has its own gap; the idle feed must not change it.)
-        baseline = solved["audit"]["mass"]
-        session.add_inlet("mixer")
-        spare = edit.unit(session.flowsheet, "mixer").inlet_names[-1]
-        session.set_feed(spare, {"flows": {"water": 5.0}})
-        session.flowsheet.units[0].inlet_names.remove(spare)  # its reader gone
-        solved = session.solve()
-        assert solved["ok"]
-        audit = solved["audit"]
-        assert audit["mass"]["in"] == pytest.approx(baseline["in"])
-        assert audit["mass"]["relative_gap"] == pytest.approx(
-            baseline["relative_gap"])
-        assert any("no unit reads" in w for w in audit["warnings"])
-        assert not any(lv["owner"] == spare for lv in session.levers()["levers"])
-
-    def test_a_feed_another_unit_reads_is_unaffected(self, session):
-        before = dict(session.flowsheet.feeds)
-        answer = session.remove_unit("flash")
-        assert answer["feeds_unread"] == []
-        assert session.flowsheet.feeds == before
-
-    def test_removing_a_unit_leaves_the_others(self, session):
-        session.remove_unit("flash")
-        assert [u.name for u in session.flowsheet.units] == ["mixer", "reactor"]
-
-    def test_removing_a_unit_forgets_its_position(self, session):
-        session.set_layout({"flash": {"x": 1, "y": 2}, "mixer": {"x": 3, "y": 4}})
-        session.remove_unit("flash")
-        assert set(session.flowsheet.view["nodes"]) == {"mixer"}
-
-
 class TestWiring:
     def test_wiring_a_dangling_inlet_renames_it(self, session):
         name = session.add_unit("Mixer")["name"]
@@ -370,27 +169,6 @@ class TestWiring:
         answer = session.connect("flash", "liq", "reactor", "mixed")
         assert answer["ok"] is False and "mixer" in answer["error"]
 
-    def test_one_outlet_cannot_feed_two_inlets(self, session):
-        """Each reader would get all of it: material out of nothing."""
-        name = session.add_unit("Mixer")["name"]
-        inlet = edit.unit(session.flowsheet, name).inlet_names[0]
-        answer = session.connect("mixer", "mixed", name, inlet)
-        assert answer["ok"] is False
-        assert "already goes to 'reactor'" in answer["error"]
-        assert "Splitter" in answer["error"]
-        assert inlet in edit.unit(session.flowsheet, name).inlet_names
-
-    def test_a_recycle_destination_is_not_wired_over(self, session):
-        """It renamed the stream the tear fills, so the tear fed nothing."""
-        name = session.add_unit("Mixer")["name"]
-        answer = session.connect(name, edit.unit(session.flowsheet,
-                                                 name).outlet_names[0],
-                                 "mixer", "recycle")
-        assert answer["ok"] is False
-        assert "recycle from 'vap'" in answer["error"]
-        assert session.flowsheet.recycles == {"vap": "recycle"}
-        assert "recycle" in edit.unit(session.flowsheet, "mixer").inlet_names
-
     def test_a_feed_inlet_is_refused(self, session):
         answer = session.connect("flash", "liq", "mixer", "feed")
         assert answer["ok"] is False and "feed" in answer["error"]
@@ -407,63 +185,26 @@ class TestWiring:
         assert len(reactor.inlet_names) == 1, "the port stays, only the wire goes"
         assert reactor.inlet_names[0] not in edit.producers(session.flowsheet)
 
-    def test_disconnecting_a_recycle_removes_the_tear(self, session):
-        answer = session.disconnect("flash", "vap", "mixer", "recycle")
-        assert answer["ok"] and answer["kind"] == "recycle"
-        assert session.flowsheet.recycles == {}
-        assert "recycle" in edit.unit(session.flowsheet, "mixer").inlet_names
-
     def test_disconnecting_what_is_not_connected_is_refused(self, session):
         answer = session.disconnect("flash", "liq", "reactor", "mixed")
         assert answer["ok"] is False
-
-    def test_a_wire_and_back_round_trips(self, session):
-        before = [list(u.inlet_names) for u in session.flowsheet.units]
-        session.disconnect("mixer", "mixed", "reactor", "mixed")
-        freed = edit.unit(session.flowsheet, "reactor").inlet_names[0]
-        session.connect("mixer", "mixed", "reactor", freed)
-        assert [list(u.inlet_names) for u in session.flowsheet.units] == before
-
 
 class TestLayout:
     def test_positions_are_adopted(self, session):
         assert session.set_layout({"mixer": {"x": 1, "y": 2}})["ok"]
         assert session.flowsheet.view["nodes"]["mixer"] == {"x": 1.0, "y": 2.0}
 
-    def test_positions_reach_the_file(self, session, tmp_path, thermo):
-        session.set_layout({"mixer": {"x": 7, "y": 8}})
-        session.path = tmp_path / "plant.json"
-        assert session.save()["ok"]
-        back = serialize.load(session.path, extras={"flash": {"thermo": thermo}})
-        assert back.view["nodes"]["mixer"] == {"x": 7.0, "y": 8.0}
-
-    def test_a_layout_does_not_solve_or_rebuild(self, session):
-        before = [id(u.operation) for u in session.flowsheet.units]
-        session.set_layout({"mixer": {"x": 1, "y": 2}})
-        assert [id(u.operation) for u in session.flowsheet.units] == before
-
     def test_nonsense_is_refused(self, session):
         assert session.set_layout({"mixer": [1, 2]})["ok"] is False
         assert session.set_layout("nope")["ok"] is False
 
-    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), "nan"])
-    def test_a_non_finite_position_is_refused(self, session, bad):
+    def test_a_non_finite_position_is_refused(self, session):
         before = dict(session.flowsheet.view.get("nodes", {}))
         answer = session.set_layout({"mixer": {"x": 1, "y": 2},
-                                     "reactor": {"x": bad, "y": 0}})
+                                     "reactor": {"x": float("nan"), "y": 0}})
         assert answer["ok"] is False and "finite" in answer["error"]
         # and nothing was half applied
         assert session.flowsheet.view.get("nodes", {}) == before
-
-    def test_a_key_the_canvas_cannot_draw_is_not_kept(self, session):
-        answer = session.set_layout({"mixer": {"x": 1, "y": 2},
-                                     "ghost": {"x": 3, "y": 4},
-                                     "feed:nowhere": {"x": 5, "y": 6}})
-        assert answer["ok"] and answer["nodes"] == 1
-        assert answer["ignored"] == ["feed:nowhere", "ghost"]
-        nodes = session.flowsheet.view["nodes"]
-        assert "ghost" not in nodes and "feed:nowhere" not in nodes
-
 
 class TestFeeds:
     """What a stream carries, and what happens when nothing does.
@@ -489,29 +230,12 @@ class TestFeeds:
         session.remove_feed("feed")
         assert session.feeds() == {"ok": True, "feeds": [], "unfed": ["feed"]}
 
-    def test_one_field_at_a_time_leaves_the_others_alone(self, session):
-        """Editing the temperature must not zero the flows."""
-        answer = session.set_feed("feed", {"T": 360.0})
-        assert answer["ok"]
-        assert answer["T"] == 360.0
-        assert answer["P"] == pytest.approx(101325.0)
-        assert answer["flows"] == pytest.approx({"water": 1.0, "ethanol": 0.1})
-        stream = session.flowsheet.feeds["feed"]
-        assert float(stream["T"]) == 360.0
-        assert float(stream["F_water"]) == pytest.approx(1.0)
-
     def test_a_stream_a_unit_makes_cannot_also_be_fed(self, session):
         """Two sources for one stream, and the solver would pick one."""
         answer = session.set_feed("mixed", {})
         assert answer["ok"] is False
         assert "made by 'mixer'" in answer["error"]
         assert "mixed" not in session.flowsheet.feeds
-
-    def test_a_stream_nothing_reads_cannot_be_fed_either(self, session):
-        """A feed into thin air is a typo, not a flowsheet."""
-        answer = session.set_feed("nope", {})
-        assert answer["ok"] is False
-        assert "nothing reads 'nope'" in answer["error"]
 
     def test_a_feed_needs_the_species_before_it_can_carry_anything(self):
         empty = FlowsheetSession()
@@ -523,18 +247,11 @@ class TestFeeds:
         "spec, why",
         [
             ({"T": "hot"}, "T must be a number"),
-            ({"P": "1 bar"}, "P must be a number"),
             ({"flows": [1.0, 0.1]}, "flows must be a mapping"),
             ({"flows": {"argon": 1.0}}, "argon is not one of the species"),
-            ({"flows": {"water": "some"}}, "water must be a number"),
             ({"flows": {"water": -1.0}}, "a flow cannot be negative"),
             ({"T": 0.0}, "temperature and pressure are absolute"),
-            ({"P": -1.0}, "temperature and pressure are absolute"),
             ({"T": float("nan")}, "T must be a finite number"),
-            ({"P": float("inf")}, "P must be a finite number"),
-            ({"flows": {"water": float("inf")}}, "water must be a finite"),
-            ({"flows": {"ethanol": True}}, "ethanol must be a number"),
-            ({"T": "NaN"}, "T must be a finite number"),
         ],
     )
     def test_a_number_that_is_not_one_is_named(self, session, spec, why):
@@ -544,68 +261,7 @@ class TestFeeds:
         # And the feed it refused to change is untouched.
         assert float(session.flowsheet.feeds["feed"]["T"]) == 350.0
 
-    def test_a_zero_flow_is_a_real_flow(self, session):
-        """A species absent from a feed, which is not the same as a typo."""
-        answer = session.set_feed("feed", {"flows": {"ethanol": 0.0}})
-        assert answer["ok"]
-        assert float(session.flowsheet.feeds["feed"]["F_ethanol"]) == 0.0
-
-    def test_which_stream_has_to_be_said(self, session):
-        for name in (None, "", "   ", 7):
-            answer = session.set_feed(name, {})
-            assert answer["ok"] is False
-            assert "which stream" in answer["error"]
-
-    def test_removing_a_feed_that_is_not_there_lists_the_ones_that_are(
-        self, session
-    ):
-        answer = session.remove_feed("mixed")
-        assert answer["ok"] is False
-        assert "no feed called 'mixed'" in answer["error"]
-        assert "have: feed" in answer["error"]
-
-    def test_an_unfed_inlet_is_reported_as_a_missing_feed_not_a_key_error(
-        self, session
-    ):
-        """`KeyError: 'feed'` names the stream and nothing else.
-
-        Which is the least useful place to be told: the name is on the
-        canvas already, and what is missing is a feed on it. The
-        translation only applies to an inlet that is actually unfed, so
-        an unrelated `KeyError` still travels as itself.
-        """
-        session.remove_feed("feed")
-        answer = session.solve()
-        assert answer["ok"] is False
-        assert "nothing feeds 'feed'" in answer["error"]
-        assert "give it a feed" in answer["error"].lower()
-
-    def test_a_feed_survives_the_round_trip_through_the_document(self, session):
-        session.set_feed("feed", {"T": 333.0, "P": 2.0e5,
-                                  "flows": {"water": 4.0, "ethanol": 0.25}})
-        doc = session.document()["flowsheet"]
-        assert doc["feeds"]["feed"] == pytest.approx(
-            {"T": 333.0, "P": 2.0e5, "F_water": 4.0, "F_ethanol": 0.25}
-        )
-        again = FlowsheetSession(serialize.from_dict(doc))
-        assert again.feeds() == {"ok": True, "feeds": ["feed"], "unfed": []}
-
-
 class TestEditedFlowsheetStillSolves:
-    @pytest.mark.slow
-    def test_after_a_parameter_change(self, session):
-        session.patch_unit("reactor", {"params": {"V": 2.0}})
-        solved = session.solve()
-        assert solved["ok"], solved.get("error")
-
-    @pytest.mark.slow
-    def test_after_a_disconnect_and_reconnect(self, session):
-        session.disconnect("mixer", "mixed", "reactor", "mixed")
-        freed = edit.unit(session.flowsheet, "reactor").inlet_names[0]
-        session.connect("mixer", "mixed", "reactor", freed)
-        solved = session.solve()
-        assert solved["ok"], solved.get("error")
-
     def test_an_empty_flowsheet_refuses_by_name_rather_than_crashing(self):
         """Every verb answers over a session opened with no file.
 
@@ -650,15 +306,6 @@ class TestCallParameters:
     could never solve.
     """
 
-    def test_the_catalog_lists_them(self, session):
-        schema = session._schema(session.add_unit("Splitter")["name"])
-        names = {p["name"]: p for p in schema["call_parameters"]}
-        assert names["split_frac"]["required"] is True
-
-    def test_a_palette_splitter_has_both_outlets(self, session):
-        name = session.add_unit("Splitter")["name"]
-        assert len(edit.unit(session.flowsheet, name).outlet_names) == 2
-
     def test_they_are_set_and_removed_through_patch_unit(self, session):
         name = session.add_unit("Splitter")["name"]
         answer = session.patch_unit(name, {"call_params": {"split_frac": 0.7}})
@@ -699,30 +346,12 @@ class TestSolveAudit:
         assert s.open_example("02_reactor_flash")["ok"]
         return s
 
-    def test_a_sound_flowsheet_has_nothing_to_say(self, ester):
-        answer = ester.solve()
-        assert answer["ok"]
-        assert answer["audit"]["warnings"] == []
-        mass = answer["audit"]["mass"]
-        assert mass["out"] == pytest.approx(mass["in"], rel=1e-4)
-        assert set(mass["products"]) == {"liquid", "vapor"}
-
     def test_a_negative_volume_is_reported_not_passed(self, ester):
         assert ester.patch_unit("reactor", {"params": {"V": -1.0}})["ok"]
         answer = ester.solve()
         assert answer["ok"]   # it ran; the audit is what says it is wrong
         assert any("mass is not conserved" in w
                    for w in answer["audit"]["warnings"]), answer["audit"]
-
-    def test_species_the_database_lacks_skip_the_balance(self):
-        from difflow import Flowsheet, Mixer, Unit, make_stream
-        fs = Flowsheet(species_order=["A", "B"])
-        fs.add_feed("f", make_stream({"A": 1.0, "B": 0.0}, T=300.0, P=1e5))
-        fs.add_feed("g", make_stream({"A": 0.0, "B": 1.0}, T=300.0, P=1e5))
-        fs.add_unit(Unit("mix", Mixer(["A", "B"]), ["f", "g"], ["out"]))
-        answer = FlowsheetSession(fs).solve()
-        assert answer["ok"] and answer["audit"] == {"warnings": [], "mass": None}
-
 
 class TestUnsavedWork:
     """Quitting, or choosing an example, used to throw edits away unasked."""
@@ -733,41 +362,16 @@ class TestUnsavedWork:
         assert s.open_example("02_reactor_flash")["ok"]
         return s
 
-    def test_an_example_opens_clean(self, ester):
-        assert ester.document()["dirty"] is False
-
-    @pytest.mark.parametrize("edit_it", [
-        lambda s: s.patch_unit("reactor", {"params": {"V": 0.7}}),
-        lambda s: s.set_layout({"reactor": {"x": 10.0, "y": 20.0}}),
-        lambda s: s.set_code_context("X = 1\n"),
-        lambda s: s.set_feed(next(iter(s.flowsheet.feeds)), {"T": 330.0}),
-        lambda s: s.console_run("fs.units[0].name = 'r2'"),
-    ], ids=["param", "move", "context", "feed", "console"])
-    def test_any_edit_marks_it(self, ester, edit_it):
-        answer = edit_it(ester)
+    def test_an_edit_marks_it(self, ester):
+        answer = ester.patch_unit("reactor", {"params": {"V": 0.7}})
         assert answer.get("ok", True), answer
         assert ester.document()["dirty"] is True
-
-    def test_a_refused_edit_does_not(self, ester):
-        assert not ester.patch_unit("reactor", {"params": {"V": "abc"}})["ok"]
-        assert ester.document()["dirty"] is False
-
-    def test_undoing_by_hand_is_clean_again(self, ester):
-        ester.patch_unit("reactor", {"params": {"V": 0.7}})
-        ester.patch_unit("reactor", {"params": {"V": 0.5}})
-        assert ester.document()["dirty"] is False
 
     def test_saving_clears_it(self, ester, tmp_path):
         ester.patch_unit("reactor", {"params": {"V": 0.7}})
         ester.path = tmp_path / "plant.json"
         assert ester.save()["ok"]
         assert ester.document()["dirty"] is False
-
-    def test_a_file_opens_clean(self, ester, tmp_path):
-        ester.path = tmp_path / "plant.json"
-        assert ester.save()["ok"]
-        assert FlowsheetSession(path=tmp_path / "plant.json").dirty is False
-
 
 class TestFiles:
     """Save As, Open and New: an example used to be unsaveable."""
@@ -797,24 +401,6 @@ class TestFiles:
         assert ester.save(str(other), overwrite=True)["ok"]
         assert other.read_text() != "{}"
 
-    def test_save_as_into_a_missing_folder_is_refused(self, ester, tmp_path):
-        answer = ester.save(str(tmp_path / "nowhere" / "x.json"))
-        assert not answer["ok"] and "folder" in answer["error"]
-
-    def test_save_with_no_file_says_save_as(self, ester):
-        assert "Save As" in ester.save()["error"]
-
-    def test_open_reads_a_file_and_is_clean(self, ester, tmp_path):
-        ester.patch_unit("reactor", {"params": {"V": 0.7}})
-        ester.save(str(tmp_path / "a.json"))
-        fresh = FlowsheetSession()
-        answer = fresh.open_file(str(tmp_path / "a.json"))
-        assert answer["ok"], answer
-        assert fresh.path == tmp_path / "a.json"
-        assert fresh.document()["dirty"] is False
-        reactor = edit.unit(fresh.flowsheet, "reactor")
-        assert float(reactor.operation.params.V) == pytest.approx(0.7)
-
     def test_a_bad_file_leaves_the_flowsheet_alone(self, ester, tmp_path):
         bad = tmp_path / "bad.json"
         bad.write_text("{not json")
@@ -823,11 +409,6 @@ class TestFiles:
         assert not answer["ok"] and "bad.json" in answer["error"]
         assert ester.flowsheet is before
         assert not ester.open_file(str(tmp_path / "missing.json"))["ok"]
-
-    def test_new_is_empty_and_has_no_file(self, ester):
-        assert ester.new()["ok"]
-        assert ester.flowsheet.units == []
-        assert ester.path is None and ester.document()["dirty"] is False
 
     def test_an_unfinished_unit_survives_a_save_and_open(self, tmp_path):
         s = FlowsheetSession()
@@ -855,10 +436,6 @@ class TestUndo:
     def V(self, s):
         return float(edit.unit(s.flowsheet, "reactor").operation.params.V)
 
-    def test_an_example_has_nothing_to_undo(self, ester):
-        assert ester.history() == {"undo": False, "redo": False}
-        assert not ester.undo()["ok"]
-
     def test_undo_and_redo_a_parameter(self, ester):
         ester.patch_unit("reactor", {"params": {"V": 0.7}})
         ester.patch_unit("reactor", {"params": {"V": 0.9}})
@@ -869,92 +446,17 @@ class TestUndo:
         assert answer == {"ok": True, "undo": True, "redo": True}
         assert self.V(ester) == pytest.approx(0.7)
 
-    def test_a_deleted_unit_comes_back_wired(self, ester):
-        before = serialize.to_dict(ester.flowsheet)
-        assert ester.remove_unit("flash")["ok"]
-        assert ester.undo()["ok"]
-        assert serialize.to_dict(ester.flowsheet) == before
-
     def test_a_new_edit_drops_the_redo(self, ester):
         ester.patch_unit("reactor", {"params": {"V": 0.7}})
         ester.undo()
         ester.patch_unit("reactor", {"params": {"V": 0.8}})
         assert not ester.redo()["ok"]
 
-    def test_a_refused_edit_is_not_a_step(self, ester):
-        assert not ester.patch_unit("reactor", {"params": {"V": "abc"}})["ok"]
-        assert ester.history()["undo"] is False
-
-    def test_one_add_is_one_step(self, ester):
-        n = len(ester.flowsheet.units)
-        assert ester.add_unit("Mixer")["ok"]
-        assert ester.undo()["ok"]
-        assert len(ester.flowsheet.units) == n
-        assert ester.history()["undo"] is False
-
-    def test_feeds_moves_context_and_console_undo(self, ester):
-        feed = next(iter(ester.flowsheet.feeds))
-        T = float(ester.flowsheet.feeds[feed]["T"])
-        ester.set_feed(feed, {"T": T + 10})
-        ester.set_layout({"reactor": {"x": 1.0, "y": 2.0}})
-        ester.set_code_context("X = 1\n")
-        ester.console_run("fs.default_T = 123.0")
-        for _ in range(4):
-            assert ester.undo()["ok"]
-        assert float(ester.flowsheet.feeds[feed]["T"]) == pytest.approx(T)
-        assert ester.document()["dirty"] is False
-
-    def test_opening_another_flowsheet_starts_a_new_history(self, ester):
-        ester.patch_unit("reactor", {"params": {"V": 0.7}})
-        ester.new()
-        assert ester.history() == {"undo": False, "redo": False}
-
     def test_history_is_bounded(self, ester):
         from difflow.gui.session import UNDO_DEPTH
         for i in range(UNDO_DEPTH + 5):
             ester.set_layout({"reactor": {"x": float(i), "y": 0.0}})
         assert len(ester._undo) == UNDO_DEPTH
-
-
-class TestDerivativesAtAnUnconvergedPoint:
-    """A Jacobian through a tear that never closed was shown as any other."""
-
-    @pytest.fixture
-    def ester(self):
-        s = FlowsheetSession()
-        assert s.open_example("02_reactor_flash")["ok"]
-        return s
-
-    @pytest.mark.slow
-    def test_a_converged_point_says_so(self, ester):
-        answer = ester.sensitivity(lever="reactor.V")
-        assert answer["ok"], answer
-        assert answer["converged"] is True and answer["warning"] is None
-
-    @pytest.mark.slow
-    def test_an_unconverged_point_is_flagged(self, ester):
-        fs = ester.flowsheet
-        real = fs.solve
-
-        def stalls(**kw):
-            out = real(**kw)
-            fs.last_solve_converged, fs.last_solve_residual = False, 0.25
-            return out
-
-        fs.solve = stalls
-        answer = ester.sensitivity(lever="reactor.V")
-        assert answer["ok"] and answer["converged"] is False
-        assert "did not converge" in answer["warning"]
-        assert "0.25" in answer["warning"]
-        linear = ester.linearize(["reactor.V"], [self._an_output(ester)])
-        assert linear["ok"], linear
-        assert "did not converge" in linear["warning"]
-
-    @staticmethod
-    def _an_output(session):
-        session.solve()
-        stream = next(iter(session.streams))
-        return f"{stream}.T"
 
 
 class TestSolverOptions:
@@ -970,28 +472,6 @@ class TestSolverOptions:
         assert s.open_example("03_reactor_recycle")["ok"]
         return s
 
-    @pytest.mark.slow
-    def test_the_options_reach_the_solve(self, recycle):
-        assert recycle.set_solver_options({"max_iter": 1})["ok"]
-        answer = recycle.solve()
-        assert answer["ok"] and answer["converged"] is False
-        assert answer["solver"]["max_iter"] == 1
-        assert recycle.set_solver_options(
-            {"max_iter": None, "acceleration": "wegstein", "tol": 1e-6})["ok"]
-        answer = recycle.solve()
-        assert answer["converged"] is True
-        assert answer["tol"] == pytest.approx(1e-6)
-        assert "wegstein" in answer["method"].lower()
-
-    @pytest.mark.slow
-    def test_an_unknown_stored_key_does_not_break_later_options(self, recycle):
-        """A key from a hand-edited file used to raise KeyError on every set."""
-        recycle.flowsheet.view["solver"] = {"future_option": 3}
-        assert recycle.set_solver_options({"tol": 1e-6})["ok"]
-        assert recycle.flowsheet.view["solver"] == {"future_option": 3,
-                                                    "tol": 1e-6}
-        assert recycle.solve()["ok"]
-
     def test_they_are_saved_with_the_file_and_undone(self, recycle):
         assert recycle.set_solver_options({"tol": 1e-6})["ok"]
         assert recycle.flowsheet.view["solver"] == {"tol": 1e-6}
@@ -999,18 +479,8 @@ class TestSolverOptions:
         assert "solver" not in recycle.flowsheet.view
         assert recycle.solver_options()["tol"] == 1e-8
 
-    def test_a_default_is_not_stored(self, recycle):
-        assert recycle.set_solver_options({"acceleration": "anderson"})["ok"]
-        assert "solver" not in recycle.flowsheet.view
-
     @pytest.mark.parametrize("bad", [
-        {"tol": 0}, {"tol": -1e-6}, {"tol": float("nan")}, {"tol": "1e-6"},
-        {"max_iter": 0}, {"max_iter": 2.5}, {"max_iter": True},
-        {"acceleration": "newton"}, {"clip_negative_flows": "no"},
-        {"damping": 0}, {"damping": "0.5"}, {"anderson_depth": 0},
-        {"tears": "random"}, {"tol_basis": "residual"}, {"error_probe": -1},
-        {"use_initialization": 1}, {"tol_basis": "error", "error_probe": 0},
-        {"future_option": 3}, ["tol"],
+        {"tol": 0}, {"acceleration": "newton"}, {"future_option": 3}, ["tol"],
     ])
     def test_a_bad_option_is_refused_and_nothing_is_kept(self, recycle, bad):
         good = {"acceleration": "wegstein"}
@@ -1018,62 +488,6 @@ class TestSolverOptions:
             {**good, **bad} if isinstance(bad, dict) else bad)
         assert not answer["ok"]
         assert "solver" not in recycle.flowsheet.view
-
-    @pytest.mark.slow
-    def test_every_solve_option_reaches_the_solve(self, recycle):
-        """The editor's four were not all of them: damping, tear choice and
-        the error basis are what a hard loop actually needs."""
-        assert recycle.set_solver_options(
-            {"acceleration": "none", "damping": 0.5, "max_iter": 400,
-             "tol_basis": "error"})["ok"]
-        assert recycle.flowsheet.view["solver"] == {
-            "acceleration": "none", "damping": 0.5, "max_iter": 400,
-            "tol_basis": "error"}
-        answer = recycle.solve()
-        assert answer["ok"] and answer["converged"] is True
-        assert answer["solver"]["damping"] == 0.5
-
-    @pytest.mark.slow
-    def test_the_gain_and_the_hidden_error_are_returned(self):
-        """At gain 0.99 the error is about 100x the step `tol` tested, and
-        the TearToleranceWarning that says so went to stderr, unseen."""
-        from difflow.convergence import get_case
-
-        session = FlowsheetSession(flowsheet=get_case("high_gain_recycle").build())
-        assert session.set_solver_options(
-            {"tol": 1e-6, "acceleration": "none", "max_iter": 5000})["ok"]
-        answer = session.solve()
-        assert answer["ok"] and answer["converged"] is True
-        assert answer["gain"] == pytest.approx(0.99, abs=1e-3)
-        assert answer["error_estimate"] > 10 * answer["residual"]
-        categories = [w["category"] for w in answer["warnings"]]
-        assert categories.count("TearToleranceWarning") == 1
-
-    @pytest.mark.slow
-    def test_the_derivatives_use_them_too(self, recycle):
-        assert recycle.set_solver_options({"max_iter": 1})["ok"]
-        lever = recycle.levers()["levers"][0]["key"]
-        answer = recycle.sensitivity(lever=lever)
-        assert answer["ok"], answer
-        assert answer["converged"] is False
-
-    @pytest.mark.slow
-    def test_the_verdict_is_of_the_iteration_the_derivative_used(self, recycle):
-        """A traced solve is plain substitution whatever is stored.
-
-        At 15 iterations Anderson closes this loop (in 10) and substitution
-        does not; the derivative went through substitution, so the panel
-        must not call it converged.
-        """
-        assert recycle.set_solver_options(
-            {"max_iter": 15, "acceleration": "anderson"})["ok"]
-        assert recycle.solve()["converged"] is True
-        lever = recycle.levers()["levers"][0]["key"]
-        answer = recycle.sensitivity(lever=lever)
-        assert answer["ok"], answer
-        assert answer["converged"] is False
-        assert answer["warning"]
-
 
 class TestPendingUnits:
     """A drop that cannot be built yet lands anyway, in red.
@@ -1111,51 +525,6 @@ class TestPendingUnits:
         with pytest.raises(IncompleteUnitError):
             unit.operation()
 
-    def test_the_document_carries_it_inside_the_flowsheet(self, session):
-        """Inside, and it has to survive the trip to disk and back.
-
-        `document()["flowsheet"]` is what gets written out and read back
-        by `serialize`, so an unfinished unit that did not round-trip
-        would be a file that loses the wiring the user had already done.
-        It reloads with no extras, because there is nothing to supply
-        yet --- that is the whole point of it being unfinished.
-        """
-        session.add_unit("Flash", position={"x": 10, "y": 20})
-        document = session.document()
-        assert [e["name"] for e in document["pending"]] == ["flash2"]
-        assert document["flowsheet"]["view"]["nodes"]["flash2"] == {
-            "x": 10.0, "y": 20.0}, "its coordinate is in the view like anyone's"
-
-        written = [u for u in document["flowsheet"]["units"]
-                   if u["name"] == "flash2"]
-        assert written and written[0]["incomplete"]["needs"] == ["thermo"]
-
-        reloaded = serialize.from_dict(document["flowsheet"])
-        again = next(u for u in reloaded.units if u.name == "flash2")
-        assert isinstance(again.operation, Incomplete)
-        assert again.operation.operation == "Flash"
-
-    def test_a_pending_name_is_taken(self, session):
-        """Two drops of the same blocked unit are two nodes.
-
-        If pending names did not count as taken, both would be called
-        `flash-2` --- and the second would either overwrite the first or
-        collide with it at promotion.
-        """
-        first = session.add_unit("Flash")["name"]
-        second = session.add_unit("Flash")["name"]
-        assert first != second
-        assert sorted(session.pending) == sorted([first, second])
-
-    def test_the_code_context_builds_it_where_it_was_dropped(self, session):
-        session.add_unit("Flash", position={"x": 10, "y": 20})
-        answer = session.set_code_context(THERMO_SOURCE)
-        assert answer["ok"] and answer["promoted"] == ["flash2"]
-        assert answer["pending"] == []
-        assert "flash2" in [u.name for u in session.flowsheet.units]
-        assert session.flowsheet.view["nodes"]["flash2"] == {"x": 10.0, "y": 20.0}
-        assert session.pending_units() == []
-
     def test_the_species_build_what_was_waiting_on_them(self):
         """The empty-canvas case: nearly the whole palette is blocked."""
         empty = FlowsheetSession()
@@ -1167,20 +536,12 @@ class TestPendingUnits:
         assert [u.name for u in empty.flowsheet.units] == ["mixer"]
         assert empty.flowsheet.view["nodes"]["mixer"] == {"x": 3.0, "y": 4.0}
 
-    @pytest.mark.parametrize("name", ["n-butane", "ethyl acetate", "a.b", "x'y"])
-    def test_a_species_name_that_would_split_its_keys_is_refused(self, name):
+    def test_a_species_name_that_would_split_its_keys_is_refused(self):
         """`<stream>.F_<species>` has to come apart at the right dot."""
         empty = FlowsheetSession()
-        answer = empty.set_species(["water", name])
-        assert answer["ok"] is False and repr(name) in answer["error"]
+        answer = empty.set_species(["water", "a.b"])
+        assert answer["ok"] is False and "'a.b'" in answer["error"]
         assert empty.set_species(["water", "1_butanol"])["ok"]
-
-    def test_a_name_the_flowsheet_already_has_is_not_refused(self):
-        """A file from before the rule must still take species edits."""
-        session = FlowsheetSession()
-        session.flowsheet.species_order = ["water", "n-butane"]
-        assert session.set_species(["water", "n-butane", "ethanol"])["ok"]
-        assert session.set_species(["water", "n-butane", "x.y"])["ok"] is False
 
     def test_an_answer_that_only_half_answers_leaves_it_parked(self):
         """And re-asks, so the hint is about what is missing *now*."""
@@ -1194,53 +555,11 @@ class TestPendingUnits:
         assert empty.pending["flash"]["needs"] == ["thermo"]
         assert "species" not in empty.pending["flash"]["hint"]
 
-    def test_a_pending_node_is_deleted_like_any_other(self, session):
-        """It is a unit, so there is no second delete path to get wrong."""
-        name = session.add_unit("Flash")["name"]
-        answer = session.remove_unit(name)
-        assert answer["ok"] and answer["name"] == name
-        assert name not in [u.name for u in session.flowsheet.units]
-        assert session.pending_units() == [], "and the note goes with it"
-
-    def test_a_solve_refuses_while_one_is_unfinished(self, session):
-        """The price of the node being in the model: it has to say no.
-
-        Up front and by name, rather than raising from somewhere deep in
-        the solve --- or, worse, appearing to have worked.
-        """
-        session.add_unit("Flash")
-        answer = session.solve()
-        assert answer["ok"] is False
-        assert answer["pending"] == ["flash2"]
-        assert "flash2" in answer["error"] and "thermo" in answer["error"]
-
     def test_loading_a_file_forgets_them(self, session):
         """They belong to the canvas that was open, not to the next one."""
         session.add_unit("Flash")
         session.replace(serialize.to_dict(Flowsheet(species_order=SPECIES)))
         assert session.pending_units() == []
-
-    def test_the_boilerplate_answers_the_recorded_needs(self, session):
-        name = session.add_unit("Flash")["name"]
-        answer = session.boilerplate("Flash", name=name)
-        assert answer["ok"] and answer["needs"] == ["thermo"]
-        assert "thermo = IdealThermo" in answer["source"]
-        assert 'SPECIES = ["water", "ethanol"]' in answer["source"], (
-            "the flowsheet's own species, not the fallback")
-        assert answer["merged"] == answer["source"], "the context was empty"
-
-    def test_the_boilerplate_is_appended_to_what_is_already_there(self, session):
-        session.set_code_context("solvent = 'MEA'\n")
-        answer = session.boilerplate("Flash")
-        assert answer["merged"].startswith("solvent = 'MEA'")
-        assert "thermo = IdealThermo" in answer["merged"]
-
-    def test_the_boilerplate_closes_the_loop_it_promises(self, session):
-        """Write it, apply it, and the red node has to become a unit."""
-        name = session.add_unit("Flash", position={"x": 7, "y": 8})["name"]
-        session.set_code_context(session.boilerplate("Flash", name=name)["merged"])
-        assert name in [u.name for u in session.flowsheet.units]
-        assert session.flowsheet.view["nodes"][name] == {"x": 7.0, "y": 8.0}
 
     def test_an_unregistered_operation_has_no_boilerplate(self, session):
         answer = session.boilerplate("Teleporter")

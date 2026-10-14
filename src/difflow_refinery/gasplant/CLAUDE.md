@@ -34,8 +34,8 @@ Invariants encoded in the gas plant (do not weaken them):
   top of a long column (true e^-600), a 1e-12 change of a feed moved those
   log flows by hundreds, and the deisobutanizer's pass 1 then stalled on a
   near-singular J for some feeds (and some CI runners: the 0.2.0 Publish
-  gate). `tests/refinery/test_gasplant.py` checks the guess is insensitive
-  to a 1e-12 feed perturbation; keep it that way.
+  gate). The guess must be insensitive to a 1e-12 feed perturbation; no test
+  checks this any more, so check it by hand before changing the guess.
 - Pass 1 that does not converge is retried from guesses at half and twice
   `reflux_guess` (`GasColumn._pass1`); one that converges is never retried, so
   those columns keep their iterates. The retries are ONE `lax.while_loop` over
@@ -50,11 +50,10 @@ Invariants encoded in the gas plant (do not weaken them):
 - RVP is the D323 construction on the same EOS, never a correlation.
 - A non-converging solve is usually an infeasible spec: a C2- spec larger than
   the C2- fed, an RVP above what a hot feed allows, an olefin-limited iC4 purity.
-- The IDAES reference (`tests/refinery/reference/gasplant_reference.json`) is
+- The IDAES reference (since removed, with its generator and tests) was
   an independent IMPLEMENTATION of the same model (PR, kij 0, same constants),
-  not an independent model. Regenerate it, never loosen the staleness checks.
-  The debutanizer is a full `TrayColumn` comparison (agreement 1e-7, but only
-  after the generator tightens SmoothVLE's eps: at IDAES's defaults the total
+  not an independent model. The debutanizer was a full `TrayColumn` comparison
+  (agreement 1e-7, but only after the generator tightened SmoothVLE's eps: at IDAES's defaults the total
   condenser leaks 0.07 % of a component). IDAES's TrayColumn does not converge
   the C3/C4 splitter, so that case is IDAES flashes at difflow's stage states.
 

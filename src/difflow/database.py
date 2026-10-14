@@ -956,8 +956,7 @@ def watson_coeffs(H_ref: float, n: float, Tc: float, T_ref: float) -> tuple:
 # deviation from it 0.04-2.3%; n-dodecane the worst). Antoine: PPO 5e
 # App. A, log10(P/Pa), T in K. Hvap: Watson A back-solved from the CRC
 # dHvap at the CRC Tb. Hf: CRC ideal-gas value where CRC has one, else the
-# API Technical Data Book (Albahri) value. Pinned in
-# tests/refinery/test_alkylation.py::TestDatabaseSpecies.
+# API Technical Data Book (Albahri) value.
 _ALKYLATION_CRITICAL = {
     "2_3_dimethylpentane": (537.3, 2.910e6, 0.297, 100.20),
     "2_4_dimethylpentane": (519.8, 2.740e6, 0.304, 100.20),
@@ -1043,7 +1042,7 @@ del _name, _note
 # HDS model needs. Hf and the ideal-gas Cp cubic are those of
 # difflow_refinery.thermochemistry (the one formation table, #339), copied
 # rather than imported because the core must not import a plugin;
-# tests/refinery/test_thermochemistry.py::TestCoreDatabaseAgrees fails if the
+# tests/refinery/test_thermochemistry.py::test_core_database_agrees fails if the
 # two drift apart. Thiophene's critical constants, the Hvap at Tb and the
 # Antoine sets were read from the data tables of the `chemicals` package
 # (C. Bell et al., v1.5.2), as for the refinery isomers above.

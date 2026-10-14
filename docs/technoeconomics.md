@@ -309,9 +309,9 @@ jax.grad(annual_cost)(0.15)        # d(annual cost)/dD: zero at the economic dia
 econ.pipe_cost_nps(4, "80", C_ref=150.0, nps_ref=2, base_year=2019, length=120.0)
 ```
 
-`tests/test_pipe_cost.py` checks the weights against B36.10M (2-in Sch 40
-5.44 kg/m, 4-in Sch 80 22.32 kg/m), the exponents, the escalation, and that the
-optimum of this cost scales as $Q^{0.40\text{-}0.48}$.
+When the model was written, the weights were checked against B36.10M (2-in
+Sch 40 5.44 kg/m, 4-in Sch 80 22.32 kg/m), along with the exponents, the
+escalation, and that the optimum of this cost scales as $Q^{0.40\text{-}0.48}$.
 
 ### Total Capital Investment
 

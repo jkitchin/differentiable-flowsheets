@@ -1,9 +1,8 @@
 """Tests for ParamsMixin, in particular its PyTree registration."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import jax
-import jax.numpy as jnp
 import pytest
 
 from difflow.params_mixin import ParamsMixin

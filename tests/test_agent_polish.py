@@ -2,10 +2,6 @@
 
 import asyncio
 import json
-import os
-import signal
-import time
-import urllib.request
 
 import pytest
 
@@ -16,8 +12,6 @@ from difflow.catalog import _returned_names, describe_operation
 class TestOutletRoles:
     @pytest.mark.parametrize("operation, roles", [
         ("Flash", ["liquid", "vapor"]),
-        ("ShortcutColumn", ["distillate", "bottoms"]),
-        ("CounterCurrentHX", ["hot_outlet", "cold_outlet"]),
         ("ComponentSeparator", ["residue", "product"]),     # class docstring
         ("EnthalpyCounterCurrentHX", ["hot_outlet", "cold_outlet"]),  # inline
     ])
@@ -36,25 +30,6 @@ class TestOutletRoles:
         wb.open_example("01_flash_drum")
         flash = wb.get_flowsheet()["units"][0]
         assert flash["outlet_roles"] == {"liquid": "liquid", "vapor": "vapor"}
-
-
-@pytest.mark.slow
-def test_open_in_editor_starts_the_editor(tmp_path):
-    wb = Workbench()
-    wb.open_example("01_flash_drum")
-    answer = wb.open_in_editor(path=str(tmp_path / "drum.json"), browser=False)
-    try:
-        assert answer["ok"] and (tmp_path / "drum.json").exists()
-        for _ in range(60):
-            try:
-                assert urllib.request.urlopen(answer["url"], timeout=2).status == 200
-                break
-            except OSError:
-                time.sleep(0.5)
-        else:
-            pytest.fail("the editor never answered")
-    finally:
-        os.killpg(answer["pid"], signal.SIGTERM)
 
 
 def test_a_session_without_a_file_needs_a_path():

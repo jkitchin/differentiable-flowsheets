@@ -502,7 +502,7 @@ Two cross-checks have no MATPOWER counterpart and are worth more, because they c
 - LMPs read off the equality multipliers agree with `jax.grad` of the optimal cost through the KKT system to around 1e-12 $/MWh.
 - The backward/forward sweep agrees with Newton to 1e-12 on every bus of a feeder — two entirely different algorithms on the same equations.
 
-The equation set itself is checked in `tests/power/test_residuals.py` against an independent restatement in **polar** form, written from the textbook while the implementation works in complex rectangular form. Two algebraic routes to the same numbers is what makes the comparison worth anything.
+When it was written, the equation set was checked against an independent restatement in **polar** form, written from the textbook while the implementation works in complex rectangular form. Two algebraic routes to the same numbers is what makes the comparison worth anything.
 
 ---
 

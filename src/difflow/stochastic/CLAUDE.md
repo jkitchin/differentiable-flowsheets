@@ -45,8 +45,9 @@ Invariants encoded in the module (do not weaken them):
   `expected_value_solution`, and hence every VSS, solves — for the only scenario
   there is: the whole gradient vanishes and the design never leaves its
   initialization while reporting convergence.
-  `tests/test_stochastic.py::TestRisk::test_a_one_scenario_cvar_solve_would_have_frozen_at_its_start`
-  is the regression.
+  `tests/test_stochastic.py::test_cvar_smoothed_positive_part_has_a_live_slope_at_zero`
+  checks the slope; the one-scenario solve itself is no longer tested, so
+  check it by hand before changing the smoothing.
 - `WS <= SP <= EEV` holds among ADMISSIBLE designs only. A mean-value design
   that misses the chance constraint scores better than the stochastic one for
   exactly the reason it is not allowed; `BoundReport.ev_feasible` says so and
@@ -55,8 +56,8 @@ Invariants encoded in the module (do not weaken them):
 - The constraint handler is an AUGMENTED LAGRANGIAN, not a growing penalty. A
   penalty weight of 1e4 inflates Adam's second moment by eight decades and
   every later step shrinks to nothing — the iterate freezes and reports itself
-  feasible. `tests/test_stochastic.py::TestSolve::test_a_growing_penalty_would_have_frozen_here`
-  is the regression.
+  feasible. No test checks this any more; check it by hand before changing
+  the constraint handler.
 - Objective and constraint residuals are rescaled, and the rescaling is EXACT:
   every risk measure is translation-equivariant and positively homogeneous, and
   every constraint form is positively homogeneous in its residual.

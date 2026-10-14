@@ -141,8 +141,8 @@ late_window, not_yet = build_window(times, [assay], y_names=["Nd_org"], now=7.0)
 
 Placing that assay against the *current* state is not a small error: it asserts
 the plant is where it was six hours ago. On a plant whose state halves every
-interval it is wrong by a factor of 32, and `tests/test_mhe.py` checks exactly
-that discrepancy.
+interval it is wrong by a factor of 32. `tests/test_mhe.py` checks that
+`build_window` places a delayed record at its sample time.
 
 **A channel that is not sampled is not a missing value.** It is a measurement of
 infinite variance. Written that way, every array shape stays fixed under `jit`,
@@ -449,8 +449,7 @@ from difflow.mhe import (
 )
 ```
 
-Tests: `tests/test_mhe.py`. The load-bearing one is
-`test_mhe_full_information_matches_kalman`: on a linear model with Gaussian noise
-and no active constraints, moving-horizon estimation over the whole record *is*
-the Kalman filter, and the two agree to about `1e-13` in the mean and `1e-15` in
-the covariance.
+Tests: `tests/test_mhe.py`. On a linear model with Gaussian noise and no active
+constraints, moving-horizon estimation over the whole record *is* the Kalman
+filter; when this was written the two agreed to about `1e-13` in the mean and
+`1e-15` in the covariance (no test checks this any more).

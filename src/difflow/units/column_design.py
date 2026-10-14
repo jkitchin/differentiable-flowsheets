@@ -16,8 +16,7 @@ differentiable in every numeric argument.
    10-20 % on a diameter or velocity, worse on a pressure drop and an
    entrainment. Check against the cited source before a design is relied on.
 
-   Checked against published worked examples (``tests/test_column_design.py``,
-   ``TestPublishedExamples``): the Fair fit, the dry-plate drop and the weir
+   Checked, when written, against published worked examples: the Fair fit, the dry-plate drop and the weir
    crest against Dutta, *Principles of Mass Transfer and Separation
    Processes* (2007), Example 5.1; the Eckert flood line against Dutta
    Example 5.2; the Robbins pressure drop against Perry's 8e Example 13

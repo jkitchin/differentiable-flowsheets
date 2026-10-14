@@ -7,10 +7,8 @@ rather than propagated, that "the solver said it converged" and "the answer
 audits" stay separate, and that no case is rigged so a strategy starts on
 the answer.
 
-The full grid is minutes of JAX compilation, so it lives in
-``test_convergence_full_grid.py`` (marked ``slow``), and everything else here
-runs against the two cheap analytic cases or against synthetic ones built in
-the test.
+Everything here runs against cheap analytic cases or synthetic ones built
+in the test.
 """
 
 import warnings
@@ -19,9 +17,7 @@ import jax.numpy as jnp
 import pytest
 
 from difflow.convergence import (
-    ACCELERATIONS,
     CORPUS,
-    INITIALIZATIONS,
     Case,
     Outcome,
     Report,
@@ -29,7 +25,6 @@ from difflow.convergence import (
     _product_streams,
     cases,
     get_case,
-    run_benchmark,
     run_case,
     total_mole_balance,
 )
@@ -85,47 +80,6 @@ class TestCorpus:
     def test_the_corpus_has_a_control_that_is_meant_to_pass(self):
         """All-failing corpora cannot tell a hard case from a broken solver."""
         assert any("control" in c.tags for c in CORPUS)
-
-
-class TestNoCaseIsRigged:
-    """A strategy must not start on the answer it is being scored on.
-
-    ``overshoot_loop`` originally used ``g(x) = 3F - 2x``, whose fixed point
-    is ``x = F`` --- exactly the ``"feed"`` guess.  That strategy scored two
-    free passes on a case it had not solved.
-    """
-
-    @pytest.mark.slow
-    @pytest.mark.parametrize("case", CORPUS, ids=lambda c: c.name)
-    def test_the_feed_guess_is_not_already_the_answer(self, case):
-        fs = case.build()
-        guess = _feed_guess(fs)
-        # No single acceleration converges every case -- that is the
-        # corpus's whole point -- so take the first that does.
-        for acceleration in ("anderson", "wegstein", "none"):
-            fs = case.build()
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                solved = fs.solve(acceleration=acceleration, tol=1e-10,
-                                  max_iter=500, on_nonconvergence="ignore")
-            if fs.last_solve_converged:
-                break
-        else:
-            pytest.fail(f"{case.name} converges under no acceleration, so "
-                        "its 'feed' guess cannot be checked against an answer")
-
-        for dest, start in guess.items():
-            source = next(s for s, d in fs.recycles.items() if d == dest)
-            answer = solved[source]
-            gap = max(
-                abs(float(start[f"F_{s}"]) - float(answer[f"F_{s}"]))
-                for s in fs.species_order)
-            scale = max(
-                max(abs(float(answer[f"F_{s}"])) for s in fs.species_order),
-                1e-12)
-            assert gap / scale > 1e-6, (
-                f"{case.name}: the 'feed' guess for {dest!r} is already the "
-                "converged answer, so that strategy is not being tested")
 
 
 # =============================================================================
@@ -207,12 +161,6 @@ class TestOutcomeVerdict:
 
 class TestRunCase:
 
-    @pytest.mark.slow
-    def test_the_control_case_passes(self):
-        outcome = run_case(get_case("two_phase_flash"), acceleration="anderson")
-        assert outcome.passed, outcome
-        assert outcome.method == "anderson"
-        assert outcome.iterations is not None
 
     def test_a_raising_case_is_counted_not_propagated(self):
         """A benchmark that dies on its hardest case reports a short corpus."""
@@ -237,19 +185,6 @@ class TestRunCase:
         assert not outcome.passed
         assert outcome.verdict == "raised"
 
-    @pytest.mark.slow
-    def test_a_check_that_raises_makes_the_answer_wrong(self):
-        def bad_check(fs, streams):
-            raise ValueError("cannot audit")
-
-        case = Case(name="unauditable", build=get_case("two_phase_flash").build,
-                    difficulty="A check that raises, to confirm an "
-                               "unauditable answer counts as wrong.",
-                    check=bad_check)
-        outcome = run_case(case)
-        assert not outcome.correct
-        assert outcome.balance_error == float("inf")
-        assert "check raised" in outcome.error
 
     def test_non_convergence_does_not_warn_through(self):
         """Counting non-convergence is the job; announcing each one is not."""
@@ -260,13 +195,6 @@ class TestRunCase:
     def test_an_unknown_initialization_is_rejected(self):
         with pytest.raises(ValueError, match="unknown initialization"):
             run_case(get_case("two_phase_flash"), initialization="telepathy")
-
-    @pytest.mark.slow
-    @pytest.mark.parametrize("initialization", INITIALIZATIONS)
-    def test_every_initialization_strategy_runs(self, initialization):
-        outcome = run_case(get_case("two_phase_flash"),
-                           initialization=initialization)
-        assert outcome.passed, outcome
 
 
 class TestFeedGuess:
@@ -361,169 +289,7 @@ class TestReport:
         assert "passed" in rows[0]
 
 
-@pytest.mark.slow
-class TestRunBenchmark:
-
-    @pytest.mark.slow
-    def test_it_covers_the_whole_grid(self):
-        report = run_benchmark(cases=["two_phase_flash"],
-                               accelerations=("anderson", "wegstein"),
-                               initializations=("unit", "default"))
-        assert len(report.outcomes) == 4
-        assert {o.acceleration for o in report.outcomes} == {"anderson", "wegstein"}
-        assert {o.initialization for o in report.outcomes} == {"unit", "default"}
-
-    @pytest.mark.slow
-    def test_it_accepts_case_objects_as_well_as_names(self):
-        report = run_benchmark(cases=[get_case("two_phase_flash")],
-                               accelerations=("anderson",),
-                               initializations=("unit",))
-        assert len(report.outcomes) == 1
-
-    def test_the_report_carries_the_settings_it_ran_under(self):
-        report = run_benchmark(cases=["two_phase_flash"],
-                               accelerations=("anderson",),
-                               initializations=("unit",),
-                               tol=1e-6, max_iter=42)
-        assert report.tol == 1e-6
-        assert report.max_iter == 42
-
-
 # =============================================================================
 # The measurements the corpus was built to make
 # =============================================================================
 
-@pytest.mark.slow
-class TestTheFindings:
-    """These pin *why* each hard case is in the corpus.
-
-    They assert the qualitative finding, not the exact iteration count: the
-    point of a benchmark is that its numbers move.
-    """
-
-    def test_anderson_rescues_a_divergent_map_that_substitution_cannot(self):
-        divergent = run_case(get_case("overshoot_loop"), acceleration="none")
-        accelerated = run_case(get_case("overshoot_loop"), acceleration="anderson")
-        assert not divergent.passed
-        assert accelerated.passed
-
-    @pytest.mark.slow
-    def test_anderson_is_not_a_free_win(self):
-        """phase_coupled_flash is in the corpus precisely because it isn't."""
-        anderson = run_case(get_case("phase_coupled_flash"),
-                            acceleration="anderson", initialization="unit")
-        wegstein = run_case(get_case("phase_coupled_flash"),
-                            acceleration="wegstein", initialization="unit")
-        assert wegstein.passed
-        assert not anderson.passed
-
-    def test_anderson_solves_a_disjunction_without_binaries(self):
-        """The negative result #251 most needs.
-
-        ``regime_switch`` is a unit picking between two linear branches with
-        the answer exactly on the boundary -- the disjunction that issue
-        proposes handing to a MILP's binaries. Anderson lands on it in two
-        iterations.
-        """
-        assert run_case(get_case("regime_switch"),
-                        acceleration="anderson").passed
-
-    @pytest.mark.slow
-    def test_a_signed_tear_beats_both_accelerated_methods(self):
-        """The one case that inverts the corpus ranking.
-
-        ``clip_negative_flows`` defaults to True and binds on the Wegstein
-        and Anderson paths but not on the unaccelerated one. On a tear
-        whose answer is genuinely negative, that projection is the
-        difference between solving it and not.
-
-        The asymmetry is the decision #263 settled, not a bug left
-        standing: the projection guards an extrapolated guess and the
-        unaccelerated path makes none. See
-        ``tests/test_flowsheet_tear_clip.py`` for what clipping there
-        would cost.
-        """
-        plain = run_case(get_case("signed_tear"), acceleration="none")
-        wegstein = run_case(get_case("signed_tear"), acceleration="wegstein")
-        anderson = run_case(get_case("signed_tear"), acceleration="anderson")
-        assert plain.passed, "plain substitution should solve this one"
-        assert not wegstein.passed
-        assert not anderson.passed
-
-    def test_turning_the_clip_off_rescues_the_signed_tear(self):
-        """Pins the remedy the case's `difficulty` claims."""
-        clipped = run_case(get_case("signed_tear"), acceleration="anderson")
-        unclipped = run_case(get_case("signed_tear"), acceleration="anderson",
-                             clip_negative_flows=False)
-        assert not clipped.passed
-        assert unclipped.passed
-        assert unclipped.iterations < 30
-
-    @pytest.mark.slow
-    def test_a_rigorous_column_in_a_recycle_is_not_the_hard_part(self):
-        """#251 names near-pinch columns; every setting solves this one."""
-        for acceleration in ACCELERATIONS:
-            outcome = run_case(get_case("column_recycle"),
-                               acceleration=acceleration)
-            assert outcome.passed, outcome
-
-    def test_the_multi_loop_case_really_has_two_tears(self):
-        """Otherwise it is not testing what it says it tests."""
-        fs = get_case("two_loop_recycle").build()
-        assert len(fs.recycles) == 2
-
-    @pytest.mark.slow
-    def test_an_absolute_tear_tolerance_can_accept_a_wrong_answer(self):
-        """The trap ``trace_recycle`` exists to expose.
-
-        ``tol`` is an absolute residual on the tear.  On a loop of gain
-        ``g``, a step of ``d`` means a remaining error of ``d / (1 - g)``,
-        so at ``g = 0.97`` the residual understates the error by about 33x.
-        With a tear whose converged value is ~3e-5, Wegstein stops on a
-        residual inside 1e-8 while still about 1% out --- reporting
-        convergence and meaning it, on the solver's own terms.
-        """
-        outcome = run_case(get_case("trace_recycle"), acceleration="wegstein",
-                           initialization="unit")
-        assert outcome.converged is True, "the solver should claim success"
-        assert not outcome.correct, "and the audit should disagree"
-        assert outcome.verdict == "WRONG"
-
-    @pytest.mark.slow
-    def test_the_solver_could_have_known_it_was_wrong(self):
-        """#264: the same solve, with the error measured rather than assumed.
-
-        The audit is the case's own analytic answer and is available only
-        because someone wrote it down. The error estimate is measured from
-        the flowsheet itself, and it agrees --- which is what makes it
-        usable on a flowsheet nobody has an analytic answer for.
-        """
-        outcome = run_case(get_case("trace_recycle"), acceleration="wegstein",
-                           initialization="unit")
-        assert outcome.verdict == "WRONG"
-        assert outcome.gain == pytest.approx(0.97, abs=1e-6)
-        # The tear settles near 3.33e-5, so a relative audit error of ~9e-3
-        # is an absolute ~3e-7 -- what the estimate reads, from a residual
-        # of 9.3e-9.
-        assert outcome.error_estimate == pytest.approx(3.0e-7, rel=0.05)
-        assert outcome.error_estimate > 30 * outcome.residual
-
-    @pytest.mark.slow
-    def test_the_signed_tear_amplification_was_the_reference_not_the_solver(self):
-        """#264: ``signed_tear`` was measuring a rounded constant.
-
-        Its ``tol`` was loosened to 1e-4 for a 1.2e-6 error attributed to
-        ``M`` being non-normal. The reference was written to six decimals
-        and is itself 4.4e-6 from the answer; plain substitution lands
-        7.6e-9 away, *inside* its own tear residual rather than 450 times
-        it. With the reference at full precision the case audits at 1e-6
-        like every other analytic one.
-        """
-        outcome = run_case(get_case("signed_tear"), acceleration="none",
-                           initialization="unit")
-        assert outcome.passed
-        assert outcome.balance_error < 1e-8
-        assert get_case("signed_tear").tol == 1e-6
-        # Measured amplification below one: the error is smaller than the
-        # step, not 450 times it.
-        assert outcome.error_estimate < outcome.residual

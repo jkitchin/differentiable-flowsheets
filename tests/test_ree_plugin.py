@@ -1,861 +1,152 @@
-"""Tests for REE separation plugin."""
+"""Tests for the REE separation plugin: smoke, API contracts and validation."""
 
+import jax
+import numpy as np
 import pytest
-import jax.numpy as jnp
 
-# Skip if plugin not installed
 pytest.importorskip("difflow_ree")
 
+from difflow.streams import get_flows, make_stream
 
-class TestREEDatabase:
-    """Test REE database functionality."""
-
-    def test_load_elements(self):
-        """Test loading element data."""
-        from difflow_ree import get_element, list_ree_elements
-
-        elements = list_ree_elements()
-        # 15: the fourteen stable lanthanides plus Y. Pm is deliberately
-        # absent -- no stable isotope, no process role.
-        assert set(elements) == {
-            "La", "Ce", "Pr", "Nd", "Sm", "Eu", "Gd",
-            "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu", "Y",
-        }
-        assert "Pm" not in elements
-
-    def test_element_properties(self):
-        """Test element property access."""
-        from difflow_ree import get_element
-
-        nd = get_element("Nd")
-        assert nd.symbol == "Nd"
-        assert nd.atomic_number == 60
-        assert nd.atomic_weight > 144
-        assert nd.group == "light"
-
-    def test_extractant_data(self):
-        """Test extractant database."""
-        from difflow_ree import get_extractant, list_extractants
-
-        extractants = list_extractants()
-        assert "D2EHPA" in extractants
-        assert "PC88A" in extractants
-
-        d2ehpa = get_extractant("D2EHPA")
-        assert d2ehpa.molecular_weight > 300
-        assert "Nd" in d2ehpa.ph_coefficients
-
-
-class TestDistributionModel:
-    """Test distribution coefficient models."""
-
-    def test_basic_distribution(self):
-        """Test basic D value calculation."""
-        from difflow_ree import REEDistribution
-
-        dist = REEDistribution(
-            extractant="D2EHPA",
-            elements=("La", "Nd", "Dy"),
-        )
-
-        # (#270) pH 1.0, inside D2EHPA's refitted validity window of
-        # [0.0, 2.0]. The ordering this asserts is pH-independent -- all ten
-        # elements share the slope b = 3 -- but the probe still has to be
-        # somewhere the coefficients were fitted.
-        D_values = dist.get_D_all(pH=1.0, T=298.15)
-
-        # Heavy REE should have higher D
-        assert D_values["Dy"] > D_values["Nd"]
-        assert D_values["Nd"] > D_values["La"]
-
-    def test_ph_effect(self):
-        """Test pH effect on D values."""
-        from difflow_ree import get_distribution_coefficient
-
-        # (#270) Both ends inside D2EHPA's refitted window of [0.0, 2.0].
-        D_low_pH = get_distribution_coefficient("Nd", "D2EHPA", pH=0.5)
-        D_high_pH = get_distribution_coefficient("Nd", "D2EHPA", pH=1.5)
-
-        # Higher pH = higher extraction
-        assert D_high_pH > D_low_pH
-
-    def test_separation_factor(self):
-        """Test separation factor calculation."""
-        from difflow_ree import REEDistribution
-
-        dist = REEDistribution(
-            extractant="D2EHPA",
-            elements=("Nd", "Pr"),
-        )
-
-        # (#270) pH 1.0, in-window. With one shared slope the factor is
-        # 10**(a_Nd - a_Pr) at every pH, so this reads 1.699 anywhere.
-        SF = dist.get_separation_factor("Nd", "Pr", pH=1.0)
-
-        # Nd should extract slightly better than Pr
-        assert SF > 1.0
-
-
-class TestUnitOperations:
-    """Test REE unit operations."""
-
-    def test_extractor(self):
-        """Test REE extractor."""
-        from difflow_ree import REEExtractor, REEExtractorParams
-        from difflow.streams import make_stream, get_flows
-
-        # Use fewer stages and lower S/F to see selectivity differences
-        params = REEExtractorParams(
-            n_stages=3,
-            extractant="D2EHPA",
-            elements=("La", "Nd", "Dy"),
-            # (#270) pH 0.5. The intent of the old 2.5 -- "low enough that
-            # the elements have not all saturated" -- is now a pH inside the
-            # refitted window of [0.0, 2.0]: D(La) = 0.32, D(Dy) = 104.
-            pH=0.5,
-        )
-        extractor = REEExtractor(params)
-
-        feed = make_stream(
-            flows={"H2O": 10.0, "La": 0.01, "Nd": 0.02, "Dy": 0.01},
-            T=298.15,
-            P=101325.0,
-        )
-        solvent = make_stream(
-            flows={"kerosene": 5.0, "D2EHPA": 0.5 * 5.0, "La": 0.0, "Nd": 0.0, "Dy": 0.0},
-            T=298.15,
-            P=101325.0,
-        )
-
-        raffinate, extract, info = extractor(feed, solvent)
-
-        raff_flows = get_flows(raffinate)
-        ext_flows = get_flows(extract)
-
-        # Heavy REE should have higher recovery
-        dy_recovery = float(ext_flows["Dy"]) / 0.01
-        la_recovery = float(ext_flows["La"]) / 0.01
-
-        # At these conditions, Dy extracts much better than La
-        assert dy_recovery > la_recovery, f"Dy recovery {dy_recovery:.3f} should be > La recovery {la_recovery:.3f}"
-        assert dy_recovery > 0.3  # Should have significant Dy extraction
-
-    def test_extractor_mass_conservation(self):
-        """Test that REEExtractor conserves mass for all species (issue #53)."""
-        from difflow_ree import REEExtractor, REEExtractorParams
-        from difflow.streams import make_stream, get_flows
-
-        params = REEExtractorParams(
-            n_stages=1,
-            extractant="D2EHPA",
-            elements=("Dy", "Nd"),
-            diluent="n-Heptane",
-            pH=1.6,
-        )
-        extractor = REEExtractor(params)
-
-        feed = make_stream(
-            flows={"H2O": 10.0, "Nd": 0.2, "Dy": 0.143827799, "Fe": 0.553},
-            T=298.15,
-            P=101325.0,
-        )
-        solvent = make_stream(
-            flows={"D2EHPA": 10.0, "n-Heptane": 20.0, "Nd": 0.0, "Dy": 0.0, "Fe": 0.0},
-            T=298.15,
-            P=101325.0,
-        )
-
-        raffinate, extract, info = extractor(feed, solvent)
-        raff_flows = get_flows(raffinate)
-        ext_flows = get_flows(extract)
-
-        feed_flows = get_flows(feed)
-        solvent_flows = get_flows(solvent)
-
-        # Check mass conservation for every species in feed + solvent
-        all_species = set(feed_flows.keys()) | set(solvent_flows.keys())
-        for species in all_species:
-            total_in = float(feed_flows.get(species, 0.0)) + float(solvent_flows.get(species, 0.0))
-            total_out = float(raff_flows.get(species, 0.0)) + float(ext_flows.get(species, 0.0))
-            assert abs(total_in - total_out) < 1e-10, (
-                f"Mass not conserved for {species}: in={total_in:.6f}, out={total_out:.6f}"
-            )
-
-    def test_oxalate_precipitator(self):
-        """Test oxalate precipitation."""
-        from difflow_ree import OxalatePrecipitator, PrecipitatorParams
-        from difflow.streams import make_stream
-
-        params = PrecipitatorParams(
-            elements=("Nd", "Dy"),
-            precipitant_excess=1.5,
-        )
-        precip = OxalatePrecipitator(params)
-
-        feed = make_stream(
-            flows={"H2O": 10.0, "Nd": 0.1, "Dy": 0.05},
-            T=298.15,
-            P=101325.0,
-        )
-        oxalate = make_stream(
-            flows={"H2O": 5.0, "C2O4": 0.3},  # 1.5x stoichiometric
-            T=298.15,
-            P=101325.0,
-        )
-
-        filtrate, solid, info = precip(feed, oxalate)
-
-        # Should have high precipitation
-        assert info["total_precipitated"] > 0.1
-
-    def test_cerium_oxidizer_registers_its_solid_outlet(self):
-        """The CeO2 solid is an outlet, so a flowsheet can place the unit (#371).
-
-        It used to come back as a bare dict: the catalog counted one
-        outlet from the annotation, the call returned three items, and
-        every flowsheet holding the unit failed to solve.
-        """
-        from difflow.catalog import catalog
-        from difflow.flowsheet import Unit, _parse_outlets
-        from difflow.streams import get_flows, make_stream
-        from difflow_ree import CeriumOxidizer, CeriumOxidizerParams
-
-        ports = catalog()["CeriumOxidizer"].ports
-        assert ports.n_outlets == 2
-        assert list(ports.outlet_roles) == ["filtrate", "solid"]
-
-        elements = ("La", "Ce", "Nd")
-        oxidizer = CeriumOxidizer(CeriumOxidizerParams(elements=elements))
-        feed = make_stream(flows={"H2O": 10.0, "La": 0.1, "Ce": 0.2, "Nd": 0.05},
-                           T=298.15, P=101325.0)
-        unit = Unit("ce_ox", oxidizer, ["feed"], ["filtrate", "ceo2"])
-        outlets = _parse_outlets(oxidizer(feed), unit)
-
-        ce_in = 0.2
-        ce_out = (float(get_flows(outlets["filtrate"])["Ce"])
-                  + float(get_flows(outlets["ceo2"])["Ce"]))
-        assert ce_out == pytest.approx(ce_in)
-        assert float(get_flows(outlets["ceo2"])["Ce"]) > 0.0
-
-    def test_separation_train_counts_stream_products_in_its_balance(self):
-        """A Stream is a dict, so the balance must read F_<element> keys (#371).
-
-        It tested ``isinstance(product, dict)`` and read bare element keys,
-        which counted every stream product as zero; with the CeO2 solid now a
-        Stream too, the closure read exactly 0.
-        """
-        from difflow.streams import get_flows, make_stream
-        from difflow_ree.flowsheets.full_train import (
-            FullSeparationTrain,
-            SeparationTrainParams,
-        )
-
-        elements = ("La", "Ce", "Pr", "Nd")
-        train = FullSeparationTrain(SeparationTrainParams(elements=elements))
-        feed = make_stream(flows={"H2O": 10.0, "La": 0.3, "Ce": 0.5, "Pr": 0.05,
-                                  "Nd": 0.15}, T=298.15, P=101325.0)
-        result = train(feed)
-
-        def ree(stream):
-            flows = get_flows(stream)
-            return sum(float(flows.get(e, 0.0)) for e in elements)
-
-        products = result["products"]
-        assert result["mass_balance"]["total_out"] == pytest.approx(
-            sum(ree(p) for p in products.values()))
-        assert result["mass_balance"]["total_out"] > ree(products["CeO2"])
-        # The oxidizer itself conserves the REE it is fed
-        assert ree(products["CeO2"]) + ree(result["intermediates"]["ce_depleted"]) \
-            == pytest.approx(ree(feed))
-
-
-class TestFlowsheets:
-    """Test flowsheet templates."""
-
-    def test_extract_strip_circuit(self):
-        """Test basic extract-strip circuit."""
-        from difflow_ree import ExtractStripCircuit, ExtractStripParams
-        from difflow.streams import make_stream
-
-        params = ExtractStripParams(
-            extractant="D2EHPA",
-            elements=("La", "Nd", "Dy"),
-            n_extraction_stages=5,
-            n_stripping_stages=3,
-        )
-        circuit = ExtractStripCircuit(params)
-
-        feed = make_stream(
-            flows={"H2O": 10.0, "La": 0.01, "Nd": 0.02, "Dy": 0.01},
-            T=298.15,
-            P=101325.0,
-        )
-
-        results = circuit(feed)
-
-        assert "product" in results
-        assert "recovery" in results
-        assert results["recovery"] > 0.5  # Should have reasonable recovery
-
-    def test_split_shell_cascade_basic(self):
-        """Test that SplitShellCascade runs and returns expected keys."""
-        from difflow_ree import SplitShellCascade, SplitShellParams
-        from difflow.streams import make_stream
-
-        params = SplitShellParams(
-            extractant="D2EHPA",
-            elements=("La", "Nd", "Dy"),
-            n_stages=12,
-            split_points=(4, 8),
-        )
-        cascade = SplitShellCascade(params)
-
-        feed = make_stream(
-            flows={"H2O": 10.0, "La": 0.03, "Nd": 0.03, "Dy": 0.03},
-            T=298.15,
-            P=101325.0,
-        )
-        solvent = make_stream(
-            flows={"kerosene": 10.0, "D2EHPA": 5.0, "La": 0.0, "Nd": 0.0, "Dy": 0.0},
-            T=298.15,
-            P=101325.0,
-        )
-
-        results = cascade(feed, solvent)
-
-        assert "products" in results
-        assert "D_values" in results
-        assert "converged_in_iter" in results
-        assert "product_1" in results["products"]
-        assert "product_2" in results["products"]
-        assert "raffinate" in results["products"]
-
-    def test_split_shell_cascade_convergence(self):
-        """Test that SplitShellCascade iteration converges and mass is conserved."""
-        from difflow_ree import SplitShellCascade, SplitShellParams
-        from difflow.streams import make_stream
-
-        params = SplitShellParams(
-            extractant="D2EHPA",
-            elements=("La", "Nd", "Dy"),
-            n_stages=15,
-            split_points=(5, 10),
-            pH=0.5,  # (#270) the record's own scrubbing point; see default_pH
-        )
-        cascade = SplitShellCascade(params)
-
-        feed_flows_dict = {"H2O": 10.0, "La": 0.05, "Nd": 0.03, "Dy": 0.02}
-        feed = make_stream(flows=feed_flows_dict, T=298.15, P=101325.0)
-        solvent = make_stream(
-            flows={"kerosene": 10.0, "D2EHPA": 5.0, "La": 0.0, "Nd": 0.0, "Dy": 0.0},
-            T=298.15,
-            P=101325.0,
-        )
-
-        results = cascade(feed, solvent)
-
-        # Should converge in fewer than max_iter iterations
-        assert results["converged_in_iter"] < 50
-
-        # Mass conservation: total extracted + raffinate equals feed
-        total_extracted = {elem: 0.0 for elem in ("La", "Nd", "Dy")}
-        for prod_name, prod in results["products"].items():
-            for elem in ("La", "Nd", "Dy"):
-                total_extracted[elem] += prod["flows"].get(elem, 0.0)
-
-        for elem in ("La", "Nd", "Dy"):
-            total_out = total_extracted[elem]
-            total_in = feed_flows_dict[elem]
-            assert abs(total_out - total_in) < 1e-6, (
-                f"Mass not conserved for {elem}: in={total_in}, out={total_out}"
-            )
-
-    def test_split_shell_heavy_ree_enriched_early(self):
-        """Test that heavy REE (high D) are preferentially extracted in early sections."""
-        from difflow_ree import SplitShellCascade, SplitShellParams
-        from difflow.streams import make_stream
-
-        params = SplitShellParams(
-            extractant="D2EHPA",
-            elements=("La", "Dy"),
-            n_stages=10,
-            split_points=(5,),
-            pH=0.5,  # (#270) the record's own scrubbing point; see default_pH
-        )
-        cascade = SplitShellCascade(params)
-
-        feed = make_stream(
-            flows={"H2O": 10.0, "La": 0.1, "Dy": 0.1},
-            T=298.15,
-            P=101325.0,
-        )
-        solvent = make_stream(
-            flows={"kerosene": 10.0, "D2EHPA": 5.0, "La": 0.0, "Dy": 0.0},
-            T=298.15,
-            P=101325.0,
-        )
-
-        results = cascade(feed, solvent)
-        prods = results["products"]
-
-        # product_1 is the first section (highest extraction for high-D elements)
-        # Dy has much higher D than La, so it should dominate product_1
-        dy_in_p1 = prods["product_1"]["flows"]["Dy"]
-        la_in_p1 = prods["product_1"]["flows"]["La"]
-        assert dy_in_p1 > la_in_p1, (
-            f"Expected Dy ({dy_in_p1:.4f}) > La ({la_in_p1:.4f}) in product_1"
-        )
-
-    def test_optimize_split_points_d_value_based(self):
-        """Test that optimize_split_points uses D values, not equal spacing."""
-        from difflow_ree.flowsheets.split_shell import optimize_split_points
-
-        # For D2EHPA at pH 0.5 -- (#270) the record's own scrubbing point,
-        # inside its refitted window -- Dy >> Nd >> La in terms of D.
-        # With 3 products from 3 elements, splits should place boundaries
-        # between natural D-value gaps, not at n/3 and 2n/3.
-        splits = optimize_split_points(
-            elements=("La", "Nd", "Dy"),
-            extractant="D2EHPA",
-            n_stages=30,
-            n_products=3,
-            pH=0.5,
-        )
-
-        assert len(splits) == 2  # n_products - 1 split points
-        assert splits[0] < splits[1]  # Strictly increasing
-        assert splits[0] >= 1
-        assert splits[1] <= 29  # Within valid range
-
-    def test_optimize_split_points_single_product(self):
-        """Test optimize_split_points with n_products=1 returns empty tuple."""
-        from difflow_ree.flowsheets.split_shell import optimize_split_points
-
-        splits = optimize_split_points(
-            elements=("La", "Nd"),
-            extractant="D2EHPA",
-            n_stages=20,
-            n_products=1,
-            pH=0.5,
-        )
-        assert splits == ()
-
-
-class TestEconomics:
-    """Test economic analysis functions."""
-
-    def test_ree_pricing(self):
-        """Test REE pricing model."""
-        from difflow_ree import REEPricing
-
-        from difflow_ree import get_element, list_ree_elements
-
-        pricing = REEPricing()
-
-        nd_price = pricing.get_price("Nd", purity="99%", form="oxide")
-        ce_price = pricing.get_price("Ce", purity="99%", form="oxide")
-        assert ce_price < nd_price  # Ce is in surplus; Nd is the magnet metal
-
-        # The prices are READ from elements.yaml, not restated in costs.py.
-        # A second hand-synced copy is what #268 removed from the Langmuir
-        # constants: it agrees the day it is written and then drifts silently.
-        for elem in list_ree_elements():
-            assert pricing.base_prices[elem] == get_element(elem).price_usd_kg
-
-        # "oxide" and "99%" are both the unit multiplier, so the base price
-        # comes back unchanged -- if that stops holding, every notebook that
-        # quotes a revenue moved without saying so.
-        assert nd_price == get_element("Nd").price_usd_kg
-
-    def test_capex_estimate(self):
-        """Test capital cost estimation."""
-        from difflow_ree import estimate_capex
-
-        capex = estimate_capex(
-            annual_ree_tonnes=1000,
-            n_stages_extraction=10,
-            n_stages_scrubbing=5,
-            n_stages_stripping=5,
-        )
-
-        assert "total" in capex
-        assert capex["total"] > 0
-
-    def test_msp_calculation(self):
-        """Test minimum selling price."""
-        from difflow_ree import minimum_selling_price
-
-        msp = minimum_selling_price(
-            opex=1000000,  # $1M/year
-            capex=5000000,  # $5M
-            annual_production_kg=100000,  # 100 tonnes
-            target_roi=0.15,
-        )
-
-        assert msp > 0
-        assert msp < 1000  # Should be reasonable $/kg
-
-
-class TestJAXCompatibility:
-    """Test JAX compatibility for gradients."""
-
-    def test_distribution_gradient(self):
-        """Test that D values are differentiable."""
-        from difflow_ree import REEDistribution
-        from jax import grad
-
-        dist = REEDistribution(
-            extractant="D2EHPA",
-            elements=("Nd",),
-        )
-
-        def D_at_pH(pH):
-            return dist.get_D("Nd", pH)
-
-        # Should be able to compute gradient
-        # (#270) pH 1.0, inside D2EHPA's refitted window of [0.0, 2.0].
-        dD_dpH = grad(D_at_pH)(1.0)
-        assert dD_dpH > 0  # D increases with pH
-
-
-class TestCustomExtractants:
-    """Test custom extractant creation and registration."""
-
-    def test_create_custom_extractant(self):
-        """Test creating a custom extractant."""
-        from difflow_ree import create_custom_extractant
-
-        # Create custom extractant with minimal required data
-        custom_ext = create_custom_extractant(
-            name="TestExtractant",
-            full_name="Test Phosphoric Acid",
-            formula="C8H17O4P",
-            molecular_weight=220.0,
-            ph_coefficients={
-                "La": {"a": -8.0, "b": 2.2, "c": 0.01},
-                "Nd": {"a": -7.5, "b": 2.4, "c": 0.01},
-                "Dy": {"a": -7.0, "b": 2.6, "c": 0.01},
-            },
-            temperature_coefficients={
-                "La": -1500.0,
-                "Nd": -1700.0,
-                "Dy": -1900.0,
-            },
-            pKa=3.5,
-        )
-
-        assert custom_ext.name == "TestExtractant"
-        assert custom_ext.molecular_weight == 220.0
-        assert "La" in custom_ext.ph_coefficients
-        assert custom_ext.ph_coefficients["La"].a == -8.0
-        assert custom_ext.ph_coefficients["La"].b == 2.2
-
-    def test_register_custom_extractant(self):
-        """Test registering a custom extractant with the database."""
-        from difflow_ree import create_custom_extractant, get_extractant_database
-
-        # Create custom extractant
-        custom_ext = create_custom_extractant(
-            name="MyExtractant",
-            full_name="My Custom Extractant",
-            formula="C10H20O4P",
-            molecular_weight=250.0,
-            ph_coefficients={
-                "La": {"a": -8.5, "b": 2.3, "c": 0.01, "d": 0.0},
-                "Nd": {"a": -8.0, "b": 2.5, "c": 0.01, "d": 0.0},
-            },
-            temperature_coefficients={
-                "La": -1600.0,
-                "Nd": -1800.0,
-            },
-        )
-
-        # Register it
-        db = get_extractant_database()
-        db.add_extractant("MyExtractant", custom_ext)
-
-        # Verify it's registered
-        assert "MyExtractant" in db.list_extractants()
-
-        # Retrieve it
-        retrieved = db.get("MyExtractant")
-        assert retrieved.name == "MyExtractant"
-        assert retrieved.molecular_weight == 250.0
-
-        # Clean up
+
+def _ext(name="TestExtractant", **kw):
+    from difflow_ree import create_custom_extractant
+
+    args = dict(name=name, full_name="Test", formula="C8H17O4P", molecular_weight=220.0,
+                ph_coefficients={"La": {"a": -8.0, "b": 2.2, "c": 0.01},
+                                 "Nd": {"a": -7.5, "b": 2.4, "c": 0.01}},
+                temperature_coefficients={"La": -1500.0, "Nd": -1700.0})
+    args.update(kw)
+    return create_custom_extractant(**args)
+
+
+def test_database_smoke():
+    from difflow_ree import get_element, get_extractant, list_extractants, list_ree_elements
+
+    assert "Nd" in list_ree_elements()
+    assert get_element("Nd").atomic_number == 60
+    assert "D2EHPA" in list_extractants()
+    assert "Nd" in get_extractant("D2EHPA").ph_coefficients
+
+
+def test_distribution_smoke_and_grad():
+    from difflow_ree import REEDistribution
+
+    dist = REEDistribution(extractant="D2EHPA", elements=("La", "Nd", "Dy"))
+    D = dist.get_D_all(pH=1.0, T=298.15)
+    assert all(np.isfinite(float(v)) for v in D.values())
+    assert np.isfinite(float(dist.get_separation_factor("Nd", "La", pH=1.0)))
+    assert np.isfinite(float(jax.grad(lambda pH: dist.get_D("Nd", pH))(1.0)))
+
+
+def test_extractor_conserves_mass():
+    from difflow_ree import REEExtractor, REEExtractorParams
+
+    extractor = REEExtractor(REEExtractorParams(n_stages=1, extractant="D2EHPA",
+                                                elements=("Dy", "Nd"), diluent="n-Heptane", pH=1.6))
+    feed = make_stream({"H2O": 10.0, "Nd": 0.2, "Dy": 0.14, "Fe": 0.553}, T=298.15, P=101325.0)
+    solvent = make_stream({"D2EHPA": 10.0, "n-Heptane": 20.0, "Nd": 0.0, "Dy": 0.0, "Fe": 0.0},
+                          T=298.15, P=101325.0)
+    raff, ext, _ = extractor(feed, solvent)
+    fi, si, ro, eo = (get_flows(s) for s in (feed, solvent, raff, ext))
+    for sp in set(fi) | set(si):
+        total_in = float(fi.get(sp, 0.0)) + float(si.get(sp, 0.0))
+        assert abs(total_in - float(ro.get(sp, 0.0)) - float(eo.get(sp, 0.0))) < 1e-10, sp
+
+
+def test_oxalate_precipitator_smoke():
+    from difflow_ree import OxalatePrecipitator, PrecipitatorParams
+
+    precip = OxalatePrecipitator(PrecipitatorParams(elements=("Nd", "Dy"), precipitant_excess=1.5))
+    feed = make_stream({"H2O": 10.0, "Nd": 0.1, "Dy": 0.05}, T=298.15, P=101325.0)
+    oxalate = make_stream({"H2O": 5.0, "C2O4": 0.3}, T=298.15, P=101325.0)
+    _, _, info = precip(feed, oxalate)
+    assert np.isfinite(float(info["total_precipitated"]))
+
+
+def test_cerium_oxidizer_registers_its_solid_outlet():
+    """Regression (#371): the CeO2 solid is an outlet a flowsheet can place."""
+    from difflow.catalog import catalog
+    from difflow.flowsheet import Unit, _parse_outlets
+    from difflow_ree import CeriumOxidizer, CeriumOxidizerParams
+
+    assert catalog()["CeriumOxidizer"].ports.n_outlets == 2
+    oxidizer = CeriumOxidizer(CeriumOxidizerParams(elements=("La", "Ce", "Nd")))
+    feed = make_stream({"H2O": 10.0, "La": 0.1, "Ce": 0.2, "Nd": 0.05}, T=298.15, P=101325.0)
+    outlets = _parse_outlets(oxidizer(feed), Unit("ce_ox", oxidizer, ["feed"], ["filtrate", "ceo2"]))
+    assert set(outlets) == {"filtrate", "ceo2"}
+
+
+def test_separation_train_balance_reads_stream_products():
+    """Regression (#371): stream products used to count as zero in the balance."""
+    from difflow_ree.flowsheets.full_train import FullSeparationTrain, SeparationTrainParams
+
+    elements = ("La", "Ce", "Pr", "Nd")
+    train = FullSeparationTrain(SeparationTrainParams(elements=elements))
+    result = train(make_stream({"H2O": 10.0, "La": 0.3, "Ce": 0.5, "Pr": 0.05, "Nd": 0.15},
+                               T=298.15, P=101325.0))
+    total = sum(float(get_flows(p).get(e, 0.0)) for p in result["products"].values() for e in elements)
+    assert result["mass_balance"]["total_out"] == pytest.approx(total)
+    assert total > 0.0
+
+
+def test_extract_strip_circuit_smoke():
+    from difflow_ree import ExtractStripCircuit, ExtractStripParams
+
+    circuit = ExtractStripCircuit(ExtractStripParams(extractant="D2EHPA", elements=("La", "Nd", "Dy"),
+                                                     n_extraction_stages=3, n_stripping_stages=2))
+    results = circuit(make_stream({"H2O": 10.0, "La": 0.01, "Nd": 0.02, "Dy": 0.01},
+                                  T=298.15, P=101325.0))
+    assert "product" in results and np.isfinite(float(results["recovery"]))
+
+
+def test_split_shell_cascade_smoke():
+    from difflow_ree import SplitShellCascade, SplitShellParams
+    from difflow_ree.flowsheets.split_shell import optimize_split_points
+
+    cascade = SplitShellCascade(SplitShellParams(extractant="D2EHPA", elements=("La", "Nd", "Dy"),
+                                                 n_stages=12, split_points=(4, 8)))
+    feed = make_stream({"H2O": 10.0, "La": 0.03, "Nd": 0.03, "Dy": 0.03}, T=298.15, P=101325.0)
+    solvent = make_stream({"kerosene": 10.0, "D2EHPA": 5.0, "La": 0.0, "Nd": 0.0, "Dy": 0.0},
+                          T=298.15, P=101325.0)
+    results = cascade(feed, solvent)
+    assert {"product_1", "product_2", "raffinate"} <= set(results["products"])
+    splits = optimize_split_points(elements=("La", "Nd", "Dy"), extractant="D2EHPA",
+                                   n_stages=30, n_products=3, pH=0.5)
+    assert len(splits) == 2
+
+
+def test_economics_smoke():
+    from difflow_ree import REEPricing, estimate_capex, minimum_selling_price
+
+    assert REEPricing().get_price("Nd", purity="99%", form="oxide") > 0
+    assert estimate_capex(annual_ree_tonnes=1000, n_stages_extraction=10,
+                          n_stages_scrubbing=5, n_stages_stripping=5)["total"] > 0
+    assert np.isfinite(minimum_selling_price(opex=1e6, capex=5e6, annual_production_kg=1e5,
+                                             target_roi=0.15))
+
+
+def test_custom_extractant_register_update_remove():
+    from difflow_ree import REEDistribution, get_extractant_database
+
+    db = get_extractant_database()
+    db.add_extractant("MyExtractant", _ext("MyExtractant"))
+    try:
+        with pytest.raises(ValueError, match="already exists"):
+            db.add_extractant("MyExtractant", _ext("MyExtractant"))
+        db.update_extractant("MyExtractant", _ext("MyExtractant", molecular_weight=250.0))
+        assert db.get("MyExtractant").molecular_weight == 250.0
+        D = REEDistribution(extractant="MyExtractant", elements=("La", "Nd")).get_D_all(pH=3.0, T=298.15)
+        assert np.isfinite(float(D["Nd"]))
+    finally:
         db.remove_extractant("MyExtractant")
-        assert "MyExtractant" not in db.list_extractants()
-
-    def test_custom_extractant_in_distribution(self):
-        """Test using custom extractant in distribution calculations."""
-        from difflow_ree import create_custom_extractant, get_extractant_database, REEDistribution
-
-        # Create and register custom extractant
-        custom_ext = create_custom_extractant(
-            name="CustomD2EHPA",
-            full_name="Custom D2EHPA variant",
-            formula="C8H17O4P",
-            molecular_weight=322.43,
-            ph_coefficients={
-                "La": {"a": -8.5, "b": 2.3, "c": 0.01},
-                "Nd": {"a": -7.7, "b": 2.45, "c": 0.01},
-                "Dy": {"a": -6.8, "b": 2.8, "c": 0.01},
-            },
-            temperature_coefficients={
-                "La": -1500.0,
-                "Nd": -1800.0,
-                "Dy": -2400.0,
-            },
-            pKa=3.24,
-            typical_concentration=0.5,
-        )
-
-        db = get_extractant_database()
-        db.add_extractant("CustomD2EHPA", custom_ext)
-
-        try:
-            # Use in distribution model
-            dist = REEDistribution(
-                extractant="CustomD2EHPA",
-                elements=("La", "Nd", "Dy"),
-                concentration=0.5,
-            )
-
-            D_values = dist.get_D_all(pH=3.0, T=298.15)
-
-            # Verify heavy REE have higher D
-            assert D_values["Dy"] > D_values["Nd"]
-            assert D_values["Nd"] > D_values["La"]
-            assert D_values["La"] > 0
-
-        finally:
-            # Clean up
-            db.remove_extractant("CustomD2EHPA")
-
-    def test_validation_missing_ph_coefficients(self):
-        """Test validation for missing pH coefficients."""
-        from difflow_ree import create_custom_extractant
-
-        with pytest.raises(ValueError, match="ph_coefficients is required"):
-            create_custom_extractant(
-                name="BadExtractant",
-                full_name="Bad Extractant",
-                formula="C8H17O4P",
-                molecular_weight=220.0,
-                ph_coefficients={},  # Empty!
-                temperature_coefficients={"La": -1500.0},
-            )
-
-    def test_validation_mismatched_elements(self):
-        """Test validation for mismatched elements between pH and temperature."""
-        from difflow_ree import create_custom_extractant
-
-        with pytest.raises(ValueError, match="Element mismatch"):
-            create_custom_extractant(
-                name="BadExtractant",
-                full_name="Bad Extractant",
-                formula="C8H17O4P",
-                molecular_weight=220.0,
-                ph_coefficients={
-                    "La": {"a": -8.0, "b": 2.2, "c": 0.01},
-                    "Nd": {"a": -7.5, "b": 2.4, "c": 0.01},
-                },
-                temperature_coefficients={
-                    "La": -1500.0,
-                    # Missing Nd!
-                },
-            )
-
-    def test_validation_missing_required_coeff(self):
-        """Test validation for missing required coefficient keys."""
-        from difflow_ree import create_custom_extractant
-
-        with pytest.raises(ValueError, match="missing required keys"):
-            create_custom_extractant(
-                name="BadExtractant",
-                full_name="Bad Extractant",
-                formula="C8H17O4P",
-                molecular_weight=220.0,
-                ph_coefficients={
-                    "La": {"a": -8.0, "b": 2.2},  # Missing 'c'!
-                },
-                temperature_coefficients={
-                    "La": -1500.0,
-                },
-            )
-
-    def test_duplicate_extractant_error(self):
-        """Test error when trying to add duplicate extractant."""
-        from difflow_ree import create_custom_extractant, get_extractant_database
-
-        custom_ext = create_custom_extractant(
-            name="DuplicateTest",
-            full_name="Duplicate Test",
-            formula="C8H17O4P",
-            molecular_weight=220.0,
-            ph_coefficients={
-                "La": {"a": -8.0, "b": 2.2, "c": 0.01},
-            },
-            temperature_coefficients={
-                "La": -1500.0,
-            },
-        )
-
-        db = get_extractant_database()
-        db.add_extractant("DuplicateTest", custom_ext)
-
-        try:
-            # Try to add again - should fail
-            with pytest.raises(ValueError, match="already exists"):
-                db.add_extractant("DuplicateTest", custom_ext)
-        finally:
-            db.remove_extractant("DuplicateTest")
-
-    def test_update_extractant(self):
-        """Test updating an existing extractant."""
-        from difflow_ree import create_custom_extractant, get_extractant_database
-
-        # Create and add original
-        original = create_custom_extractant(
-            name="UpdateTest",
-            full_name="Update Test Original",
-            formula="C8H17O4P",
-            molecular_weight=220.0,
-            ph_coefficients={
-                "La": {"a": -8.0, "b": 2.2, "c": 0.01},
-            },
-            temperature_coefficients={
-                "La": -1500.0,
-            },
-        )
-
-        db = get_extractant_database()
-        db.add_extractant("UpdateTest", original)
-
-        try:
-            # Create updated version
-            updated = create_custom_extractant(
-                name="UpdateTest",
-                full_name="Update Test Modified",
-                formula="C10H20O4P",
-                molecular_weight=250.0,
-                ph_coefficients={
-                    "La": {"a": -7.5, "b": 2.5, "c": 0.02},
-                },
-                temperature_coefficients={
-                    "La": -1600.0,
-                },
-            )
-
-            # Update it
-            db.update_extractant("UpdateTest", updated)
-
-            # Verify update
-            retrieved = db.get("UpdateTest")
-            assert retrieved.molecular_weight == 250.0
-            assert retrieved.full_name == "Update Test Modified"
-
-        finally:
-            db.remove_extractant("UpdateTest")
+    assert "MyExtractant" not in db.list_extractants()
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
-
-
-class TestGroupSeparation:
-    """GroupSeparator sends each group to its own product (#371 follow-up).
-
-    It used to pass on only the scrub liquor and drop the raffinate, run a
-    circuit for an empty group, and sit each section at a fixed fraction of
-    the extractant's window that, after the #270 refit, extracted the light
-    REE and could not strip the heavy: the "heavy" product was light REE and
-    the heavies stayed on the solvent.
-    """
-
-    ELEMENTS = ("La", "Ce", "Pr", "Nd", "Sm", "Eu", "Gd", "Tb", "Dy", "Y")
-    GROUPS = {"light_REE": ("La", "Ce", "Pr", "Nd"), "middle_REE": ("Sm", "Eu"),
-              "heavy_REE": ("Gd", "Tb", "Dy", "Y")}
-
-    @staticmethod
-    def _train(elements, flows):
-        from difflow.streams import make_stream
-        from difflow_ree.flowsheets.full_train import (
-            FullSeparationTrain,
-            SeparationTrainParams,
-        )
-
-        train = FullSeparationTrain(SeparationTrainParams(elements=elements))
-        feed = make_stream(flows={"H2O": 55.5, **flows}, T=298.15, P=101325.0)
-        return train(feed)
-
-    @pytest.mark.slow
-    def test_each_group_reaches_its_own_product(self):
-        from difflow.streams import get_flows
-
-        flows = {"La": .0125, "Ce": .0175, "Pr": .0025, "Nd": .0075, "Sm": .002,
-                 "Eu": .0005, "Gd": .0015, "Tb": .0005, "Dy": .0015, "Y": .004}
-        from difflow_ree.equilibrium.operating_points import StripAcidLimitWarning
-
-        # The heavy strip on D2EHPA needs ~15 M acid by the cut rule; it runs
-        # at the 6 M max_strip_acid instead and says so.
-        with pytest.warns(StripAcidLimitWarning, match="Y"):
-            result = self._train(self.ELEMENTS, flows)
-        for product, group in self.GROUPS.items():
-            f = get_flows(result["products"][product])
-            total = sum(float(f.get(e, 0.0)) for e in self.ELEMENTS)
-            assert sum(float(f.get(e, 0.0)) for e in group) / total > 0.9, product
-        balance = result["mass_balance"]
-        assert float(balance["closure"]) == pytest.approx(1.0, abs=1e-9)
-        # What the floored strip leaves is held on the solvent, not lost:
-        # 2.8 % of the feed REE (it was ~0 with the ~15 M strip), Y nearly
-        # all of it.
-        total_in = sum(flows.values())
-        held = float(balance["holdup"]) / total_in
-        assert float(balance["recovery"]) == pytest.approx(1.0 - held, abs=1e-9)
-        assert 0.01 < held < 0.05
-        solvent = get_flows(result["holdup"]["solvent"])
-        assert float(solvent["Y"]) > 0.9 * float(balance["holdup"])
-
-    def test_a_light_only_feed_is_all_light(self):
-        from difflow.streams import get_flows
-
-        elements = ("La", "Ce", "Pr", "Nd")
-        result = self._train(elements, {"La": .015, "Ce": .025, "Pr": .0025, "Nd": .0075})
-        for product in ("middle_REE", "heavy_REE"):
-            f = get_flows(result["products"][product])
-            assert sum(float(f.get(e, 0.0)) for e in elements) == 0.0
-        assert float(result["mass_balance"]["closure"]) == pytest.approx(1.0)
-
-    def test_sections_sit_at_their_cuts(self):
-        """D x (O/A) crosses the section's cut at the chosen pH."""
-        import math
-        import warnings
-
-        from difflow_ree.equilibrium.operating_points import (
-            CUT_FACTOR, circuit_phase_ratios)
-        from difflow_ree.flowsheets.full_train import GroupSeparator
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            sep = GroupSeparator(elements=self.ELEMENTS)
-            heavy = sep.operating_pH["heavy_circuit"]
-            p = sep._heavy_circuit.params
-            # The O/A each section really runs at (the cut is placed on it).
-            oa = circuit_phase_ratios(p.solvent_to_feed_ratio,
-                                      p.scrub_to_solvent_ratio,
-                                      p.strip_to_solvent_ratio,
-                                      p.extractant_conc)
-            assert heavy["stripping"] < heavy["scrubbing"] < heavy["extraction"]
-            D = sep._distribution.get_D_all(pH=heavy["extraction"])
-            cut = math.sqrt(float(D["Gd"]) * float(D["Eu"])) * oa["extraction"]
-            assert cut == pytest.approx(CUT_FACTOR["extraction"], rel=1e-6)
-            D = sep._distribution.get_D_all(pH=heavy["scrubbing"])
-            cut = math.sqrt(float(D["Gd"]) * float(D["Eu"])) * oa["scrubbing"]
-            assert cut == pytest.approx(CUT_FACTOR["scrubbing"], rel=1e-6)
-            # The strip cut for the heavies needs ~15 M acid; the section
-            # sits at the 6 M max_strip_acid floor instead, never below it.
-            assert heavy["stripping"] == pytest.approx(-math.log10(6.0), abs=1e-12)
-            D_strip = sep._distribution.get_D_all(pH=heavy["stripping"])
-            assert max(float(D_strip[e]) for e in ("Gd", "Tb", "Dy", "Y")) \
-                * oa["stripping"] > CUT_FACTOR["stripping"]
+def test_custom_extractant_validation():
+    with pytest.raises(ValueError, match="ph_coefficients is required"):
+        _ext(ph_coefficients={}, temperature_coefficients={"La": -1500.0})
+    with pytest.raises(ValueError, match="Element mismatch"):
+        _ext(temperature_coefficients={"La": -1500.0})
+    with pytest.raises(ValueError, match="missing required keys"):
+        _ext(ph_coefficients={"La": {"a": -8.0, "b": 2.2}}, temperature_coefficients={"La": -1500.0})

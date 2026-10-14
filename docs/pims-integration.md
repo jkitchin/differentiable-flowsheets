@@ -76,8 +76,7 @@ embedded, so `jax.jacobian` returns the *reduced* input-output sensitivity
 directly, already implicitly differentiated through those inner solves. That
 reduced Jacobian **is** the delta vector, and it costs a small constant multiple
 of one model evaluation regardless of $n$
-(`difflow.planning.benchmark` measures it; the ratio is locked in as a
-regression test).
+(`difflow.planning.benchmark` measures it).
 
 That asymmetry — $O(1)$ against $O(n)$ — is the whole basis of the feature. It
 is not "difflow is a better planner." It is "the expensive step in your existing
@@ -492,7 +491,6 @@ Risks carried by the two other plays rather than by the bridge:
 | Path | Contents |
 |---|---|
 | `src/difflow/planning/pims.py` | `PIMSMapping`, `write_pims`, `read_pims_model`, `compare_vectors` — a writer on `export.DeltaVectorSet`, kept out of `export.py` because the importer and the basis layer have no business there |
-| `tests/test_planning_pims.py` | Round trip, closure, golden, refusal tests |
 | `tests/fixtures/` | Synthetic PIMS-layout workbook |
 | `docs/planning.md` | Cross-reference once implemented |
 | `pyproject.toml` | New `pims` extra (`openpyxl`) — there is no Excel dependency in the project today |

@@ -13,8 +13,8 @@ Every function takes and returns SI units (K, Pa, J/mol, g/mol) whatever units
 the correlation was published in; the conversions live inside, next to the
 published constants, so the constants can be checked against their source.
 
-Accuracy, measured against 13 pure hydrocarbons (n-C5 to n-C20, two
-naphthenes, three aromatics; ``tests/refinery/test_correlations.py``)::
+Accuracy, measured when written against 13 pure hydrocarbons (n-C5 to n-C20,
+two naphthenes, three aromatics)::
 
     method               MW     Tc     Pc     (average absolute % deviation)
     twu (= twu_1984)     0.5    0.4    1.8

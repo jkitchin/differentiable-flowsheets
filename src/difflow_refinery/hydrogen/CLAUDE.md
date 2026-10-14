@@ -27,4 +27,4 @@ A library, not a palette operation.
   HDT's `reactor.pH2_in`). PSA defaults are illustrative.
 
 Docs: `docs/unit-operations-refinery.md` ("The hydrogen network"). Tests:
-`tests/refinery/test_hydrogen.py`, `tests/refinery/test_hydrogen_loop.py` (slow).
+`tests/refinery/test_hydrogen.py`.
