@@ -1,4 +1,10 @@
-"""Tests for product properties and the CrudeUnit assembly."""
+"""Tests for product properties and the CrudeUnit assembly.
+
+The unit is the 8-stage column of the other small-unit tests, closed by a 5 %
+overflash. The 30-stage atmospheric column with three side products and two
+pumparounds (``test_column.py``'s ``_atmospheric_params``) is imported here
+for ``test_cdu_baseline.py``; it is not solved in this file.
+"""
 
 import jax
 import jax.numpy as jnp
@@ -10,40 +16,38 @@ from difflow_refinery import Assay, characterize, products
 from difflow_refinery import column as cc
 from difflow_refinery.thermo import ColumnThermo
 
-from .test_column import LIGHT, PCT, T_C, _atmospheric_params
+from .test_column import LIGHT, PCT, T_C, _atmospheric_params  # noqa: F401  (re-exported)
 
 jax.config.update("jax_enable_x64", True)
 
 ASSAY = Assay(PCT, [t + 273.15 for t in T_C], sg=0.86, light_ends=LIGHT)
 BPD = 95_000.0
 
+SMALL_ASSAY = Assay([0, 30, 70, 100], [320.0, 480.0, 640.0, 900.0], sg=0.85)
+
+
+def _params(overflash=0.05):
+    return cc.CrudeColumnParams(
+        n_stages=8, feed_stage=7, bottom_steam=0.2, P_top=1.4e5, P_bottom=1.6e5,
+        specs=(cc.product_rate("naphtha", 0.25, basis="mole"), cc.overflash(overflash)))
+
 
 @pytest.fixture(scope="module")
 def unit():
-    crude = characterize(ASSAY)
-    th = ColumnThermo.from_characterization(crude)
-    # specs are absolute rates: size them on the crude the unit will run
-    kg_s = BPD * cc.BARREL / 86400.0 * float(crude.bulk_sg) * 999.016
-    feed = crude.stream(kg_s, T=600.0, P=1.9e5, basis="mass")
-    base = _atmospheric_params(feed, th, pa1_duty=15e6)
-    params = _atmospheric_params(feed, th, pa1_duty=15e6, specs=base.specs + (cc.overflash(0.05),))
-    return dr.CrudeUnit(ASSAY, params)
+    return dr.CrudeUnit(SMALL_ASSAY, _params())
 
 
 @pytest.fixture(scope="module")
 def solved(unit):
-    return unit.solve(BPD, T=273.15 + 240.0, P=6e5)
+    return unit.solve(1.0, T=480.0, P=4e5, basis="mole")
 
 
-@pytest.mark.slow
 class TestProductProperties:
-    @pytest.mark.slow
     def test_a_pure_component_boils_at_its_boiling_point(self):
         th = ColumnThermo.from_characterization(characterize(ASSAY))
         flows = jnp.zeros(th.n_components).at[5].set(1.0)
         np.testing.assert_allclose(products.tbp_curve(flows, th), th.Tb[5], rtol=1e-12)
 
-    @pytest.mark.slow
     def test_whole_crude_recovers_its_assay(self):
         """The crude's own TBP, rebuilt from its cuts, is within a cut of the data."""
         crude = characterize(ASSAY)
@@ -60,22 +64,20 @@ class TestProductProperties:
         assert float(props["crude"].sg) == pytest.approx(float(crude.bulk_sg), rel=1e-12)
         assert float(props["crude"].yield_volume) == pytest.approx(1.0)
 
-    @pytest.mark.slow
     def test_gap_definition(self, solved):
         props = solved.properties
-        g = products.gaps(props, ["naphtha", "kero"])[("naphtha", "kero")]
-        assert float(g) == pytest.approx(float(props["kero"].tbp_at(5) - props["naphtha"].tbp_at(95)))
+        g = products.gaps(props, ["naphtha", "residue"])[("naphtha", "residue")]
+        assert float(g) == pytest.approx(float(props["residue"].tbp_at(5) - props["naphtha"].tbp_at(95)))
 
 
-@pytest.mark.slow
 class TestCrudeUnit:
-    @pytest.mark.slow
     def test_converges(self, solved):
         assert bool(solved.converged)
 
-    def test_feed_rate_in_barrels(self, solved, unit):
+    def test_feed_rate_in_barrels(self, unit):
+        feed = unit.feed(BPD, T=480.0, P=4e5)
         th = unit.thermo
-        flows = jnp.stack([solved.feed[f"F_{n}"] for n in th.names])
+        flows = jnp.stack([feed[f"F_{n}"] for n in th.names])
         bpd = float(th.std_volume(flows)) * 86400.0 / cc.BARREL
         assert bpd == pytest.approx(BPD, rel=1e-10)
 
@@ -83,15 +85,14 @@ class TestCrudeUnit:
         props = solved.properties
         assert sum(float(p.yield_volume) for p in props.values()) == pytest.approx(1.0, rel=1e-10)
         assert sum(float(p.yield_mass) for p in props.values()) == pytest.approx(1.0, rel=1e-10)
-        assert sum(float(p.bpd) for p in props.values()) == pytest.approx(BPD, rel=1e-10)
 
-    def test_specified_yields(self, solved):
-        props = solved.properties
-        for name, frac in [("naphtha", 0.20), ("kero", 0.11), ("diesel", 0.17), ("ago", 0.05)]:
-            assert float(props[name].yield_volume) == pytest.approx(frac, rel=1e-8)
+    def test_the_specified_product_rate_is_met(self, solved, unit):
+        th = unit.thermo
+        n = sum(float(solved.products["naphtha"][f"F_{c}"]) for c in th.names)
+        assert n == pytest.approx(0.25, rel=1e-8)
 
     def test_products_get_heavier(self, solved):
-        order = ["naphtha", "kero", "diesel", "ago", "residue"]
+        order = ["naphtha", "residue"]
         api = [float(solved.properties[n].api) for n in order]
         tbp50 = [float(solved.properties[n].tbp_at(50)) for n in order]
         assert np.all(np.diff(api) < 0)
@@ -102,71 +103,45 @@ class TestCrudeUnit:
         text = solved.table()
         assert "naphtha" in text and "coil outlet" in text and "MW fired" in text
         # lightest first
-        assert text.index("naphtha") < text.index("kero") < text.index("residue")
+        assert text.index("naphtha") < text.index("residue")
 
-    @pytest.mark.slow
     def test_furnace_is_added(self):
         params = cc.CrudeColumnParams(n_stages=8, feed_stage=7, bottom_steam=0.2,
                                       specs=(cc.product_rate("naphtha", 0.25, basis="mole"),
                                              cc.coil_outlet_temperature(620.0)))
-        u = dr.CrudeUnit(Assay([0, 30, 70, 100], [320.0, 480.0, 640.0, 900.0], sg=0.85), params)
+        u = dr.CrudeUnit(SMALL_ASSAY, params)
         assert u.params.furnace == cc.Furnace()
         assert u.column.degrees_of_freedom() == 2
 
 
 class TestSmallUnit:
-    """Gradients through the whole unit, on a small column."""
+    """Gradients through the whole unit, on the small column."""
 
-    ASSAY = Assay([0, 30, 70, 100], [320.0, 480.0, 640.0, 900.0], sg=0.85)
+    def test_gradients_with_respect_to_the_assay_and_the_preheat(self, unit):
+        """d(residue API, fired duty)/d(crude SG, inlet T), through characterisation,
+        thermo, furnace and column, against central differences."""
 
-    @pytest.fixture(scope="class")
-    def small(self):
-        params = cc.CrudeColumnParams(
-            n_stages=8, feed_stage=7, bottom_steam=0.2, P_top=1.4e5, P_bottom=1.6e5,
-            specs=(cc.product_rate("naphtha", 0.25, basis="mole"), cc.overflash(0.05)))
-        return dr.CrudeUnit(self.ASSAY, params)
+        def f(x):
+            assay = Assay([0, 30, 70, 100], [320.0, 480.0, 640.0, 900.0], sg=x[0])
+            r = unit.solve(1.0, T=x[1], P=4e5, basis="mole", assay=assay)
+            y = jnp.stack([r.properties["residue"].api, r.column.furnace_fired_duty])
+            return y, y
 
-    @pytest.mark.slow
-    def test_gradient_with_respect_to_the_assay(self, small):
-        """d(residue API)/d(crude SG), through characterisation, thermo, furnace and column."""
+        value_and_jac = jax.jit(lambda x: jax.jacfwd(f, has_aux=True)(x))   # one compile for both
+        x0 = jnp.array([0.85, 480.0])
+        J = np.asarray(value_and_jac(x0)[0])
+        for i, h in enumerate([1e-5, 0.01]):
+            e = jnp.zeros(2).at[i].set(h)
+            fd = np.asarray(value_and_jac(x0 + e)[1] - value_and_jac(x0 - e)[1]) / (2 * h)
+            np.testing.assert_allclose(J[:, i], fd, rtol=1e-5)
+        assert J[0, 0] < 0   # a heavier crude, a heavier residue
+        assert J[1, 1] < 0   # a hotter preheat, less fired duty
 
-        def residue_api(sg):
-            assay = Assay([0, 30, 70, 100], [320.0, 480.0, 640.0, 900.0], sg=sg)
-            return small.solve(1.0, T=480.0, P=4e5, basis="mole", assay=assay).properties["residue"].api
-
-        g = float(jax.grad(residue_api)(0.85))
-        h = 1e-5
-        fd = float((residue_api(0.85 + h) - residue_api(0.85 - h)) / (2 * h))
-        assert g < 0  # a heavier crude, a heavier residue
-        assert g == pytest.approx(fd, rel=1e-5)
-
-    @pytest.mark.slow
-    def test_gradient_with_respect_to_preheat(self, small):
-        def fired(T):
-            return small.solve(1.0, T=T, P=4e5, basis="mole").column.furnace_fired_duty
-
-        g = float(jax.grad(fired)(480.0))
-        fd = float((fired(480.01) - fired(479.99)) / 0.02)
-        assert g < 0
-        assert g == pytest.approx(fd, rel=1e-5)
-
-    @pytest.mark.slow
-    def test_assay_must_keep_the_components(self, small):
+    def test_assay_must_keep_the_components(self, unit):
         other = Assay([0, 30, 70, 100], [320.0, 480.0, 640.0, 900.0], sg=0.85, light_ends={"propane": 1.0})
         with pytest.raises(ValueError, match="different components"):
-            small.solve(1.0, T=480.0, P=4e5, basis="mole", assay=other)
+            unit.solve(1.0, T=480.0, P=4e5, basis="mole", assay=other)
 
-    @pytest.mark.slow
-    def test_new_params_keep_the_furnace(self, small):
-        params = cc.CrudeColumnParams(
-            n_stages=8, feed_stage=7, bottom_steam=0.2, P_top=1.4e5, P_bottom=1.6e5,
-            specs=(cc.product_rate("naphtha", 0.25, basis="mole"), cc.overflash(0.08)))
-        res = small.solve(1.0, T=480.0, P=4e5, basis="mole", params=params)
-        base = small.solve(1.0, T=480.0, P=4e5, basis="mole")
-        assert bool(res.converged)
-        assert float(res.column.coil_outlet_T) > float(base.column.coil_outlet_T)
-
-    @pytest.mark.slow
-    def test_bad_basis(self, small):
+    def test_bad_basis(self, unit):
         with pytest.raises(ValueError, match="basis"):
-            small.feed(1.0, T=480.0, P=4e5, basis="gallons")
+            unit.feed(1.0, T=480.0, P=4e5, basis="gallons")

@@ -160,7 +160,6 @@ class TestReferenceIsCurrent:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.release
 @pytest.mark.parametrize("case", CASES)
 class TestAgainstDWSIM:
 
@@ -204,7 +203,6 @@ class TestAgainstDWSIM:
         for r in _points(case):
             assert r["equilibrium_residual"] < 5e-5, r["T"]
 
-    @pytest.mark.slow
     def test_the_flash(self, case):
         """difflow's own TP flash of the same feed against DWSIM's.
         Measured: vapour fraction 6.5e-6, phase compositions 1.9e-6 (both

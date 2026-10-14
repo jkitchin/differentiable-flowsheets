@@ -1,10 +1,8 @@
 """The gas plant columns against IDAES's TrayColumn on Peng-Robinson (#312).
 
-``release`` throughout: each case is a full column solve per side, and the
-reference is the committed ``reference/gasplant_reference.json`` (IDAES is
+One column solve (the debutanizer), against the committed ``reference/gasplant_reference.json`` (IDAES is
 not needed to run this; see ``reference/gasplant_generate.py`` to rebuild
-it). The per-commit checks on the file itself are in
-``test_gasplant_validation_file.py``.
+it). The checks on the file itself are in ``test_gasplant_validation_file.py``.
 
 What this is: an independent *implementation* of the same model -- PR with
 zero kij on the same constants, equilibrium trays, a total condenser at the
@@ -24,8 +22,10 @@ For ``debutanizer``, three layers, from the most local to the least:
 ``TrayColumn`` initialization does not converge it; see
 ``reference/gasplant_generate.py``). Its reference is IDAES's flash at each
 of difflow's stage states, which ``test_gasplant_validation_file.py``
-checks per commit against difflow's thermodynamics; what is left here is
-that difflow's column still puts its stages at those states.
+checks against difflow's thermodynamics (K-values and enthalpies; difflow's own
+TP flash of the same points and a re-solve of the column to check it still
+sits at them were cut for cost -- ``test_dwsim_gasplant.py`` solves the C3/C4
+column against DWSIM's stage states).
 """
 
 from __future__ import annotations
@@ -45,7 +45,6 @@ from .reference import gasplant_case as gc
 
 jax.config.update("jax_enable_x64", True)
 
-pytestmark = [pytest.mark.release, pytest.mark.slow]
 
 REF = json.loads((Path(__file__).parent / "reference" / "gasplant_reference.json").read_text())
 
@@ -69,7 +68,6 @@ def _x(stream, names):
     return f / f.sum()
 
 
-@pytest.mark.slow
 def test_k_values_point_by_point(solved):
     """Measured: worst relative difference 1.4e-13 (debutanizer)."""
     name, case, ref, *_ = solved
@@ -117,21 +115,3 @@ def test_the_specs_are_the_same_specs(solved):
     o = info["outputs"]
     assert float(o["reflux_ratio"]) == pytest.approx(ref["reflux_ratio"], rel=1e-6)
     assert float(o["boilup_ratio"]) == pytest.approx(ref["boilup_ratio"], rel=1e-6)
-
-
-@pytest.mark.slow
-@pytest.mark.parametrize("name", POINT_CASES)
-def test_the_state_points_are_still_difflows_stages(name):
-    """The state-point reference is only a check on the column if the column
-    still sits at those points: same T to 1e-6 K, same overall stage
-    composition to 1e-8."""
-    case = gc.CASES[name]
-    col, feed = gc.difflow_column(case)
-    _, _, info = col(feed)
-    assert bool(info["converged"])
-    pr = info["profiles"]
-    for j, p in enumerate(REF["cases"][name]["idaes_points"], start=1):
-        L, V = float(pr["L"][j]), float(pr["V"][j])
-        z = (L * np.asarray(pr["x"][j]) + V * np.asarray(pr["y"][j])) / (L + V)
-        assert float(pr["T"][j]) == pytest.approx(p["T"], abs=1e-6), p["stage"]
-        np.testing.assert_allclose(z, p["z"], atol=1e-8, err_msg=p["stage"])

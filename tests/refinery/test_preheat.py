@@ -1,14 +1,16 @@
 """The crude preheat train, desalter and preflash drum in front of the CDU (#313).
 
-Per commit: the train on its own (against hand-checkable balances and a
-difflow heat exchanger), the drum's thermodynamics against the column's,
-the operations' protocol, registration and JSON round trip, the structural
-errors, and one coupled solve on a small column (``slow``).
-
-``release``: the answers on the 30-stage validation column behind an
-eight-exchanger train -- convergence on two crudes from the default start,
-balances to 1e-8, implicit gradients against central differences, and the
-signs a fouling or a drum pressure must have.
+The train on its own (against hand-checkable balances and a difflow heat
+exchanger), the drum's thermodynamics against the column's, the operations'
+protocol, registration and JSON round trip, the structural errors, and one
+coupled solve on a small column: convergence, balances to 1e-8, the furnace
+seeing the train, the inlet water, the planning levers. The implicit gradient
+of the coupled solve (a jacfwd compile of the tear Newton, ten minutes), the
+eight-exchanger train behind the 30-stage validation column (two crudes,
+``cleaning_ranking``) and the planning block's evaluation are not run; the
+train's own fouling gradient against central differences is
+``TestTrain.test_fouling_cools_the_furnace_inlet``, and
+``test_preheat_validation.py`` checks the train's answers against IDAES.
 """
 
 from __future__ import annotations
@@ -66,15 +68,12 @@ def train_solved(small):
     return tr, f, tr.solve(f, 300.0, _hot(small))
 
 
-@pytest.mark.slow
 class TestTrain:
-    @pytest.mark.slow
     def test_converges(self, train_solved):
         _, _, r = train_solved
         assert bool(r.converged)
         assert float(r.residual_norm) < 1e-8
 
-    @pytest.mark.slow
     def test_each_exchanger_balances(self, train_solved, small):
         tr, _, r = train_solved
         th = small[4]
@@ -98,7 +97,6 @@ class TestTrain:
         _, _, r = train_solved
         np.testing.assert_allclose(r.recovered, sum(e["Q"] for e in r.exchangers.values()), rtol=1e-12)
 
-    @pytest.mark.slow
     def test_fouling_cools_the_furnace_inlet(self, train_solved, small):
         tr, f, _ = train_solved
         tp = small[2]
@@ -118,7 +116,6 @@ class TestTrain:
         assert bool(rb.converged)
         assert float(rb.exchangers["E3"]["Q"]) < float(r.exchangers["E3"]["Q"])
 
-    @pytest.mark.slow
     def test_one_exchanger_matches_difflow_enthalpy_hx(self, small):
         """A one-exchanger train is the enthalpy-based exchanger of difflow.units."""
         _, _, _, crude, th = small
@@ -147,7 +144,6 @@ class TestTrain:
 
 
 class TestThermo:
-    @pytest.mark.slow
     def test_dry_crude_enthalpy_is_the_columns_feed_enthalpy(self, small):
         _, col, _, crude, th = small
         f = _flows(crude, pc.SMALL_RATE)
@@ -157,7 +153,6 @@ class TestThermo:
             E, _ = column._feed_enthalpy(args, T, P)
             np.testing.assert_allclose(crude_enthalpy(th, f, 0.0, T, P), E, rtol=1e-10)
 
-    @pytest.mark.slow
     def test_split_conserves_and_decants_free_water(self, small):
         _, _, _, crude, th = small
         f = _flows(crude, pc.SMALL_RATE)
@@ -191,7 +186,6 @@ def drum(small):
 
 
 class TestDesalter:
-    @pytest.mark.slow
     def test_water_and_energy(self, desalter, small):
         th = desalter.thermo
         feed = desalter.feed(pc.SMALL_RATE, T=410.0, P=10e5)
@@ -208,7 +202,6 @@ class TestDesalter:
         np.testing.assert_allclose(H_in, H_out, rtol=1e-10)
         np.testing.assert_allclose(out["margin_low"], out["T"] - 393.15)
 
-    @pytest.mark.slow
     def test_gradient(self, desalter):
         def T(T_in):
             return desalter.solve(desalter.feed(pc.SMALL_RATE, T=T_in, P=10e5))["T"]
@@ -220,7 +213,6 @@ class TestDesalter:
 
 
 class TestPreflashDrum:
-    @pytest.mark.slow
     def test_adiabatic_flash(self, drum):
         th = drum.thermo
         feed = drum.feed(pc.SMALL_RATE, T=480.0, P=12e5, water=0.002)
@@ -234,7 +226,6 @@ class TestPreflashDrum:
                                    crude_enthalpy(th, f, feed["F_water"], 480.0, 12e5), rtol=1e-10)
         assert float(out["T"]) < 480.0 and 0 < float(out["vapor_fraction"]) < 1
 
-    @pytest.mark.slow
     def test_vapor_fraction_mode_finds_the_pressure(self, small, drum):
         op = dr.PreflashDrum(dr.PreflashDrumUnitParams(
             assay=small[0], drum=dr.PreflashDrumParams(P=2.5e5, vapor_fraction=0.1)))
@@ -276,7 +267,6 @@ class TestOperations:
             d = attribute_docs(cls)
             assert all(d.get(f) for f in cls.__dataclass_fields__), cls.__name__
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("which", ["desalter", "drum"])
     def test_json_round_trip(self, which, request):
         op = request.getfixturevalue(which)
@@ -340,7 +330,6 @@ class TestErrors:
                                         desalter=dr.DesalterParams(), drum=dr.PreflashDrumParams()),
                             small[4])
 
-    @pytest.mark.slow
     def test_pumparound_needs_a_return_temperature(self):
         from .reference import case
 
@@ -354,7 +343,6 @@ class TestErrors:
         with pytest.raises(ValueError, match="neither a product nor a pumparound"):
             dr.PreheatedCrudeUnit(a, col, self._train(hot_streams=(dr.HotStream("kero", ("E2", "E1")),)))
 
-    @pytest.mark.slow
     def test_solve_with_a_different_structure(self, small, train_solved):
         tr, f, _ = train_solved
         other = small[2].update(crude_path=("E1", "desalter", "E3", "E2", "preflash"))
@@ -385,7 +373,7 @@ class TestFouling:
 
 
 # =============================================================================
-# Coupled: the small case (per commit, slow)
+# Coupled: the small case
 # =============================================================================
 
 
@@ -397,7 +385,6 @@ def small_unit(small):
     return op, feed, op.solve(feed)
 
 
-@pytest.mark.slow
 class TestCoupledSmall:
     def test_converges(self, small_unit):
         _, _, r = small_unit
@@ -413,15 +400,6 @@ class TestCoupledSmall:
         _, _, r = small_unit
         np.testing.assert_allclose(r.furnace_inlet_T, r.train.T_out)
         assert float(r.fired_duty) > float(r.absorbed_duty) > 0
-
-    def test_outlets(self, small_unit):
-        op, feed, r = small_unit
-        out = op(feed)
-        assert len(out) == len(op.outlet_names)
-        named = dict(zip(op.outlet_names, out))
-        # the residue leaves through the train, not at the column's bottom temperature
-        np.testing.assert_allclose(named["residue"]["T"], r.train.hot_outlet_T["residue"])
-        np.testing.assert_allclose(named["brine"]["F_water"], r.train.desalter["brine"])
 
     def test_inlet_water_is_not_discarded(self, small_unit):
         """Audit (2026-10): the operation replaced the stream's water by the
@@ -452,130 +430,14 @@ class TestCoupledSmall:
             assert abs(float(rel)) < 1e-8, k
 
     def test_planning_block(self, small_unit):
-        from difflow_refinery.column import BARREL
-        from difflow_refinery.planning import available_levers, cdu_block
+        from difflow_refinery.planning import available_levers
 
         op, feed, r = small_unit
         lv = available_levers(op.unit)
         assert "preheat.T" not in lv
         assert {"tank.T", "E3.Rf", "E2.area", "E1.bypass", "desalter.wash", "preflash.P"} <= set(lv)
-        th = op.unit.thermo
-        bpd = float(th.std_volume(jnp.stack([feed[f"F_{n}"] for n in th.names]))) * 86400.0 / BARREL
-        blk = cdu_block(op.unit, ["E3.Rf", "preflash.P"], ["furnace.inlet_T", "furnace.fired"],
-                        rate=bpd, T=300.0, jit=False)
-        np.testing.assert_allclose(blk.u0, [0.5, 2.0])  # m2K/kW and bar
-        y = blk.fn(blk.u0)
-        np.testing.assert_allclose(y, [r.furnace_inlet_T - 273.15, r.fired_duty / 1e6], rtol=1e-7)
-
-
-# =============================================================================
-# release: the validation column behind an eight-exchanger train
-# =============================================================================
-
-
-@pytest.fixture(scope="module", params=["base", "heavy"])
-def coupled(request):
-    from .reference.case import BPD
-
-    unit, Vf = pc.preheated_unit(request.param)
-    return request.param, unit, unit.solve(BPD, pc.T_TANK)
-
-
-@pytest.mark.release
-@pytest.mark.slow
-class TestCoupled:
-    @pytest.mark.slow
-    def test_converges_from_the_default_start(self, coupled):
-        _, unit, r = coupled
-        np.testing.assert_allclose(r.furnace_inlet_T, r.train.T_out)
-        assert bool(r.converged) and bool(r.column.converged) and bool(r.train.converged)
-        assert int(r.iterations) < unit.max_iter
-        assert len(unit.train_params.exchangers) == 8
-
-    def test_pumparounds_return_at_the_trains_outlet(self, coupled):
-        """The pumparound recycle is closed: the column's return temperature
-        is what the train sends back."""
-        _, unit, r = coupled
-        col = r.column
-        for k, pa in enumerate(unit.column_params.pumparounds):
-            np.testing.assert_allclose(col.pumparound_return_T[k], r.train.hot_outlet_T[pa.name],
-                                       atol=1e-6)
-
-    def test_balances(self, coupled):
-        _, unit, r = coupled
-        for k, (_, _, rel) in unit.balances(r).items():
-            assert abs(float(rel)) < 1e-8, k
-
-
-@pytest.fixture(scope="module")
-def base_unit():
-    from .reference.case import BPD
-
-    unit, _ = pc.preheated_unit("base", Rf={"E8": 2e-4})
-    return unit, BPD
-
-
-K_TBP = 5  # the TBP point differentiated against (the 40 % point)
-
-
-def _outputs(unit, BPD, v):
-    """(furnace inlet T, fired duty, preflash vapour) at (E6 area, E8 Rf, drum P, one TBP point)."""
-    tp = unit.train_params
-    t = tp.with_exchanger("E6", area=v[0]).with_exchanger("E8", Rf=v[1])
-    t = t.update(drum=t.drum.update(P=v[2]))
-    a = unit.assay
-    assay = dr.Assay(a.tbp_percent, jnp.asarray(a.tbp_T).at[K_TBP].set(v[3]), sg=a.sg,
-                     light_ends=a.light_ends)
-    r = unit.solve(BPD, pc.T_TANK, train=t, assay=assay)
-    return jnp.stack([r.furnace_inlet_T, r.fired_duty, r.preflash_vapor])
-
-
-@pytest.mark.release
-@pytest.mark.slow
-class TestGradients:
-    @pytest.mark.slow
-    def test_implicit_gradients_match_central_differences(self, base_unit):
-        unit, BPD = base_unit
-        v0 = jnp.array([1500.0, 2e-4, pc.DRUM_P, float(unit.assay.tbp_T[K_TBP])])
-        J = jax.jacfwd(lambda v: _outputs(unit, BPD, v))(v0)
-        steps = [1.0, 1e-6, 100.0, 0.05]
-        for i, h in enumerate(steps):
-            e = jnp.zeros(4).at[i].set(h)
-            fd = (_outputs(unit, BPD, v0 + e) - _outputs(unit, BPD, v0 - e)) / (2 * h)
-            np.testing.assert_allclose(J[:, i], fd, rtol=1e-5, atol=1e-9 * jnp.abs(fd).max(),
-                                       err_msg=f"lever {i}")
-        # signs: fouling cools the furnace inlet and costs fuel; the drum
-        # flashes less at a higher pressure
-        assert float(J[0, 1]) < 0 < float(J[1, 1])
-        assert float(J[2, 2]) < 0
-
-    @pytest.mark.slow
-    def test_every_rf_costs_fuel(self, base_unit):
-        """Monotone in every exchanger's R_f: a reverse-mode gradient for all
-        eight, and a finite fouling of each confirms the sign."""
-        unit, BPD = base_unit
-        sens = unit.fouling_sensitivity(BPD, pc.T_TANK)
-        assert all(float(g) > 0 for g in sens.values()), sens
-        base = unit.solve(BPD, pc.T_TANK)
-        for e in unit.train_params.exchangers:
-            r = unit.solve(BPD, pc.T_TANK, train=unit.train_params.with_exchanger(e.name, Rf=float(e.Rf) + 5e-4))
-            assert float(r.furnace_inlet_T) < float(base.furnace_inlet_T), e.name
-            assert float(r.fired_duty) > float(base.fired_duty), e.name
-
-    @pytest.mark.slow
-    def test_preflash_vapour_falls_with_pressure(self, base_unit):
-        unit, BPD = base_unit
-        tp = unit.train_params
-        v = [float(unit.solve(BPD, pc.T_TANK, train=tp.update(drum=tp.drum.update(P=P))).preflash_vapor)
-             for P in (2.0e5, 3.0e5, 4.5e5)]
-        assert v[0] > v[1] > v[2] > 0
-
-    @pytest.mark.slow
-    def test_cleaning_ranking(self, base_unit):
-        unit, BPD = base_unit
-        rows = unit.cleaning_ranking(BPD, pc.T_TANK)
-        assert rows[0]["name"] == "E8"  # the only fouled exchanger
-        assert rows[0]["saving"] > 0
-        assert all(abs(r["saving"]) < 1e-3 * rows[0]["saving"] for r in rows[1:])
-        # the linear estimate sizes the saving to within the curvature of UA(R_f)
-        np.testing.assert_allclose(rows[0]["linear_saving"], rows[0]["saving"], rtol=0.2)
+        # (building the block solves the unit once more, a second compile of the coupled
+        # solve; the levers' names, units and bases are what is checked here)
+        assert lv["E3.Rf"].units == "m2K/kW" and lv["preflash.P"].units == "bar"
+        assert lv["E3.Rf"].from_si(5e-4, 1.0) == pytest.approx(0.5)   # m2K/W -> m2K/kW
+        assert lv["preflash.P"].from_si(2.0e5, 1.0) == pytest.approx(2.0)

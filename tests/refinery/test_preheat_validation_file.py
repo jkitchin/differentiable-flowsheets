@@ -71,7 +71,6 @@ class TestReferenceFile:
 
 
 class TestReferenceIsCurrent:
-    @pytest.mark.slow
     def test_the_component_table_is_the_one_the_reference_used(self):
         import difflow_refinery as dr
 

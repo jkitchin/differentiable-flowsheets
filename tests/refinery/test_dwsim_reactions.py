@@ -191,7 +191,6 @@ LABELS = sorted({(lab, w) for lab, w, *_ in cmp._cases()})
 NO_DWSIM_ANSWER = {("isom c6_ring 480 K", "hypo")}
 
 
-@pytest.mark.release
 class TestHowDWSIMComputes:
     """DWSIM's conventions, reproduced: what makes the hypo runs agree."""
 
@@ -258,7 +257,6 @@ class TestHowDWSIMComputes:
         assert max(v[1] for v in acc.values() if v[0]) < 2.2e-6
 
 
-@pytest.mark.release
 class TestImplementation:
     """(a): DWSIM's reactors on difflow's own constants."""
 
@@ -318,7 +316,6 @@ class TestImplementation:
                     assert row["flue_dwsim"][D[k]] == pytest.approx(n, rel=2e-6, abs=1e-9)
 
 
-@pytest.mark.release
 class TestData:
     """(b): DWSIM's database against difflow's tables, pinned at the measured
     size; a test fails if a difference MOVES."""
@@ -495,8 +492,6 @@ class TestData:
                 assert 6e-5 < rel < 1e-4, (r_co, label, rel)
 
 
-@pytest.mark.release
-@pytest.mark.slow
 @pytest.mark.parametrize("kind", ["paraffinic", "benzene_rich"])
 def test_the_reactor_reaches_the_emulated_adiabatic_equilibrium(kind):
     """difflow's isomerization reactor, adiabatic and taken to equilibrium
@@ -517,8 +512,6 @@ def test_the_reactor_reaches_the_emulated_adiabatic_equilibrium(kind):
     assert float(out["T"]) == pytest.approx(run["T_set"], abs=1e-6)
 
 
-@pytest.mark.release
-@pytest.mark.slow
 def test_reformer_bed_is_still_difflows():
     """The bed outlet DWSIM was given is still what difflow's bed makes."""
     now = rc.reformer_bed()

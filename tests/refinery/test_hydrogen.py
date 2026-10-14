@@ -194,7 +194,6 @@ def test_validation():
         h2.Header(purge_to="flare")
 
 
-@pytest.mark.slow
 def test_traces_under_jit_and_both_ad_modes():
     def surplus(x):
         n = _net(producers=[h2.Producer.of_purity("reformer", x[0], x[1], impurity=IMP, to_psa=0.5)],
@@ -209,8 +208,6 @@ def test_traces_under_jit_and_both_ad_modes():
                                rtol=1e-10, atol=1e-14)
 
 
-@pytest.mark.slow
-@pytest.mark.release
 def test_header_gradients_match_finite_differences():
     def f(x):
         n = _net(producers=[h2.Producer.of_purity("reformer", x[0], x[1], impurity=IMP, to_psa=0.4)],

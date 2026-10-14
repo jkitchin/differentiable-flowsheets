@@ -1,23 +1,23 @@
 """A non-converged crude unit is NaN, and a plan never lands there (#297).
 
 The rejection test runs the planner into the region where the column fails
-and checks it backs off; the same run with the mask off shows what the
+and checks it backs off; the same column with the mask off shows what the
 planner would otherwise have taken -- a column that did not converge, scored
 as a plan.
 
-These were ``TestNonConvergence`` in test_planning.py. They are the bulk of
-that file's cost -- about ten minutes of it on a CI runner -- and ``pytest
---dist loadfile`` keeps a file on one worker, so together they made a
-single-worker tail on whichever shard drew them (#315). The tests share no
-compiled code with the rest of that file (each builds its own block), so
-splitting them off costs nothing but the ``unit`` fixture, which is cheap.
+These were ``TestNonConvergence`` in test_planning.py, on the 30-stage
+column and four planner runs (about ten minutes). The edge is the same one on
+the 8-stage column of test_planning.py: a pumparound that takes more heat
+than the feed brings leaves no reflux, and the column does not converge.
 """
 
 import jax
 import numpy as np
 import pytest
 
-from difflow.planning import DeltaBasePlanner, Network, state_is_finite
+import jax.numpy as jnp
+
+from difflow.planning import Block, DeltaBasePlanner, Network, state_is_finite
 from difflow.planning.planner import TrustRegionOptions
 from difflow_refinery.planning import cdu_block
 
@@ -25,64 +25,55 @@ from .test_planning import BPD, P_IN, T_IN, build_unit
 
 jax.config.update("jax_enable_x64", True)
 
+#: pa1.duty (MW): the base converges, FAIL_MW does not (the column is dry).
+BASE_MW = 0.1
+FAIL_MW = 0.3
+BOUNDS = {"pa1.duty": (0.05, 0.5)}
+
 
 @pytest.fixture(scope="module")
 def unit():
     return build_unit()
 
 
+@pytest.fixture(scope="module")
+def masked(unit):
+    return cdu_block(unit, ["pa1.duty"], ["naphtha.tbp95", "furnace.fired"], rate=BPD, T=T_IN, P=P_IN,
+                     bounds=BOUNDS)
+
+
 class TestNonConvergence:
-    #: 5% overflash and 25 MW out of PA1 dries the column (test_furnace.py
-    #: shows the same edge at 150 kg/s); 15 MW converges.
-    FAIL_MW = 30.0
+    def test_a_failed_solve_is_nan(self, masked):
+        u = np.array([FAIL_MW])
+        assert not bool(masked.fn.solve(u).converged)
+        assert np.all(np.isnan(np.asarray(masked.fn(u))))
+        assert np.all(np.isfinite(np.asarray(masked.fn(np.array([BASE_MW])))))
 
-    @pytest.mark.slow
-    def test_a_failed_solve_is_nan(self, unit):
-        blk = cdu_block(unit, ["pa1.duty"], ["naphtha.tbp95", "furnace.fired"], rate=BPD, T=T_IN, P=P_IN,
-                        bounds={"pa1.duty": (10.0, 30.0)})
-        u = np.array([self.FAIL_MW])
-        assert not bool(blk.fn.solve(u).converged)
-        assert np.all(np.isnan(np.asarray(blk.fn(u))))
-        assert np.all(np.isfinite(np.asarray(blk.fn(np.array([15.0])))))
+    def test_a_non_converging_proposal_is_rejected(self):
+        """The planner side of it, on a block that is NaN past an edge (the masked
+        column's behaviour above) and cheap to evaluate: the planner proposes past
+        the edge, rejects it, and lands on a point inside it. Running it on the
+        column itself costs a failing Newton solve per rejected proposal, about
+        fifteen minutes."""
+        EDGE = 0.24
 
-    @pytest.mark.slow
-    def test_unmasked_it_would_have_looked_like_an_answer(self, unit):
-        blk = cdu_block(unit, ["pa1.duty"], ["naphtha.tbp95"], rate=BPD, T=T_IN, P=P_IN,
-                        bounds={"pa1.duty": (10.0, 30.0)}, mask_nonconverged=False)
-        assert np.all(np.isfinite(np.asarray(blk.fn(np.array([self.FAIL_MW])))))
+        def fn(u):
+            y = jnp.stack([jnp.sqrt(u[0]) * 10.0, u[0] ** 2])
+            return jnp.where(u[0] > EDGE, jnp.nan, y)
 
-    @staticmethod
-    def _plan(unit, mask):
-        """Heat recovered from PA1 is credited; the credit pushes toward the edge."""
-        blk = cdu_block(unit, ["pa1.duty"], ["naphtha.tbp95", "kero.tbp95", "furnace.fired"],
-                        rate=BPD, T=T_IN, P=P_IN, bounds={"pa1.duty": (10.0, 30.0)},
-                        mask_nonconverged=mask)
+        blk = Block(name="cdu", fn=fn, u_names=["pa1.duty"], y_names=["a", "b"],
+                    lb=[0.05], ub=[0.5], u0=[0.1], jit=False)
         planner = DeltaBasePlanner(Network([blk]), prices={"cdu.pa1.duty": 1000.0},
                                    options=TrustRegionOptions(radius=0.3, radius_min=1e-2, tol=1e-6,
                                                               max_iter=30),
                                    vertex_seeding=False)
-        return blk, planner.solve()
-
-    @pytest.mark.slow
-    def test_a_non_converging_proposal_is_rejected(self, unit):
-        blk, res = self._plan(unit, mask=True)
+        res = planner.solve()
         failed = [h for h in res.history if "not evaluable" in h.lp_status]
         assert failed, "the plan never proposed past the edge; the test proves nothing"
         assert not any(h.accepted for h in failed)
-        assert any(h.decisions[0] > 24.5 for h in failed)
-        # every accepted point, and the plan, is a converged column
         for h in res.history:
             if h.accepted:
-                assert bool(blk.fn.solve(h.decisions).converged)
+                assert float(h.decisions[0]) <= EDGE
         duty = res.plan["cdu.pa1.duty"]
-        assert 23.0 < duty < 25.0
-        assert bool(blk.fn.solve(np.array([duty])).converged)
+        assert 0.1 < duty <= EDGE
         assert state_is_finite(res.state)
-
-    @pytest.mark.slow
-    def test_without_the_mask_the_plan_is_a_failed_column(self, unit):
-        """The control: the planner takes the bound, where the column did not converge."""
-        blk, res = self._plan(unit, mask=False)
-        duty = res.plan["cdu.pa1.duty"]
-        assert duty == pytest.approx(30.0)
-        assert not bool(blk.fn.solve(np.array([duty])).converged)

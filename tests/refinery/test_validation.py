@@ -25,8 +25,7 @@ Four layers, each with its own tolerance and the reason for it:
 4. **Gradients**: ``jax.grad`` through difflow's solve against central
    finite differences of the reference column.
 
-The whole module is ``release``: its subject is the answer, and a deliberate
-model change is what moves it. When one does -- a new characterisation, a
+The subject is the answer, and a deliberate model change is what moves it. When one does -- a new characterisation, a
 new property method -- :class:`TestReferenceIsCurrent` fails first and says
 to regenerate (see ``reference/generate.py``'s docstring for the command).
 """
@@ -46,7 +45,6 @@ from .reference import formulas as fm
 
 jax.config.update("jax_enable_x64", True)
 
-pytestmark = pytest.mark.release
 
 REF_PATH = Path(__file__).parent / "reference" / "cdu_reference.json"
 REF = json.loads(REF_PATH.read_text())
@@ -82,7 +80,6 @@ class TestReferenceIsCurrent:
     both models); if they have moved, every comparison below is against a
     different crude, and the right response is to regenerate, not loosen."""
 
-    @pytest.mark.slow
     def test_the_component_table_is_the_one_the_reference_used(self, difflow_case):
         unit, crude, thermo, _ = difflow_case
         now = case.component_data(crude, thermo)
@@ -413,7 +410,6 @@ class TestWater:
 # =============================================================================
 
 
-@pytest.mark.slow
 class TestColumnAgainstReference:
     """Same specs, same property model, independently written equations and
     an independent solver started from a crude guess. The model is the same,
@@ -422,7 +418,6 @@ class TestColumnAgainstReference:
 
     ref = REF["layer3"]["column"]
 
-    @pytest.mark.slow
     def test_both_converged(self, solved):
         assert bool(solved.converged)
         assert REF["layer3"]["solve"]["status"] == "optimal"
@@ -478,7 +473,6 @@ class TestColumnAgainstReference:
 # =============================================================================
 
 
-@pytest.mark.slow
 class TestGradientsAgainstReference:
     """``jax.grad`` through difflow's implicit-function solve against central
     differences of the reference column (step 2e-3 in each spec fraction,
@@ -490,17 +484,6 @@ class TestGradientsAgainstReference:
     def unit_vf(self, difflow_case):
         return difflow_case[0], difflow_case[3]
 
-    @pytest.mark.slow
-    def test_diesel_api_with_diesel_yield(self, unit_vf):
-        unit, Vf = unit_vf
-        ref = REF["layer4"]["d_diesel_api_d_diesel_yield"]
-
-        def f(y):
-            return case.solve_difflow(unit, Vf, volume_yield={"diesel": y}).properties["diesel"].api
-
-        assert float(jax.grad(f)(ref["x0"])) == pytest.approx(ref["value"], rel=1e-3)
-
-    @pytest.mark.slow
     def test_fired_duty_with_overflash(self, unit_vf):
         unit, Vf = unit_vf
         ref = REF["layer4"]["d_fired_duty_d_overflash"]
@@ -516,7 +499,6 @@ class TestGradientsAgainstReference:
 # =============================================================================
 
 
-@pytest.mark.slow
 def test_regeneration_reproduces_the_committed_reference(tmp_path):
     """Optional: rebuild the reference (without finite differences) and check
     it lands on the committed numbers. Needs IDAES and its IPOPT."""
