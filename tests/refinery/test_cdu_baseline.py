@@ -50,7 +50,6 @@ def _check(char, ref):
 BASELINE_NAME = {"twu_legacy": "twu"}
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("method", ["twu_legacy", "riazi_daubert_1980", "riazi_daubert_1987",
                                     "lee_kesler"])
 def test_characterization_is_unchanged(method):
@@ -60,18 +59,15 @@ def test_characterization_is_unchanged(method):
     _check(char, ref)
 
 
-@pytest.mark.slow
 def test_mass_basis_characterization_is_unchanged():
     _check(characterize(MASS_ASSAY, method="twu_legacy"), BASE["char_mass"])
 
 
-@pytest.mark.slow
 def test_vapor_pressures_are_unchanged():
     th = ColumnThermo.from_characterization(characterize(ASSAY, method="twu_legacy"))
     np.testing.assert_allclose(np.asarray(th.psat(500.0)), BASE["thermo_psat_500K"], rtol=1e-10)
 
 
-@pytest.mark.slow
 def test_crude_unit_solve_is_unchanged():
     crude = characterize(ASSAY, method="twu_legacy")
     th = ColumnThermo.from_characterization(crude)

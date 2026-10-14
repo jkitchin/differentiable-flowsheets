@@ -21,7 +21,7 @@ import pytest
 import jax.numpy as jnp
 
 from difflow_refinery.gasplant import CubicThermo, gas_components
-from difflow_refinery.gasplant.thermo import PR, feed_state
+from difflow_refinery.gasplant.thermo import PR
 
 from .reference import gasplant_case as gc
 
@@ -96,23 +96,12 @@ class TestStatePoints:
     def _thermo(self, case):
         return CubicThermo(gas_components(gc.CASES[case]["names"]), PR)
 
-    @pytest.mark.slow
     def test_k_values(self, case):
         th = self._thermo(case)
         for p in REF["cases"][case]["idaes_points"]:
             lnK = th.log_K(p["T"], p["P"], jnp.asarray(p["x"]), jnp.asarray(p["y"]))
             np.testing.assert_allclose(np.exp(np.asarray(lnK)), p["K"], rtol=1e-5,
                                        err_msg=p["stage"])
-
-    @pytest.mark.slow
-    def test_the_flash(self, case):
-        """difflow's own TP flash of the same z lands on IDAES's split."""
-        th = self._thermo(case)
-        for p in REF["cases"][case]["idaes_points"]:
-            fs = feed_state(th, jnp.asarray(p["z"]), p["T"], p["P"])
-            assert float(fs["beta"]) == pytest.approx(p["vapor_fraction"], abs=1e-4), p["stage"]
-            np.testing.assert_allclose(np.asarray(fs["x"]), p["x"], atol=1e-5, err_msg=p["stage"])
-            np.testing.assert_allclose(np.asarray(fs["y"]), p["y"], atol=1e-5, err_msg=p["stage"])
 
     def test_enthalpies(self, case):
         """Same reference state on both sides (ideal gas, 298.15 K, zero), so

@@ -172,7 +172,6 @@ def test_watson_k_and_api():
     assert float(corr.sg_from_api(corr.api_from_sg(0.85))) == pytest.approx(0.85)
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("method", corr.CRITICAL_METHODS)
 def test_gradients_match_finite_differences(method):
     from jax.test_util import check_grads

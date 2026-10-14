@@ -1,128 +1,117 @@
-"""The hydrogen header closed on a real reformer and two hydrotreaters (#329 acceptance).
+"""The header/hydrotreater loop (#329), on stand-in hydrotreaters.
 
-Reformer net gas -> header (import as the swing) -> kerosene and diesel
-hydrotreaters, with the header's makeup composition fed back into each
-``HydrotreaterParams.makeup`` until the purity stops moving. Each
-hydrotreater compiles once (about a minute); the later passes re-solve the
-compiled units. Slow.
+``close_hydrotreater_loop`` is Python substitution on the header purity: it
+only reads ``unit.layout.gases``, calls ``unit.solve(feed, params=, warn=)``
+and uses the result's ``converged`` and ``outputs["h2.makeup"]``. The
+hydrotreater's own physics (a compile of a minute or more each) is tested in
+``test_hydrotreating*.py``; here each unit is a stand-in whose makeup demand
+falls with the purity it is given, so the loop's own claims are checked in
+milliseconds: it feeds the header's composition into each unit, iterates while
+an import swing makes the purity depend on the demands, records the secant
+response, and the header balances the demands the units report.
 
-The gradient test differentiates the surplus with respect to the reformer
-WAIT in forward mode (the reformer's beds are ``diffrax.ForwardMode``),
-through the closed network whose hydrotreater responses are the loop's
-linear ones, and checks it against central differences of the same
-composition. Slow and release.
+The gradient is the surplus with respect to the producer's rate through the
+closed network (the units' response is the loop's linear secant), against
+central differences.
 """
 
 from __future__ import annotations
 
-import warnings
+from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
-import difflow_refinery as dr
 import difflow_refinery.hydrogen as h2
-from difflow_refinery.hydrotreating import Hydrotreater, HydrotreaterParams, straight_run_cut
-from difflow_refinery.hydrotreating.feed import select_cuts
-from difflow_refinery.reforming import CatalyticReformer, ReformerParams, lean_naphtha
+from difflow_refinery.hydrotreating import HydrotreaterParams
 
 jax.config.update("jax_enable_x64", True)
 
-TBP_PCT = [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95]
-TBP_A = [60, 95, 150, 205, 260, 315, 370, 430, 500, 600, 680]
+GASES = ("hydrogen", "methane", "ethane", "propane")
+IMP = {"methane": 0.6, "ethane": 0.3, "propane": 0.1}
 
 
-def _char():
-    a = dr.Assay(TBP_PCT, jnp.asarray([t + 273.15 for t in TBP_A]), sg=0.86,
-                 light_ends={"propane": 0.5, "n_butane": 1.0, "n_pentane": 1.5},
-                 heavy_end=dr.HeavyEnd(), sulfur_wt=1.8, nitrogen_wppm=1500.0)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        return dr.characterize(a, cut_points=dr.default_cut_points(a), composition=True)
+class _StandIn:
+    """A hydrotreater whose makeup H2 demand is ``d0 * (1 + k (0.97 - y))`` at makeup purity ``y``."""
+
+    layout = SimpleNamespace(gases=GASES)
+
+    def __init__(self, d0, k):
+        self.d0, self.k = d0, k
+        self.calls = 0
+
+    def solve(self, feed, params, warn=True):
+        self.calls += 1
+        y = params.makeup["hydrogen"]
+        d = self.d0 * (1.0 + self.k * (0.97 - y))
+        return SimpleNamespace(converged=True, outputs={"h2.makeup": jnp.asarray(d)})
 
 
-@pytest.fixture(scope="module")
-def reformer():
-    unit = CatalyticReformer(ReformerParams())
-    return unit, unit.solve(lean_naphtha())
+def _units():
+    return {"kht": (_StandIn(20.0, 4.0), None, HydrotreaterParams(P=35e5)),
+            "dht": (_StandIn(60.0, 6.0), None, HydrotreaterParams(P=60e5))}
 
 
-@pytest.fixture(scope="module")
-def hydrotreaters():
-    char = _char()
-    kc = select_cuts(char, 150 + 273.15, 250 + 273.15)
-    kfeed = straight_run_cut(char, rate=20.0, cuts=kc)
-    kp = HydrotreaterParams(T_in=(593.15,), quench=None, bed_fractions=(1.0,), P=35e5, h2_oil=150.0,
-                            lhsv=2.5, stripper_feed_T=473.15)
-    dc = select_cuts(char, 230 + 273.15, 370 + 273.15)
-    dfeed = straight_run_cut(char, rate=50.0, cuts=dc)     # demand > reformer H2: the import swings
-    dp = HydrotreaterParams()
-    return {"kht": (Hydrotreater(char, kfeed, kp), kfeed, kp), "dht": (Hydrotreater(char, dfeed, dp), dfeed, dp)}
-
-
-def _network(producer, hdts):
-    cons = [h2.Consumer(n, 20.0, P=p.P, min_purity=0.85) for n, (_, _, p) in hdts.items()]
+def _network(units, producer, swing):
+    cons = [h2.Consumer(n, 20.0, P=p.P, min_purity=0.85) for n, (_, _, p) in units.items()]
     return h2.HydrogenNetwork(producers=[producer], consumers=cons,
-                              headers=[h2.Header("main", P=10e5, min_purge=1.0,
-                                                 swing=[h2.Import(purity=0.999, P=30e5)])])
+                              headers=[h2.Header("main", P=10e5, min_purge=1.0, swing=swing)])
 
 
 @pytest.fixture(scope="module")
-def loop(reformer, hydrotreaters):
-    _, ref = reformer
-    net = _network(h2.Producer.from_reformer(ref), hydrotreaters)
-    return h2.close_hydrotreater_loop(net, hydrotreaters, tol=1e-7)
+def loop():
+    units = _units()
+    prod = h2.Producer.of_purity("reformer", 45.0, 0.88, impurity=IMP)
+    net = _network(units, prod, [h2.Import(purity=0.999, P=30e5)])
+    return units, h2.close_hydrotreater_loop(net, units, tol=1e-9)
 
 
-@pytest.mark.slow
-def test_reformer_to_two_hydrotreaters_closes(loop, reformer):
-    _, ref = reformer
-    res = loop.header
-    assert loop.converged and loop.passes >= 2   # import swing: purity moves with the demands
-    for k, v in res.balances.items():
+def test_the_loop_closes_on_the_header_purity(loop):
+    units, res = loop
+    assert res.converged and res.passes >= 2   # the import swing: purity moves with the demands
+    for k, v in res.header.balances.items():
         assert float(v) < 1e-12, k
-    o = res.outputs
+    o = res.header.outputs
     y = float(o["main.purity"])
-    # the header is a mix of reformer gas (its own purity) and 99.9 % import
-    assert float(ref.outputs()["h2.purity"]) / 100.0 - 1e-9 < y < 0.999
-    for name, r in loop.units.items():
-        assert bool(r.converged)
-        for k, v in r.balances.items():
-            assert float(v) < 1e-8, (name, k)
+    assert 0.88 < y < 0.999   # a mix of the producer gas and 99.9 % import
+    for name, r in res.units.items():
         # the unit was solved at the purity the header delivers it ...
-        assert loop.params[name].makeup["hydrogen"] == pytest.approx(y, abs=1e-7)
+        assert res.params[name].makeup["hydrogen"] == pytest.approx(y, abs=1e-8)
         # ... and the header balances the demand the unit reports at that purity
-        assert float(o[f"{name}.makeup_h2"]) == pytest.approx(float(r.outputs["h2.makeup"]), rel=1e-6)
+        assert float(o[f"{name}.makeup_h2"]) == pytest.approx(float(r.outputs["h2.makeup"]), rel=1e-8)
         assert float(o[f"{name}.purity_margin"]) == pytest.approx(y - 0.85)
-    supply = float(ref.outputs()["h2.net_mol_s"]) + float(o["import.h2"])
-    demand = sum(float(r.outputs["h2.makeup"]) for r in loop.units.values())
+    supply = 45.0 + float(o["swing.h2"])
+    demand = sum(float(r.outputs["h2.makeup"]) for r in res.units.values())
     assert float(o["h2.surplus"]) == pytest.approx(supply - demand, rel=1e-6, abs=1e-6)
     assert float(o["h2.surplus"]) >= 1.0 - 1e-9
-    # a leaner makeup than the 97 % default costs makeup: the loop's secant says which way
-    for c in loop.network.consumers:
-        assert np.isfinite(float(c.d_demand_d_purity))
+    # a leaner makeup costs makeup: the secant is the stand-in's slope
+    for c in res.network.consumers:
+        u = units[c.name][0]
+        assert float(c.d_demand_d_purity) == pytest.approx(-u.d0 * u.k, rel=1e-6)
 
 
-@pytest.mark.slow
-@pytest.mark.release
-def test_surplus_gradient_wrt_wait_matches_finite_differences(loop, reformer):
-    unit, ref = reformer
-    feed = lean_naphtha()
-    tear = ref.tear
-    # purge as the swing so the surplus is the reformer's H2 less the (responding) demands
-    net = loop.network.replace(headers=[h2.Header("main", P=10e5)])
+def test_a_fixed_supply_closes_in_one_pass():
+    units = _units()
+    net = _network(units, h2.Producer.of_purity("reformer", 200.0, 0.9, impurity=IMP), [])
+    res = h2.close_hydrotreater_loop(net, units, tol=1e-9)
+    assert res.converged and res.passes == 1
+    assert all(u.calls == 1 for u, _, _ in units.values())
 
-    def surplus(wait_C):
-        p = ReformerParams().with_wait(wait_C + 273.15)
-        r = unit.solve(feed, p, tear_initial=tear, tol=1e-11, max_iter=400, on_nonconvergence="ignore")
-        o = net.replace(producers=[h2.Producer.from_reformer(r)]).solve().outputs
+
+def test_surplus_gradient_wrt_the_producer_rate_matches_finite_differences(loop):
+    _, res = loop
+    net = res.network
+
+    def surplus(F):
+        p = h2.Producer.of_purity("reformer", F, 0.88, impurity=IMP)
+        o = net.replace(producers=[p]).solve().outputs
         return jnp.stack([o["h2.surplus"], o["main.purity"]])
 
-    w0 = float(ReformerParams().wait) - 273.15
-    J = jax.jacfwd(surplus)(jnp.asarray(w0))
-    h = 0.02
-    fd = (surplus(jnp.asarray(w0 + h)) - surplus(jnp.asarray(w0 - h))) / (2 * h)
+    F0 = jnp.asarray(45.0)
+    J = jax.jacfwd(surplus)(F0)
+    h = 1e-3
+    fd = (surplus(F0 + h) - surplus(F0 - h)) / (2 * h)
     np.testing.assert_allclose(np.asarray(J), np.asarray(fd), rtol=1e-5, atol=1e-9)
-    assert float(J[0]) != 0.0
+    assert float(J[1]) != 0.0

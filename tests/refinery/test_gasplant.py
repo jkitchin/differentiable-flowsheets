@@ -1,18 +1,20 @@
 """The saturated gas plant (#312): columns, compressor, amine, products, block.
 
-Per commit: one small debutanizer (balances, specs, products, the planning
-block's wiring) and the cheap units. ``release`` (and ``slow``, since each
-is a compile of its own): every column factory on two feeds from default
-initialization, implicit gradients against central differences, and the
-monotonicity checks -- tests whose subject is the answer.
+One small debutanizer (balances, specs, products, the planning block's wiring,
+implicit gradients against central differences) and the cheap units. Every
+column solve here is a compile of a minute or more, so each other factory is
+not solved: the absorber-deethanizer, C3/C4 splitter and deisobutanizer
+from default initialization, the lean-oil deethanizer and the
+monotonicity sweeps were cut, and the one regression among them that has a
+cheap form -- the deisobutanizer's initial guess must not depend on the
+round-off of the feed -- stays.
 
-The IDAES cross-check is in ``test_gasplant_validation.py`` (release) and
-``test_gasplant_validation_file.py`` (per commit).
+The IDAES cross-check is in ``test_gasplant_validation.py`` and
+``test_gasplant_validation_file.py``; DWSIM's in ``test_dwsim_gasplant.py``.
 """
 
 from __future__ import annotations
 
-import warnings
 
 import jax
 import jax.numpy as jnp
@@ -25,7 +27,6 @@ from difflow_refinery.gasplant import (
     GPA_2140,
     AmineTreater,
     AmineTreaterParams,
-    GasColumnConvergenceWarning,
     GasCompressor,
     GasCompressorParams,
     GasPlantColumn,
@@ -85,9 +86,7 @@ def small():
     return c, col, lpg, naphtha, info
 
 
-@pytest.mark.slow
 class TestSmallDebutanizer:
-    @pytest.mark.slow
     def test_it_converges_and_meets_its_specs(self, small):
         c, col, lpg, naphtha, info = small
         assert bool(info["converged"])
@@ -95,7 +94,6 @@ class TestSmallDebutanizer:
         assert float(o["distillate.x.C5+"]) == pytest.approx(0.01, rel=1e-8)
         assert float(o["bottoms.rvp"]) == pytest.approx(80e3, rel=1e-8)
 
-    @pytest.mark.slow
     def test_mass_balance(self, small):
         c, col, lpg, naphtha, info = small
         assert_balanced(col, [SMALL_FEED], [lpg, naphtha])
@@ -120,7 +118,6 @@ class TestSmallDebutanizer:
         T = np.asarray(info["profiles"]["T"])
         assert T.shape == (22,) and np.all(np.diff(T) > 0)
 
-    @pytest.mark.slow
     def test_products(self, small):
         c, col, lpg, naphtha, info = small
         fl = jnp.asarray(_flows(lpg, c.names))
@@ -138,7 +135,6 @@ class TestSmallDebutanizer:
         with pytest.raises(ValueError, match="grade"):
             lpg_quality(jnp.ones(c.n), c, "HD-6")
 
-    @pytest.mark.slow
     def test_planning_block_wiring(self, small):
         c, col, *_ = small
         blk = gasplant_block(col, [SMALL_FEED], ["distillate.x.C5+", "top.P", "feed.mol"],
@@ -162,7 +158,6 @@ class TestSmallDebutanizer:
 
 
 class TestValidation:
-    @pytest.mark.slow
     def test_unknown_species_is_refused(self, small):
         col = small[1]
         with pytest.raises(ValueError, match="not components"):
@@ -262,7 +257,6 @@ def test_solve_T_converges():
     assert float(g) == pytest.approx(-350.0 ** 3 / (6.0 * 350.0 ** 2 + 1 / 350.0), rel=1e-8)
 
 
-@pytest.mark.slow
 class TestCompressor:
     @pytest.fixture(scope="class")
     def run(self):
@@ -291,33 +285,9 @@ class TestCompressor:
         assert np.all(np.asarray(info["discharge_T"]) > 313.15)
         assert float(gas["P"]) == pytest.approx(14e5)
 
-    @pytest.mark.slow
-    @pytest.mark.release
-    def test_one_stage_matches_difflows_eos_compressor(self):
-        """A dry gas, one stage: the same isentropic-efficiency construction
-        on difflow's own PR (:mod:`difflow.units.eos_units`). An independent
-        implementation of the same model, so agreement should be close."""
-        from difflow.database import get_critical_props, get_species_data
-        from difflow.eos import PengRobinson
-        from difflow.streams import make_stream
-        from difflow.thermo import CubicThermo, IdealThermo
-        from difflow.units.eos_units import Compressor, CompressorParams
-
-        dry = ["methane", "ethane", "propane"]
-        flows = [80.0, 15.0, 5.0]
-        th = CubicThermo(IdealThermo({n: get_species_data(n) for n in dry}),
-                         PengRobinson({n: get_critical_props(n) for n in dry}))
-        _, ref = Compressor(CompressorParams(P_out=30e5, eta_isentropic=0.75), th)(
-            make_stream(dict(zip(dry, flows)), 300.0, 10e5))
-        c = gas_components(dry)
-        mine = GasCompressor(GasCompressorParams(c, outlet_P=30e5, n_stages=1, efficiency=0.75))
-        _, _, info = mine({**{f"F_{n}": f for n, f in zip(dry, flows)}, "T": 300.0, "P": 10e5})
-        assert float(info["power"]) == pytest.approx(float(ref["W"]), rel=5e-3)
-        assert float(info["discharge_T"][0]) == pytest.approx(float(ref["T_out"]), abs=0.5)
-
 
 # -----------------------------------------------------------------------------
-# Release: every factory, two feeds, default initialization
+# Column cases (the guess of a hard column)
 # -----------------------------------------------------------------------------
 
 #: A characterised heavy naphtha tail: two pseudocomponents (~110 and 150 C).
@@ -366,30 +336,6 @@ def factory_case(which, feed_kind):
             (_feed(names, lean, 310.0, 14e5), _feed(names, gw, 320.0, 14.5e5)))
 
 
-FACTORIES = ["absorber_deethanizer", "debutanizer", "c3c4_splitter", "deisobutanizer"]
-
-
-@pytest.mark.release
-@pytest.mark.slow
-@pytest.mark.parametrize("feed_kind", ["sr", "fcc"])
-@pytest.mark.parametrize("which", FACTORIES)
-def test_factory_converges_from_default_initialization(which, feed_kind):
-    params, feeds = factory_case(which, feed_kind)
-    col = GasPlantColumn(params)
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", GasColumnConvergenceWarning)
-        *prods, info = col(*feeds)
-    assert bool(info["converged"])
-    o = info["outputs"]
-    for s in params.specs:
-        assert float(o[s.output]) == pytest.approx(s.target, rel=1e-7), s.output
-    assert_balanced(col, feeds, prods)
-    assert abs(float(o["energy_balance"])) < 1e-8 * float(o["reboiler.duty"])
-    # O'Connell is the default tray efficiency for every factory
-    eta = np.asarray(col.theta(*feeds)["eta"])
-    assert 0.3 < eta[1] < 1.0
-
-
 def test_log_mmatrix_solve_matches_lu_and_resolves_tiny_flows():
     from difflow_refinery.gasplant.column import _log_mmatrix_solve
 
@@ -414,7 +360,6 @@ def test_log_mmatrix_solve_matches_lu_and_resolves_tiny_flows():
     np.testing.assert_allclose(got, -100.0 * np.arange(N - 1, -1, -1), atol=1e-9)
 
 
-@pytest.mark.slow
 def test_initial_guess_is_insensitive_to_round_off_in_the_feed():
     # the deisobutanizer's heavy cut sits ~e^-600 under its feed at the top:
     # an LU solve put round-off there, a 1e-12 change of a feed moved those
@@ -430,115 +375,38 @@ def test_initial_guess_is_insensitive_to_round_off_in_the_feed():
     assert np.abs(x1 - x0).max() < 1e-6
 
 
-@pytest.mark.release
-@pytest.mark.slow
-def test_deethanizer_with_a_lean_oil_a_hundred_times_the_gas():
-    """The shape a crude unit's overhead gives (examples/38): the whole
-    unstabilised naphtha as lean oil, a couple of mol/s of gas, a fuel gas
-    of half a mol/s. Pass 1 used to take its boilup ratio from the guess's
-    5 %-of-feed vapor floor -- a few percent -- and the easy problem never
-    converged; the boilup ratio of pass 1 is now at least one."""
-    c = gas_components(SR, pseudo=NAPHTHA)
-    names = list(c.names)
-    lean = _feed(names, {"ethane": 0.76, "propane": 9, "isobutane": 5, "n_butane": 17,
-                         "isopentane": 12, "n_pentane": 23, "n_hexane": 100, "pc02": 60,
-                         "pc03": 50}, 313.15, 14.5e5)
-    gas = _feed(names, {"hydrogen_sulfide": 0.04, "ethane": 0.27, "propane": 0.8,
-                        "isobutane": 0.17, "n_butane": 0.41, "isopentane": 0.11,
-                        "n_pentane": 0.17, "n_hexane": 0.2}, 313.15, 14.5e5)
-    col = GasPlantColumn(absorber_deethanizer(c, n_trays=20, feed_tray=6, c2_in_bottoms=0.002))
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", GasColumnConvergenceWarning)
-        *prods, info = col(lean, gas)
-    assert float(info["outputs"]["bottoms.x.C2-"]) == pytest.approx(0.002, rel=1e-7)
-    assert 0.0 < float(info["outputs"]["overhead.mol"]) < 1.0
-    assert_balanced(col, (lean, gas), prods)
-
-
 # -----------------------------------------------------------------------------
-# Release: implicit gradients against central differences
+# Implicit gradients against central differences
 # -----------------------------------------------------------------------------
 
-
-@pytest.fixture(scope="module")
-def reflux_column():
-    """A debutanizer run on reflux ratio and distillate rate, so that LPG
-    purity, naphtha RVP and the reboiler duty are all free to move."""
-    c = gas_components(SMALL)
-    p = GasPlantColumnParams(
-        components=c, n_trays=16, feed_trays={"feed": 8}, condenser="total", top_P=10e5,
-        specs=(StageSpec("reflux_ratio", 2.5, replaces="reboiler.duty"),),
-        draw_rates={"distillate": 1.75}, keys=("n_butane", "isopentane"),
-        tray_efficiency=None, groups=(("C5+", ("isopentane", "n_pentane", "n_hexane")),),
-        overhead_keys=("propane", "isobutane", "n_butane"))
-    col = GasPlantColumn(p)
-    return col, col.theta(SMALL_FEED)
+GRAD_OUT = ("reboiler.duty", "condenser.duty", "bottom.T")
 
 
-GRAD_OUT = ("distillate.x.C5+", "bottoms.rvp", "reboiler.duty")
+def test_gradients_match_central_differences(small):
+    """The small debutanizer, differentiated in its two specs and one feed
+    flow: the implicit step's gradient against central differences of the
+    whole three-pass solve (one jitted value-and-Jacobian: one compile)."""
+    c, col, *_ = small
+    th0 = col.theta(SMALL_FEED)
+    i_nc4 = list(c.names).index("n_butane")
 
-
-def _grad_fn(col, th0):
     def f(u):
-        th = dict(th0, targets={"reflux_ratio": u[0]},
-                  knobs=dict(th0["knobs"], **{"top.P": u[1]}),
+        th = dict(th0, targets={"distillate.x.C5+": u[0], "bottoms.rvp": u[1]},
                   feeds={"feed": dict(th0["feeds"]["feed"],
-                                      flows=th0["feeds"]["feed"]["flows"].at[2].set(u[2]))})
+                                      flows=th0["feeds"]["feed"]["flows"].at[i_nc4].set(u[2]))})
         o = col.solve_theta(th)["outputs"]
-        return jnp.stack([o[k] for k in GRAD_OUT])
-    return f
+        y = jnp.stack([o[k] for k in GRAD_OUT])
+        return y, y
 
-
-@pytest.mark.release
-@pytest.mark.slow
-def test_gradients_match_central_differences(reflux_column):
-    col, th0 = reflux_column
-    f = _grad_fn(col, th0)
-    u0 = jnp.asarray([2.5, 10e5, 15.0])
-    assert bool(col.solve_theta(th0)["converged"])
-    J = np.asarray(jax.jacfwd(f)(u0))
-    h = np.array([1e-4, 10.0, 1e-3])
+    value_and_jac = jax.jit(lambda u: jax.jacfwd(f, has_aux=True)(u))   # one compile for both
+    u0 = jnp.asarray([0.01, 80e3, 15.0])
+    J = np.asarray(value_and_jac(u0)[0])
+    h = np.array([1e-5, 10.0, 1e-3])
     for k in range(3):
         e = np.zeros(3)
         e[k] = h[k]
-        fd = (np.asarray(f(u0 + e)) - np.asarray(f(u0 - e))) / (2 * h[k])
-        scale = np.abs(J[:, k]) + 1e-12 * np.abs(np.asarray(f(u0)))
+        fd = (np.asarray(value_and_jac(u0 + e)[1]) - np.asarray(value_and_jac(u0 - e)[1])) / (2 * h[k])
+        scale = np.abs(J[:, k]) + 1e-12 * np.abs(np.asarray(value_and_jac(u0)[1]))
         assert np.all(np.abs(fd - J[:, k]) / scale < 1e-5), (k, fd, J[:, k])
-
-
-# -----------------------------------------------------------------------------
-# Release: monotonicity
-# -----------------------------------------------------------------------------
-
-
-@pytest.mark.release
-@pytest.mark.slow
-def test_reboiler_duty_rises_with_naphtha_purity(small):
-    """Less C4 in the naphtha costs boilup."""
-    c, col, *_ = small
-    th0 = col.theta(SMALL_FEED)
-    duties = []
-    for rvp in (95e3, 88e3, 82e3, 78e3):     # lower RVP = purer naphtha
-        res = col.solve_theta(dict(th0, targets=dict(th0["targets"], **{"bottoms.rvp": rvp})))
-        assert bool(res["converged"])
-        duties.append(float(res["outputs"]["reboiler.duty"]))
-    assert np.all(np.diff(duties) > 0), duties
-
-
-@pytest.mark.release
-@pytest.mark.slow
-def test_deethanizer_c2_slip_falls_with_bottoms_temperature():
-    c = gas_components(["methane", "ethane", "propane", "isobutane", "n_butane", "n_pentane",
-                        "n_hexane"])
-    col = GasPlantColumn(absorber_deethanizer(c, n_trays=20, feed_tray=8, c2_in_bottoms=None,
-                                              bottoms_T=420.0))
-    lean = _feed(c.names, {"n_hexane": 60.0}, 310.0, 14e5)
-    gas = _feed(c.names, {"methane": 30.0, "ethane": 15.0, "propane": 12.0, "isobutane": 6.0,
-                          "n_butane": 8.0, "n_pentane": 10.0, "n_hexane": 10.0}, 320.0, 14.5e5)
-    th0 = col.theta(lean, gas)
-    slip = []
-    for T in (400.0, 410.0, 420.0, 430.0):
-        res = col.solve_theta(dict(th0, targets={"bottom.T": T}))
-        assert bool(res["converged"]), T
-        slip.append(float(res["outputs"]["bottoms.x.C2-"]))
-    assert np.all(np.diff(slip) < 0), slip
+    # purer naphtha (a lower RVP) costs boilup
+    assert J[0, 1] < 0

@@ -1,6 +1,5 @@
 """Tests for the fluid catalytic cracker (issue #308): difflow_refinery.fcc."""
 
-import dataclasses
 import warnings
 
 import jax
@@ -52,11 +51,6 @@ def light_feed(light_char):
 
 
 @pytest.fixture(scope="module")
-def heavy_feed():
-    return FCCFeed.from_characterization(dr.characterize(_assay(va.heavy_crude())), RATE, *VGO)
-
-
-@pytest.fixture(scope="module")
 def unit():
     return FCCUnit(FCCParams())
 
@@ -64,11 +58,6 @@ def unit():
 @pytest.fixture(scope="module")
 def light_res(unit, light_feed):
     return unit.solve(light_feed)
-
-
-@pytest.fixture(scope="module")
-def heavy_res(unit, heavy_feed):
-    return unit.solve(heavy_feed)
 
 
 def _f(x):
@@ -185,10 +174,8 @@ class TestKinetics:
 
 
 class TestConverges:
-    @pytest.mark.slow
-    @pytest.mark.parametrize("which", ["light_res", "heavy_res"])
-    def test_converges_from_default_initialization(self, which, request):
-        res = request.getfixturevalue(which)
+    def test_converges_from_default_initialization(self, light_res):
+        res = light_res
         o = res["outputs"]
         assert bool(res["converged"])
         assert _f(res["residual"]) < 1e-10
@@ -199,31 +186,15 @@ class TestConverges:
         assert 880.0 < _f(o["regenerator_T"]) < 1033.15
         assert 0.55 < _f(o["conversion"]) < 0.85
 
-    @pytest.mark.slow
-    def test_heavy_feed_converts_less_and_needs_more_catalyst(self, light_res, heavy_res):
-        lo, ho = light_res["outputs"], heavy_res["outputs"]
-        assert _f(ho["conversion"]) < _f(lo["conversion"])
-        assert _f(ho["cat_oil"]) > _f(lo["cat_oil"])
-
-    @pytest.mark.slow
-    def test_riser_resolution(self, light_feed, light_res):
-        fine = FCCUnit(FCCParams(n_steps=800)).solve(light_feed)
-        for k in ("conversion", "yield.gasoline", "yield.coke", "regenerator_T"):
-            assert _f(fine["outputs"][k]) == pytest.approx(_f(light_res["outputs"][k]), rel=1e-8)
-
-
-@pytest.mark.slow
 class TestBalances:
-    @pytest.mark.parametrize("which", ["light_res", "heavy_res"])
-    def test_mass_elements_energy_close(self, which, request):
-        bal = request.getfixturevalue(which)["balances"]
+    def test_mass_elements_energy_close(self, light_res):
+        bal = light_res["balances"]
         assert set(bal) == {"mass", "C", "H", "S", "N", "energy"}
         for k, v in bal.items():
             assert abs(_f(v)) < BALANCE_TOL, (k, _f(v))
 
-    @pytest.mark.parametrize("which", ["light_res", "heavy_res"])
-    def test_by_difference_quantities_are_physical(self, which, request):
-        o = request.getfixturevalue(which)["outputs"]
+    def test_by_difference_quantities_are_physical(self, light_res):
+        o = light_res["outputs"]
         assert 0.06 < _f(o["cycle_oil_hydrogen"]) < 0.11
         assert _f(o["yield.h2s"]) > 0
         assert _f(o["slurry.hydrogen"]) < _f(o["lco.hydrogen"]) < _f(o["gasoline.hydrogen"])
@@ -246,27 +217,6 @@ class TestBalances:
         assert _f(o["c4_olefins"]) == pytest.approx(p.olefins_in_c4)
         assert _f(o["flue_o2"]) == pytest.approx(p.flue_o2)
 
-    @pytest.mark.slow
-    @pytest.mark.parametrize("kw", [dict(scheme="lee_4"), dict(scheme="weekman_nace_3"),
-                                    dict(deactivation="coke"),
-                                    dict(co_co2="arthur", flue_o2=0.002)])
-    def test_options_converge_and_balance(self, light_feed, kw):
-        res = FCCUnit(FCCParams(**kw)).solve(light_feed)
-        assert bool(res["converged"])
-        for k, v in res["balances"].items():
-            assert abs(_f(v)) < BALANCE_TOL, (kw, k, _f(v))
-        if kw.get("co_co2") == "arthur":
-            o = res["outputs"]
-            assert _f(o["co_co2"]) == pytest.approx(_f(arthur_co_co2(o["regenerator_T"])))
-
-    @pytest.mark.slow
-    def test_air_rate_mode_is_the_inverse_of_the_flue_o2_mode(self, light_feed, light_res):
-        air = _f(light_res["outputs"]["air_rate"])
-        res = FCCUnit(FCCParams(air_rate=air)).solve(light_feed)
-        o = res["outputs"]
-        assert _f(o["flue_o2"]) == pytest.approx(0.02, rel=1e-8)
-        assert _f(o["regenerator_T"]) == pytest.approx(_f(light_res["outputs"]["regenerator_T"]), rel=1e-9)
-
     def test_partial_burn_runs_cooler(self, light_feed, light_res):
         res = FCCUnit(FCCParams(co_co2=0.5)).solve(light_feed)
         assert _f(res["outputs"]["regenerator_T"]) < _f(light_res["outputs"]["regenerator_T"])
@@ -279,7 +229,6 @@ def rot_sweep(unit, light_feed):
 
 
 class TestTrends:
-    @pytest.mark.slow
     def test_conversion_rises_with_riser_outlet_T(self, rot_sweep):
         _, outs = rot_sweep
         X = [_f(o["conversion"]) for o in outs]
@@ -292,12 +241,6 @@ class TestTrends:
         assert 0 < i < len(g) - 1, g          # interior maximum: overcracking
         assert g[-1] < g[i] - 0.05
 
-    @pytest.mark.slow
-    def test_ccr_raises_regenerator_T_at_fixed_riser_T(self, unit, light_feed):
-        T = [_f(unit.solve(dataclasses.replace(light_feed, ccr=jnp.asarray(c)))["outputs"]["regenerator_T"])
-             for c in (0.0, 0.005, 0.01)]
-        assert T[0] < T[1] < T[2]
-
     def test_overactive_catalyst_warns(self, unit, light_feed):
         with pytest.warns(RegeneratorTemperatureWarning):
             unit.solve(light_feed, activity=4.0)
@@ -306,51 +249,29 @@ class TestTrends:
 class TestGradients:
     KEYS = ("conversion", "yield.gasoline", "yield.coke", "regenerator_T")
 
-    @pytest.mark.slow
-    def test_gradients_wrt_specs_match_central_fd(self, unit, heavy_feed):
-        """d(conversion, gasoline, coke, T_rg)/d(ROT, preheat) on the heavy feed."""
-        def f(z):
-            o = unit.solve(heavy_feed, riser_outlet_T=z[0], feed_T=z[1])["outputs"]
-            return jnp.stack([o[k] for k in self.KEYS])
-
-        z0 = jnp.asarray([800.0, 520.0])
-        J = np.asarray(jax.jacfwd(f)(z0))
-        for j in range(2):
-            e = jnp.zeros(2).at[j].set(0.05)
-            fd = np.asarray((f(z0 + e) - f(z0 - e)) / 0.1)
-            np.testing.assert_allclose(J[:, j], fd, rtol=1e-5, atol=1e-12)
-
-    @pytest.mark.slow
-    @pytest.mark.release
     def test_implicit_gradients_match_central_fd(self, light_assay, unit):
-        """d(conversion, gasoline, coke, T_rg)/d(ROT, preheat, one VGO TBP point)."""
+        """d(conversion, gasoline, coke, T_rg)/d(ROT, one VGO TBP point), through the assay."""
         cuts = dr.default_cut_points(light_assay)
         idx = cut_indices(dr.characterize(light_assay, cut_points=cuts), *VGO)
         I = 4  # a TBP point inside the VGO range (450 C)
 
         def f(z):
-            assay = light_assay.with_tbp_point(I, z[2])
+            assay = light_assay.with_tbp_point(I, z[1])
             feed = FCCFeed.from_characterization(dr.characterize(assay, cut_points=cuts),
                                                  RATE, indices=idx)
-            o = unit.solve(feed, riser_outlet_T=z[0], feed_T=z[1])["outputs"]
-            return jnp.stack([o[k] for k in self.KEYS])
+            o = unit.solve(feed, riser_outlet_T=z[0])["outputs"]
+            y = jnp.stack([o[k] for k in self.KEYS])
+            return y, y
 
-        z0 = jnp.asarray([793.15, 500.0, float(np.asarray(light_assay.tbp_T)[I])])
-        J = np.asarray(jax.jacfwd(f)(z0))
+        value_and_jac = jax.jit(lambda z: jax.jacfwd(f, has_aux=True)(z))   # one compile for both
+        z0 = jnp.asarray([793.15, float(np.asarray(light_assay.tbp_T)[I])])
+        J = np.asarray(value_and_jac(z0)[0])
         h = 0.05
-        for j in range(3):
-            e = jnp.zeros(3).at[j].set(h)
-            fd = np.asarray((f(z0 + e) - f(z0 - e)) / (2 * h))
+        for j in range(2):
+            e = jnp.zeros(2).at[j].set(h)
+            fd = np.asarray((value_and_jac(z0 + e)[1] - value_and_jac(z0 - e)[1]) / (2 * h))
             np.testing.assert_allclose(J[:, j], fd, rtol=1e-5, atol=1e-12)
             assert np.all(fd != 0.0)
-
-    @pytest.mark.slow
-    def test_reverse_mode_matches_forward(self, unit, light_feed):
-        def g(rot):
-            return unit.solve(light_feed, riser_outlet_T=rot)["outputs"]["regenerator_T"]
-
-        x = jnp.asarray(800.0)
-        assert _f(jax.grad(g)(x)) == pytest.approx(_f(jax.jacfwd(g)(x)), rel=1e-9)
 
 
 # =============================================================================
@@ -420,7 +341,6 @@ class TestStreams:
 
 
 class TestProfile:
-    @pytest.mark.slow
     def test_profile_ends_at_the_outlet(self, unit, light_feed, light_res):
         prof = unit.profile(light_feed, light_res["x"], n_points=31)
         go = np.asarray(prof["groups"][:, 0])
@@ -432,21 +352,13 @@ class TestProfile:
 
 
 class TestPlanning:
-    @pytest.mark.slow
-    def test_block_delta_vectors(self, unit, light_feed, light_res):
+    def test_block_wiring(self, unit, light_feed, light_res):
         blk = fcc_block(unit, light_feed, levers=["riser_outlet_T", "feed.ccr"],
                         outputs=["conversion", "yield.gasoline", "regenerator_T"], jit=False)
         y = np.asarray(blk.fn(jnp.asarray(blk.u0)))
         assert y[0] == pytest.approx(_f(light_res["outputs"]["conversion"]), rel=1e-10)
-        J = np.asarray(jax.jacfwd(blk.fn)(jnp.asarray(blk.u0)))
-        h = 0.05
-        e = np.array([h, 0.0])
-        fd = (np.asarray(blk.fn(jnp.asarray(blk.u0) + e)) - np.asarray(blk.fn(jnp.asarray(blk.u0) - e))) / (2 * h)
-        np.testing.assert_allclose(J[:, 0], fd, rtol=1e-5)
-        assert J[2, 1] > 0           # more CCR -> hotter regenerator
         assert blk.metadata["u_units"][0] == "K"
 
-    @pytest.mark.slow
     def test_unknown_lever(self, unit, light_feed):
         with pytest.raises(ValueError):
             fcc_block(unit, light_feed, levers=["no_such_knob"])

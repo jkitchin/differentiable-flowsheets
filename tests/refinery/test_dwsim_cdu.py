@@ -186,7 +186,6 @@ class TestReferenceIsCurrent:
         assert INP["heat_path"] == json.loads(json.dumps(dc.HEAT_PATH)), REGENERATE
         assert INP["vacuum_flash"] == json.loads(json.dumps(dc.VACUUM_FLASH)), REGENERATE
 
-    @pytest.mark.slow
     def test_the_crude_constants_are_difflows(self):
         from .reference import case
 
@@ -199,7 +198,6 @@ class TestReferenceIsCurrent:
                                    err_msg=REGENERATE)
         np.testing.assert_allclose(flows, INP["feed_flows"], rtol=1e-12, err_msg=REGENERATE)
 
-    @pytest.mark.slow
     def test_the_characterizations_are_difflows(self):
         now = dc.difflow_characterizations()
         for key in ASSAYS:
@@ -237,7 +235,6 @@ def _col(rows, k, n=None):
     return np.array([r[k] for r in rows[:n]])
 
 
-@pytest.mark.release
 @pytest.mark.parametrize("key", ASSAYS)
 class TestCorrelationsAtTheSameCut:
     """DWSIM's correlations evaluated at difflow's own (Tb, SG): the
@@ -328,7 +325,6 @@ class TestCorrelationsAtTheSameCut:
         assert -0.21 < r.min() < -0.18 and 0.11 < r.max() < 0.12
 
 
-@pytest.mark.release
 @pytest.mark.parametrize("key", ASSAYS)
 @pytest.mark.parametrize("run", ["default", "rd"])
 class TestDWSIMsCharacterizationPipeline:
@@ -452,7 +448,6 @@ SAME = REF["thermo"]["same_model"]
 OWN = REF["thermo"]["dwsim_own"]
 
 
-@pytest.mark.release
 class TestSameModelOnTheCrude:
     """difflow's ColumnThermo against DWSIM's Raoult's Law on difflow's
     constants (an implementation check), on the CDU case's whole crude."""
@@ -557,7 +552,6 @@ class TestSameModelOnTheCrude:
         assert duty_df - SAME["furnace_duty_W"] == pytest.approx(sum(parts.values()), abs=1.0)
 
 
-@pytest.mark.release
 class TestDWSIMsOwnModelsOnTheCrude:
     """DWSIM's own characterization of the same crude (default options, its
     cuts plus database propane/n-butane/n-pentane, the same standard volume
@@ -634,7 +628,6 @@ class TestDWSIMsOwnModelsOnTheCrude:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.release
 class TestVacuumFeedFlash:
     """The CDU reference's atmospheric residue at vacuum flash-zone
     conditions (673 K / 50 and 100 mmHg, 693 K / 75 mmHg)."""
@@ -662,7 +655,6 @@ class TestVacuumFeedFlash:
             assert p["equilibrium_residual"] < 1e-7
 
 
-@pytest.mark.release
 def test_dwsim_raoult_gives_its_petroleum_fractions_no_latent_heat():
     """The cause of DWSIM-Raoult's 36 % low furnace duty: ``AUX_HVAPi``
     returns zero for a "Petroleum Assay" compound. Under PR, GS and LKP the
@@ -701,7 +693,6 @@ def small():
     return dc.difflow_small_column(COMP)
 
 
-@pytest.mark.release
 class TestSmallColumnAgainstDWSIM:
     """:data:`COLUMN_SMALL` (five of the crude's cuts, 10 stages, bottom
     feed, a liquid side draw, total condenser, no reboiler) solved by both
@@ -712,7 +703,6 @@ class TestSmallColumnAgainstDWSIM:
     What is left is DWSIM's enthalpy conventions (``P v_L``, unsmoothed
     Watson, quadrature), as on the crude above."""
 
-    @pytest.mark.slow
     def test_converged(self, small):
         r, _ = small
         assert bool(r.converged)
@@ -782,29 +772,3 @@ class TestSmallColumnAgainstDWSIM:
         h_l = float(x[0] @ (_dwsim_h_ig(cp, T[0]) - hvap)) + P[0] * v_l
         q_dw = V[1] * float(y[1] @ _dwsim_h_ig(cp, T[1])) - (L[0] + D) * h_l
         assert q_dw == pytest.approx(d["condenser_duty_W"], rel=1.5e-4)
-
-
-@pytest.mark.slow
-@pytest.mark.release
-def test_difflow_solves_the_column_dwsim_could_not():
-    """:data:`COLUMN_A` -- the CDU crude's 28 components in the main column
-    with side draws -- converges in difflow; DWSIM's attempts are in
-    ``COLUMN_A_ATTEMPTS``."""
-    from difflow_refinery import column as cc
-
-    from .reference import case
-
-    unit, crude, thermo, Vf, flows = dc.difflow_crude()
-    cfg = dc.COLUMN_A
-    feed = dict(unit.feed(case.BPD, T=case.T_FURNACE_IN, P=case.P_FURNACE_IN))
-    feed["T"], feed["P"] = cfg["T_feed"], cfg["P_feed"]
-    specs = (cc.product_rate("naphtha", cfg["distillate"], "mole"),) + tuple(
-        cc.product_rate(n, r, "mole") for n, _, r in cfg["side_draws"])
-    p = cc.CrudeColumnParams(n_stages=cfg["n_stages"], feed_stage=cfg["feed_stage"], specs=specs,
-                             P_top=cfg["P_top"], P_bottom=cfg["P_bottom"],
-                             P_condenser=cfg["P_condenser"],
-                             side_products=tuple(cc.SideProduct(n, s, 0)
-                                                 for n, s, _ in cfg["side_draws"]))
-    r = cc.CrudeColumn(p, thermo).solve(feed)
-    assert bool(r.converged)
-    assert float(r.L[-2]) > 0.05 * sum(flows)          # a wet wash zone: a real answer

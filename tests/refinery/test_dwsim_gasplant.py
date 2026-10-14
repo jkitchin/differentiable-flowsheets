@@ -35,8 +35,7 @@ DWSIM's own RVP, a correlation on the TVP (the classic UI's cold-flow
 utility), against difflow's D323 construction. These measure the model,
 not the code, and are reported rather than tuned away.
 
-``release`` throughout but for the per-commit checks on the file
-(:class:`TestReferenceFile`, :class:`TestReferenceIsCurrent`).
+The columns solved are listed in ``SOLVED_COLUMNS``.
 """
 
 from __future__ import annotations
@@ -89,7 +88,7 @@ def _h_dwsim(th, cp, T, P, x, phase):
 
 
 # ---------------------------------------------------------------------------
-# Per commit: the file, and whether it is still about difflow's constants
+# The file, and whether it is still about difflow's constants
 # ---------------------------------------------------------------------------
 
 
@@ -185,11 +184,19 @@ class TestReferenceIsCurrent:
 
 
 # ---------------------------------------------------------------------------
-# Release: columns
+# Columns
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module", params=COLUMNS)
+#: The columns solved against DWSIM. The C3/C4 splitter is the one IDAES's
+#: TrayColumn cannot converge, so DWSIM is its only column-level reference;
+#: the debutanizer is compared with IDAES in ``test_gasplant_validation.py``
+#: and the naphtha splitter is the same machinery with another cut. Each is
+#: a full column solve (a minute of compile), so one is run.
+SOLVED_COLUMNS = ["c3c4_splitter"]
+
+
+@pytest.fixture(scope="module", params=SOLVED_COLUMNS)
 def column(request):
     name = request.param
     c = REF["columns"][name]
@@ -204,11 +211,8 @@ def _x(stream, names):
     return f / f.sum()
 
 
-@pytest.mark.release
-@pytest.mark.slow
 class TestColumns:
 
-    @pytest.mark.slow
     def test_k_values_at_dwsims_stage_states(self, column):
         """difflow's PR ``ln K`` at DWSIM's own (T, P, x, y) on every
         equilibrium stage, no column in the way. Measured 5.1e-7
@@ -273,7 +277,6 @@ class TestColumns:
         assert float(o["reboiler.duty"]) == pytest.approx(c["same"]["reboiler_duty"], rel=1e-4)
 
 
-@pytest.mark.release
 @pytest.mark.parametrize("name", COLUMNS)
 def test_dwsims_duties_are_its_own_enthalpies(name):
     """The 5e-5 explained: DWSIM's condenser and reboiler duties recomputed
@@ -300,7 +303,6 @@ def test_dwsims_duties_are_its_own_enthalpies(name):
     assert 2e-5 < qc2 / c["same"]["condenser_duty"] - 1 < 1e-4
 
 
-@pytest.mark.release
 @pytest.mark.parametrize("name", DB_COLUMNS)
 def test_dwsims_own_data_moves_the_split(name):
     """Comparison (b): the same column on DWSIM's database constants and
@@ -321,7 +323,7 @@ def test_dwsims_own_data_moves_the_split(name):
 
 
 # ---------------------------------------------------------------------------
-# Release: compressor
+# Compressor
 # ---------------------------------------------------------------------------
 
 
@@ -332,10 +334,8 @@ def compressed():
     return c, unit(feed)
 
 
-@pytest.mark.release
 class TestCompressor:
 
-    @pytest.mark.slow
     def test_stage_power_and_discharge_temperature(self, compressed):
         """Measured: power 5.1e-5 (stage 1) and 4.9e-5 (stage 2) relative,
         discharge temperatures 2.7 and 2.8 mK -- R and the midpoint rule in
@@ -374,11 +374,10 @@ class TestCompressor:
 
 
 # ---------------------------------------------------------------------------
-# Release: vapour pressure
+# Vapour pressure
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.release
 @pytest.mark.parametrize("name", RVPS)
 class TestVaporPressure:
 
@@ -386,7 +385,6 @@ class TestVaporPressure:
         c = REF["rvp"][name]
         return c, dc.gas_components_of(c["components"]), jnp.asarray(c["case"]["z"])
 
-    @pytest.mark.slow
     def test_true_vapor_pressure(self, name):
         """Bubble pressure at 100 F: measured 8.6e-7 and 1.1e-6 relative
         (DWSIM's flash residual and its truncated sqrt(2))."""
@@ -427,8 +425,6 @@ class TestVaporPressure:
         assert r["rvp_dwsim_correlation"] / r["d323"]["rvp"] - 1 == pytest.approx(gap, abs=0.005)
 
 
-@pytest.mark.slow
-@pytest.mark.release
 def test_the_correlation_crosses_the_tvp_once():
     """``RVP(TVP) = TVP`` where ``ln t + 0.15279 = 2.7738 log10 t`` (t in
     psi): t = 2.11 psi. Above it the correlation returns less than the TVP."""

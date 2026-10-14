@@ -356,7 +356,6 @@ class TestDistillation:
             assert float(tbp_evaporated(T, Tb, phi, 5.0)) == \
                 pytest.approx(f, abs=1e-10)
 
-    @pytest.mark.release
     def test_implicit_gradient_matches_fd(self):
         Tb = jnp.array([330.0, 360.0, 400.0, 450.0])
         phi = jnp.array([0.1, 0.3, 0.4, 0.2])
@@ -544,7 +543,6 @@ class TestPoolPropertyMode:
 
 
 class TestPoolStreamMode:
-    @pytest.mark.slow
     def test_mass_and_volume_balance(self, char, stream_components):
         pool = BlendPool("gasoline")
         V = jnp.array([0.6, 0.3, 0.05]) * 1e-3
@@ -632,7 +630,6 @@ def _fd_check(f, x, rel=1e-5, h=1e-6):
                                    atol=rel * max(1.0, np.abs(fd).max()))
 
 
-@pytest.mark.release
 class TestGradients:
     """Every property's derivative against central finite differences."""
 
@@ -688,7 +685,6 @@ class TestGradients:
 
         _fd_check(fo, jnp.array([0.6, 0.4, 3000.0, 3.0, 1.0, 0.86]))
 
-    @pytest.mark.slow
     def test_stream_mode_wrt_recipe_and_boiling_points(self, char,
                                                        stream_components):
         pool = BlendPool("gasoline")
@@ -741,7 +737,6 @@ class TestSmoothMargins:
 
 
 class TestPlanningBlock:
-    @pytest.mark.slow
     def test_as_block_delta_vectors(self, stream_components):
         pool = BlendPool("gasoline")
         blk = pool.as_block(stream_components)

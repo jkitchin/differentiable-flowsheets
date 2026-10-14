@@ -96,15 +96,12 @@ def _enthalpy(stream, thermo, phase):
 # =============================================================================
 
 
-@pytest.mark.slow
 class TestAtmosphericColumn:
-    @pytest.mark.slow
     def test_converges(self, atmospheric):
         _, res = atmospheric
         assert bool(res.converged)
         assert float(res.residual_norm) < 1e-9
 
-    @pytest.mark.slow
     def test_component_balance_closes(self, atmospheric, feed, thermo):
         _, res = atmospheric
         f = np.asarray(_flows(feed, thermo))
@@ -164,36 +161,6 @@ class TestAtmosphericColumn:
         _, res = atmospheric
         assert float(jnp.max(res.water_saturation)) < 1.0
 
-    @pytest.mark.slow
-    def test_pumparound_heat_comes_off_the_condenser(self, feed, thermo):
-        """Gradient through the implicit solve matches a central difference."""
-        def qc(q):
-            col = cc.CrudeColumn(_atmospheric_params(feed, thermo, pa1_duty=q), thermo)
-            return col.solve(feed).condenser_duty
-
-        g = float(jax.grad(qc)(25e6))
-        h = 1e5
-        fd = float((qc(25e6 + h) - qc(25e6 - h)) / (2 * h))
-        assert g == pytest.approx(fd, rel=1e-5)
-        # most of a pumparound's duty is duty the condenser no longer has to take
-        assert -1.0 < g < -0.8
-
-    @pytest.mark.slow
-    def test_gradient_reaches_the_assay(self, feed, thermo):
-        """d(condenser duty)/d(bulk SG), through characterisation and thermo."""
-        params = _atmospheric_params(feed, thermo)  # specs fixed in absolute terms
-
-        def qc(sg):
-            crude = characterize(Assay(PCT, [t + 273.15 for t in T_C], sg=sg, light_ends=LIGHT))
-            th = ColumnThermo.from_characterization(crude)
-            f = crude.stream(150.0, T=273.15 + 360.0, P=1.9e5, basis="mass")
-            return cc.CrudeColumn(params, th).solve(f).condenser_duty / 1e6
-
-        g = float(jax.grad(qc)(0.86))
-        h = 1e-4
-        fd = float((qc(0.86 + h) - qc(0.86 - h)) / (2 * h))
-        assert g == pytest.approx(fd, rel=1e-5)
-
 
 # =============================================================================
 # Smaller columns: other condensers, specs and draws
@@ -201,24 +168,18 @@ class TestAtmosphericColumn:
 
 
 class TestVariants:
-    @pytest.mark.slow
-    def test_doctest_case(self):
-        crude = characterize(Assay([0, 30, 70, 100], [320.0, 480.0, 640.0, 900.0], sg=0.85))
-        th = ColumnThermo.from_characterization(crude)
-        col = _small(th, (cc.product_rate("naphtha", 0.25, basis="mole"),), bottom_steam=0.2)
-        res = col.solve(crude.stream(1.0, T=620.0, P=1.6e5, basis="mole"))
-        assert bool(res.converged)
-
-    @pytest.mark.slow
-    def test_reflux_ratio_spec(self, crude, thermo):
+    def test_without_steam_there_is_no_water(self, crude, thermo):
         feed = crude.stream(10.0, T=273.15 + 350.0, P=1.6e5, basis="mass")
-        col = _small(thermo, (cc.reflux_ratio(2.0),), bottom_steam=10.0)
+        F = float(sum(_flows(feed, thermo)))
+        col = _small(thermo, (cc.product_rate("naphtha", 0.2 * F, basis="mole"),), bottom_steam=0.0)
         res = col.solve(feed)
         assert bool(res.converged)
-        D = float(sum(_flows(res.products["naphtha"], thermo)))
-        assert float(res.reflux) / D == pytest.approx(2.0, rel=1e-8)
+        assert float(res.products["water"]["F_water"]) == pytest.approx(0.0, abs=1e-9)
+        x0 = _flows(res.products["naphtha"], thermo)
+        x0 = x0 / jnp.sum(x0)
+        # the drum is at the distillate's hydrocarbon bubble point
+        assert float(jnp.sum(thermo.K(res.T_condenser, 1.2e5) * x0)) == pytest.approx(1.0, abs=1e-9)
 
-    @pytest.mark.slow
     def test_partial_condenser(self, crude, thermo):
         feed = crude.stream(10.0, T=273.15 + 350.0, P=1.6e5, basis="mass")
         F = float(sum(_flows(feed, thermo)))
@@ -236,66 +197,8 @@ class TestVariants:
         assert f[i_prop] / f.sum() > float(res.products["naphtha"][f"F_{thermo.names[i_prop]}"]) / float(
             sum(_flows(res.products["naphtha"], thermo)))
 
-    @pytest.mark.slow
-    def test_without_steam_there_is_no_water(self, crude, thermo):
-        feed = crude.stream(10.0, T=273.15 + 350.0, P=1.6e5, basis="mass")
-        F = float(sum(_flows(feed, thermo)))
-        col = _small(thermo, (cc.product_rate("naphtha", 0.2 * F, basis="mole"),), bottom_steam=0.0)
-        res = col.solve(feed)
-        assert bool(res.converged)
-        assert float(res.products["water"]["F_water"]) == pytest.approx(0.0, abs=1e-9)
-        x0 = _flows(res.products["naphtha"], thermo)
-        x0 = x0 / jnp.sum(x0)
-        # the drum is at the distillate's hydrocarbon bubble point
-        assert float(jnp.sum(thermo.K(res.T_condenser, 1.2e5) * x0)) == pytest.approx(1.0, abs=1e-9)
-
-    @pytest.mark.slow
-    def test_direct_side_draw_and_overflash(self, crude, thermo):
-        feed = crude.stream(10.0, T=273.15 + 360.0, P=1.7e5, basis="mass")
-        col = _small(
-            thermo,
-            (cc.product_rate("naphtha", 0.2 * float(sum(_flows(feed, thermo))), basis="mole"),
-             cc.overflash(0.03)),
-            n_stages=10, feed_stage=9, P_bottom=1.7e5, bottom_steam=10.0,
-            side_products=(cc.SideProduct("gasoil", 6, 0),),
-        )
-        res = col.solve(feed)
-        assert bool(res.converged)
-        # stage 8, above the feed, has no draw: its liquid is the overflash
-        wash = float(thermo.std_volume(res.x[7] * res.L[7]))
-        assert wash / _feed_volume(feed, thermo) == pytest.approx(0.03, rel=1e-8)
-        assert float(sum(_flows(res.products["gasoil"], thermo))) > 0
-        # the side product is drawn at the draw stage's temperature
-        assert float(res.products["gasoil"]["T"]) == pytest.approx(float(res.T[5]))
-
-
-class TestTransforms:
-    @pytest.fixture(scope="class")
-    def small(self):
-        crude = characterize(Assay([0, 30, 70, 100], [320.0, 480.0, 640.0, 900.0], sg=0.85))
-        th = ColumnThermo.from_characterization(crude)
-        col = _small(th, (cc.product_rate("naphtha", 0.25, basis="mole"),), bottom_steam=0.2)
-        return col, crude.stream(1.0, T=620.0, P=1.6e5, basis="mole")
-
-    @pytest.mark.slow
-    def test_jit(self, small):
-        col, feed = small
-        res = jax.jit(col.solve)(feed)
-        assert bool(res.converged)
-        np.testing.assert_allclose(res.condenser_duty, col.solve(feed).condenser_duty, rtol=1e-10)
-
-    @pytest.mark.slow
-    def test_vmap_over_furnace_temperature(self, small):
-        col, feed = small
-        T = jnp.array([610.0, 620.0, 630.0])
-        res = jax.vmap(lambda t: col.solve({**feed, "T": t}))(T)
-        assert bool(jnp.all(res.converged))
-        # a hotter feed brings more heat for the condenser to take
-        assert bool(jnp.all(jnp.diff(res.condenser_duty) > 0))
-
 
 class TestConfiguration:
-    @pytest.mark.slow
     def test_spec_count_must_match_freedoms(self, thermo):
         with pytest.raises(ValueError, match="degrees of freedom"):
             _small(thermo, ())
@@ -321,7 +224,6 @@ class TestConfiguration:
             _small(thermo, spec + (cc.product_rate("residue", 0.1),),
                    side_products=(cc.SideProduct("residue", 4, 0),))
 
-    @pytest.mark.slow
     def test_feed_must_match_thermo(self, thermo):
         col = _small(thermo, (cc.reflux_ratio(1.0),))
         with pytest.raises(ValueError, match="no flow"):

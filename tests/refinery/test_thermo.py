@@ -29,9 +29,7 @@ class TestWater:
         assert dh == pytest.approx(40660.0, rel=1e-6)
 
 
-@pytest.mark.slow
 class TestColumnThermo:
-    @pytest.mark.slow
     def test_components_boil_at_their_boiling_points(self, thermo):
         # Lee-Kesler with the acentric factor that boils each one at Tb
         psat = jax.vmap(lambda T, i: thermo.psat(T)[i])(thermo.Tb, jnp.arange(thermo.n_components))
@@ -40,7 +38,6 @@ class TestColumnThermo:
         # the light ends use their tabulated acentric factors: close, not exact
         np.testing.assert_allclose(np.asarray(psat)[:2], 101325.0, rtol=0.05)
 
-    @pytest.mark.slow
     def test_latent_heat_at_tb(self, thermo):
         dh = jax.vmap(lambda T, i: thermo.dhvap(T)[i])(thermo.Tb, jnp.arange(thermo.n_components))
         expected = [LIGHT_ENDS["propane"][5], LIGHT_ENDS["n_butane"][5]]
@@ -74,7 +71,6 @@ class TestColumnThermo:
         f = jax.jit(lambda th, T: th.h_liquid(T))
         np.testing.assert_allclose(f(thermo, 400.0), thermo.h_liquid(400.0), rtol=1e-12)
 
-    @pytest.mark.slow
     def test_unknown_light_end(self):
         crude = characterize(Assay([0, 100], [300.0, 900.0], sg=0.85, light_ends={"water": 1.0}))
         with pytest.raises(ValueError, match="light ends"):
