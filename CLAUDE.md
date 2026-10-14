@@ -17,8 +17,7 @@ say "do not weaken them" for a reason a regression test records.
 ```bash
 pip install -e ".[dev,examples,solvers]"
 
-make test                 # parallel, skips `slow`
-make test-all             # everything
+make test                 # the whole suite, in parallel
 pytest tests/ -v -n auto --dist loadfile   # loadfile keeps a module's JAX cache in one worker
 pytest tests/test_cstr.py -v
 make test-durations       # re-measure .test_durations (CI shards on it)
@@ -28,14 +27,13 @@ make notebooks            # execute example notebooks
 make gui-build            # rebuild the editor bundle + docs-index.json
 ```
 
-Markers: `slow` is a cost label; `release` marks tests whose subject is the
-*answer* (physics, FD checks, published benchmarks). Both are deselected per
-commit (`make test`, the Tests workflow) and run by the nightly Full suite
-workflow. Per-commit tests check correctness cheaply: one that needs an
-expensive solve gets `slow`, and CI fails a non-slow test whose call runs
-past `DIFFLOW_TEST_BUDGET` (180 s). CI shards by measured duration
-(`pytest-split`): 2 shards per commit, 12 for the full suite (2 workers
-each: 4 heavy JAX files at once exhaust a 16 GB runner).
+There is one suite and it runs on every commit: no `slow`/`release` tiers, no
+nightly run. A test that cannot finish in seconds is shrunk (a smaller
+configuration, one representative feed, a couple of levers) or cut, not
+deselected; CI fails a test whose call runs past `DIFFLOW_TEST_BUDGET`. CI
+shards by measured duration (`pytest-split`, 2 shards, 2 workers each: 4 heavy
+JAX files at once exhaust a 16 GB runner); publish.yml runs the same suite
+before a release.
 
 ## Layout
 

@@ -15,9 +15,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # The per-commit suite (not `release`, not `slow`), sharded two ways and
-  # run in parallel inside each shard. The history below is of the whole
-  # suite, which is what release-tests.yml now runs nightly.
+  # The whole suite, sharded two ways and run in parallel inside each shard.
+  # There is no nightly or release-only tier: every test runs on every commit
+  # (and publish.yml runs the same suite before a release), so a test that
+  # cannot finish in seconds is cut or shrunk rather than deselected. The
+  # history below predates that and was written when a `slow`/`release` tier
+  # existed.
   #
   # Two multipliers, because one is not enough. Run end to end in one process
   # the suite takes 50 minutes, nearly all of it XLA turning traced graphs
@@ -38,8 +41,7 @@ jobs:
   #    ~7x, so Mac numbers put 27 minutes of runner work in one shard and
   #    8 in another. To re-record, run the suite on CI with
   #    `--store-durations --durations-path <file>` and upload the file as an
-  #    artifact, once with `-m "not release"` and once with the release
-  #    tier too (publish.yml splits on the same file).
+  #    artifact (publish.yml splits on the same file).
   #
   #  * `-n auto` is 2 workers on `ubuntu-latest`, not 4: it counts physical
   #    cores, and the 4 vCPUs are 2 of them.
@@ -128,19 +130,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,gui,solvers,mcp]"
 
-      # `-m "not release"` is the point of this job: a commit is checked
-      # against the tests that a typo, a rename or a bad merge can break, and
-      # not against the ones that re-derive physics. The release tier runs in
-      # release.yml -- see the marker note in pyproject.toml for where the
-      # line is. `slow` is filtered too (2026-10-11): a commit is checked
-      # for correctness, and a test that needs an expensive solve to check
-      # it runs nightly in release-tests.yml, which has no `-m` filter.
-      # Before this the per-commit suite was ~490 runner-minutes, 85% of it
-      # in the 350 tests over 10 s, and a shard of four hit the 40-minute
-      # cap; without them it is ~20 and two shards finish in minutes.
+      # No `-m` filter: the whole suite runs on every commit.
       #
-      # DIFFLOW_TEST_BUDGET keeps it that way: a non-slow test whose call
-      # takes longer fails the run (tests/conftest.py), and `--durations=15`
+      # DIFFLOW_TEST_BUDGET keeps it that way: a test whose call takes
+      # longer fails the run (tests/conftest.py), and `--durations=15`
       # names the next candidates. 180 s is generous because the first test
       # in a file pays the file's JIT compile.
       #
@@ -158,7 +151,7 @@ jobs:
         env:
           DIFFLOW_TEST_BUDGET: "180"
         run: |
-          python -m pytest tests/ -q --tb=short -m "not release and not slow" \
+          python -m pytest tests/ -q --tb=short\
             -n auto --dist loadfile --no-loadscope-reorder \
             --durations=15 --splits 2 --group ${{ matrix.shard }}
 

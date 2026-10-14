@@ -41,7 +41,7 @@ endif
 
 .PHONY: all notebooks notebooks-force notebooks-bio notebooks-ree notebooks-cc \
         notebooks-bio-force notebooks-ree-force notebooks-cc-force \
-        clean test test-release test-slow test-all test-durations book book-clean sync \
+        clean test test-durations book book-clean sync \
         gui gui-build gui-test convergence ask-check
 
 all: notebooks
@@ -128,25 +128,9 @@ run:
 # keeps tests/conftest.py's longest-first order of the files (#315).
 PYTEST := pytest -n auto --dist loadfile --no-loadscope-reorder
 
-# What you run while working, and what every commit is checked against:
-# everything except the `release` tier, which re-derives physics and numerics
-# rather than checking the code (see the marker notes in pyproject.toml).
-# `slow` comes out too, as it does in the Tests workflow; the nightly Full
-# suite runs both.
+# The whole suite: what you run while working, what every commit is checked
+# against and what a release has to pass. There are no slow/release tiers.
 test:
-	$(UV_RUN_DEV) $(PYTEST) tests/ -v -m "not release and not slow"
-
-# The release tier on its own: Monte Carlo refits, finite-difference
-# agreement, energy balances, published benchmarks.
-test-release:
-	$(UV_RUN_DEV) $(PYTEST) tests/ -v -m release
-
-# Only the compile-bound tests
-test-slow:
-	$(UV_RUN_DEV) $(PYTEST) tests/ -v -m slow
-
-# Everything. What a release has to pass, and what release.yml runs.
-test-all:
 	$(UV_RUN_DEV) $(PYTEST) tests/ -v
 
 # Re-measure what CI shards on. `.test_durations` is what balances the four
