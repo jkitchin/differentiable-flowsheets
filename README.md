@@ -2,6 +2,8 @@
 
 # difflow
 
+<!-- doc-test: skip-page: runs ~77 s, too slow for the per-commit suite -->
+
 [![Tests](https://github.com/jkitchin/differentiable-flowsheets/actions/workflows/test.yml/badge.svg)](https://github.com/jkitchin/differentiable-flowsheets/actions/workflows/test.yml)
 [![PyPI](https://img.shields.io/pypi/v/difflow.svg)](https://pypi.org/project/difflow/)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/difflow?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/difflow)

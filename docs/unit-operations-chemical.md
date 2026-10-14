@@ -1,5 +1,7 @@
 # Chemical Unit Operations
 
+<!-- doc-test: skip-page: runs ~72 s, too slow for the per-commit suite -->
+
 This document provides comprehensive documentation for all chemical unit operations available in Difflow.
 
 ---

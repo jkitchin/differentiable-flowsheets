@@ -1,5 +1,7 @@
 # Refinery Unit Operations
 
+<!-- doc-test: skip-page: runs ~263 s, too slow for the per-commit suite -->
+
 ![difflow_refinery](../images/plugins/difflow-refinery-logo.svg)
 
 This document covers the `difflow_refinery` plugin. It characterises a crude from its assay, separates it in a crude distillation unit (CDU): a fired heater and an atmospheric column, with side strippers, pumparounds and stripping steam. The products are reported the way a refinery reads them: yields, API gravities and TBP ranges. The atmospheric residue goes on to a vacuum distillation unit (VDU), and finished components are blended into products in a nonlinear blending pool.

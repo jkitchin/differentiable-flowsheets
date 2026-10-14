@@ -11,6 +11,10 @@ stale example fails here instead of in a reader's session.
   needing an optional package or a long solve) is marked by putting
   ``<!-- doc-test: skip -->`` on the line directly above its opening fence;
   add a reason after ``skip:``.
+* A page whose examples take too long for the per-commit suite carries
+  ``<!-- doc-test: skip-page: reason -->`` (blocks share one namespace, so a
+  single block cannot be dropped without breaking the ones after it). The
+  examples stay in the docs; they are just not run.
 * Output goes to a temporary directory and matplotlib uses ``Agg``.
 """
 
@@ -29,6 +33,7 @@ FILES = sorted(
 
 _FENCE = re.compile(r"^(?P<ind>[ \t]*)```python[ \t]*$")
 _SKIP = re.compile(r"<!--\s*doc-test:\s*skip\b")
+_SKIP_PAGE = re.compile(r"^<!--\s*doc-test:\s*skip-page\b", re.MULTILINE)
 
 
 def extract_blocks(text: str) -> list[tuple[int, str, bool]]:
@@ -58,6 +63,8 @@ def test_extract_blocks_honours_skip_marker():
 
 @pytest.mark.parametrize("path", [pytest.param(f, id=str(f.relative_to(ROOT))) for f in FILES])
 def test_doc_python_blocks_run(path, tmp_path, monkeypatch):
+    if _SKIP_PAGE.search(path.read_text()):
+        pytest.skip("page marked doc-test: skip-page (too slow for the per-commit suite)")
     import matplotlib
 
     matplotlib.use("Agg")

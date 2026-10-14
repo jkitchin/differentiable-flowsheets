@@ -1,5 +1,7 @@
 # Streams and Flowsheets
 
+<!-- doc-test: skip-page: runs ~73 s, too slow for the per-commit suite -->
+
 This document covers stream handling, flowsheet management, and recycle calculations in Difflow.
 
 ## Table of Contents

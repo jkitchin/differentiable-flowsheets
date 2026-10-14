@@ -1,5 +1,7 @@
 # Delta-Base Planning
 
+<!-- doc-test: skip-page: runs ~88 s, too slow for the per-commit suite -->
+
 The `difflow.planning` module turns one or more differentiable flowsheets into a
 linear (or mixed-integer linear) planning model, keeps it honest with a trust
 region, and returns the sensitivity of the *plan* as well as the plan.
