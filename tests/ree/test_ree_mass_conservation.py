@@ -1,190 +1,103 @@
-"""Tests for REE extractor mass conservation (issue #53).
+"""Smoke tests for the REE unit operations: they run, and species balance."""
 
-Verifies that non-extracted species (inerts) are preserved through
-REEExtractor and REEMixerSettler unit operations.
-"""
+import warnings
 
 import pytest
-import jax.numpy as jnp
 
-from difflow.streams import make_stream, get_flows
-from difflow_ree import REEExtractorParams, REEExtractor
+from difflow.streams import get_flows, make_stream
+from difflow_ree.units.cerium import CeriumOxidizer, CeriumOxidizerParams
 from difflow_ree.units.extraction import (
     MixerSettlerParams,
+    REEExtractor,
+    REEExtractorParams,
     REEMixerSettler,
 )
+from difflow_ree.units.precipitation import (
+    CarbonatePrecipitator,
+    HydroxidePrecipitator,
+    OxalatePrecipitator,
+    PrecipitatorParams,
+)
+from difflow_ree.units.scrubbing import REEScrubber, ScrubberParams
+from difflow_ree.units.stripping import REEStripper, StripperParams
 
 
-@pytest.fixture
-def feed():
-    """Aqueous feed with an inert species (Fe)."""
-    return make_stream(
-        flows={"H2O": 10.0, "Nd": 0.2, "Dy": 0.143827799, "Fe": 0.553},
-        T=298.15,
-        P=101325.0,
-    )
+@pytest.fixture(autouse=True)
+def _quiet():
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        yield
 
 
-@pytest.fixture
-def solvent():
-    """Organic solvent: D2EHPA extractant in an n-Heptane diluent.
-
-    The carriers are named after the extractant and the diluent the
-    extractor is configured with. A stream whose organic carrier is called
-    something else ("Organic") no longer silently contributes a default
-    organic flow of 1.0 -- it raises (#192).
-    """
-    return make_stream(
-        flows={
-            "D2EHPA": 10.0,
-            "n-Heptane": 20.0,
-            "Nd": 0.0,
-            "Dy": 0.0,
-            "Fe": 0.0,
-        },
-        T=298.15,
-        P=101325.0,
-    )
+def _assert_balanced(inlets, outlets, atol=1e-8):
+    def totals(streams):
+        out = {}
+        for s in streams:
+            for k, v in get_flows(s).items():
+                out[k] = out.get(k, 0.0) + float(v)
+        return out
+    t_in, t_out = totals(inlets), totals(outlets)
+    for k in set(t_in) | set(t_out):
+        assert t_in.get(k, 0.0) == pytest.approx(t_out.get(k, 0.0), abs=atol), k
 
 
-def _check_mass_conservation(feed, solvent, raffinate, extract, atol=1e-10):
-    """Assert total mass is conserved for every species."""
-    feed_flows = get_flows(feed)
-    solvent_flows = get_flows(solvent)
-    raff_flows = get_flows(raffinate)
-    ext_flows = get_flows(extract)
-
-    all_species = set(feed_flows.keys()) | set(solvent_flows.keys())
-    for species in all_species:
-        total_in = float(feed_flows.get(species, 0.0)) + float(
-            solvent_flows.get(species, 0.0)
-        )
-        total_out = float(raff_flows.get(species, 0.0)) + float(
-            ext_flows.get(species, 0.0)
-        )
-        assert abs(total_in - total_out) < atol, (
-            f"Mass not conserved for {species}: in={total_in:.6f}, out={total_out:.6f}"
-        )
+def test_extractor_balances():
+    feed = make_stream({"H2O": 10.0, "Nd": 0.2, "Dy": 0.14, "Fe": 0.553},
+                       T=298.15, P=101325.0)
+    solvent = make_stream({"D2EHPA": 10.0, "n-Heptane": 20.0},
+                          T=298.15, P=101325.0)
+    raff, ext, info = REEExtractor(REEExtractorParams(
+        n_stages=3, extractant="D2EHPA", diluent="n-Heptane",
+        elements=("Dy", "Nd"), pH=1.0))(feed, solvent)
+    _assert_balanced([feed, solvent], [raff, ext])
 
 
-class TestREEExtractorMassConservation:
-    """Mass conservation tests for REEExtractor (Kremser-based)."""
-
-    def test_inert_species_preserved(self, feed, solvent):
-        """Non-element species must appear unchanged in outputs."""
-        params = REEExtractorParams(
-            n_stages=1,
-            extractant="D2EHPA",
-            diluent="n-Heptane",  # names the solvent fixture's carrier (#192)
-            elements=("Dy", "Nd"),
-            pH=1.6,
-        )
-        extractor = REEExtractor(params)
-        raffinate, extract, info = extractor(feed, solvent)
-
-        raff_flows = get_flows(raffinate)
-        ext_flows = get_flows(extract)
-
-        # Fe is inert -- should stay in raffinate at its feed value
-        assert "Fe" in raff_flows, "Fe missing from raffinate"
-        assert float(raff_flows["Fe"]) == pytest.approx(0.553, abs=1e-10)
-
-        # n-Heptane is inert -- should stay in extract at its solvent value
-        assert "n-Heptane" in ext_flows, "n-Heptane missing from extract"
-        assert float(ext_flows["n-Heptane"]) == pytest.approx(20.0, abs=1e-10)
-
-    def test_total_mass_conservation(self, feed, solvent):
-        """Total input must equal total output for every species."""
-        params = REEExtractorParams(
-            n_stages=1,
-            extractant="D2EHPA",
-            diluent="n-Heptane",  # names the solvent fixture's carrier (#192)
-            elements=("Dy", "Nd"),
-            pH=1.6,
-        )
-        extractor = REEExtractor(params)
-        raffinate, extract, info = extractor(feed, solvent)
-        _check_mass_conservation(feed, solvent, raffinate, extract)
-
-    def test_multistage_mass_conservation(self, feed, solvent):
-        """Mass conservation holds for multi-stage extraction."""
-        params = REEExtractorParams(
-            n_stages=5,
-            extractant="D2EHPA",
-            diluent="n-Heptane",  # names the solvent fixture's carrier (#192)
-            elements=("Dy", "Nd"),
-            pH=1.0,  # (#270) inside D2EHPA's refitted [0.0, 2.0]
-        )
-        extractor = REEExtractor(params)
-        raffinate, extract, info = extractor(feed, solvent)
-        _check_mass_conservation(feed, solvent, raffinate, extract)
+def test_mixer_settler_balances():
+    aq = make_stream({"H2O": 10.0, "Nd": 0.1, "Dy": 0.05, "Fe": 0.3},
+                     T=298.15, P=101325.0)
+    org = make_stream({"D2EHPA": 5.0, "kerosene": 15.0}, T=298.15, P=101325.0)
+    aq_out, org_out, info = REEMixerSettler(MixerSettlerParams(
+        extractant="D2EHPA", elements=("Nd", "Dy"), pH=1.0))(aq, org)
+    _assert_balanced([aq, org], [aq_out, org_out])
 
 
-class TestMixerSettlerMassConservation:
-    """Mass conservation tests for REEMixerSettler (single stage)."""
+@pytest.mark.parametrize("unit", [
+    REEScrubber(ScrubberParams(n_stages=3, extractant="D2EHPA",
+                               elements=("Nd",), pH=0.5)),
+    REEStripper(StripperParams(n_stages=3, extractant="D2EHPA",
+                               elements=("Nd",), pH=0.0)),
+], ids=["scrubber", "stripper"])
+def test_scrubber_and_stripper_balance(unit):
+    org = make_stream({"D2EHPA": 5.0, "kerosene": 10.0, "Na_org": 0.7,
+                       "Nd": 0.05}, 298.15, 101325.0)
+    aq = make_stream({"H2O": 5.0, "HCl": 0.4, "Fe": 0.01}, 298.15, 101325.0)
+    a, o, info = unit(org, aq)
+    assert info["dropped_species"] == ()
+    _assert_balanced([org, aq], [a, o])
 
-    def test_inert_species_preserved(self):
-        """Non-element species must appear unchanged in outputs."""
-        params = MixerSettlerParams(
-            extractant="D2EHPA",
-            elements=("Nd", "Dy"),
-            pH=1.0,  # (#270) inside D2EHPA's refitted [0.0, 2.0]
-        )
-        stage = REEMixerSettler(params)
 
-        aq_in = make_stream(
-            flows={"H2O": 10.0, "Nd": 0.1, "Dy": 0.05, "Fe": 0.3},
-            T=298.15,
-            P=101325.0,
-        )
-        org_in = make_stream(
-            flows={
-                "D2EHPA": 5.0,
-                "kerosene": 15.0,
-                "Nd": 0.0,
-                "Dy": 0.0,
-                "n-Heptane": 10.0,
-            },
-            T=298.15,
-            P=101325.0,
-        )
+@pytest.mark.parametrize("cls,reagent", [(OxalatePrecipitator, "C2O4"),
+                                         (CarbonatePrecipitator, "CO3"),
+                                         (HydroxidePrecipitator, "NaOH")])
+def test_precipitator_smoke(cls, reagent):
+    feed = make_stream({"H2O": 55.5, "Nd": 0.10, "Dy": 0.02}, 298.15, 101325.0)
+    rg = make_stream({"H2O": 10.0, reagent: 1.0}, 298.15, 101325.0)
+    filt, solid, info = cls(PrecipitatorParams(elements=("Nd", "Dy")))(feed, rg)
+    for e in ("Nd", "Dy"):
+        total = float(get_flows(filt).get(e, 0.0)) + float(get_flows(solid)[e])
+        assert total == pytest.approx(float(get_flows(feed)[e]))
+    assert float(get_flows(solid)["Nd"]) > 0.0
 
-        aq_out, org_out, info = stage(aq_in, org_in)
-        aq_out_flows = get_flows(aq_out)
-        org_out_flows = get_flows(org_out)
 
-        # Fe should remain in aqueous outlet
-        assert "Fe" in aq_out_flows, "Fe missing from aqueous outlet"
-        assert float(aq_out_flows["Fe"]) == pytest.approx(0.3, abs=1e-10)
+def test_missing_solubility_data_is_named():
+    with pytest.raises(ValueError, match=r"No \w+ solubility product .*'Ho'"):
+        OxalatePrecipitator(PrecipitatorParams(elements=("Nd", "Ho")))
 
-        # n-Heptane should remain in organic outlet
-        assert "n-Heptane" in org_out_flows, "n-Heptane missing from organic outlet"
-        assert float(org_out_flows["n-Heptane"]) == pytest.approx(10.0, abs=1e-10)
 
-    def test_total_mass_conservation(self):
-        """Total input equals total output for every species."""
-        params = MixerSettlerParams(
-            extractant="D2EHPA",
-            elements=("Nd", "Dy"),
-            pH=1.0,  # (#270) inside D2EHPA's refitted [0.0, 2.0]
-        )
-        stage = REEMixerSettler(params)
-
-        aq_in = make_stream(
-            flows={"H2O": 10.0, "Nd": 0.1, "Dy": 0.05, "Fe": 0.3},
-            T=298.15,
-            P=101325.0,
-        )
-        org_in = make_stream(
-            flows={
-                "D2EHPA": 5.0,
-                "kerosene": 15.0,
-                "Nd": 0.0,
-                "Dy": 0.0,
-            },
-            T=298.15,
-            P=101325.0,
-        )
-
-        aq_out, org_out, info = stage(aq_in, org_in)
-        _check_mass_conservation(aq_in, org_in, aq_out, org_out)
+def test_cerium_oxidizer_smoke():
+    feed = make_stream({"H2O": 100.0, "La": 1.0, "Ce": 2.0, "Fe": 0.3},
+                       298.15, 101325.0)
+    filt, solid, _ = CeriumOxidizer(CeriumOxidizerParams(
+        elements=("La", "Ce")))(feed)
+    assert float(get_flows(filt)["Fe"]) == pytest.approx(0.3)
+    assert float(get_flows(filt)["La"]) == pytest.approx(1.0)

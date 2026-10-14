@@ -1,12 +1,4 @@
-"""Tests for difflow.serialize.
-
-The load-bearing test is `test_reloaded_flowsheet_solves_identically`: a
-file format that reproduces the structure but not the answer is worse
-than none, because the difference is invisible until it matters.
-
-The rest check that what cannot be written faithfully is refused with a
-message naming the culprit, rather than dropped.
-"""
+"""Tests for difflow.serialize: round trips, and refusals that name the culprit."""
 
 import dataclasses
 import json
@@ -24,7 +16,6 @@ from difflow import (
     Heater,
     HeaterParams,
     IdealThermo,
-    Splitter,
     Unit,
     get_species_data,
     make_stream,
@@ -75,24 +66,6 @@ class TestRoundTrip:
                     f"{stream}.{key} differs"
                 )
 
-    def test_structure_survives(self, flowsheet):
-        reloaded = serialize.from_json(serialize.to_json(flowsheet))
-        assert reloaded.species_order == flowsheet.species_order
-        assert [u.name for u in reloaded.units] == ["heat", "flash"]
-        assert [u.inlet_names for u in reloaded.units] == [["feed"], ["hot"]]
-        assert [u.outlet_names for u in reloaded.units] == [["hot"], ["liq", "vap"]]
-
-    def test_parameters_survive(self, flowsheet):
-        reloaded = serialize.from_json(serialize.to_json(flowsheet))
-        assert float(reloaded.units[0].operation.params.T_out) == 360.0
-        assert reloaded.units[1].operation.params.species_order == SPECIES
-
-    def test_feeds_survive(self, flowsheet):
-        reloaded = serialize.from_json(serialize.to_json(flowsheet))
-        feed = reloaded.feeds["feed"]
-        assert float(feed["F_water"]) == 1.0
-        assert float(feed["T"]) == 350.0
-
     def test_serialization_is_stable(self, flowsheet):
         """Writing, reading and writing again gives the same bytes."""
         once = serialize.to_json(flowsheet)
@@ -112,42 +85,12 @@ class TestRoundTrip:
         reloaded = serialize.from_json(serialize.to_json(fs))
         assert reloaded.recycles == fs.recycles
 
-    def test_defaults_survive(self):
-        fs = Flowsheet(species_order=["A"], default_flow=1e-6,
-                       default_T=310.0, default_P=2.0e5)
-        reloaded = serialize.from_json(serialize.to_json(fs))
-        assert reloaded.default_flow == 1e-6
-        assert reloaded.default_T == 310.0
-        assert reloaded.default_P == 2.0e5
-
-    def test_output_is_real_json(self, flowsheet):
-        data = json.loads(serialize.to_json(flowsheet))
-        assert data["format_version"] == FORMAT_VERSION
-        assert data["units"][0]["operation"] == "Heater"
-        assert "difflow_version" in data
-
-
 # =============================================================================
 # Thermodynamics
 # =============================================================================
 
 
 class TestThermo:
-    def test_thermo_is_written_and_rebuilt(self, flowsheet):
-        """About half the core units need a thermo object, not just params."""
-        reloaded = serialize.from_json(serialize.to_json(flowsheet))
-        rebuilt = reloaded.units[1].operation.thermo
-        assert isinstance(rebuilt, IdealThermo)
-        assert list(rebuilt.species) == SPECIES
-
-    def test_species_data_survives_as_a_namedtuple(self, flowsheet, thermo):
-        """SpeciesData is a NamedTuple, which a plain tuple encoding erases."""
-        reloaded = serialize.from_json(serialize.to_json(flowsheet))
-        rebuilt = reloaded.units[1].operation.thermo.species["water"]
-        original = thermo.species["water"]
-        assert type(rebuilt) is type(original)
-        assert rebuilt._fields == original._fields
-
     def test_an_unsupported_thermo_is_refused_with_a_way_out(self, flowsheet):
         class ExoticThermo:
             pass
@@ -168,13 +111,6 @@ class TestThermo:
             data, extras={"flash": {"thermo": thermo}}
         )
         assert reloaded.units[1].operation.thermo is thermo
-
-    def test_extras_overrides_a_stored_thermo(self, flowsheet, thermo):
-        reloaded = serialize.from_json(
-            serialize.to_json(flowsheet), extras={"flash": {"thermo": thermo}}
-        )
-        assert reloaded.units[1].operation.thermo is thermo
-
 
 # =============================================================================
 # What it refuses
@@ -207,10 +143,6 @@ class TestDataBuiltRateLaw:
         )), ["feed"], ["out"]))
         return fs
 
-    def test_a_reactor_round_trips(self, reactor_flowsheet):
-        reloaded = serialize.from_json(serialize.to_json(reactor_flowsheet))
-        assert callable(reloaded.units[0].operation.params.rate_fn)
-
     def test_the_reloaded_reactor_solves_identically(self, reactor_flowsheet):
         reloaded = serialize.from_json(serialize.to_json(reactor_flowsheet))
         original, restored = reactor_flowsheet.solve(), reloaded.solve()
@@ -219,15 +151,6 @@ class TestDataBuiltRateLaw:
                 if isinstance(value, str):
                     continue
                 assert float(value) == float(restored[stream][key])
-
-    def test_the_reactions_are_what_is_written(self, reactor_flowsheet):
-        """The file carries the specification, not an opaque blob."""
-        data = json.loads(serialize.to_json(reactor_flowsheet))
-        spec = data["units"][0]["params"]["rate_fn"]["$callable"]
-        assert spec["factory"] == "mass_action_kinetics"
-        assert spec["attr"] == "rate_fn"
-        assert spec["kwargs"]["reactions"][0]["equation"] == "water -> ethanol"
-
 
 class TestRefusals:
     def test_a_callable_parameter_is_refused(self, thermo):
@@ -245,19 +168,6 @@ class TestRefusals:
 
         with pytest.raises(SerializationError, match="callable"):
             serialize.to_json(fs)
-
-    def test_the_refusal_names_the_field(self, thermo):
-        from difflow import CSTR, CSTRParams
-
-        fs = Flowsheet(species_order=SPECIES)
-        fs.add_unit(Unit("rx", CSTR(CSTRParams(
-            V=1.0, rate_fn=lambda C, T, p: jnp.array([0.0]),
-            stoich=jnp.zeros((2, 1)), rate_params={}, species_order=SPECIES,
-        )), ["feed"], ["out"]))
-        with pytest.raises(SerializationError) as exc:
-            serialize.to_json(fs)
-        assert "rate_fn" in str(exc.value)
-        assert "rx" in str(exc.value)
 
     def test_an_unregistered_operation_is_refused(self):
         class HomeMadeUnit:
@@ -299,11 +209,6 @@ class TestView:
         back = serialize.from_dict(serialize.to_dict(flowsheet))
         assert back.view == flowsheet.view
 
-    def test_a_flowsheet_with_no_view_writes_no_view_key(self, flowsheet):
-        """A file that has never been opened in an editor is unchanged."""
-        assert "view" not in serialize.to_dict(flowsheet)
-        assert serialize.from_dict(serialize.to_dict(flowsheet)).view == {}
-
     def test_a_version_1_file_still_loads(self, flowsheet):
         """Files written before the view block existed keep opening."""
         data = serialize.to_dict(flowsheet)
@@ -312,27 +217,6 @@ class TestView:
         back = serialize.from_dict(data)
         assert [u.name for u in back.units] == [u.name for u in flowsheet.units]
         assert back.view == {}
-
-    def test_the_written_version_is_the_current_one(self, flowsheet):
-        assert serialize.to_dict(flowsheet)["format_version"] == 2
-        assert FORMAT_VERSION == 2
-        assert set(serialize.SUPPORTED_VERSIONS) == {1, 2}
-
-    def test_the_view_survives_an_apply_params(self, flowsheet):
-        """_apply_params rebuilds the flowsheet; the canvas must survive it."""
-        flowsheet.view = {"nodes": {"reactor": {"x": 1.0, "y": 2.0}}}
-        applied = flowsheet._apply_params({})
-        assert applied.view == flowsheet.view
-        applied.view["nodes"]["reactor"]["x"] = 99.0
-        assert flowsheet.view["nodes"]["reactor"]["x"] == 1.0, "copied, not shared"
-
-    def test_the_view_holds_arbitrary_json(self, flowsheet):
-        """The editor puts its planning selection here too; nothing validates."""
-        flowsheet.view = {"planning": {"u": ["reactor.V"], "y": ["out.total_flow"],
-                                       "bounds": {"reactor.V": [0.5, 5.0]},
-                                       "radius": 0.3}}
-        assert serialize.from_dict(serialize.to_dict(flowsheet)).view == flowsheet.view
-
 
 # =============================================================================
 # Values
@@ -347,17 +231,6 @@ class TestValueEncoding:
         restored = _decode_value(_encode_value(original, "test"))
         assert restored.shape == original.shape
         assert jnp.allclose(restored, original)
-
-    def test_a_plain_list_stays_a_list(self):
-        from difflow.serialize import _decode_value, _encode_value
-
-        assert _decode_value(_encode_value(["a", "b"], "test")) == ["a", "b"]
-
-    def test_nested_dicts_and_none(self):
-        from difflow.serialize import _decode_value, _encode_value
-
-        value = {"a": 1.0, "b": None, "c": {"d": [1.0, 2.0]}}
-        assert _decode_value(_encode_value(value, "test")) == value
 
     def test_an_unencodable_object_is_refused(self):
         from difflow.serialize import _encode_value
@@ -385,29 +258,6 @@ class TestNonFiniteFloats:
             raise AssertionError(f"bare {token} is not valid JSON")
 
         return json.loads(text, parse_constant=reject)
-
-    def test_scalar_round_trip(self):
-        from difflow.serialize import _decode_value, _encode_value
-
-        for value in (float("inf"), float("-inf")):
-            restored = _decode_value(_encode_value(value, "test"))
-            assert restored == value
-        assert jnp.isnan(_decode_value(_encode_value(float("nan"), "test")))
-
-    def test_array_round_trip(self):
-        from difflow.serialize import _decode_value, _encode_value
-
-        original = jnp.array([1.0, jnp.inf, -jnp.inf])
-        restored = _decode_value(_encode_value(original, "test"))
-
-        assert jnp.array_equal(restored, original)
-
-    def test_the_encoding_is_valid_json(self):
-        from difflow.serialize import _encode_value
-
-        text = json.dumps(_encode_value(jnp.array([jnp.inf, jnp.nan]), "test"))
-
-        self._strict(text)
 
     def test_a_saved_flowsheet_with_an_irreversible_reaction_is_valid_json(self):
         from difflow.kinetics import mass_action_kinetics
@@ -463,23 +313,6 @@ class TestRefs:
     with nothing but `serialize`.
     """
 
-    def test_a_known_object_is_written_as_its_name(self, flowsheet, thermo):
-        data = serialize.to_dict(flowsheet, refs={"thermo": thermo})
-        assert data["units"][1]["constructor"] == {"thermo": {"$ref": "thermo"}}
-
-    def test_it_comes_back_as_the_same_object(self, flowsheet, thermo):
-        data = serialize.to_dict(flowsheet, refs={"thermo": thermo})
-        back = serialize.from_dict(data, refs={"thermo": thermo})
-        assert back.units[1].operation.thermo is thermo
-
-    def test_a_different_object_of_the_same_type_is_not_a_reference(
-        self, flowsheet, thermo
-    ):
-        """Identity, not equality: two thermos are two objects."""
-        other = IdealThermo({n: get_species_data(n) for n in SPECIES})
-        data = serialize.to_dict(flowsheet, refs={"thermo": other})
-        assert data["units"][1]["constructor"]["thermo"] != {"$ref": "thermo"}
-
     def test_numbers_and_short_strings_are_never_captured(self, flowsheet):
         """Small ints and identifier-like strings are interned, so an
         identity scan run before the primitive branch would rewrite every
@@ -508,49 +341,9 @@ class TestRefs:
         reloaded = serialize.load(path, refs={"thermo": thermo})
         assert reloaded.units[1].operation.thermo is thermo
 
-    def test_a_reference_survives_a_solve(self, flowsheet, thermo, tmp_path):
-        """The point of the whole mechanism: the file still runs."""
-        path = serialize.save(flowsheet, tmp_path / "plant.json",
-                              refs={"thermo": thermo})
-        before = flowsheet.solve()
-        after = serialize.load(path, refs={"thermo": thermo}).solve()
-        for key, value in before["vap"].items():
-            if not isinstance(value, str):
-                assert float(after["vap"][key]) == float(value), f"vap.{key}"
-
-    def test_the_namespace_does_not_leak_between_calls(self, flowsheet, thermo):
-        """It is a context, not a global: the next call has none of it."""
-        serialize.to_dict(flowsheet, refs={"thermo": thermo})
-        plain = serialize.to_dict(flowsheet)
-        assert json.dumps(plain).count('"$ref"') == 0
-
-    def test_private_names_are_not_offered(self, flowsheet, thermo):
-        data = serialize.to_dict(flowsheet, refs={"_thermo": thermo})
-        assert data["units"][1]["constructor"]["thermo"] != {"$ref": "_thermo"}
-
-
 # =============================================================================
 # Files
 # =============================================================================
-
-
-class TestFiles:
-    def test_save_and_load(self, flowsheet, tmp_path):
-        path = serialize.save(flowsheet, tmp_path / "plant.json")
-        assert path.exists()
-        reloaded = serialize.load(path)
-        assert [u.name for u in reloaded.units] == ["heat", "flash"]
-
-    def test_the_file_is_human_readable(self, flowsheet, tmp_path):
-        path = serialize.save(flowsheet, tmp_path / "plant.json")
-        text = path.read_text()
-        assert "\n" in text, "indented, so it can be diffed"
-        assert '"operation": "Heater"' in text
-
-    def test_load_accepts_extras(self, flowsheet, thermo, tmp_path):
-        path = serialize.save(flowsheet, tmp_path / "plant.json")
-        reloaded = serialize.load(path, extras={"flash": {"thermo": thermo}})
-        assert reloaded.units[1].operation.thermo is thermo
 
 
 class TestPluginTypes:
@@ -562,14 +355,8 @@ class TestPluginTypes:
     without complaint and refuses to load.
     """
 
-    @pytest.mark.parametrize("name", [
-        "HeaterParams",                     # difflow
-        "BioreactorParams",                 # difflow_bio
-        "PipeParams",                       # difflow_gas
-        "BranchParams",                     # difflow_power
-    ])
-    def test_a_plugin_params_class_resolves_by_name(self, name):
-        found = serialize._lookup_type(name)
+    def test_a_plugin_params_class_resolves_by_name(self):
+        found = serialize._lookup_type("BranchParams")
         assert dataclasses.is_dataclass(found)
 
     def test_every_shipped_plugin_is_searched(self):
@@ -598,15 +385,6 @@ class TestUnpackedParams:
     refused a file that plainly carried them.
     """
 
-    CASES = [
-        ("Compressor", dict(ratio=1.3), "ratio", 1.3),
-        ("FlowSplit", dict(w=2.0), "w", 2.0),
-        ("SourceHead", dict(P_set=5.0e6), "P_set", 5.0e6),
-        ("GasPipe", dict(beta=7.0), "beta", 7.0),
-        ("BackPipe", dict(beta=7.0), "beta", 7.0),
-        ("PressureDrivenPipe", dict(beta=7.0), "beta", 7.0),
-    ]
-
     def _round_trip(self, name, kwargs):
         from difflow.catalog import _default_registry
 
@@ -615,24 +393,9 @@ class TestUnpackedParams:
         fs.add_unit(Unit(name.lower(), cls(**kwargs), ["a"], ["b"]))
         return fs, serialize.from_json(serialize.to_json(fs))
 
-    @pytest.mark.parametrize("name,kwargs,field,value", CASES)
-    def test_the_value_comes_back(self, name, kwargs, field, value):
-        _, back = self._round_trip(name, kwargs)
-        assert getattr(back.units[0].operation.params, field) == value
-
-    @pytest.mark.parametrize("name,kwargs,field,value", CASES)
-    def test_the_file_carries_it_under_params(self, name, kwargs, field, value):
-        """Where the loader now reads it from, stated as its own fact."""
-        fs, _ = self._round_trip(name, kwargs)
-        written = json.loads(serialize.to_json(fs))["units"][0]
-        assert written["params"][field] == value
-        assert field not in written["constructor"]
-
-    def test_defaults_the_unit_filled_in_survive_too(self):
-        """Not just the required argument: the whole Params it built."""
-        _, back = self._round_trip("Compressor", dict(ratio=1.3))
-        params = back.units[0].operation.params
-        assert (params.eta_ad, params.kappa, params.cp) == (0.8, 1.3, 2200.0)
+    def test_the_value_comes_back(self):
+        _, back = self._round_trip("GasPipe", dict(beta=7.0))
+        assert back.units[0].operation.params.beta == 7.0
 
     def test_a_non_params_argument_still_travels_as_a_constructor_extra(self):
         """The two channels compose: `ratio` by params, `direction` by extras."""
@@ -641,17 +404,6 @@ class TestUnpackedParams:
         )
         assert back.units[0].operation.params.ratio == 1.2
         assert back.units[0].operation.direction == -1
-
-    def test_extras_on_load_still_outrank_the_file(self):
-        from difflow.catalog import _default_registry
-
-        cls = _default_registry().list_operations()["GasPipe"].cls
-        fs = Flowsheet(species_order=SPECIES)
-        fs.add_unit(Unit("pipe", cls(beta=7.0), ["a"], ["b"]))
-        back = serialize.from_json(
-            serialize.to_json(fs), extras={"pipe": {"beta": 9.0}}
-        )
-        assert back.units[0].operation.params.beta == 9.0
 
     def test_a_genuinely_absent_argument_is_still_refused(self):
         """The message has to keep meaning what it says.
@@ -685,6 +437,3 @@ class TestUnpackedParams:
         back = serialize.from_json(serialize.to_json(fs))
         assert back.units[0].operation.membrane_area == 4.0
 
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

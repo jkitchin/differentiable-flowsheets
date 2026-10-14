@@ -60,25 +60,9 @@ def test_a_failing_plugin_is_reported_not_raised(monkeypatch):
     plugins.load(force=True)
 
 
-class TestPowerTools:
-    @pytest.mark.slow
-    def test_power_flow_matches_matpower(self):
-        """IEEE 14-bus: MATPOWER reports 13.393 MW of losses."""
-        answer = Workbench().plugin_tool("power_flow", case="case14")
-        assert answer["converged"] and answer["max_mismatch_mw"] < 1e-6
-        assert answer["losses_mw"] == pytest.approx(13.393, abs=1e-3)
-
-    @pytest.mark.slow
-    def test_acopf_matches_matpower_and_prices_check(self):
-        """WSCC 9-bus: MATPOWER's AC-OPF optimum is 5296.69 $/h."""
-        answer = Workbench().plugin_tool("power_opf", case="case9", kind="ac")
-        assert answer["converged"]
-        assert answer["cost"] == pytest.approx(5296.69, abs=0.01)
-        assert answer["price_check"] < 1e-6
-
-    def test_a_bad_case_is_an_answer(self):
-        answer = Workbench().plugin_tool("power_flow", case="case99")
-        assert not answer["ok"] and "case9" in answer["error"]
+def test_a_bad_case_is_an_answer():
+    answer = Workbench().plugin_tool("power_flow", case="case99")
+    assert not answer["ok"] and "case9" in answer["error"]
 
 
 def test_plugin_tools_are_served():

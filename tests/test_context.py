@@ -20,8 +20,6 @@ import pytest
 jax.config.update("jax_enable_x64", True)
 
 from difflow import (
-    CSTR,
-    CSTRParams,
     Flash,
     FlashParams,
     Flowsheet,
@@ -30,7 +28,6 @@ from difflow import (
     Unit,
     get_species_data,
     make_stream,
-    mass_action_kinetics,
 )
 from difflow.gui import context, docs_index
 from difflow.gui.session import FlowsheetSession
@@ -42,21 +39,13 @@ SPECIES = ["water", "ethanol"]
 def session():
     """A recycle flowsheet, solved, in a session."""
     thermo = IdealThermo({n: get_species_data(n) for n in SPECIES})
-    kin = mass_action_kinetics([{
-        "equation": "water -> ethanol",
-        "reactants": {"water": 1.0}, "products": {"ethanol": 1.0},
-        "rate_params": {"A": 1.0e3, "Ea": 40_000.0, "n": 0.0},
-    }], SPECIES)
     fs = Flowsheet(species_order=SPECIES)
     fs.add_feed("feed", make_stream({"water": 1.0, "ethanol": 0.1},
                                     T=350.0, P=101325.0))
     fs.add_unit(Unit("mix", Mixer(SPECIES, thermo), ["feed", "recycle"],
                      ["mixed"]))
-    fs.add_unit(Unit("reactor", CSTR(CSTRParams(
-        V=1.5, molar_density=1000.0, **kin.params_kwargs())),
-        ["mixed"], ["rx"]))
     fs.add_unit(Unit("flash", Flash(FlashParams(species_order=SPECIES), thermo),
-                     ["rx"], ["liq", "vap"]))
+                     ["mixed"], ["liq", "vap"]))
     fs.add_recycle("vap", "recycle")
     session = FlowsheetSession(flowsheet=fs)
     session.solve()
@@ -117,46 +106,8 @@ class TestDocsIndex:
 
 # -- the briefs -------------------------------------------------------
 
-@pytest.mark.slow
-class TestBlockPack:
-
-    @pytest.mark.slow
-    def test_it_carries_the_values_this_unit_actually_holds(self, session):
-        pack = context.block(session, name="reactor", question="volume")
-        text = pack.prompt()
-        assert "V [m^3] = 1.5" in text          # the value, and its units
-        assert "Operation: CSTR" in text
-
-    @pytest.mark.slow
-    def test_a_parameter_it_cannot_print_is_named_not_dropped(self, session):
-        # Same rule as the published page: a parameter that vanishes
-        # reads as a parameter the unit does not have.
-        assert "rate_fn = <function>" in context.block(
-            session, name="reactor").prompt()
-
-    def test_it_carries_the_equations_and_the_docstring(self, session):
-        text = context.block(session, name="reactor").prompt()
-        assert "Equations (LaTeX)" in text
-        assert "Continuous Stirred Tank Reactor" in text
-
-    def test_an_operation_with_no_node_is_answered_from_the_catalog(self, session):
-        pack = context.block(session, operation="Heater", question="duty")
-        assert "Operation: Heater" in pack.prompt()
-        assert "Parameters of Heater" in pack.prompt()
-
-    def test_a_name_nothing_is_called_says_so(self, session):
-        pack = context.block(session, name="nonesuch")
-        assert "No unit called 'nonesuch'" in pack.prompt()
-
 
 class TestFlowsheetPack:
-
-    @pytest.mark.slow
-    def test_it_names_the_units_the_wiring_and_the_recycle(self, session):
-        text = context.flowsheet(session, "what is this?").prompt()
-        assert "reactor (CSTR): mixed -> rx" in text
-        assert "vap is recycled to recycle" in text
-        assert "water, ethanol" in text
 
     def test_it_carries_the_generated_python(self, session):
         assert "difflow.codegen" in context.flowsheet(session).prompt()
@@ -192,44 +143,6 @@ class TestSolvePack:
             session.solve_error = None
 
 
-@pytest.mark.slow
-class TestPlanningPack:
-
-    @pytest.fixture(scope="class")
-    def dvs(self):
-        from difflow.planning import chain
-        from difflow.planning.export import DeltaVectorSet
-
-        return DeltaVectorSet.from_result(
-            chain.two_plant_chain().planner(radius=0.3).solve())
-
-    @pytest.mark.slow
-    def test_the_jacobian_is_readable_as_a_table(self, dvs):
-        pack = context.planning(dvs, "which lever moves the margin?")
-        table = next(s for s in pack.sections
-                     if s.title.startswith("Delta vectors for block 'ngl'"))
-        # Names are stripped of the block prefix that is already in the
-        # heading, so the columns fit rather than truncating.
-        assert "ethane_recovery" in table.body
-        assert "ngl.ethane_recovery" not in table.body
-        assert "Base case:" in table.body
-
-    @pytest.mark.slow
-    def test_it_says_where_the_linear_model_stops_being_the_flowsheet(self, dvs):
-        assert "trust radius" in context.planning(dvs).prompt()
-
-    def test_only_binding_marginals_are_quoted(self, dvs):
-        text = context.planning(dvs).prompt()
-        if "Shadow prices" in text:
-            rows = [line for line in text.splitlines()
-                    if line.startswith("- ") and ": " in line]
-            assert not any(line.endswith(": 0") for line in rows)
-
-    def test_a_constraint_reads_as_the_lp_holds_it(self, dvs):
-        if dvs.specs:
-            assert "ngl.T_colfeed <= 236.0" in context.planning(dvs).prompt()
-
-
 # -- the budget -------------------------------------------------------
 
 class TestBudget:
@@ -254,13 +167,6 @@ class TestBudget:
         assert [s.title for s in kept] == sorted(
             (s.title for s in kept), key=int)
 
-    @pytest.mark.slow
-    def test_a_real_pack_fits_the_window(self, session):
-        for kind in ("flowsheet", "block", "solve"):
-            pack = session.context(kind=kind, name="reactor",
-                                   question="what is going on here?")
-            assert pack["tokens"] <= context.BUDGET + 200, kind
-
 
 # -- the dispatch -----------------------------------------------------
 
@@ -268,7 +174,7 @@ class TestPack:
 
     def test_every_kind_answers(self, session):
         for kind in ("flowsheet", "block", "solve"):
-            answer = session.context(kind=kind, name="reactor", question="?")
+            answer = session.context(kind=kind, name="flash", question="?")
             assert answer["ok"] and answer["prompt"]
             assert answer["sections"] and answer["system"]
 

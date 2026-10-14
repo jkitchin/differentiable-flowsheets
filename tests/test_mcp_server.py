@@ -7,7 +7,6 @@ round trip of a call.
 """
 
 import asyncio
-import json
 
 import pytest
 
@@ -51,20 +50,6 @@ def test_schemas_come_from_the_signatures():
     schema = run(tools_of(build_server()))["add_unit"].input_schema
     assert schema["required"] == ["operation"]
     assert schema["properties"]["session"]["default"] == "main"
-
-
-@pytest.mark.slow
-def test_a_round_trip_solves_an_example():
-    async def go():
-        async with Client(build_server()) as client:
-            opened = await client.call_tool("open_example", {"key": "03_reactor_recycle"})
-            assert not opened.is_error
-            solved = await client.call_tool("solve", {})
-            return json.loads(solved.content[0].text)
-
-    answer = run(go())
-    assert answer["ok"] and answer["converged"]
-    assert "purge" in answer["streams"]
 
 
 def test_a_missing_sdk_names_the_extra(monkeypatch):

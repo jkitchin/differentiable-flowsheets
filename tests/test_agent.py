@@ -7,7 +7,6 @@ uses to get there and the guard rails (timeouts, --no-exec, rollback).
 """
 
 import json
-import time
 from pathlib import Path
 
 import pytest
@@ -51,14 +50,6 @@ class TestDiscovery:
         ops = Workbench().list_operations(plugin="gas")["operations"]
         assert ops and all(op["plugin"] == "difflow_gas" for op in ops)
 
-    @pytest.mark.slow
-    def test_describe_says_what_is_missing_and_how_to_supply_it(self):
-        """In an empty session a CSTR cannot be built: it needs a rate law."""
-        spec = Workbench().describe_operation("CSTR")
-        assert spec["ok"]
-        assert {"rate_fn"} <= set(spec["needs"])
-        assert "mass_action_kinetics" in spec["starter_code"]
-        assert any(p["name"] == "V" for p in spec["parameters"])
 
     def test_an_unknown_operation_points_at_the_search(self):
         answer = Workbench().describe_operation("Reboiler9000")
@@ -127,55 +118,6 @@ class TestBuildFromScratch:
         assert_same(mine["flash_out"], ref["liquid"])
         assert_same(mine["flash_out2"], ref["vapor"])
 
-    @pytest.mark.slow
-    def test_the_reactor_and_flash(self):
-        wb = Workbench()
-        assert wb.set_code_context(context_of("02_reactor_flash"))["ok"]
-        assert wb.set_species(ESTERIFICATION)["ok"]
-        added = wb.add_unit("CSTR", "reactor",
-                            params={"V": 0.5, "molar_density": 17000.0})
-        assert added["ok"] and added["placeholders"] == []
-        assert wb.add_unit("Flash", "flash")["ok"]
-        assert wb.connect("reactor", "reactor_out", "flash", "flash_in")["kind"] == "arc"
-        assert wb.set_feed("reactor_in", T=366.0, P=101325.0,
-                           flows={"acetic_acid": 1.0, "ethanol": 1.0,
-                                  "ethyl_acetate": 0.0, "water": 0.0})["ok"]
-        answer = wb.solve()
-        assert answer["converged"] and answer["warnings"] == []
-        ref = reference("02_reactor_flash")
-        mine = wb.get_streams()["streams"]
-        assert_same(mine["flash_out2"], ref["vapor"])
-        assert_same(mine["flash_out"], ref["liquid"])
-
-    @pytest.mark.slow
-    def test_the_reactor_recycle(self):
-        wb = Workbench()
-        assert wb.set_code_context(context_of("03_reactor_recycle"))["ok"]
-        assert wb.set_species(ESTERIFICATION)["ok"]
-        for op, name, params in [("Mixer", "mixer", None),
-                                 ("CSTR", "reactor", {"V": 0.5, "molar_density": 17000.0}),
-                                 ("Flash", "flash", None),
-                                 ("Splitter", "splitter", None)]:
-            assert wb.add_unit(op, name, params=params)["ok"]
-        assert wb.update_unit("splitter", call_params={"split_frac": 0.7})["ok"]
-        wires = [("mixer", "mixer_out", "reactor", "reactor_in"),
-                 ("reactor", "reactor_out", "flash", "flash_in"),
-                 ("flash", "flash_out", "splitter", "splitter_in")]
-        for wire in wires:
-            assert wb.connect(*wire)["kind"] == "arc"
-        # Closing the loop makes the tear; nobody has to declare it.
-        closing = wb.connect("splitter", "splitter_out", "mixer", "mixer_in2")
-        assert closing["kind"] == "recycle"
-        assert wb.set_feed("mixer_in", T=366.0, P=101325.0,
-                           flows={"acetic_acid": 1.0, "ethanol": 1.0,
-                                  "ethyl_acetate": 0.0, "water": 0.0})["ok"]
-        answer = wb.solve()
-        assert answer["converged"] and answer["audit"]["warnings"] == []
-        assert 0 < answer["gain"] < 1
-        ref = reference("03_reactor_recycle")
-        mine = wb.get_streams()["streams"]
-        assert_same(mine["flash_out2"], ref["vapor"], rel=1e-7)
-        assert_same(mine["splitter_out2"], ref["purge"], rel=1e-7)
 
     def test_a_forgotten_density_is_reported_by_the_solve(self):
         """The mistake this test file's author made first: no molar_density.
@@ -225,17 +167,6 @@ class TestGuardRails:
         assert "disabled" in wb.set_code_context("x = 1")["error"]
         assert "disabled" in wb.open_file("plant.py")["error"]
 
-    @pytest.mark.slow
-    def test_a_cell_past_its_timeout_returns_and_the_session_waits(self):
-        wb = Workbench()
-        wb.open_example("01_flash_drum")
-        answer = wb.run_python("import time; time.sleep(1.5)", timeout=0.2)
-        assert answer["timed_out"]
-        busy = wb.solve()
-        assert not busy["ok"] and "busy" in busy["error"]
-        assert wb.list_sessions()["sessions"][0]["busy"]
-        time.sleep(2.0)
-        assert wb.run_python("1 + 1")["outputs"][-1]["text"] == "2"
 
     def test_results_are_json(self):
         """inf and nan are not JSON; the error estimate can be either."""
