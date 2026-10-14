@@ -709,6 +709,11 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Changed
 
+- **The test suite checks the code, not the physics.** ~7300 tests (~106k lines) became 1700 (~23k): per unit a
+  smoke test, a finite-gradient test, one test per validation path and the simplest form of each fixed crash/NaN
+  regression, plus the API contracts. Comparisons to literature and reference data, rederived answers, trend and
+  finite-difference checks are gone, and with them the `slow`/`release` markers, the nightly Full suite workflow
+  and the 12-shard gate in `publish.yml` (one job now). CI runs the whole suite on every commit in two shards.
 - **Per-commit tests check correctness, not expensive solves.** ~990 tests whose recorded cost was the computation
   (over 2-3 s; the 350 over 10 s were 85% of the ~490 runner-minutes) are marked `slow`, and the Tests workflow now
   runs `-m "not release and not slow"` on 2 shards instead of 4 (timeout 40 -> 25 min). The nightly Full suite still

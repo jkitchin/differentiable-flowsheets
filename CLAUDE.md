@@ -17,13 +17,14 @@ say "do not weaken them" for a reason a regression test records.
 ```bash
 pip install -e ".[dev,examples,solvers]"
 
-make test                 # parallel (the -m filter it passes is now a no-op)
+make test                 # the whole suite, parallel
 pytest tests/ -v -n auto --dist loadfile   # loadfile keeps a module's JAX cache in one worker
 pytest tests/test_cstr.py -v
 make convergence          # recycle-solver pass rate over the hard corpus
 make book                 # Jupyter Book (+ the "Ask" index); make ask-check
 make notebooks            # execute example notebooks
 make gui-build            # rebuild the editor bundle + docs-index.json
+make test-durations       # re-record .test_durations (CI shards on it)
 ```
 
 Tests check the code, never the physics: per unit, one smoke test (it runs,
@@ -31,8 +32,8 @@ outputs finite, right keys), one `jax.grad`-is-finite test, one test per
 input-validation path, and the simplest form of a fixed crash/NaN regression;
 plus API contracts (Params, flowsheet wiring, serialization, catalog, GUI
 routes, doc links). No comparisons to literature or reference data, no
-rederived answers, no trend or FD-accuracy checks, no `slow`/`release` tiers
-(the markers are registered but unused). CI fails a test whose call runs
+rederived answers, no trend or FD-accuracy checks, no `slow`/`release` tiers.
+CI runs the whole suite on every commit (two shards) and fails a test whose call runs
 past `DIFFLOW_TEST_BUDGET` (180 s).
 
 ## Layout

@@ -69,8 +69,8 @@ dev = [
     # The suite is compile-bound, so it parallelises across processes and not
     # across threads: `pytest -n 4` cut it from 40 to 14.5 minutes on a
     # 4-core box, where forcing XLA and BLAS to one thread each changed
-    # nothing (215s vs 212s on a 6-file sample). `pytest-split` shards what
-    # is left across CI jobs by measured duration -- see `.test_durations`.
+    # nothing (215s vs 212s on a 6-file sample). `pytest-split` shards the
+    # suite across CI jobs by measured duration -- see `.test_durations`.
     "pytest-xdist>=3.8",
     "pytest-split>=0.8",
     "jupyter-book<2.0",
@@ -222,13 +222,8 @@ include = [
 [tool.pytest.ini_options]
 # The suite checks correctness only (a unit runs, its outputs are finite and
 # shaped right, its gradient is finite, the API and validation contracts
-# hold), never the physics or a published answer. No test carries these
-# markers any more; they stay registered while CI and the Makefile still
-# filter on them. DIFFLOW_TEST_BUDGET (tests/conftest.py) keeps it cheap.
-markers = [
-    "release: unused (formerly: a test whose subject is the answer, not the code).",
-    "slow: unused (formerly: a test whose cost is an expensive solve).",
-]
+# hold), never the physics or a published answer. DIFFLOW_TEST_BUDGET
+# (tests/conftest.py) keeps every test cheap.
 
 [dependency-groups]
 dev = [

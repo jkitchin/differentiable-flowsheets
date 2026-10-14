@@ -15,117 +15,28 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # The per-commit suite (not `release`, not `slow`), sharded two ways and
-  # run in parallel inside each shard. The history below is of the whole
-  # suite, which is what release-tests.yml now runs nightly.
+  # The whole suite, which checks the code and not the physics (see the test
+  # policy in CLAUDE.md), sharded two ways and run in parallel in each shard.
   #
-  # Two multipliers, because one is not enough. Run end to end in one process
-  # the suite takes 50 minutes, nearly all of it XLA turning traced graphs
-  # into machine code, and that work is per-process. So:
-  #
-  #  * `-n auto --dist loadfile` spends every core of the runner. Measured on
-  #    a 4-core/16 GB box (what `ubuntu-latest` is), on the half of the suite
-  #    this job used to run alone: 40:01 -> 14:30. That is 2.8x, not 4x, and
-  #    the shortfall is not thread contention -- pinning XLA and BLAS to one
-  #    thread each changed nothing (215s vs 212s over a six-file sample). It
-  #    is the compiler itself.
-  #
-  #  * `--splits/--group` then cuts what is left across four jobs, which run
-  #    concurrently. Balance comes from `.test_durations`, not from anyone's
-  #    judgement -- and those durations are measured HERE, on the runner,
-  #    not on a laptop (#315). A Mac is ~2.3x faster on this suite on
-  #    average but far from uniformly: the crude-unit planning tests are
-  #    ~7x, so Mac numbers put 27 minutes of runner work in one shard and
-  #    8 in another. To re-record, run the suite on CI with
-  #    `--store-durations --durations-path <file>` and upload the file as an
-  #    artifact, once with `-m "not release"` and once with the release
-  #    tier too (publish.yml splits on the same file).
-  #
-  #  * `-n auto` is 2 workers on `ubuntu-latest`, not 4: it counts physical
-  #    cores, and the 4 vCPUs are 2 of them.
-  #
-  # Four *jobs* and not four pytest invocations in one job: each one re-pays
-  # JAX/XLA startup and shares no compiled code with the others, which is dead
-  # weight when it is serial (the reason core and bio were merged into a single
-  # invocation here) and free when the four run on separate runners.
-  #
-  # `loadfile`, NOT the default `load`, is what makes the first one pay. A
-  # worker has its own compilation cache, so scattering one module's tests
-  # across four workers compiles the same graph four times; keeping a file
-  # whole keeps the reuse the cache is there for. An earlier attempt at plain
-  # `-n auto` is on record as having made the compile-bound tests *worse*
-  # (17-33 min against ~11 serial, run 29622893782). It no longer reproduces
-  # -- those same tests now go 598s -> 291s at `-n 4` -- most likely because
-  # the memory that attempt ran into is what tests/conftest.py now bounds.
-  #
-  # This replaces a `-m "not slow"` / `-m slow` pair of jobs whose halves had
-  # drifted to 2382s against 598s, so wall-clock was the fast half alone: 34
-  # minutes. The `slow` marker still exists, and `make test` still skips it,
-  # but CI no longer splits on it -- see the marker note in pyproject.toml.
+  #  * `-n auto --dist loadfile`: the suite is compile-bound and XLA's work is
+  #    per process, so workers buy wall-clock. `loadfile` keeps a module on one
+  #    worker so its compiled graphs are reused. `-n auto` is 2 on
+  #    `ubuntu-latest` (2 physical cores).
+  #  * `--splits 2 --group N` (pytest-split) balances the shards on
+  #    `.test_durations`; `make test-durations` re-records it.
   test:
     name: Tests (${{ matrix.python-version }}, shard ${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
-    # A shard was ~7 minutes when this cap was 25, chosen to be short enough
-    # to catch a hang, which was the problem with reading the old 45: at 34
-    # minutes of real work, a cap that meant "this has hung" and a cap that
-    # meant "this is slow today" were the same number, and run 34425803062
-    # was cancelled at 81% with everything to that point passing.
-    #
-    # After #315 the shards ran 17.7 / 21.6 / 16.6 minutes (run
-    # 36957483515), against 10 / 28 / 10 measured on the runner before it
-    # (the issue saw 16-18 / 20-22 / 6-9) -- on a suite that has grown by
-    # the preheat train and gas plant since. Shard 2 stays the longest: it
-    # holds tests/refinery/test_planning_nonconvergence.py, 776s of runner
-    # time in four tests that cannot be split across workers, which is a
-    # floor for whichever shard holds it. 30 is ~1.4x that
-    # shard: long enough not to fire on a slow runner (the same commit has
-    # measured 3-4 minutes apart), short enough that reaching it means
-    # something is wrong. If a shard creeps toward it, re-record
-    # `.test_durations` (below) before raising it.
-    #
-    # By 2026-10-04 that was not enough: with durations re-recorded the same
-    # day, three shards ran 18-24 / 26-30 / 16-24 minutes and shard 2 hit the
-    # cap on main (run 37228290967) and on two pull requests. Part of that
-    # was a .test_durations recorded on a Mac (restored to runner numbers);
-    # the rest is growth, so the split went to four. Four shards ran 16 /
-    # 27.5 / 16 / 15 minutes (run 37247376828): the long one holds the
-    # serial planning group, ~22 minutes on one worker however many shards
-    # there are, so the cap is ~1.4x that shard again.
-    #
-    # 2026-10-11: `slow` tests moved to the nightly run and the shards went
-    # to two of a few minutes each, so the cap went back to 25: reaching it
-    # now means a hang, not a slow day.
+    # Reaching this means a hang, not a slow day.
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        # One interpreter on a pull request, both of them on main.
-        #
-        # The jobs run concurrently, so this does not make a pull request
-        # finish sooner -- it costs the same wall-clock as one job. What it
-        # saves is job-minutes, and this being a public repository those are
-        # free. The reason to do it anyway is contention: the jobs draw on the
-        # same runner pool as every other repository on the account, and two
-        # of them have almost never been the ones to fail.
-        #
-        # Almost, not never. Every recorded exception was 3.10: over 134
-        # full-matrix runs, three had 3.10 fail while 3.11 passed (all on
-        # main, 2026-07-17/18), and 3.10 has since been dropped -- it was
-        # pinned to jax 0.6.2 / lineax 0.1.0, a frozen stack three JAX
-        # minors behind what 3.12 resolves, and the divergence was the
-        # failure, not the Python version. 3.11 and 3.12 sit one minor
-        # apart and have never disagreed here. If they start to, delete
-        # the condition and keep the list.
+        # One interpreter on a pull request, both on main.
         python-version: >-
           ${{ fromJSON(github.event_name == 'pull_request'
               && '["3.11"]' || '["3.11", "3.12"]') }}
-        # Sharding costs job-minutes and buys wall-clock, and it buys less
-        # of it each time. Three shards were ~7 min when the suite was
-        # smaller; at ~70 runner-minutes three put one shard at the 30 min
-        # cap, and four bring each to ~18. If this list changes, `--splits`
-        # below has to change with it -- they are the same number written
-        # twice, and nothing checks. Two since `slow` left the per-commit
-        # run (see "Run tests").
+        # If this list changes, `--splits` below changes with it.
         shard: [1, 2]
 
     steps:
@@ -145,38 +56,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,gui,solvers,mcp]"
 
-      # `-m "not release"` is the point of this job: a commit is checked
-      # against the tests that a typo, a rename or a bad merge can break, and
-      # not against the ones that re-derive physics. The release tier runs in
-      # release.yml -- see the marker note in pyproject.toml for where the
-      # line is. `slow` is filtered too (2026-10-11): a commit is checked
-      # for correctness, and a test that needs an expensive solve to check
-      # it runs nightly in release-tests.yml, which has no `-m` filter.
-      # Before this the per-commit suite was ~490 runner-minutes, 85% of it
-      # in the 350 tests over 10 s, and a shard of four hit the 40-minute
-      # cap; without them it is ~20 and two shards finish in minutes.
-      #
-      # DIFFLOW_TEST_BUDGET keeps it that way: a non-slow test whose call
-      # takes longer fails the run (tests/conftest.py), and `--durations=15`
-      # names the next candidates. 180 s is generous because the first test
-      # in a file pays the file's JIT compile.
-      #
-      # `-q`, because `-v` from four workers at once interleaves into
-      # something nobody reads; a failure still prints its own name.
-      #
-      # `--no-loadscope-reorder` (pytest-xdist >= 3.8) keeps the order
-      # tests/conftest.py gives the work units -- longest recorded duration
-      # first. xdist's own order is by test count, which handed shard 2's
-      # few-test, many-minute refinery files out last, to run alone at the
-      # end (#315). tests/conftest.py also makes the three files that slow
-      # each other down 2-2.5x when overlapped one work unit, so they run
-      # in series on one worker.
+      # DIFFLOW_TEST_BUDGET fails a test whose call runs past it
+      # (tests/conftest.py); `--durations=15` names the next candidates. 180 s
+      # is generous because the first test in a file pays its JIT compile.
       - name: Run tests
         env:
           DIFFLOW_TEST_BUDGET: "180"
         run: |
-          python -m pytest tests/ -q --tb=short -m "not release and not slow" \
-            -n auto --dist loadfile --no-loadscope-reorder \
+          python -m pytest tests/ -q --tb=short \
+            -n auto --dist loadfile \
             --durations=15 --splits 2 --group ${{ matrix.shard }}
 
   # Verify the package imports with NO optional dependencies installed. The job
