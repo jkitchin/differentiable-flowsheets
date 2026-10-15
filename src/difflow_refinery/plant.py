@@ -162,8 +162,8 @@ AD_MODES: dict[str, ADMode] = {m.name: m for m in (
            "the catalytic reformer per bed, inside an outer Python coke-activity loop on primal values "
            "(stop_gradient) closed by one implicit Newton step (I - dPhi/dC)^-1 with dPhi/dC by jax.jacfwd; "
            "eager only, never jit",
-           evidence="tests/refinery/test_ccr.py::TestCCRFlowsheet::test_jacfwd_matches_finite_differences "
-                    "(jax.jacfwd)"),
+           evidence="tests/reference/ccr_gradient_check.py (jax.jacfwd vs central differences; "
+                    "outside the suite, ~400 s)"),
     ADMode("FCC", "fcc.FCCUnit", ("fwd", "rev"),
            "riser by constant-step Tsit5 with diffrax.DirectAdjoint (both modes), riser-regenerator "
            "heat balance by optimistix Newton with implicit adjoint",

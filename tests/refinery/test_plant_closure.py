@@ -28,7 +28,7 @@ liquid products, FCC flue SO2, sweet fuel gas, amine flash gas, liquid
 sulfur and the SO2 the SRU emits. Each unit uses its own S molar mass (FCC
 32.06, reformer 32.065); the closure is in moles.
 
-Everything is a full solve: slow, and release (the answer is the subject).
+The fixtures are module-scoped full solves; each test only reads them.
 """
 
 from __future__ import annotations
@@ -56,8 +56,6 @@ from difflow_refinery.sulfur import tgtu as tg
 from difflow_refinery.treating import AmineUnitParams, Contactor, TrayParams, solve_amine_unit
 
 jax.config.update("jax_enable_x64", True)
-
-pytestmark = [pytest.mark.slow, pytest.mark.release]
 
 TBP_PCT = [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95]
 TBP_A = [60, 95, 150, 205, 260, 315, 370, 430, 500, 600, 680]

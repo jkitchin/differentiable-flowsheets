@@ -43,6 +43,9 @@ reformer bit for bit; the CCR sets that per-reactor tuple itself.
   bisection), ~5 passes. Gradients: eager `jax.jacfwd` only -- primal
   values by `stop_gradient`, then ONE implicit step `(I-J)^-1` with J by
   jacfwd. Never `jit` it (`ccr_block` forces `jit=False`).
+  The jacfwd-vs-FD check is `tests/reference/ccr_gradient_check.py`
+  (~10 min, outside the suite's per-test budget); rerun it after touching
+  the implicit step.
 - Coke made = coke burned and each bed's `C_k - C_{k-1} = m_k/G` close to
   the loop tolerance (tested). Circulation -> inf with zero regenerated coke
   IS the fresh-catalyst reformer (tested exactly).

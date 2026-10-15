@@ -214,7 +214,6 @@ class TestGradients:
             rtol=1e-12)
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("amine", ["MDEA", "DEA"])
 def test_constants_are_the_fit(amine):
     """Refit: the constants in KE_AMINES are still the least-squares optimum."""

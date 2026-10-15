@@ -271,7 +271,6 @@ class TestPlant:
             assert abs(float(v)) < 1e-12
         assert 0.0 < float(r["recovery"]) < 1.0
 
-    @pytest.mark.slow
     def test_gradients_vs_fd(self):
         """d(H2, CO2, NG)/d(S/C, T_out) through the whole plant, forward mode."""
         def f(x):
@@ -350,7 +349,6 @@ class TestIEAGHG:
 
 # ---------------------------------------------------------------- planning
 class TestPlanning:
-    @pytest.mark.slow
     def test_plant_reverse_mode(self):
         """jax.grad through the whole plant (tube on the checkpointed adjoint)
         agrees with the forward-mode derivative."""

@@ -326,7 +326,6 @@ def loop():
     return solve_amine_unit(LOOP, loop_gas())
 
 
-@pytest.mark.slow
 class TestAmineUnit:
     def test_converged(self, loop):
         assert bool(loop.converged)

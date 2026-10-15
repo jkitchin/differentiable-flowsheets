@@ -1,7 +1,4 @@
-"""CCR reformer (#474): activity from coke, moving-bed coke balance, regenerator.
-
-The flowsheet tests (a full reformer solve per outer pass) are ``slow``.
-"""
+"""CCR reformer (#474): activity from coke, moving-bed coke balance, regenerator."""
 
 from dataclasses import replace
 
@@ -179,7 +176,6 @@ def base():
     return CCRReformer().solve(lean_naphtha())
 
 
-@pytest.mark.slow
 class TestCCRFlowsheet:
     def test_converges(self, base):
         assert base.converged
@@ -235,28 +231,7 @@ class TestCCRFlowsheet:
         assert np.all(np.asarray(r.activity) > np.asarray(base.activity))
         assert float(r.outputs()["reformate.RON"]) > float(base.outputs()["reformate.RON"])
 
-    def test_jacfwd_matches_finite_differences(self, base):
-        feed = lean_naphtha()
-        u = CCRReformer(base.params, base.ccr)
-        p0 = base.params
 
-        def f(x):
-            r = u.solve(feed, p0.with_wait(x[1]), replace(base.ccr, circulation=x[0]),
-                        tear_initial=base.tear)
-            o = r.outputs()
-            return jnp.stack([o["ccr.spent_coke_wt"], o["reformate.RON"], o["ccr.T_peak_C"]])
-
-        x0 = jnp.array([float(base.ccr.circulation), float(p0.wait)])
-        J = np.asarray(jax.jacfwd(f)(x0))
-        for i, h in enumerate((1e-3 * float(x0[0]), 0.05)):
-            e = jnp.zeros(2).at[i].set(h)
-            fd = np.asarray((f(x0 + e) - f(x0 - e)) / (2 * h))
-            np.testing.assert_allclose(J[:2, i], fd[:2], rtol=2e-4)
-        # The peak is set by y_O2 alone (test_peak_does_not_depend_on_the_coke_rate).
-        np.testing.assert_allclose(J[2], 0.0, atol=1e-9)
-
-
-@pytest.mark.slow
 def test_ccr_block(base):
     from difflow_refinery.reforming.planning import CCR_OUTPUTS, ccr_block
 

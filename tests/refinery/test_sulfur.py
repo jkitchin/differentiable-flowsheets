@@ -204,7 +204,6 @@ class TestTrain:
 
 
 # ---------------------------------------------------------------- solved train
-@pytest.mark.slow
 class TestAirControl:
     @pytest.fixture(scope="class")
     def solved(self):
@@ -266,7 +265,6 @@ class TestAirControl:
         assert float(g[2]) < 0.0
 
 
-@pytest.mark.slow
 class TestSRU:
     @pytest.fixture(scope="class")
     def sru(self):
@@ -308,7 +306,7 @@ class TestSRU:
         def emitted(h):
             return tg.solve_sru(dict(acid_gas(), F_hydrogen_sulfide=h), params(2), tp)["SO2_emitted"]
 
-        g = float(jax.jit(jax.grad(emitted))(90.0))
-        f = jax.jit(emitted)
-        fd = (float(f(90.001)) - float(f(89.999))) / 0.002
+        vg = jax.jit(jax.value_and_grad(emitted))     # one compile serves the FD points too
+        g = float(vg(90.0)[1])
+        fd = (float(vg(90.001)[0]) - float(vg(89.999)[0])) / 0.002
         assert g == pytest.approx(fd, rel=1e-5)

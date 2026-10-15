@@ -2130,8 +2130,10 @@ Validation (`tests/refinery/test_ccr.py`):
   C and H closures to round-off; activities fall and coke rises along the
   train; infinite circulation with zero regenerated coke reproduces the
   fresh-catalyst reformer to 1e-8; more circulation gives less coke, more
-  activity and more octane; `jax.jacfwd` of spent coke and RON with respect to
-  circulation and WAIT matches central differences (2e-4).
+  activity and more octane. `jax.jacfwd` of spent coke and RON with respect to
+  circulation and WAIT matches central differences to 3e-6 relative
+  (`tests/reference/ccr_gradient_check.py`; about ten minutes, so it runs
+  outside the per-commit suite).
 
 What is not validated: the coke rate law is the reformer's ILLUSTRATIVE one,
 and on it the design circulation of this 10 kg/s feed is ~11 kg/h, a catalyst
