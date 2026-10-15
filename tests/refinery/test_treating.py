@@ -321,9 +321,30 @@ def loop_gas():
     return {"fuel": g}
 
 
+def _sweet_h2s(x, gas):
+    r = solve_amine_unit(LOOP, gas, circulation=(x[0],), Q_reboiler=x[1] * 1e6)
+    return jnp.log(r.sweet["fuel"][H2S]), r
+
+
+#: The loop at circulation x[0] mol/s and duty x[1] MW with d ln(sweet H2S)/dx,
+#: from one forward-mode program: one compile serves the fixture, the gradient
+#: test and the CO2-free gas (the gas is traced, so only its keys shape it).
+_loop_and_grad_jit = jax.jit(jax.jacfwd(_sweet_h2s, has_aux=True))
+
+
+def _loop_and_grad(gas):
+    J, r = _loop_and_grad_jit(jnp.array([120.0, 5.0]), gas)
+    return r, J
+
+
 @pytest.fixture(scope="module")
-def loop():
-    return solve_amine_unit(LOOP, loop_gas())
+def loop_and_grad():
+    return _loop_and_grad(loop_gas())
+
+
+@pytest.fixture(scope="module")
+def loop(loop_and_grad):
+    return loop_and_grad[0]
 
 
 class TestAmineUnit:
@@ -346,20 +367,16 @@ class TestAmineUnit:
         assert float(loop.lean["H2S"]) == pytest.approx(float(loop.regenerator.lean["H2S"]), rel=1e-12)
         assert float(loop.lean["W"]) == pytest.approx(lean_water("MDEA", 120.0, 0.45), rel=1e-12)
 
-    def test_gradients(self):
-        def f(x):
-            r = solve_amine_unit(LOOP, loop_gas(), circulation=(x[0],), Q_reboiler=x[1] * 1e6)
-            return jnp.log(r.sweet["fuel"][H2S])
-
-        J = np.asarray(jax.jacfwd(f)(jnp.array([120.0, 5.0])))
-        assert np.all(np.isfinite(J))
+    def test_gradients(self, loop_and_grad):
+        """tests/reference/gradient_checks.py compares it with FD."""
+        assert np.all(np.isfinite(np.asarray(loop_and_grad[1])))
 
     def test_gas_without_co2(self):
         """A refinery fuel gas carries H2S and no CO2 (hydrotreater off-gas):
         the loop's CO2 is then a pure decay with no source, the case that
         failed to converge before #475. Balances still close."""
         g = dict(loop_gas()["fuel"], **{CO2: 0.0})   # same keys: reuses the compiled loop
-        r = solve_amine_unit(LOOP, {"fuel": g})
+        r, _ = _loop_and_grad({"fuel": g})
         assert bool(r.converged)
         out_S = r.sweet["fuel"][H2S] + r.acid_gas[H2S] + r.flash_gas[H2S]
         assert float(out_S) == pytest.approx(g[H2S], rel=1e-9)

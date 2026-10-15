@@ -23,7 +23,7 @@ import numpy as np
 import pytest
 from jax.test_util import check_grads
 
-from difflow import GibbsReactor, GibbsReactorParams, make_stream
+from difflow import make_stream
 from difflow_refinery import thermochemistry as tc
 from difflow_refinery.sulfur import claus as cl
 from difflow_refinery.sulfur import tgtu as tg
@@ -120,30 +120,6 @@ class TestVapour:
 
 # ---------------------------------------------------------------- furnace
 class TestFurnace:
-    def gamson_elkins(self, sulfur):
-        """Equilibrium conversion of stoichiometric H2S/SO2 in air, 1 atm, all vapour."""
-        names = ["hydrogen_sulfide", "sulfur_dioxide", *sulfur, "water", "nitrogen"]
-        th = tc.IdealGasSet(names, cp_basis="wide")
-        n2 = 0.5 * (1 - cl.AIR_O2) / cl.AIR_O2
-        feed = make_stream({"hydrogen_sulfide": 2 / 3, "sulfur_dioxide": 1 / 3, "water": 1 / 3,
-                            "nitrogen": n2}, T=500.0, P=101325.0)
-        Ts = np.arange(400.0, 1601.0, 25.0)
-        X = []
-        for T in Ts:
-            o, i = GibbsReactor(GibbsReactorParams(thermo=th, T_out=T))(feed)
-            assert bool(i["converged"])
-            X.append(1.0 - float(o["F_hydrogen_sulfide"] + o["F_sulfur_dioxide"]))
-        return Ts, np.array(X)
-
-    def test_gamson_elkins_curve(self):
-        # [KN97]: minimum near 811 K, ~100% at 400 K; thermal region 60-75% [EB04]
-        for S in (["sulfur_s2", "sulfur_s6", "sulfur_s8"], list(v.SULFUR_SPECIES)):
-            Ts, X = self.gamson_elkins(S)
-            assert 760.0 <= Ts[np.argmin(X)] <= 880.0
-            assert X[0] > 0.99
-            hot = X[(Ts >= 1300) & (Ts <= 1600)]
-            assert np.all((hot > 0.60) & (hot < 0.78))
-
     def test_adiabatic_flame(self):
         # pure H2S, a third burnt, cold air: inside the 1800-2500 F furnace range [KN97]
         acid = make_stream({"hydrogen_sulfide": 100.0}, T=298.15, P=101325.0)
@@ -207,41 +183,36 @@ class TestTrain:
 class TestAirControl:
     @pytest.fixture(scope="class")
     def solved(self):
-        return {n: jax.jit(lambda g, n=n: cl.solve_air(g, params(n)))(acid_gas()) for n in (2, 3, 4)}
+        """Two beds; the air's derivative in H2S comes from the same compile.
+        tests/reference/refinery_checks.py runs 2-4 beds against AP-42."""
+        def air(h):
+            a, r = cl.solve_air(dict(acid_gas(), F_hydrogen_sulfide=h), params(2))
+            return a, (a, r)
+
+        (_, (a, r)), g = jax.jit(jax.value_and_grad(air, has_aux=True))(90.0)
+        return a, r, g
 
     def test_ratio_two_to_one(self, solved):
-        for n, (air, r) in solved.items():
-            assert bool(r["air_converged"]) and bool(r["converged"])
-            t = r["tail_gas"]
-            assert float(t["F_hydrogen_sulfide"]) == pytest.approx(2 * float(t["F_sulfur_dioxide"]),
-                                                                   rel=1e-9)
-
-    def test_recovery_vs_beds(self, solved):
-        rec = {n: float(r["recovery"]) for n, (_, r) in solved.items()}
-        # equilibrium is an upper bound: at or above the AP-42 practical
-        # ranges (2015 and 1995 tops: 95/96, 96/97.5, 97/98.5 %), and within ~3%
-        for n, top in ((2, 0.96), (3, 0.975), (4, 0.985)):
-            assert top - 0.005 < rec[n] < top + 0.03
-        assert rec[2] < rec[3] < rec[4]
-        assert rec[4] - rec[3] < 0.01                         # [KN97]: 4th bed < 1%
+        _, r, _ = solved
+        assert bool(r["air_converged"]) and bool(r["converged"])
+        t = r["tail_gas"]
+        assert float(t["F_hydrogen_sulfide"]) == pytest.approx(2 * float(t["F_sulfur_dioxide"]),
+                                                               rel=1e-9)
 
     def test_sulfur_balance(self, solved):
-        for air, r in solved.values():
-            S_tail = float(cl.sulfur_in(cl.to_vec(r["tail_gas"])))
-            assert float(r["sulfur"]) + S_tail == pytest.approx(90.0, rel=1e-11)
+        _, r, _ = solved
+        S_tail = float(cl.sulfur_in(cl.to_vec(r["tail_gas"])))
+        assert float(r["sulfur"]) + S_tail == pytest.approx(90.0, rel=1e-11)
 
     def test_steam(self, solved):
-        _, r = solved[3]
+        _, r, _ = solved
         assert float(r["steam_whb"]) > 0 and float(r["steam_condensers"]) > 0
         assert float(r["whb_duty"]) > float(jnp.sum(r["condenser_duty"]))
 
-    def test_air_gradient_matches_fd(self):
-        p = params(2)
-        f = jax.jit(lambda h: cl.solve_air(dict(acid_gas(), F_hydrogen_sulfide=h), p)[0])
-        g = float(jax.jit(jax.grad(lambda h: cl.solve_air(
-            dict(acid_gas(), F_hydrogen_sulfide=h), p)[0]))(90.0))
-        fd = (float(f(90.01)) - float(f(89.99))) / 0.02
-        assert g == pytest.approx(fd, rel=1e-6)
+    def test_air_gradient(self, solved):
+        """tests/reference/gradient_checks.py compares it with FD."""
+        g = float(solved[2])
+        assert np.isfinite(g)
         # below 0.5 O2 per extra H2S: the furnace splits some H2S to H2 + S,
         # which takes no O2 (~0.13 H2 per H2S here, ~0.065 O2 saved)
         assert 0.40 < g * cl.AIR_O2 < 0.5
@@ -268,11 +239,18 @@ class TestAirControl:
 class TestSRU:
     @pytest.fixture(scope="class")
     def sru(self):
+        """The SRU and d(SO2 emitted)/d(H2S) from one compile."""
         tp = tg.TGTUParams(tray=TRAY, L=30.0, n_stages=12, P_absorber=1.2e5)
-        return tp, jax.jit(lambda g: tg.solve_sru(g, params(2), tp))(acid_gas())
+
+        def emitted(h):
+            r = tg.solve_sru(dict(acid_gas(), F_hydrogen_sulfide=h), params(2), tp)
+            return r["SO2_emitted"], r
+
+        (_, r), g = jax.jit(jax.value_and_grad(emitted, has_aux=True))(90.0)
+        return tp, r, g
 
     def test_converged_and_recovery(self, sru):
-        _, r = sru
+        _, r, _ = sru
         assert bool(r["converged"])
         assert float(r["tear_residual"]) < 1e-10
         assert float(r["recovery"]) > 0.995                   # #472 acceptance; AP-42 ~99.9%
@@ -302,9 +280,4 @@ class TestSRU:
 
     def test_gradient_is_finite(self, sru):
         """tests/reference/gradient_checks.py compares it with FD."""
-        tp = sru[0]
-
-        def emitted(h):
-            return tg.solve_sru(dict(acid_gas(), F_hydrogen_sulfide=h), params(2), tp)["SO2_emitted"]
-
-        assert np.isfinite(float(jax.grad(emitted)(90.0)))
+        assert np.isfinite(float(sru[2]))

@@ -2126,14 +2126,15 @@ Validation (`tests/refinery/test_ccr.py`):
   the burn rate; ~11 K per 0.1 % O2, inside a hand estimate of 12-13 K
   (CH0.6 releases ~400 kJ per mol O2 over a gas Cp of ~31-33 J/mol/K; no
   published rule of thumb was found to compare against).
-- Flowsheet (`slow`): coke made = coke burned, each bed's balance, and mass,
+- Flowsheet: coke made = coke burned, each bed's balance, and mass,
   C and H closures to round-off; activities fall and coke rises along the
   train; infinite circulation with zero regenerated coke reproduces the
-  fresh-catalyst reformer to 1e-8; more circulation gives less coke, more
-  activity and more octane. `jax.jacfwd` of spent coke and RON with respect to
-  circulation and WAIT matches central differences to 3e-6 relative
-  (`tests/reference/ccr_gradient_check.py`; about ten minutes, so it runs
-  outside the per-commit suite).
+  fresh-catalyst reformer to 1e-8. More circulation gives less coke, more
+  activity and more octane, and the rich naphtha stays in the coke envelope
+  (`tests/reference/refinery_checks.py`, run by hand). `jax.jacfwd` of spent
+  coke and RON with respect to circulation and WAIT matches central
+  differences to 3e-6 relative (`tests/reference/ccr_gradient_check.py`;
+  about ten minutes, so it runs outside the per-commit suite).
 
 What is not validated: the coke rate law is the reformer's ILLUSTRATIVE one,
 and on it the design circulation of this 10 kg/s feed is ~11 kg/h, a catalyst
@@ -3547,7 +3548,7 @@ plant = h2.H2Plant.from_smr(r, ng_price=4.0)        # a swing producer for the n
   - The supplementary fuel is solved in closed form, because the balance is affine in the fuel.
 - **AD:**
   - The plant differentiates in both modes. Set the tube's mode with `ReformerTubeParams(adjoint="reverse" | "forward")`.
-  - Both modes are tested against finite differences, and against each other through the whole plant.
+  - Both modes are checked against finite differences, and against each other through the whole plant (`tests/reference/gradient_checks.py`, run by hand; the suite checks the gradient is finite).
   - `smr_block` is the planning block, with levers natural gas, S/C and `T_out`. `link_smr` feeds a producer of `h2_block`.
 
 **Validation against the IEAGHG 2017/02 base case** (`TestIEAGHG`): the same natural gas at 1455.8 kmol/h, 240 tubes, S/C 2.75, `T_out` 920 °C, and PSA recovery 0.90 taken from the report's streams 7 and 12–13.
@@ -4133,7 +4134,9 @@ jax.jacfwd(lambda x: tr.solve_amine_unit(p, {"fuel": sour_gas}, circulation=(x[0
 | Regenerator | equilibrium stages, condenser with water reflux, MESH equations solved by Newton | Kohl & Nielsen (1997) |
 | Heats of absorption, amine Cp, density | constants | **ILLUSTRATIVE** |
 
-**Validation** (`tests/refinery/test_treating.py`):
+**Validation** (`tests/refinery/test_treating.py`; the closed loop's gradient
+against finite differences is in `tests/reference/gradient_checks.py`, run by
+hand):
 
 - The property correlations match their source tables:
   - k2 matches Versteeg's Table 3 to within 7%.
@@ -4215,7 +4218,10 @@ jax.grad(lambda h: su.solve_sru(dict(acid_gas, F_hydrogen_sulfide=h), claus, tgt
 | Regenerator | NOT solved: the solvent is returned to its lean loading; acid gas leaves the reflux drum saturated | — |
 | Recycle | substitution, then one implicit Newton step | — |
 
-**Validation** (`tests/refinery/test_sulfur.py`):
+**Validation** (`tests/refinery/test_sulfur.py`; the Gamson-Elkins curve and
+recovery against the number of beds are in `tests/reference/refinery_checks.py`,
+the finite-difference gradients in `tests/reference/gradient_checks.py`, both
+run by hand):
 
 - The vapour pressure reproduces Ferreira & Lobo's own point (28.4 Pa at
   424.79 K) and their normal boiling point. Before correction, the JANAF

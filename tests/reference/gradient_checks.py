@@ -1,4 +1,4 @@
-"""Derivatives of the SMR, SRU and amine loop against central differences (#471-#473).
+"""Derivatives of the SMR, Claus/SRU and amine loop against central differences (#471-#473).
 
 Run from the repository root, by hand::
 
@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 from difflow_refinery.hydrogen import smr
+from difflow_refinery.sulfur import claus as cl
 from difflow_refinery.sulfur import tgtu as tg
 from difflow_refinery.treating import solve_amine_unit
 from tests.refinery.test_smr import SHORTCUT, natural_gas, tube_inlet
@@ -70,6 +71,15 @@ def test_smr_plant_reverse_matches_forward():
     g_rev = jax.grad(f)(1193.15, "reverse")
     g_fwd = jax.jacfwd(f)(1193.15, "forward")
     assert float(g_rev) == pytest.approx(float(g_fwd), rel=1e-6)
+
+
+def test_claus_air():
+    p = params(2)
+    f = jax.jit(lambda h: cl.solve_air(dict(acid_gas(), F_hydrogen_sulfide=h), p)[0])
+    g = float(jax.jit(jax.grad(lambda h: cl.solve_air(
+        dict(acid_gas(), F_hydrogen_sulfide=h), p)[0]))(90.0))
+    fd = (float(f(90.01)) - float(f(89.99))) / 0.02
+    assert g == pytest.approx(fd, rel=1e-6)
 
 
 def test_sru():

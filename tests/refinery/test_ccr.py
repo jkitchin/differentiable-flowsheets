@@ -1,7 +1,5 @@
 """CCR reformer (#474): activity from coke, moving-bed coke balance, regenerator."""
 
-from dataclasses import replace
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -206,12 +204,6 @@ class TestCCRFlowsheet:
         # lean_naphtha(): the UOP design basis [AFPM16].
         assert float(base.outputs()["ccr.spent_coke_wt"]) == pytest.approx(5.25, abs=2e-3)
 
-    def test_another_feed_stays_in_the_coke_envelope(self, base):
-        from difflow_refinery.reforming import rich_naphtha
-        r = CCRReformer(base.params, base.ccr).solve(rich_naphtha())
-        lo, hi = CCR_ENVELOPE["spent_coke_wt"]
-        assert lo <= float(r.outputs()["ccr.spent_coke_wt"]) <= hi
-
     def test_infinite_circulation_is_semi_regen_start_of_run(self):
         # Coke-free catalyst everywhere: the CCR is the fresh-catalyst reformer.
         p = ccr_reformer_params()
@@ -223,21 +215,13 @@ class TestCCRFlowsheet:
         for k in ("reformate.RON", "reformate.yield_vol", "h2.net_mol_s", "coke.kg_h"):
             assert float(oa[k]) == pytest.approx(float(ob[k]), rel=1e-8), k
 
-    def test_more_circulation_less_coke_more_octane(self, base):
-        p, ccr = base.params, base.ccr
-        r = CCRReformer(p, replace(ccr, circulation=2 * ccr.circulation)).solve(
-            lean_naphtha(), tear_initial=base.tear)
-        assert float(r.coke[-1]) < float(base.coke[-1])
-        assert np.all(np.asarray(r.activity) > np.asarray(base.activity))
-        assert float(r.outputs()["reformate.RON"]) > float(base.outputs()["reformate.RON"])
-
 
 def test_ccr_block(base):
+    """The block's levers and base point; its unjitted fn (~3 min) is
+    evaluated in tests/reference/refinery_checks.py."""
     from difflow_refinery.reforming.planning import CCR_OUTPUTS, ccr_block
 
     blk = ccr_block(CCRReformer(base.params, base.ccr), lean_naphtha(),
                     levers=["wait", "circulation"])
+    assert blk.u_names == ["wait", "circulation"] and blk.y_names == list(CCR_OUTPUTS)
     assert blk.u0[1] == pytest.approx(float(base.ccr.circulation) * 3600.0)
-    y = np.asarray(blk.fn(jnp.asarray(blk.u0)))
-    o = base.outputs()
-    np.testing.assert_allclose(y, [float(o[k]) for k in CCR_OUTPUTS], rtol=1e-6)
