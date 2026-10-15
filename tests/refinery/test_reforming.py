@@ -54,3 +54,26 @@ def test_reformer_smoke():
     o = res.outputs()
     assert np.isfinite(float(o["reformate.RON"])) and np.isfinite(float(o["h2.net_mol_s"]))
     assert np.isfinite(float(res.blend_component().properties["RON"]))
+
+
+def test_bed_solver_validation():
+    F = jnp.asarray(lean_naphtha().flows)
+    with pytest.raises(ValueError, match="solver_name"):
+        integrate_bed(F, 773.15, 15e5, 3000.0, ReformingKinetics(), solver_name="euler")
+    with pytest.raises(ValueError, match="max_steps"):
+        integrate_bed(F, 773.15, 15e5, 3000.0, ReformingKinetics(), max_steps=0)
+    with pytest.raises(ValueError, match="solver_name"):
+        ReformerParams(bed_solver="euler")
+    with pytest.raises(ValueError, match="max_steps"):
+        ReformerParams(bed_max_steps=0)
+
+
+def test_bed_step_cap_passed_through():
+    # #479: the step cap and solver reach the beds (a too-small cap raises, it is not ignored)
+    p = ReformerParams(bed_max_steps=2)
+    fs, ops, _ = CatalyticReformer(p).build(lean_naphtha(), p)
+    assert ops["rx1"].params.max_steps == 2 and ops["rx1"].params.solver_name == "tsit5"
+    F = jnp.asarray(lean_naphtha().flows)
+    F = F.at[sp.INDEX["H2"]].set(5.0 * float(jnp.sum(F)))
+    with pytest.raises(Exception, match="max_steps"):
+        integrate_bed(F, 773.15, 15e5, 3000.0, ReformingKinetics(), max_steps=2)

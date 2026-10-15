@@ -51,7 +51,8 @@ from difflow_refinery.reforming.feed import NaphthaFeed
 from difflow_refinery.reforming.kinetics import ReformingKinetics
 from difflow_refinery.reforming.products import reformate_properties
 from difflow_refinery.reforming.reactor import (
-    FiredHeater, FiredHeaterParams, ReformingReactor, ReformingReactorParams, flows_of, stream_of)
+    DEFAULT_MAX_STEPS, FiredHeater, FiredHeaterParams, ReformingReactor, ReformingReactorParams,
+    _check_solver, flows_of, stream_of)
 from difflow_refinery.reforming.sulfur import sulfur_balance
 from difflow_refinery.reforming.separation import (
     ProductSeparator, ProductSeparatorParams, RecycleSplitter, RecycleSplitterParams, Stabilizer,
@@ -86,6 +87,10 @@ class ReformerParams(ParamsMixin):
         coke_capacity: Coke on catalyst at end of run (kg/kg) the cycle length
             is reckoned to. ILLUSTRATIVE.
         rtol: Relative tolerance of the reactor integrations.
+        bed_solver: ODE solver of the reactor beds, ``"tsit5"`` (explicit,
+            the default) or ``"kvaerno5"`` (implicit, for stiff high-severity
+            beds).
+        bed_max_steps: Cap on the adaptive ODE steps of each bed.
         feed_sulfur_wppm: Organic sulfur in the naphtha feed (wppm). ``None``
             (default) takes the feed's own ``sulfur_wppm`` if it has one, else
             zero. Carried as a trace element (:mod:`.sulfur`), outside the
@@ -109,6 +114,8 @@ class ReformerParams(ParamsMixin):
     c4_recovery: float = 0.95
     coke_capacity: float = 0.15
     rtol: float = 1e-8
+    bed_solver: str = "tsit5"
+    bed_max_steps: int = DEFAULT_MAX_STEPS
     feed_sulfur_wppm: float | None = None
     sulfur_conversion: float = 0.95
 
@@ -117,6 +124,7 @@ class ReformerParams(ParamsMixin):
             raise ValueError("inlet_T and catalyst_split need one entry per reactor")
         if len(self.inlet_T) < 1:
             raise ValueError("at least one reactor")
+        _check_solver(self.bed_solver, self.bed_max_steps)
 
     @property
     def n_reactors(self) -> int:
@@ -412,7 +420,10 @@ class CatalyticReformer:
             ops[f"heater{k + 1}"] = h
             fs.add_unit(Unit(f"heater{k + 1}", h, inlets, [f"rx{k + 1}_in"]))
             r = ReformingReactor(ReformingReactorParams(catalyst_mass=Ws[k], kinetics=p.kinetics,
-                                                        P=P_rx, rtol=p.rtol), adjoint=self.adjoint)
+                                                        P=P_rx, rtol=p.rtol,
+                                                        solver_name=p.bed_solver,
+                                                        max_steps=p.bed_max_steps),
+                                 adjoint=self.adjoint)
             ops[f"rx{k + 1}"] = r
             fs.add_unit(Unit(f"rx{k + 1}", r, [f"rx{k + 1}_in"], [f"rx{k + 1}_out"]))
         sep = ProductSeparator(ProductSeparatorParams(T=p.T_separator, P=p.P_separator))
