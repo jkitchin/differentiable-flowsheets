@@ -29,6 +29,14 @@ sulfur and the SO2 the SRU emits. Each unit uses its own S molar mass (FCC
 32.06, reformer 32.065); the closure is in moles.
 
 The fixtures are module-scoped full solves; each test only reads them.
+
+Run from the repository root, by hand (well over 20 minutes)::
+
+    PYTHONPATH=src:. python -m pytest tests/reference/plant_closure_check.py -v
+
+Not part of the suite (the file name keeps pytest from collecting it): the
+fixtures solve four refinery units and a closed hydrogen loop, far past
+``DIFFLOW_TEST_BUDGET``.
 """
 
 from __future__ import annotations

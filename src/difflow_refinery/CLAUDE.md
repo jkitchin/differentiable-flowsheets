@@ -176,7 +176,7 @@ Docs: `docs/unit-operations-refinery.md` ("Chaining units"). Tests:
 Amine treating (#471, `difflow_refinery.treating`, a library): KE absorber/
 regenerator/loop; see `treating/CLAUDE.md` for its sourced vs ILLUSTRATIVE constants.
 
-Plant closure (#475, `tests/refinery/test_plant_closure.py`, slow + release): one
+Plant closure (#475, `tests/reference/plant_closure_check.py`, run by hand): one
 crude through kerosene HDT, hydrocracker, FCC and CCR; H2 closed on the header
 (CCR net + SMR swing), S routed scrubbers/fuel gas -> amine -> Claus + SCOT.
 Every unit closes to round-off, so the plant does (rel 1e-8). Organic S in the

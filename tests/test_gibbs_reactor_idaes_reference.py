@@ -42,7 +42,10 @@ def test_constants_are_the_ones_the_reference_used(th):
         r = REF["components"][n]
         assert r["Hf"] == float(th.Hf[i]), REGENERATE
         assert r["S"] == float(th.S0[i]), REGENERATE
-        np.testing.assert_allclose(r["cp"], th.cp[i], rtol=1e-14, err_msg=REGENERATE)
+        # janaf_thermo fits cp with np.polyfit, whose least squares lands in
+        # different last bits on different LAPACK builds (1.8e-13 apart on
+        # Linux OpenBLAS vs macOS Accelerate); a changed fit moves far more.
+        np.testing.assert_allclose(r["cp"], th.cp[i], rtol=1e-10, err_msg=REGENERATE)
 
 
 @pytest.mark.parametrize("kind,i", CASES)

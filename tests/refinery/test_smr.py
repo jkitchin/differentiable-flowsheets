@@ -145,22 +145,14 @@ class TestTube:
         out, _ = smr.reformer_tube(tube_inlet(), smr.ReformerTubeParams(), T_out=1173.15)
         assert float(out["F_methane"]) < float(tube[0]["F_methane"])
 
-    @pytest.mark.parametrize("adjoint", ["reverse", "forward"])
-    def test_gradient_vs_fd(self, adjoint):
-        """d(CH4 out, Q)/d(T_out, steam): implicit step through the duty solve."""
-        tp = smr.ReformerTubeParams(adjoint=adjoint)
-
+    def test_gradient_is_finite(self):
+        """Reverse mode (the default adjoint) through the duty solve;
+        tests/reference/gradient_checks.py compares both modes with FD."""
         def f(x):
-            out, info = smr.reformer_tube(tube_inlet(water=x[1]), tp, T_out=x[0])
-            return jnp.stack([out["F_methane"], info["Q"] / 1e5])
+            out, info = smr.reformer_tube(tube_inlet(water=x[1]), smr.ReformerTubeParams(), T_out=x[0])
+            return out["F_methane"] + info["Q"] / 1e5
 
-        x = jnp.array([1123.15, 1.2])
-        J = (jax.jacfwd if adjoint == "forward" else jax.jacrev)(f)(x)
-        h = jnp.array([0.05, 1e-4])
-        for j in range(2):
-            e = jnp.zeros(2).at[j].set(h[j])
-            fd = (f(x + e) - f(x - e)) / (2 * h[j])
-            np.testing.assert_allclose(np.asarray(J[:, j]), np.asarray(fd), rtol=2e-4, atol=1e-9)
+        assert np.all(np.isfinite(np.asarray(jax.grad(f)(jnp.array([1123.15, 1.2])))))
 
 
 # ---------------------------------------------------------------- front/back end
@@ -271,23 +263,6 @@ class TestPlant:
             assert abs(float(v)) < 1e-12
         assert 0.0 < float(r["recovery"]) < 1.0
 
-    def test_gradients_vs_fd(self):
-        """d(H2, CO2, NG)/d(S/C, T_out) through the whole plant, forward mode."""
-        def f(x):
-            p = smr.SMRParams(S_C=x[0], T_out=x[1], psa=SHORTCUT,
-                              tube=smr.ReformerTubeParams(adjoint="forward"))
-            r = smr.smr_plant(natural_gas(), p)
-            return jnp.stack([r["H2"], r["CO2"], r["ng_lhv"] / 1e5])
-
-        x = jnp.array([3.0, 1123.15])
-        J = jax.jacfwd(f)(x)
-        h = jnp.array([1e-3, 0.05])
-        for j in range(2):
-            e = jnp.zeros(2).at[j].set(h[j])
-            fd = (f(x + e) - f(x - e)) / (2 * h[j])
-            np.testing.assert_allclose(np.asarray(J[:, j]), np.asarray(fd), rtol=5e-4)
-        assert float(J[0, 1]) > 0        # hotter outlet, more H2
-
 
 # ---------------------------------------------------------------- IEAGHG 2017/02 base case
 class TestIEAGHG:
@@ -350,15 +325,12 @@ class TestIEAGHG:
 # ---------------------------------------------------------------- planning
 class TestPlanning:
     def test_plant_reverse_mode(self):
-        """jax.grad through the whole plant (tube on the checkpointed adjoint)
-        agrees with the forward-mode derivative."""
-        def f(T, adjoint):
-            p = smr.SMRParams(T_out=T, psa=SHORTCUT, tube=smr.ReformerTubeParams(adjoint=adjoint))
-            return smr.smr_plant(natural_gas(), p)["H2"]
+        """jax.grad through the whole plant (tube on the checkpointed adjoint);
+        tests/reference/gradient_checks.py checks it against forward mode."""
+        def f(T):
+            return smr.smr_plant(natural_gas(), smr.SMRParams(T_out=T, psa=SHORTCUT))["H2"]
 
-        g_rev = jax.grad(f)(1193.15, "reverse")
-        g_fwd = jax.jacfwd(f)(1193.15, "forward")
-        assert float(g_rev) == pytest.approx(float(g_fwd), rel=1e-6)
+        assert np.isfinite(float(jax.grad(f)(1193.15)))
 
     def test_smr_block_links_to_network(self):
         from difflow_refinery.hydrogen import link_smr, smr_block

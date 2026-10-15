@@ -196,8 +196,8 @@ AD_MODES: dict[str, ADMode] = {m.name: m for m in (
            "reformer tube on diffrax Tsit5 (ReformerTubeParams.adjoint: RecursiveCheckpointAdjoint or "
            "ForwardMode); outlet-T duty by secant on stop-gradient inputs + one implicit step; "
            "prereformer/shift GibbsReactor; furnace fuel affine (closed form)",
-           evidence="tests/refinery/test_smr.py::TestTube::test_gradient_vs_fd, "
-                    "TestPlant::test_gradients_vs_fd (jax.jacfwd), TestPlanning::test_plant_reverse_mode (jax.grad)"),
+           evidence="tests/reference/gradient_checks.py (jax.jacfwd and jax.grad vs central "
+                    "differences; reverse vs forward through the plant)"),
 )}
 
 
