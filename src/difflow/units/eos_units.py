@@ -203,7 +203,11 @@ def _flash_spec(
 
     # Implicit-function derivative: T_s carries no gradient; add one through
     # the residual that defines T (balance, or saturation at a jump). One
-    # forward-mode pass gives the residual and its slope together.
+    # forward-mode pass gives the residual and its slope together. One chord
+    # step on the frozen slope is exact to first order only (its second
+    # derivative misses the g_TT T'^2 + 2 g_Tp T' terms, issue #476); a second
+    # chord step from it makes the second derivative exact too. Both steps
+    # subtract the stop-gradient residual, so the value stays T_s.
     def g_balance(T):
         t = _phase_terms(thermo, flows, T, P)
         return _two_phase_value(t, t["V"], kind) - target
@@ -217,7 +221,9 @@ def _flash_spec(
         val, dgdT = jax.jvp(g, (T_s,), (jnp.ones_like(T_s),))
         dgdT = sg(dgdT)
         dgdT = jnp.where(jnp.abs(dgdT) > 0.0, dgdT, 1.0)
-        return T_s - (val - sg(val)) / dgdT, val
+        T1 = T_s - (val - sg(val)) / dgdT
+        g1 = g(T1)
+        return T1 - (g1 - sg(g1)) / dgdT, val
 
     T_bal, res_s = attach(g_balance)
     T_sat, _ = attach(g_sat)
