@@ -19,12 +19,12 @@ from __future__ import annotations
 import jax.numpy as jnp
 from jax import Array
 
-from difflow_refinery import thermochemistry
+from difflow_refinery import combustion as _cb
 
 #: IUPAC conventional atomic weights (g/mol): IUPAC CIAAW, "Standard atomic
 #: weights of the elements 2021", Pure Appl. Chem. 2022 (abridged /
 #: conventional values: H 1.008, C 12.011, N 14.007, O 15.999, S 32.06).
-ATOMIC_WEIGHT = {"C": 12.011, "H": 1.008, "N": 14.007, "O": 15.999, "S": 32.06}
+ATOMIC_WEIGHT = _cb.ATOMIC_WEIGHT
 
 #: Formula of each real species, ``{element: atoms}``.
 FORMULA: dict[str, dict[str, int]] = {
@@ -78,7 +78,7 @@ REGENERATOR_GASES = ("nitrogen", "oxygen", "carbon_dioxide", "carbon_monoxide", 
                      "sulfur_dioxide")
 
 #: Ideal-gas heat capacity ``Cp = a + b T + c T^2 + d T^3`` (J/mol/K, T in K)
-#: of the regenerator gases, and their ideal-gas enthalpy of formation at
+#: of the regenerator gases (shared with :mod:`difflow_refinery.combustion`, #470), and their ideal-gas enthalpy of formation at
 #: 298.15 K (J/mol): both from the refinery's one thermochemistry table
 #: (:mod:`difflow_refinery.thermochemistry`, #339) -- CODATA key values for
 #: Hf, and cubics fitted over 298.15-1500 K to the NIST-JANAF tables (Chase
@@ -86,30 +86,16 @@ REGENERATOR_GASES = ("nitrogen", "oxygen", "carbon_dioxide", "carbon_monoxide", 
 #: #339 the Cp were Reid, Prausnitz & Poling (4th ed.) cubics, four of them
 #: unverified transcriptions; they agree with the JANAF fits to 1.1 % (O2;
 #: the rest 0.7 %) up to 1050 K, and fall away from JANAF above 1000 K.
-CP_IG: dict[str, tuple[float, float, float, float]] = {
-    n: thermochemistry.species(n).cp for n in REGENERATOR_GASES}
-HF_298: dict[str, float] = {n: thermochemistry.Hf(n) for n in REGENERATOR_GASES}
-
-T_REF = 298.15
+CP_IG = _cb.CP_IG
+HF_298 = _cb.HF_298
+T_REF = _cb.T_REF
 
 #: Dry air (mole fractions), argon lumped into nitrogen.
-AIR_O2 = 0.2095
-AIR_N2 = 1.0 - AIR_O2
+AIR_O2 = _cb.AIR_O2
+AIR_N2 = _cb.AIR_N2
 
-
-def h_ideal_gas(name: str, T: Array) -> Array:
-    """Molar enthalpy (J/mol) of an ideal gas: ``Hf(298.15) + int Cp dT``."""
-    a, b, c, d = CP_IG[name]
-
-    def F(t):
-        return a * t + b * t ** 2 / 2 + c * t ** 3 / 3 + d * t ** 4 / 4
-
-    return HF_298[name] + F(T) - F(T_REF)
-
-
-def flue_enthalpy(moles: dict[str, Array], T: Array) -> Array:
-    """Enthalpy flow (W) of a gas mixture given as ``{species: mol/s}``."""
-    return sum(moles[n] * h_ideal_gas(n, T) for n in moles)
+h_ideal_gas = _cb.h_ideal_gas
+flue_enthalpy = _cb.gas_enthalpy
 
 
 def mass_of(moles: dict[str, Array]) -> Array:
