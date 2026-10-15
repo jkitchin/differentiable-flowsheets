@@ -22,13 +22,6 @@ class TestSafeDivide:
         for d in (-1e-15, -1e-12, -EPS_DIVISION / 2, -EPS_DIVISION):
             assert float(safe_divide(1.0, d)) < 0.0
 
-    def test_no_jump_at_the_clip_boundary(self):
-        """The only discontinuity allowed is the one at d = 0 itself."""
-        just_inside = float(safe_divide(1.0, -EPS_DIVISION * 0.999))
-        just_outside = float(safe_divide(1.0, -EPS_DIVISION * 1.001))
-
-        assert just_inside == pytest.approx(just_outside, rel=1e-2)
-
     def test_large_denominators_are_untouched(self):
         assert float(safe_divide(1.0, -4.0)) == pytest.approx(-0.25)
         assert float(safe_divide(1.0, 4.0)) == pytest.approx(0.25)

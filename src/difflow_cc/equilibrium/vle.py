@@ -152,7 +152,7 @@ def co2_equilibrium_pressure(
     # tested for sign and monotonicity, but the absorber divides by this
     # slope: its absorption factor came out at 5.6e9 rather than the tens it
     # should be, every Kremser stage count saturated, and `n_stages` moved
-    # no answer anywhere in its range. See TestVLEMagnitude.
+    # no answer anywhere in its range.
     K0 = 2.7e16  # base constant (Pa)
     K = K0 * jnp.exp(-dH / (R * T))
 

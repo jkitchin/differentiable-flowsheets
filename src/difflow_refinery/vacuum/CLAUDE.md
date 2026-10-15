@@ -38,5 +38,5 @@ Invariants encoded in the vacuum stack (do not weaken them):
 - A non-converging solve is usually an infeasible spec (an LVGO end point a
   low-efficiency HVGO bed cannot make), not a solver failure.
 
-Tests: `tests/refinery/test_vacuum*.py`, `test_heavy_end.py`, `test_one_characterization.py`.
+Tests: `tests/refinery/test_vacuum*.py`, `test_heavy_end.py`.
 Examples: `examples/34_vacuum_distillation.ipynb`, `examples/36_crude_to_vacuum.ipynb`.

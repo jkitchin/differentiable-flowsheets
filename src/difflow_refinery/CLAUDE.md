@@ -58,8 +58,8 @@ feeds the VDU in a `Flowsheet` with no re-cut (rename the VDU's outlets:
 `"residue"` is taken). Correlations live once, in
 `difflow_refinery.correlations`; `vacuum.correlations` and the
 `characterization` helpers are re-export shims.
-- Opt-in, and pinned: an assay without a heavy end characterizes bit for
-  bit as before UNDER `method="twu_legacy"` (`tests/refinery/test_cdu_baseline.py`).
+- Opt-in: an assay without a heavy end characterizes bit for bit as before
+  UNDER `method="twu_legacy"` (no test checks this any more; check it by hand).
   The default `"twu"` is Twu (1984) as published (alias `"twu_1984"`);
   `"twu_legacy"` is the old crude-unit MW coding (Rankine constants /
   sqrt(1.8), aromatics up to 15% low), kept only to reproduce old numbers.
@@ -125,7 +125,8 @@ Invariants encoded in the module (do not weaken them):
   linear blend when the components agree -- tested, keep it that way. The MON
   interaction is on MON x SENSITIVITY and b3 = -0.00645 (Maples 2000); the
   pre-#301 code had MON x olefins and -0.0645, which inflated the MON penalty
-  ten-fold. RVP index and Refutas are tested against published worked examples.
+  ten-fold. RVP index and Refutas were checked against published worked examples
+  when written; no test checks them any more.
 - Distillation and cetane index are COMPUTED from the blend's composition,
   never blended; the linear view averages each component's own value, and the
   difference is real (T10 especially).
@@ -159,8 +160,8 @@ stage shares the mode, else `"chain"` (the chain rule by unit Jacobians, forward
 accumulation). `AD_MODES` / `ad_mode_table()` is the one place each unit's AD mode
 is written down. Example 40, section 10, uses it. A library.
 - A mixed chain (forward-only reformer, reverse-only default hydrotreater) can NOT
-  be traced end to end in either mode; `tests/refinery/test_plant.py` pins both
-  failures on toy stages. `HydrotreaterParams(reactor=ReactorOptions(adjoint="forward"))`
+  be traced end to end in either mode; `tests/refinery/test_plant.py` checks the
+  forward-mode failure on toy stages. `HydrotreaterParams(reactor=ReactorOptions(adjoint="forward"))`
   makes the hydrotreater forward-capable (same values).
 - `jit=True` on any stage holding a Python-level recycle (the reformer's
   `Flowsheet`): unjitted, it is traced and compiled anew on every JVP and every
@@ -170,7 +171,7 @@ is written down. Example 40, section 10, uses it. A library.
   reverse-only stage narrow (one cotangent per output of that stage).
 
 Docs: `docs/unit-operations-refinery.md` ("Chaining units"). Tests:
-`tests/refinery/test_plant.py` (per commit), `tests/refinery/test_plant_chain.py` (release, slow).
+`tests/refinery/test_plant.py`.
 
 Amine treating (#471, `difflow_refinery.treating`, a library): KE absorber/
 regenerator/loop; see `treating/CLAUDE.md` for its sourced vs ILLUSTRATIVE constants.

@@ -17,8 +17,7 @@ the root CLAUDE.md, which keeps only what every session needs).
   carries a `[database]`/`[carried over]`/`[placeholder]` tag and a test
   refuses an untagged one. Do not present the reference result as a
   benchmark. The benchmark is `data/petrides2015_mab.yaml` (Petrides 2015,
-  Intelligen "Bioprocess Design and Economics", sec. 11.6.3), checked by
-  `tests/bio/test_economics_benchmark.py`: production, cycles per batch,
-  elution volumes, resin and media cost reproduce the source's stated
-  inputs. Its labor, facility, QC and total $/g are NOT reproduced (the
+  Intelligen "Bioprocess Design and Economics", sec. 11.6.3): production, cycles per batch, elution volumes, resin and
+  media cost reproduced the source's stated inputs when it was encoded (no
+  test checks this any more). Its labor, facility, QC and total $/g are NOT reproduced (the
   source gives them as totals without inputs); do not claim they are.

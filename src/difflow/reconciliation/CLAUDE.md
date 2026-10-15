@@ -22,8 +22,9 @@ Invariants encoded in the module (do not weaken them):
 - The verdict **gates** the update; it does not advise it. Only `model drift`
   opens it. Re-estimating on a concentrated suspect converts a meter fault into
   a confident statement about equipment, and the chi-squared statistic *falls*
-  while it happens — `tests/test_tracking.py::TestGate::test_an_ungated_loop_would_have_invented_a_fouling_factor`
-  is the regression. Widening `allow=` is a deliberate act with a known cost.
+  while it happens. `tests/test_tracking.py::test_only_model_drift_opens_the_gate`
+  checks the gate; what an opened gate does is no longer tested, so check it
+  by hand before changing it. Widening `allow=` is a deliberate act with a known cost.
 - Holding on `consistent` is the deadband, not an oversight. A parameter
   re-estimated every period tracks that period's noise and the twin stops being
   a model.

@@ -303,7 +303,7 @@ provenance:
     - {pattern: "elements.*.oxide_mw", source: CALC,
        note: "n_M * atomic_weight + n_O * 15.999, from this file's own
               atomic_weight and oxide_formula. Reproduced to within
-              0.02 g/mol by test_oxide_mw_is_consistent."}
+              0.02 g/mol when added."}
 
     # --- prices -----------------------------------------------------------
     # The default is still "no source". Six entries beat it, by being named

@@ -350,7 +350,7 @@ Four properties of that combination are worth stating, because they are what mak
 
 Holding on `consistent` makes the loop **event-triggered**: the parameter sits still until the evidence is strong enough to reject, then moves. That deadband is deliberate. A parameter re-estimated every period tracks whatever that period's noise favoured, and the twin stops being a model.
 
-The policy is an argument (`allow=`), so it can be widened — deliberately, and at a known cost. `tests/test_tracking.py::TestGate::test_an_ungated_loop_would_have_invented_a_fouling_factor` is the regression: the same filter on the same biased-meter data, with the gate opened, reports a pipe several percent off clean.
+The policy is an argument (`allow=`), so it can be widened — deliberately, and at a known cost. With the gate opened, the same filter on the same biased-meter data reports a pipe several percent off clean.
 
 The gate is a **statistical rule, not a guarantee**, and the rule has two knobs. `track_parameters` forwards `window`, `rejection_threshold` and `concentration_threshold` to `diagnose`, because the defaults are not right for every plant: on a small network a few days early in a sensor bias can read as diffuse, slip through as `model drift`, and move the parameter before the rule settles. When that happens the fix is to tune the rule to the plant's own noise — lengthen the window, lower the concentration threshold — never to widen `allow`, which removes the rule instead of sharpening it. Section 7 of [`examples/29_model_updating.ipynb`](../examples/29_model_updating.ipynb) shows both the leak and the tuning on a real gas network.
 

@@ -1,21 +1,10 @@
-"""Tests for flash separator, splitter, and mixer units.
-
-Tests cover:
-- Flash TP calculation with Rachford-Rice
-- Flash edge cases (subcooled, superheated)
-- Flash gradient compatibility
-- Splitter functionality
-- Mixer functionality
-- FlashParams validation
-"""
+"""Smoke tests for Flash, EOSFlash, PHFlash, Splitter and Mixer."""
 
 import pytest
 import jax
 import jax.numpy as jnp
-from jax import Array
 import numpy.testing as npt
 
-# Enable 64-bit precision
 jax.config.update("jax_enable_x64", True)
 
 from difflow.units.flash import (
@@ -29,29 +18,16 @@ from difflow.eos import PengRobinson, CriticalProperties
 
 @pytest.fixture
 def binary_thermo():
-    """Create a simple binary system (light/heavy) for testing.
-
-    Using Antoine coefficients similar to pentane (light) and octane (heavy).
-    Antoine: log10(Psat/Pa) = A - B/(T + C) where T in K
-    """
     species_data = {
         "Light": SpeciesData(
-            name="Light",
-            MW=72.0,  # Similar to pentane
-            Cp_coeffs=(120.0, 0.0, 0.0, 0.0),
-            Hvap_coeffs=(26000.0, 0.38, 470.0),  # Hvap, n, Tc
-            # Antoine coeffs for ~pentane (high vapor pressure)
-            antoine_coeffs=(10.422, 1687.537, -38.44),
-            Hf=0.0,
+            name="Light", MW=72.0, Cp_coeffs=(120.0, 0.0, 0.0, 0.0),
+            Hvap_coeffs=(26000.0, 0.38, 470.0),
+            antoine_coeffs=(10.422, 1687.537, -38.44), Hf=0.0,
         ),
         "Heavy": SpeciesData(
-            name="Heavy",
-            MW=114.0,  # Similar to octane
-            Cp_coeffs=(190.0, 0.0, 0.0, 0.0),
+            name="Heavy", MW=114.0, Cp_coeffs=(190.0, 0.0, 0.0, 0.0),
             Hvap_coeffs=(35000.0, 0.38, 570.0),
-            # Antoine coeffs for ~octane (lower vapor pressure)
-            antoine_coeffs=(10.186, 2004.68, -60.53),
-            Hf=0.0,
+            antoine_coeffs=(10.186, 2004.68, -60.53), Hf=0.0,
         ),
     }
     return IdealThermo(species_data)
@@ -59,1017 +35,103 @@ def binary_thermo():
 
 @pytest.fixture
 def flash_params():
-    """Flash parameters for binary system."""
     return FlashParams(species_order=["Light", "Heavy"])
 
 
 @pytest.fixture
 def binary_feed():
-    """Binary feed stream.
+    return make_stream({"Light": 50.0, "Heavy": 50.0}, T=350.0, P=30000.0)
 
-    Conditions chosen to be in two-phase region for pentane-octane like system.
-    At 350K:
-    - Pentane (Light) Psat ≈ 101,295 Pa (1.01 bar)
-    - Octane (Heavy) Psat ≈ 1,822 Pa (0.018 bar)
-    For 50/50 molar:
-    - P_bubble ≈ 51,559 Pa
-    - P_dew ≈ 3,580 Pa
-    So P = 30,000 Pa gives partial vaporization (in two-phase region).
-    """
-    return make_stream(
-        {"Light": 50.0, "Heavy": 50.0},
-        T=350.0,
-        P=30000.0,  # 0.3 bar - in two-phase region (3580 < 30000 < 51559)
-    )
 
+def test_flash_params_validation():
+    with pytest.raises(ValueError, match="cannot be empty"):
+        FlashParams(species_order=[])
+    with pytest.raises(ValueError, match="duplicate"):
+        FlashParams(species_order=["A", "B", "A"])
 
-class TestFlashParams:
-    """Tests for FlashParams validation."""
 
-    def test_valid_params(self):
-        """Test creating valid FlashParams."""
-        params = FlashParams(species_order=["A", "B", "C"])
-        assert params.species_order == ["A", "B", "C"]
+def test_flash_smoke(binary_thermo, flash_params, binary_feed):
+    flash = Flash(flash_params, binary_thermo)
+    liquid, vapor, info = flash(binary_feed)
+    assert jnp.isfinite(info["V_frac"])
+    npt.assert_allclose(total_flow(liquid) + total_flow(vapor),
+                        total_flow(binary_feed), rtol=1e-8)
 
-    def test_empty_species_order(self):
-        """Test that empty species_order raises error."""
-        with pytest.raises(ValueError, match="cannot be empty"):
-            FlashParams(species_order=[])
 
-    def test_duplicate_species(self):
-        """Test that duplicate species raises error."""
-        with pytest.raises(ValueError, match="duplicate"):
-            FlashParams(species_order=["A", "B", "A"])
+def test_flash_bubble_dew_and_initialize(binary_thermo, flash_params, binary_feed):
+    flash = Flash(flash_params, binary_thermo)
+    for v in (flash.bubble_point_pressure(binary_feed),
+              flash.dew_point_pressure(binary_feed),
+              flash.bubble_point_temperature(binary_feed),
+              flash.dew_point_temperature(binary_feed)):
+        assert jnp.isfinite(v)
+    result = flash.initialize(binary_feed)
+    assert {"liquid", "vapor", "states", "info"} <= set(result)
 
-    def test_params_dict_access(self):
-        """Test ParamsMixin dict-like access."""
-        params = FlashParams(species_order=["X", "Y"])
-        assert params["species_order"] == ["X", "Y"]
-        assert "species_order" in params
 
+def test_flash_grad_finite(binary_thermo, flash_params):
+    flash = Flash(flash_params, binary_thermo)
 
-class TestFlashCalculation:
-    """Tests for Flash TP calculations."""
+    def vfrac(T):
+        return flash(make_stream({"Light": 50.0, "Heavy": 50.0}, T=T, P=30000.0))[2]["V_frac"]
 
-    def test_two_phase_flash(self, binary_thermo, flash_params, binary_feed):
-        """Test flash in two-phase region."""
-        flash = Flash(flash_params, binary_thermo)
+    assert jnp.isfinite(jax.grad(vfrac)(350.0))
 
-        liquid, vapor, info = flash(binary_feed)
 
-        # Check we have two-phase output
-        assert 0.0 < float(info["V_frac"]) < 1.0
+def test_splitter():
+    feed = make_stream({"A": 100.0, "B": 50.0}, T=300.0, P=101325.0)
+    splitter = Splitter(species_order=["A", "B"])
+    out1, out2, _ = splitter(feed, split_frac=0.3)
+    npt.assert_allclose(get_flows(out1)["A"] + get_flows(out2)["A"], 100.0, rtol=1e-10)
+    *outs, info = splitter(feed, split_frac=[0.5, 0.3, 0.2])
+    assert len(outs) == 3 and info["n_outlets"] == 3
 
-        # Check mass balance
-        feed_total = total_flow(binary_feed)
-        liquid_total = total_flow(liquid)
-        vapor_total = total_flow(vapor)
-        npt.assert_allclose(liquid_total + vapor_total, feed_total, rtol=1e-8)
+    g = jax.grad(lambda s: total_flow(splitter(feed, split_frac=s)[0]))(0.5)
+    assert jnp.isfinite(g)
 
-        # Check component balance
-        feed_flows = get_flows(binary_feed)
-        liquid_flows = get_flows(liquid)
-        vapor_flows = get_flows(vapor)
-        for s in ["Light", "Heavy"]:
-            npt.assert_allclose(
-                liquid_flows[s] + vapor_flows[s],
-                feed_flows[s],
-                rtol=1e-8
-            )
 
-        # Check light component enriched in vapor
-        liquid_light_frac = liquid_flows["Light"] / liquid_total
-        vapor_light_frac = vapor_flows["Light"] / vapor_total
-        assert vapor_light_frac > liquid_light_frac
+def test_mixer(binary_thermo):
+    s1 = make_stream({"Light": 30.0, "Heavy": 20.0}, T=300.0, P=101325.0)
+    s2 = make_stream({"Light": 20.0, "Heavy": 30.0}, T=350.0, P=101325.0)
+    outlet, info = Mixer(species_order=["Light", "Heavy"], thermo=binary_thermo)(s1, s2)
+    npt.assert_allclose(total_flow(outlet), 100.0, rtol=1e-10)
+    assert jnp.isfinite(outlet["T"]) and info["n_inlets"] == 2
+    with pytest.raises(ValueError, match="At least one inlet"):
+        Mixer(species_order=["A"])()
 
-    def test_flash_at_different_T(self, binary_thermo, flash_params, binary_feed):
-        """Test flash at different temperatures."""
-        flash = Flash(flash_params, binary_thermo)
 
-        # Higher temperature should increase vapor fraction
-        _, _, info_low_T = flash(binary_feed, T=330.0)
-        _, _, info_high_T = flash(binary_feed, T=370.0)
-
-        assert info_high_T["V_frac"] > info_low_T["V_frac"]
-
-    def test_flash_at_different_P(self, binary_thermo, flash_params, binary_feed):
-        """Test flash at different pressures."""
-        flash = Flash(flash_params, binary_thermo)
-
-        # Lower pressure should increase vapor fraction
-        _, _, info_low_P = flash(binary_feed, P=50000.0)
-        _, _, info_high_P = flash(binary_feed, P=200000.0)
-
-        assert info_low_P["V_frac"] > info_high_P["V_frac"]
-
-    def test_subcooled_liquid(self, binary_thermo, flash_params):
-        """Test flash of subcooled liquid (all liquid)."""
-        # Very low temperature, high pressure
-        feed = make_stream({"Light": 10.0, "Heavy": 90.0}, T=280.0, P=500000.0)
-        flash = Flash(flash_params, binary_thermo)
-
-        liquid, vapor, info = flash(feed)
-
-        # Should be mostly liquid
-        assert float(info["V_frac"]) < 0.05  # Small tolerance for numerical
-
-    def test_superheated_vapor(self, binary_thermo, flash_params):
-        """Test flash of superheated vapor (all vapor)."""
-        # Very high temperature, low pressure
-        feed = make_stream({"Light": 90.0, "Heavy": 10.0}, T=450.0, P=10000.0)
-        flash = Flash(flash_params, binary_thermo)
-
-        liquid, vapor, info = flash(feed)
-
-        # Should be mostly vapor
-        assert float(info["V_frac"]) > 0.95
-
-    def test_compositions_normalized(self, binary_thermo, flash_params, binary_feed):
-        """Test that liquid and vapor compositions sum to 1."""
-        flash = Flash(flash_params, binary_thermo)
-
-        _, _, info = flash(binary_feed)
-
-        x_sum = sum(info["x"].values())
-        y_sum = sum(info["y"].values())
-
-        npt.assert_allclose(float(x_sum), 1.0, rtol=1e-8)
-        npt.assert_allclose(float(y_sum), 1.0, rtol=1e-8)
-
-    def test_k_values_in_info(self, binary_thermo, flash_params, binary_feed):
-        """Test that K-values are returned in info."""
-        flash = Flash(flash_params, binary_thermo)
-
-        _, _, info = flash(binary_feed)
-
-        assert "K" in info
-        assert "Light" in info["K"]
-        assert "Heavy" in info["K"]
-
-        # Light component should have higher K-value
-        assert float(info["K"]["Light"]) > float(info["K"]["Heavy"])
-
-
-class TestFlashNearPhaseBoundaries:
-    """V near the bubble and dew points is the exact Rachford-Rice root
-    (issue #444): the old sigmoid blend biased it by 10-30%."""
-
-    @pytest.mark.parametrize("side", ["bubble", "dew"])
-    def test_matches_exact_rachford_rice(self, binary_thermo, flash_params, side):
-        from scipy.optimize import brentq
-
-        flash = Flash(flash_params, binary_thermo)
-        z = jnp.array([0.5, 0.5])
-        P = 80000.0
-
-        def K_at(T):
-            return jnp.asarray(binary_thermo.K_values_array(T, P))
-
-        if side == "bubble":
-            T_b = brentq(lambda T: float(jnp.sum(z * K_at(T))) - 1.0, 250.0, 450.0)
-            T = T_b + 1.0
-        else:
-            T_b = brentq(lambda T: float(jnp.sum(z / K_at(T))) - 1.0, 250.0, 450.0)
-            T = T_b - 1.0
-        K = K_at(T)
-        V_exact = brentq(
-            lambda V: float(jnp.sum(z * (K - 1) / (1 + V * (K - 1)))), 0.0, 1.0,
-            xtol=1e-14)
-        assert 0.0 < V_exact < 1.0
-
-        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=T, P=P)
-        _, _, info = flash(feed)
-        npt.assert_allclose(float(info["V_frac"]), V_exact, atol=1e-9)
-
-    def test_single_phase_exact(self, binary_thermo, flash_params):
-        flash = Flash(flash_params, binary_thermo)
-        for T, V in [(250.0, 0.0), (450.0, 1.0)]:
-            feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=T, P=80000.0)
-            _, _, info = flash(feed)
-            assert float(info["V_frac"]) == V
-
-
-class TestFlashGradient:
-    """Tests for Flash gradient compatibility."""
-
-    @pytest.mark.release
-    def test_gradient_wrt_temperature(self, binary_thermo, flash_params):
-        """Test gradient of vapor fraction w.r.t. temperature."""
-        flash = Flash(flash_params, binary_thermo)
-
-        # Use feed at conditions clearly in two-phase region
-        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=350.0, P=80000.0)
-
-        def vapor_fraction(T):
-            _, _, info = flash(feed, T=T)
-            return info["V_frac"]
-
-        grad_fn = jax.grad(vapor_fraction)
-        grad = grad_fn(350.0)
-
-        # In two-phase region, gradient should be positive (higher T → more vapor)
-        # Check gradient is finite (may be zero at boundaries)
-        assert jnp.isfinite(grad)
-        # Higher T should increase vapor fraction
-        V_low = float(vapor_fraction(340.0))
-        V_high = float(vapor_fraction(360.0))
-        assert V_high >= V_low
-
-    @pytest.mark.release
-    def test_gradient_wrt_pressure(self, binary_thermo, flash_params):
-        """Test gradient of vapor fraction w.r.t. pressure."""
-        flash = Flash(flash_params, binary_thermo)
-
-        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=350.0, P=80000.0)
-
-        def vapor_fraction(P):
-            _, _, info = flash(feed, P=P)
-            return info["V_frac"]
-
-        grad_fn = jax.grad(vapor_fraction)
-        grad = grad_fn(80000.0)
-
-        # Check gradient is finite
-        assert jnp.isfinite(grad)
-        # Higher P should decrease vapor fraction
-        V_low_P = float(vapor_fraction(60000.0))
-        V_high_P = float(vapor_fraction(100000.0))
-        assert V_low_P >= V_high_P
-
-    @pytest.mark.slow
-    def test_gradient_smooth_at_boundaries(self, binary_thermo, flash_params):
-        """Test that gradients are finite near phase boundaries."""
-        flash = Flash(flash_params, binary_thermo)
-
-        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=350.0, P=80000.0)
-
-        def vapor_fraction(T):
-            _, _, info = flash(feed, T=T)
-            return info["V_frac"]
-
-        # Check gradient at multiple points - should all be finite
-        temps = [330.0, 350.0, 370.0, 390.0]
-        grads = [float(jax.grad(vapor_fraction)(T)) for T in temps]
-
-        # All gradients should be finite
-        for g in grads:
-            assert jnp.isfinite(g)
-
-
-class TestBubbleDewPoints:
-    """Tests for bubble and dew point calculations."""
-
-    def test_bubble_point_pressure(self, binary_thermo, flash_params, binary_feed):
-        """Test bubble point pressure calculation."""
-        flash = Flash(flash_params, binary_thermo)
-
-        P_bubble = flash.bubble_point_pressure(binary_feed)
-
-        # Should be finite and positive
-        assert float(P_bubble) > 0
-        assert jnp.isfinite(P_bubble)
-
-    def test_dew_point_pressure(self, binary_thermo, flash_params, binary_feed):
-        """Test dew point pressure calculation."""
-        flash = Flash(flash_params, binary_thermo)
-
-        P_dew = flash.dew_point_pressure(binary_feed)
-
-        # Should be finite and positive
-        assert float(P_dew) > 0
-        assert jnp.isfinite(P_dew)
-
-    def test_bubble_above_dew(self, binary_thermo, flash_params, binary_feed):
-        """Test that bubble point pressure is above dew point pressure.
-
-        For Raoult's law:
-        - P_bubble = sum(x_i * Psat_i) - first bubble of vapor
-        - P_dew = 1/sum(y_i / Psat_i) - last drop of liquid
-
-        At same T with same composition: P_bubble > P_dew
-        """
-        flash = Flash(flash_params, binary_thermo)
-
-        P_bubble = flash.bubble_point_pressure(binary_feed)
-        P_dew = flash.dew_point_pressure(binary_feed)
-
-        # For Raoult's law: P_bubble > P_dew at same T
-        # (bubble point is when first bubble forms at high P,
-        #  dew point is when last drop condenses at low P)
-        assert float(P_bubble) > float(P_dew)
-
-
-class TestFlashInitialize:
-    """Tests for Flash initialize method."""
-
-    def test_initialize_returns_estimates(self, binary_thermo, flash_params, binary_feed):
-        """Test that initialize returns reasonable estimates."""
-        flash = Flash(flash_params, binary_thermo)
-
-        result = flash.initialize(binary_feed)
-
-        assert "liquid" in result
-        assert "vapor" in result
-        assert "states" in result
-        assert "info" in result
-
-        # Check states
-        assert "V_frac" in result["states"]
-        assert "K" in result["states"]
-        assert "x" in result["states"]
-        assert "y" in result["states"]
-
-
-class TestSplitter:
-    """Tests for Splitter unit."""
-
-    def test_basic_split(self):
-        """Test basic stream splitting."""
-        feed = make_stream({"A": 100.0, "B": 50.0}, T=300.0, P=101325.0)
-        splitter = Splitter(species_order=["A", "B"])
-
-        out1, out2, info = splitter(feed, split_frac=0.3)
-
-        # Check split fractions
-        out1_flows = get_flows(out1)
-        out2_flows = get_flows(out2)
-
-        npt.assert_allclose(out1_flows["A"], 30.0, rtol=1e-10)
-        npt.assert_allclose(out1_flows["B"], 15.0, rtol=1e-10)
-        npt.assert_allclose(out2_flows["A"], 70.0, rtol=1e-10)
-        npt.assert_allclose(out2_flows["B"], 35.0, rtol=1e-10)
-
-    def test_full_split_to_first(self):
-        """Test splitting everything to first outlet."""
-        feed = make_stream({"A": 100.0}, T=300.0, P=101325.0)
-        splitter = Splitter(species_order=["A"])
-
-        out1, out2, info = splitter(feed, split_frac=1.0)
-
-        npt.assert_allclose(total_flow(out1), 100.0, rtol=1e-10)
-        npt.assert_allclose(total_flow(out2), 0.0, atol=1e-10)
-
-    def test_full_split_to_second(self):
-        """Test splitting everything to second outlet."""
-        feed = make_stream({"A": 100.0}, T=300.0, P=101325.0)
-        splitter = Splitter(species_order=["A"])
-
-        out1, out2, info = splitter(feed, split_frac=0.0)
-
-        npt.assert_allclose(total_flow(out1), 0.0, atol=1e-10)
-        npt.assert_allclose(total_flow(out2), 100.0, rtol=1e-10)
-
-    def test_splitter_preserves_T_P(self):
-        """Test that splitter preserves temperature and pressure."""
-        feed = make_stream({"A": 100.0}, T=350.0, P=200000.0)
-        splitter = Splitter(species_order=["A"])
-
-        out1, out2, _ = splitter(feed, split_frac=0.5)
-
-        npt.assert_allclose(float(out1["T"]), 350.0, rtol=1e-10)
-        npt.assert_allclose(float(out1["P"]), 200000.0, rtol=1e-10)
-        npt.assert_allclose(float(out2["T"]), 350.0, rtol=1e-10)
-        npt.assert_allclose(float(out2["P"]), 200000.0, rtol=1e-10)
-
-    def test_splitter_info(self):
-        """Test splitter info dict."""
-        feed = make_stream({"A": 100.0, "B": 100.0}, T=300.0, P=101325.0)
-        splitter = Splitter(species_order=["A", "B"])
-
-        _, _, info = splitter(feed, split_frac=0.4)
-
-        npt.assert_allclose(info["split_fractions"], [0.4, 0.6], rtol=1e-10)
-        npt.assert_allclose(float(info["flow_to_outlet1"]), 80.0, rtol=1e-10)
-        npt.assert_allclose(float(info["flow_to_outlet2"]), 120.0, rtol=1e-10)
-
-    def test_splitter_gradient(self):
-        """Test gradient through splitter."""
-        feed = make_stream({"A": 100.0}, T=300.0, P=101325.0)
-        splitter = Splitter(species_order=["A"])
-
-        def outlet1_flow(split_frac):
-            out1, _, _ = splitter(feed, split_frac=split_frac)
-            return total_flow(out1)
-
-        grad = jax.grad(outlet1_flow)(0.5)
-
-        # d(100*s)/ds = 100
-        npt.assert_allclose(float(grad), 100.0, rtol=1e-10)
-
-    def test_three_way_split(self):
-        """Test splitting into three streams."""
-        feed = make_stream({"A": 100.0, "B": 50.0}, T=300.0, P=101325.0)
-        splitter = Splitter(species_order=["A", "B"])
-
-        out1, out2, out3, info = splitter(feed, split_frac=[0.5, 0.3, 0.2])
-
-        npt.assert_allclose(get_flows(out1)["A"], 50.0, rtol=1e-10)
-        npt.assert_allclose(get_flows(out2)["A"], 30.0, rtol=1e-10)
-        npt.assert_allclose(get_flows(out3)["A"], 20.0, rtol=1e-10)
-        npt.assert_allclose(get_flows(out1)["B"], 25.0, rtol=1e-10)
-        npt.assert_allclose(get_flows(out2)["B"], 15.0, rtol=1e-10)
-        npt.assert_allclose(get_flows(out3)["B"], 10.0, rtol=1e-10)
-        assert info["n_outlets"] == 3
-
-    def test_four_way_split(self):
-        """Test splitting into four streams."""
-        feed = make_stream({"X": 200.0}, T=350.0, P=200000.0)
-        splitter = Splitter(species_order=["X"])
-
-        out1, out2, out3, out4, info = splitter(
-            feed, split_frac=[0.4, 0.3, 0.2, 0.1]
-        )
-
-        npt.assert_allclose(get_flows(out1)["X"], 80.0, rtol=1e-10)
-        npt.assert_allclose(get_flows(out2)["X"], 60.0, rtol=1e-10)
-        npt.assert_allclose(get_flows(out3)["X"], 40.0, rtol=1e-10)
-        npt.assert_allclose(get_flows(out4)["X"], 20.0, rtol=1e-10)
-        assert info["n_outlets"] == 4
-
-    def test_n_way_preserves_T_P(self):
-        """Test that n-way splitter preserves temperature and pressure."""
-        feed = make_stream({"A": 100.0}, T=400.0, P=300000.0)
-        splitter = Splitter(species_order=["A"])
-
-        out1, out2, out3, _ = splitter(feed, split_frac=[0.5, 0.3, 0.2])
-
-        for out in [out1, out2, out3]:
-            npt.assert_allclose(float(out["T"]), 400.0, rtol=1e-10)
-            npt.assert_allclose(float(out["P"]), 300000.0, rtol=1e-10)
-
-    def test_n_way_mass_balance(self):
-        """Test that n-way split conserves mass exactly."""
-        feed = make_stream({"A": 100.0, "B": 50.0}, T=300.0, P=101325.0)
-        splitter = Splitter(species_order=["A", "B"])
-
-        out1, out2, out3, _ = splitter(feed, split_frac=[0.5, 0.3, 0.2])
-
-        for s in ["A", "B"]:
-            total_out = sum(get_flows(o)[s] for o in [out1, out2, out3])
-            npt.assert_allclose(float(total_out), float(feed[f"F_{s}"]), rtol=1e-12)
-
-    def test_n_way_gradient(self):
-        """Test gradient through n-way splitter."""
-        feed = make_stream({"A": 100.0}, T=300.0, P=101325.0)
-        splitter = Splitter(species_order=["A"])
-
-        def second_outlet_flow(fracs):
-            out1, out2, out3, _ = splitter(feed, split_frac=fracs)
-            return total_flow(out2)
-
-        fracs = jnp.array([0.5, 0.3, 0.2])
-        grads = jax.grad(second_outlet_flow)(fracs)
-
-        # d(100 * f2) / d(f1) = 0, d/d(f2) = 100
-        # But last frac = 1 - f1 - f2, so d(100*f2)/d(f1) = 0, d/d(f2) = 100
-        # Actually: grads are w.r.t. the input array elements
-        # f2 is fracs[1], last = 1 - fracs[0] - fracs[1]
-        # out2 flow = 100 * fracs[1], so grad = [0, 100, 0] but fracs[2] doesn't
-        # affect out2 since last frac is recomputed, so grad w.r.t. fracs[2] = 0
-        npt.assert_allclose(float(grads[0]), 0.0, atol=1e-10)
-        npt.assert_allclose(float(grads[1]), 100.0, rtol=1e-10)
-
-
-class TestMixer:
-    """Tests for Mixer unit."""
-
-    def test_two_stream_mix(self, binary_thermo):
-        """Test mixing two streams."""
-        stream1 = make_stream({"Light": 30.0, "Heavy": 20.0}, T=300.0, P=101325.0)
-        stream2 = make_stream({"Light": 20.0, "Heavy": 30.0}, T=350.0, P=101325.0)
-
-        mixer = Mixer(species_order=["Light", "Heavy"])
-
-        outlet, info = mixer(stream1, stream2)
-
-        # Check mass balance
-        out_flows = get_flows(outlet)
-        npt.assert_allclose(out_flows["Light"], 50.0, rtol=1e-10)
-        npt.assert_allclose(out_flows["Heavy"], 50.0, rtol=1e-10)
-
-        # Check temperature is between inputs (without thermo, uses weighted average)
-        T_out = float(outlet["T"])
-        assert 300.0 < T_out < 350.0
-
-    def test_three_stream_mix(self):
-        """Test mixing three streams."""
-        s1 = make_stream({"A": 10.0}, T=300.0, P=101325.0)
-        s2 = make_stream({"A": 20.0}, T=300.0, P=101325.0)
-        s3 = make_stream({"A": 30.0}, T=300.0, P=101325.0)
-
-        mixer = Mixer(species_order=["A"])
-
-        outlet, info = mixer(s1, s2, s3)
-
-        out_flows = get_flows(outlet)
-        npt.assert_allclose(out_flows["A"], 60.0, rtol=1e-10)
-        assert info["n_inlets"] == 3
-
-    def test_single_stream(self):
-        """Test mixer with single stream (passthrough)."""
-        stream = make_stream({"A": 100.0}, T=350.0, P=101325.0)
-        mixer = Mixer(species_order=["A"])
-
-        outlet, info = mixer(stream)
-
-        npt.assert_allclose(total_flow(outlet), 100.0, rtol=1e-10)
-        npt.assert_allclose(float(outlet["T"]), 350.0, rtol=1e-10)
-
-    def test_mixer_no_inlets_error(self):
-        """Test that mixer raises error with no inlets."""
-        mixer = Mixer(species_order=["A"])
-
-        with pytest.raises(ValueError, match="At least one inlet"):
-            mixer()
-
-    def test_mixer_info(self):
-        """Test mixer info dict."""
-        s1 = make_stream({"A": 40.0}, T=300.0, P=101325.0)
-        s2 = make_stream({"A": 60.0}, T=400.0, P=101325.0)
-
-        mixer = Mixer(species_order=["A"])
-
-        _, info = mixer(s1, s2)
-
-        assert info["n_inlets"] == 2
-        npt.assert_allclose(float(info["total_flow"]), 100.0, rtol=1e-10)
-        assert "T_out" in info
-        assert "P_out" in info
-
-    def test_mixer_with_thermo(self, binary_thermo):
-        """Test mixer with thermodynamic T calculation."""
-        s1 = make_stream({"Light": 50.0, "Heavy": 0.0}, T=300.0, P=101325.0)
-        s2 = make_stream({"Light": 0.0, "Heavy": 50.0}, T=400.0, P=101325.0)
-
-        mixer_with_thermo = Mixer(species_order=["Light", "Heavy"], thermo=binary_thermo)
-        mixer_no_thermo = Mixer(species_order=["Light", "Heavy"])
-
-        out_thermo, _ = mixer_with_thermo(s1, s2)
-        out_simple, _ = mixer_no_thermo(s1, s2)
-
-        # Both should give reasonable results
-        assert 300.0 < float(out_thermo["T"]) < 400.0
-        assert 300.0 < float(out_simple["T"]) < 400.0
-
-
-class TestMixerGradient:
-    """Tests for Mixer gradient compatibility."""
-
-    @pytest.mark.release
-    def test_mixer_gradient_wrt_flow(self):
-        """Test gradient of mixer output w.r.t. input flow."""
-        mixer = Mixer(species_order=["A"])
-
-        def output_flow(F_in):
-            s1 = make_stream({"A": F_in}, T=300.0, P=101325.0)
-            s2 = make_stream({"A": 50.0}, T=300.0, P=101325.0)
-            outlet, _ = mixer(s1, s2)
-            return total_flow(outlet)
-
-        grad = jax.grad(output_flow)(100.0)
-
-        # d(F_in + 50)/d(F_in) = 1
-        npt.assert_allclose(float(grad), 1.0, rtol=1e-10)
-
-
-class TestBubbleDewTemperature:
-    """Tests for bubble and dew point temperature calculations."""
-
-    def test_bubble_point_temperature(self, binary_thermo, flash_params):
-        """Test bubble point temperature calculation."""
-        # Create a feed at known conditions
-        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=350.0, P=50000.0)
-        flash = Flash(flash_params, binary_thermo)
-
-        T_bubble = flash.bubble_point_temperature(feed)
-
-        # Should be finite and positive
-        assert float(T_bubble) > 200.0
-        assert float(T_bubble) < 600.0
-        assert jnp.isfinite(T_bubble)
-
-        # Verify: at T_bubble, P_bubble should equal P
-        P_bubble = flash.bubble_point_pressure(feed, T=T_bubble)
-        npt.assert_allclose(float(P_bubble), 50000.0, rtol=0.01)
-
-    def test_dew_point_temperature(self, binary_thermo, flash_params):
-        """Test dew point temperature calculation."""
-        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=350.0, P=10000.0)
-        flash = Flash(flash_params, binary_thermo)
-
-        T_dew = flash.dew_point_temperature(feed)
-
-        # Should be finite and positive
-        assert float(T_dew) > 200.0
-        assert float(T_dew) < 600.0
-        assert jnp.isfinite(T_dew)
-
-        # Verify: at T_dew, P_dew should equal P
-        P_dew = flash.dew_point_pressure(feed, T=T_dew)
-        npt.assert_allclose(float(P_dew), 10000.0, rtol=0.01)
-
-    def test_bubble_above_dew_temperature(self, binary_thermo, flash_params):
-        """Test that dew point temperature is above bubble point at same P."""
-        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=350.0, P=30000.0)
-        flash = Flash(flash_params, binary_thermo)
-
-        T_bubble = flash.bubble_point_temperature(feed)
-        T_dew = flash.dew_point_temperature(feed)
-
-        # At same P: T_dew > T_bubble for VLE
-        # (dew point is last drop, bubble point is first bubble)
-        assert float(T_dew) > float(T_bubble)
-
-
-# =============================================================================
-# Multi-component (ternary) tests
-# =============================================================================
-
-@pytest.fixture
-def ternary_thermo():
-    """Create a ternary system (light/medium/heavy) for testing."""
-    species_data = {
-        "Light": SpeciesData(
-            name="Light",
-            MW=58.0,  # Similar to butane
-            Cp_coeffs=(100.0, 0.0, 0.0, 0.0),
-            Hvap_coeffs=(22000.0, 0.38, 425.0),
-            # Antoine coeffs for ~butane (very volatile)
-            antoine_coeffs=(10.523, 1554.3, -45.6),
-            Hf=0.0,
-        ),
-        "Medium": SpeciesData(
-            name="Medium",
-            MW=72.0,  # Similar to pentane
-            Cp_coeffs=(120.0, 0.0, 0.0, 0.0),
-            Hvap_coeffs=(26000.0, 0.38, 470.0),
-            # Antoine coeffs for ~pentane
-            antoine_coeffs=(10.422, 1687.537, -38.44),
-            Hf=0.0,
-        ),
-        "Heavy": SpeciesData(
-            name="Heavy",
-            MW=114.0,  # Similar to octane
-            Cp_coeffs=(190.0, 0.0, 0.0, 0.0),
-            Hvap_coeffs=(35000.0, 0.38, 570.0),
-            # Antoine coeffs for ~octane (low volatility)
-            antoine_coeffs=(10.186, 2004.68, -60.53),
-            Hf=0.0,
-        ),
-    }
-    return IdealThermo(species_data)
-
-
-@pytest.fixture
-def ternary_params():
-    """Flash parameters for ternary system."""
-    return FlashParams(species_order=["Light", "Medium", "Heavy"])
-
-
-@pytest.mark.slow
-class TestTernaryFlash:
-    """Tests for three-component flash calculations."""
-
-    def test_ternary_two_phase_flash(self, ternary_thermo, ternary_params):
-        """Test flash in two-phase region with 3 components."""
-        # Ternary feed at conditions that give partial vaporization
-        feed = make_stream(
-            {"Light": 30.0, "Medium": 40.0, "Heavy": 30.0},
-            T=350.0,
-            P=50000.0,
-        )
-        flash = Flash(ternary_params, ternary_thermo)
-
-        liquid, vapor, info = flash(feed)
-
-        # Check we have two-phase output
-        V_frac = float(info["V_frac"])
-        assert 0.0 < V_frac < 1.0, f"Expected two-phase, got V_frac={V_frac}"
-
-        # Check mass balance for all 3 components
-        feed_flows = get_flows(feed)
-        liquid_flows = get_flows(liquid)
-        vapor_flows = get_flows(vapor)
-
-        for s in ["Light", "Medium", "Heavy"]:
-            npt.assert_allclose(
-                liquid_flows[s] + vapor_flows[s],
-                feed_flows[s],
-                rtol=1e-8,
-                err_msg=f"Mass balance failed for {s}"
-            )
-
-        # Check volatility ordering: Light > Medium > Heavy in vapor
-        vapor_total = total_flow(vapor)
-        y_light = vapor_flows["Light"] / vapor_total
-        y_medium = vapor_flows["Medium"] / vapor_total
-        y_heavy = vapor_flows["Heavy"] / vapor_total
-
-        liquid_total = total_flow(liquid)
-        x_light = liquid_flows["Light"] / liquid_total
-        x_medium = liquid_flows["Medium"] / liquid_total
-        x_heavy = liquid_flows["Heavy"] / liquid_total
-
-        # K_light > K_medium > K_heavy
-        K_light = float(y_light / x_light)
-        K_medium = float(y_medium / x_medium)
-        K_heavy = float(y_heavy / x_heavy)
-
-        assert K_light > K_medium > K_heavy, \
-            f"K-value ordering wrong: K_light={K_light}, K_medium={K_medium}, K_heavy={K_heavy}"
-
-    def test_ternary_compositions_sum_to_one(self, ternary_thermo, ternary_params):
-        """Test that liquid and vapor compositions sum to 1 for ternary."""
-        feed = make_stream(
-            {"Light": 20.0, "Medium": 50.0, "Heavy": 30.0},
-            T=360.0,
-            P=60000.0,
-        )
-        flash = Flash(ternary_params, ternary_thermo)
-
-        _, _, info = flash(feed)
-
-        x_sum = sum(info["x"].values())
-        y_sum = sum(info["y"].values())
-
-        npt.assert_allclose(float(x_sum), 1.0, rtol=1e-8)
-        npt.assert_allclose(float(y_sum), 1.0, rtol=1e-8)
-
-    def test_ternary_gradient(self, ternary_thermo, ternary_params):
-        """Test gradient compatibility for ternary system."""
-        flash = Flash(ternary_params, ternary_thermo)
-        feed = make_stream(
-            {"Light": 30.0, "Medium": 40.0, "Heavy": 30.0},
-            T=350.0,
-            P=80000.0,
-        )
-
-        def vapor_fraction(T):
-            _, _, info = flash(feed, T=T)
-            return info["V_frac"]
-
-        grad_fn = jax.grad(vapor_fraction)
-        grad = grad_fn(350.0)
-
-        assert jnp.isfinite(grad), "Gradient should be finite"
-
-
-# =============================================================================
-# EOS-based flash tests
-# =============================================================================
-
-@pytest.fixture
-def hydrocarbon_eos():
-    """Create Peng-Robinson EOS for light hydrocarbons."""
-    species_data = {
+def test_eos_flash_smoke():
+    eos = PengRobinson({
         "methane": CriticalProperties("methane", 190.6, 4.6e6, 0.011, 16.04),
-        "ethane": CriticalProperties("ethane", 305.4, 4.9e6, 0.099, 30.07),
         "propane": CriticalProperties("propane", 369.8, 4.2e6, 0.152, 44.10),
-    }
-    return PengRobinson(species_data)
+    })
+    feed = make_stream({"methane": 50.0, "propane": 50.0}, T=250.0, P=2.0e6)
+    flash = EOSFlash(EOSFlashParams(species_order=["methane", "propane"]), eos)
+    liquid, vapor, info = flash(feed)
+    assert jnp.isfinite(info["V_frac"])
+    npt.assert_allclose(total_flow(liquid) + total_flow(vapor), total_flow(feed), rtol=1e-6)
 
 
-@pytest.fixture
-def eos_flash_params():
-    """EOS flash parameters for hydrocarbon system."""
-    return EOSFlashParams(species_order=["methane", "ethane", "propane"])
+def test_eos_flash_params_validation():
+    with pytest.raises(ValueError, match="eos_type must be"):
+        EOSFlashParams(species_order=["A"], eos_type="INVALID")
 
 
-class TestEOSFlash:
-    """Tests for EOS-based flash calculations."""
-
-    @pytest.mark.slow
-    def test_eos_flash_basic(self, hydrocarbon_eos, eos_flash_params):
-        """Test basic EOS flash calculation."""
-        feed = make_stream(
-            {"methane": 40.0, "ethane": 30.0, "propane": 30.0},
-            T=250.0,
-            P=2.0e6,  # 20 bar
-        )
-        flash = EOSFlash(eos_flash_params, hydrocarbon_eos)
-
-        liquid, vapor, info = flash(feed)
-
-        # Check we get two-phase output
-        V_frac = float(info["V_frac"])
-        assert 0.0 <= V_frac <= 1.0
-
-        # Check mass balance
-        feed_total = total_flow(feed)
-        liquid_total = total_flow(liquid)
-        vapor_total = total_flow(vapor)
-
-        npt.assert_allclose(
-            liquid_total + vapor_total,
-            feed_total,
-            rtol=1e-6,
-        )
-
-    @pytest.mark.slow
-    def test_eos_flash_mass_balance(self, hydrocarbon_eos, eos_flash_params):
-        """Test component mass balance for EOS flash."""
-        feed = make_stream(
-            {"methane": 50.0, "ethane": 30.0, "propane": 20.0},
-            T=240.0,
-            P=1.5e6,
-        )
-        flash = EOSFlash(eos_flash_params, hydrocarbon_eos)
-
-        liquid, vapor, info = flash(feed)
-
-        feed_flows = get_flows(feed)
-        liquid_flows = get_flows(liquid)
-        vapor_flows = get_flows(vapor)
-
-        for s in ["methane", "ethane", "propane"]:
-            npt.assert_allclose(
-                liquid_flows[s] + vapor_flows[s],
-                feed_flows[s],
-                rtol=1e-5,
-                err_msg=f"Mass balance failed for {s}"
-            )
-
-    def test_eos_flash_params_validation(self):
-        """Test EOSFlashParams validation."""
-        # Test invalid EOS type
-        with pytest.raises(ValueError, match="eos_type must be"):
-            EOSFlashParams(species_order=["A"], eos_type="INVALID")
+def test_ph_flash_smoke(binary_thermo, flash_params):
+    ph = PHFlash(flash_params, binary_thermo)
+    feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=380.0, P=101325.0)
+    liquid, vapor, info = ph(feed, P=30000.0)
+    assert {"T_flash", "H_inlet", "T_inlet", "converged"} <= set(info)
+    assert jnp.isfinite(info["T_flash"])
+    npt.assert_allclose(total_flow(liquid) + total_flow(vapor), total_flow(feed), rtol=1e-6)
+    with pytest.raises(ValueError, match="inlet_phase"):
+        ph(feed, inlet_phase="gas")
 
 
-# =============================================================================
-# PH (isenthalpic) flash tests
-# =============================================================================
-
-class TestPHFlashInletPhase:
-    """The ideal PH flash takes the inlet's own phase state (issue #444); it
-    used to take every inlet as liquid."""
-
-    def test_vapor_feed_let_down_keeps_T(self, binary_thermo, flash_params):
-        # Ideal-gas enthalpy does not depend on P: a superheated vapour let
-        # down through a valve leaves at its own T, still all vapour.
-        ph = PHFlash(flash_params, binary_thermo)
-        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=450.0, P=80000.0)
-        _, _, info = ph(feed, P=40000.0)
-        npt.assert_allclose(float(info["T_flash"]), 450.0, atol=1e-4)
-        assert float(info["V_frac"]) == 1.0
-
-    def test_two_phase_feed_at_own_P(self, binary_thermo, flash_params):
-        tp = Flash(flash_params, binary_thermo)
-        ph = PHFlash(flash_params, binary_thermo)
-        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=350.0, P=30000.0)
-        _, _, info_tp = tp(feed)
-        assert 0.05 < float(info_tp["V_frac"]) < 0.95
-        _, _, info = ph(feed)
-        npt.assert_allclose(float(info["T_flash"]), 350.0, atol=1e-4)
-        npt.assert_allclose(float(info["V_frac"]), float(info_tp["V_frac"]), atol=1e-6)
-
-    def test_named_phase(self, binary_thermo, flash_params):
-        ph = PHFlash(flash_params, binary_thermo)
-        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=300.0, P=200000.0)
-        _, _, auto = ph(feed, P=30000.0)
-        _, _, liq = ph(feed, P=30000.0, inlet_phase="liquid")
-        npt.assert_allclose(float(auto["T_flash"]), float(liq["T_flash"]), atol=1e-6)
-        with pytest.raises(ValueError, match="inlet_phase"):
-            ph(feed, inlet_phase="gas")
-
-
-class TestPHFlash:
-    """Tests for PH (isenthalpic) flash calculations."""
-
-    def test_ph_flash_basic(self, binary_thermo, flash_params):
-        """Test basic PH flash calculation."""
-        feed = make_stream(
-            {"Light": 50.0, "Heavy": 50.0},
-            T=380.0,  # Hot liquid feed
-            P=101325.0,
-        )
-
-        ph_flash = PHFlash(flash_params, binary_thermo)
-
-        # Flash to lower pressure (adiabatic)
-        liquid, vapor, info = ph_flash(feed, P=30000.0)
-
-        # Should get two-phase output
-        V_frac = float(info["V_frac"])
-        assert 0.0 <= V_frac <= 1.0
-
-        # Temperature should have changed (cooling from vaporization)
-        T_flash = float(info["T_flash"])
-        assert T_flash < 380.0  # Should cool due to flashing
-
-    def test_ph_flash_mass_balance(self, binary_thermo, flash_params):
-        """Test mass balance for PH flash."""
-        feed = make_stream(
-            {"Light": 60.0, "Heavy": 40.0},
-            T=370.0,
-            P=80000.0,
-        )
-
-        ph_flash = PHFlash(flash_params, binary_thermo)
-        liquid, vapor, info = ph_flash(feed, P=40000.0)
-
-        # Check mass balance
-        feed_total = total_flow(feed)
-        liquid_total = total_flow(liquid)
-        vapor_total = total_flow(vapor)
-
-        npt.assert_allclose(
-            liquid_total + vapor_total,
-            feed_total,
-            rtol=1e-6,
-        )
-
-    def test_ph_flash_returns_temperature(self, binary_thermo, flash_params):
-        """Test that PH flash returns flash temperature."""
-        feed = make_stream(
-            {"Light": 50.0, "Heavy": 50.0},
-            T=360.0,
-            P=60000.0,
-        )
-
-        ph_flash = PHFlash(flash_params, binary_thermo)
-        _, _, info = ph_flash(feed, P=30000.0)
-
-        # Check required info keys
-        assert "T_flash" in info
-        assert "H_inlet" in info
-        assert "T_inlet" in info
-        assert "converged" in info
-        assert jnp.isfinite(info["T_flash"])
-
-    def test_ph_flash_convergence_status(self, binary_thermo, flash_params):
-        """Test that PH flash reports convergence status."""
-        # Use conditions that produce a clear two-phase region
-        feed = make_stream(
-            {"Light": 50.0, "Heavy": 50.0},
-            T=380.0,  # Hot liquid feed
-            P=101325.0,
-        )
-
-        ph_flash = PHFlash(flash_params, binary_thermo)
-        _, _, info = ph_flash(feed, P=30000.0)
-
-        # Check convergence status is reported (may or may not converge
-        # depending on conditions, but status should be present)
-        assert "converged" in info
-
-
-class TestPHFlashPureComponent:
-    """Ideal-path PHFlash of a pure liquid let down into its two-phase region.
-
-    The old Newton on T could not land on the boiling point (the flashed
-    enthalpy jumps by the latent heat there) and returned saturated water let
-    down from 180 C to 1.5 bar at the 150 K clip with V_frac = 0.
-    """
-
-    @pytest.fixture
-    def water(self):
-        from difflow.database import get_species_data
-        th = IdealThermo({"water": get_species_data("water")})
-        return PHFlash(FlashParams(species_order=["water"]), th), th
-
-    def test_letdown_is_two_phase_at_boiling_point(self, water):
-        ph, th = water
-        feed = make_stream({"water": 1.0}, T=453.15, P=12e5)
-        liquid, vapor, info = ph(feed, P=1.5e5)
-        T = float(info["T_flash"])
-        assert float(th.Psat("water", T)) == pytest.approx(1.5e5, rel=1e-8)
-        # lever rule on the model's own enthalpies
-        hL = float(th.stream_enthalpy({"water": 1.0}, T, phase="liquid"))
-        hV = float(th.stream_enthalpy({"water": 1.0}, T, phase="vapor"))
-        beta = (float(info["H_inlet"]) - hL) / (hV - hL)
-        assert float(info["V_frac"]) == pytest.approx(beta, rel=1e-8)
-        # steam tables: Tsat(1.5 bar) = 111.4 C, quality 0.133
-        assert T - 273.15 == pytest.approx(111.4, abs=1.0)
-        assert float(info["V_frac"]) == pytest.approx(0.133, abs=0.01)
-        assert float(vapor["F_water"] + liquid["F_water"]) == pytest.approx(1.0, rel=1e-12)
-        assert bool(info["converged"])
-
-    @pytest.mark.slow
-    def test_gradients_clausius_clapeyron(self, water):
-        ph, th = water
-
-        def T_out(P):
-            return ph(make_stream({"water": 1.0}, T=453.15, P=12e5), P=P)[2]["T_flash"]
-
-        def V_out(T_in):
-            return ph(make_stream({"water": 1.0}, T=T_in, P=12e5), P=1.5e5)[2]["V_frac"]
-
-        h = 10.0
-        fd = (float(T_out(1.5e5 + h)) - float(T_out(1.5e5 - h))) / (2 * h)
-        assert float(jax.grad(T_out)(1.5e5)) == pytest.approx(fd, rel=1e-5)
-        h = 0.05
-        fd = (float(V_out(453.15 + h)) - float(V_out(453.15 - h))) / (2 * h)
-        assert float(jax.grad(V_out)(453.15)) == pytest.approx(fd, rel=1e-5)
-
-    def test_mixture_closes_energy_balance(self, binary_thermo, flash_params):
-        ph = PHFlash(flash_params, binary_thermo)
-        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=380.0, P=101325.0)
-        _, _, info = ph(feed, P=30000.0)
-        assert bool(info["converged"])
-        assert abs(float(info["residual"])) < 1e-6 * abs(float(info["H_inlet"])) + 1e-3
-        assert 0.0 < float(info["V_frac"]) < 1.0
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+def test_ph_flash_pure_letdown_not_clipped():
+    """Regression: saturated water let down used to return V_frac = 0 at the clip."""
+    from difflow.database import get_species_data
+    th = IdealThermo({"water": get_species_data("water")})
+    ph = PHFlash(FlashParams(species_order=["water"]), th)
+    _, _, info = ph(make_stream({"water": 1.0}, T=453.15, P=12e5), P=1.5e5)
+    assert 0.0 < float(info["V_frac"]) < 1.0

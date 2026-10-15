@@ -1064,7 +1064,7 @@ def typical_U_range(service: str) -> tuple[float, float]:
 #: (after Kays & Perkins). Columns ``Di/Do``, ``Nu_i`` (inner surface heated),
 #: ``Nu_o`` (outer surface heated); Nu based on ``D_h = Do - Di``. The values
 #: were reproduced independently, to +-0.01, by a finite-difference solution
-#: of the Graetz eigenproblem (``tests/test_heat_transfer.py::TestAnnulus``).
+#: of the Graetz eigenproblem.
 ANNULUS_NUSSELT_TABLE = (
     (0.0, float("nan"), 3.66),
     (0.05, 17.46, 4.06),

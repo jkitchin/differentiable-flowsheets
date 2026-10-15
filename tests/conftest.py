@@ -48,7 +48,6 @@ words) stays under the budget and keeps its reuse.
 """
 
 import gc
-import json
 import os
 
 import jax
@@ -158,123 +157,12 @@ def _release_jax_compilation_caches():
 
 
 
-_DURATIONS = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".test_durations")
-
-#: Files that must not run at the same time as each other (#315). On the CI
-#: runner (2 physical cores, 4 vCPUs) each of these runs 2-2.5x slower when
-#: another of them is running on the other worker -- measured: the
-#: non-convergence file 470s alone against 1140s overlapped, the full grid
-#: 210s against 510s, the planning file 420s against 630s -- so overlapping
-#: them costs more time than it saves. ``--dist loadfile`` hands them out as
-#: ONE work unit, which puts them on one worker in series, while the other
-#: worker takes everything else. (Pinning XLA to one thread did not help:
-#: measured, same wall time.) A file belongs here only on that evidence.
-_SERIAL_GROUP = "serial-heavy"
-_SERIAL_FILES = frozenset({
-    "tests/refinery/test_planning.py",
-    "tests/refinery/test_planning_nonconvergence.py",
-    "tests/test_convergence_full_grid.py",
-})
-
-
-#: Files that must not be compiling at the same time as each other because
-#: together they exhaust the runner's memory. Full suite shard 6/12 holds all
-#: three and on Python 3.11 lost its runner at 79 min ("The hosted runner lost
-#: communication with the server", the out-of-memory signature); 3.12 passed
-#: the same shard in 42 min against a recorded 24 min of tests, so the two
-#: workers were contending there as well. In series on one worker they take
-#: about 23 min.
-_MEMORY_GROUP = "isomerization"
-_MEMORY_FILES = frozenset({
-    "tests/refinery/test_isomerization.py",
-    "tests/refinery/test_isomerization_dih.py",
-    "tests/refinery/test_isomerization_dih_gradients.py",
-})
-
-
-#: Files whose tests are independent and long enough that one worker running
-#: the whole file sets the shard's length: each test is its own work unit.
-#: tests/test_doc_examples.py runs every document's code blocks, ~23 runner
-#: minutes in all (the refinery page and README alone ~5 each), and as one
-#: unit it was the tail that pushed per-commit shard 4 past its 40 min cap.
-_SPLIT_FILES = frozenset({
-    "tests/test_doc_examples.py",
-})
-
-
-def _work_unit(nodeid):
-    """The unit ``--dist loadfile`` hands out: the file, its group, or (for
-    :data:`_SPLIT_FILES`) the test."""
-    path = nodeid.split("::", 1)[0]
-    if path in _SPLIT_FILES:
-        return nodeid
-    if path in _SERIAL_FILES:
-        return _SERIAL_GROUP
-    if path in _MEMORY_FILES:
-        return _MEMORY_GROUP
-    return path
-
-
-@pytest.hookimpl(optionalhook=True)
-def pytest_xdist_make_scheduler(config, log):
-    """``--dist loadfile``, with :data:`_SERIAL_FILES` and
-    :data:`_MEMORY_FILES` each as one work unit and :data:`_SPLIT_FILES`
-    one unit per test."""
-    if config.getvalue("dist") != "loadfile":
-        return None
-    from xdist.scheduler import LoadFileScheduling
-
-    class _Scheduling(LoadFileScheduling):
-        def _split_scope(self, nodeid):
-            return _work_unit(nodeid)
-
-    return _Scheduling(config, log)
-
-
-@pytest.hookimpl(wrapper=True)
-def pytest_collection_modifyitems(config, items):
-    """Under xdist, hand the work units out longest first (#315).
-
-    xdist's own order is by test COUNT, descending, and each worker keeps
-    its next unit queued -- so a unit with a few tests and many minutes of
-    setup is handed out late, queued behind a running one, and ends the
-    shard alone while the other worker sits idle. Measured on shard 2: the
-    refinery planning files started at 552s and 879s and ran to 1089s, one
-    worker idle from 775s.
-
-    Sorting whole units by their recorded duration (``.test_durations``,
-    the same numbers pytest-split splits on) is the longest-processing-time
-    rule; CI passes ``--no-loadscope-reorder`` so xdist keeps this order.
-    The order inside a file is untouched. This is a wrapper so it runs after
-    pytest-split has chosen the group, and only on xdist workers (where the
-    collection that xdist schedules from happens), so a serial run is
-    unchanged.
-    """
-    result = yield
-    if not os.environ.get("PYTEST_XDIST_WORKER") or not items:
-        return result
-    try:
-        with open(_DURATIONS) as fh:
-            durations = json.load(fh)
-    except (OSError, ValueError):
-        return result
-    known = [durations[i.nodeid] for i in items if i.nodeid in durations]
-    default = sum(known) / len(known) if known else 0.0
-    totals = {}
-    for item in items:
-        unit = _work_unit(item.nodeid)
-        totals[unit] = totals.get(unit, 0.0) + durations.get(item.nodeid, default)
-    # sorted() is stable: in-file order survives, ties keep collection order.
-    items[:] = sorted(items, key=lambda i: -totals[_work_unit(i.nodeid)])
-    return result
-
-
-#: Seconds a test NOT marked ``slow`` may spend in its call phase, read from
-#: ``DIFFLOW_TEST_BUDGET`` (unset: no limit). The per-commit suite checks
-#: correctness, and anything that has to solve something expensive to do it
-#: belongs to the nightly run -- mark it ``slow``. The Tests workflow sets a
-#: budget so that a test that grows into an expensive solve fails the commit
-#: that made it grow, instead of creeping the shards back to their timeout.
+#: Seconds a test may spend in its call phase, read from
+#: ``DIFFLOW_TEST_BUDGET`` (unset: no limit). The suite checks correctness
+#: only (smoke runs, finite gradients, API contracts, input validation), never
+#: the physics, so no test needs an expensive solve. The Tests workflow sets a
+#: budget so that a test that grows into one fails the commit that made it
+#: grow.
 #: The budget is generous on purpose: the first test in a file pays that
 #: file's JIT compile, which is several times its steady-state cost.
 _BUDGET = float(os.environ.get("DIFFLOW_TEST_BUDGET", "0") or 0)
@@ -282,9 +170,8 @@ _OVER_BUDGET = []
 
 
 def pytest_runtest_logreport(report):
-    """Record non-``slow`` tests whose call phase ran past :data:`_BUDGET`."""
-    if (_BUDGET and report.when == "call" and report.duration > _BUDGET
-            and "slow" not in report.keywords):
+    """Record tests whose call phase ran past :data:`_BUDGET`."""
+    if _BUDGET and report.when == "call" and report.duration > _BUDGET:
         _OVER_BUDGET.append((report.duration, report.nodeid))
 
 
@@ -293,7 +180,7 @@ def pytest_terminal_summary(terminalreporter):
         terminalreporter.section(f"over the {_BUDGET:g}s per-test budget (DIFFLOW_TEST_BUDGET)")
         for duration, nodeid in sorted(_OVER_BUDGET, reverse=True):
             terminalreporter.line(f"{duration:8.1f}s  {nodeid}")
-        terminalreporter.line("Mark these @pytest.mark.slow, or make them cheaper.")
+        terminalreporter.line("Make these cheaper: a test checks the code, not the answer.")
 
 
 def pytest_sessionfinish(session, exitstatus):

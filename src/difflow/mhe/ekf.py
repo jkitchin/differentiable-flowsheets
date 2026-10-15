@@ -142,7 +142,7 @@ def ekf_update(
     # `inf ** 2` is never evaluated. Written as one `where`, the
     # unsampled channels reach reverse mode as d(sigma^2) = 2 inf and
     # the cotangent comes back nan. Pinned by
-    # test_ekf_keeps_an_unsampled_channel_gradient_finite.
+    # test_ekf_unsampled_channel_gradient_finite.
     var = jnp.where(mask, jnp.where(mask, sigma, 1.0) ** 2, 1.0)
     r = jnp.diag(var)
 

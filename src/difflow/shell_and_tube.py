@@ -35,8 +35,8 @@ Contents
 Short version: the Kern correlations were transcribed from memory and then
 checked against secondary sources. Kern's kerosene-crude rating (Kern 1950,
 Example 7.3; inputs and chart readings as transcribed by the FOSSEE Python
-notebook of Kern's Chapter 7) is reproduced to within the chart-reading error
-(``TestKernExample73``): ``D_e``, ``a_s`` and ``G_s`` to 0.3 percent, ``j_H``
+notebook of Kern's Chapter 7) was reproduced, when the model was written, to within the chart-reading error:
+``D_e``, ``a_s`` and ``G_s`` to 0.3 percent, ``j_H``
 and the shell friction factor to 3 percent, ``U_C`` to 2 percent. The bundle,
 tube-count and pitch constants marked "unverified" must still be checked
 against the book before a real design.

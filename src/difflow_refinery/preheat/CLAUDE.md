@@ -25,7 +25,7 @@ Invariants (do not weaken them):
   water, never dissolved in the oil).
 - The Ebert-Panchal fouling constants are illustrative, not fitted.
 
-Validation: `tests/refinery/test_preheat_validation.py` (release) against IDAES
+Validation (when written; the reference and its test are gone): against IDAES
 `Flash` and `HeatExchanger` on the same ideal thermo -- an independent
 implementation, not an independent model. Tests: `tests/refinery/test_preheat*.py`.
 Example: `examples/37_crude_preheat_train.ipynb`.

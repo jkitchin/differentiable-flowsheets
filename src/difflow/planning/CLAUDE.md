@@ -136,7 +136,8 @@ Reference model: `difflow.planning.chain.two_plant_chain()`. Docs: `docs/plannin
 Example: `examples/30_delta_base_planning.ipynb`. Tests: `tests/test_planning.py`,
 `tests/test_planning_export.py`, `tests/test_planning_curvature.py`,
 `tests/test_planning_multiperiod.py`, `tests/test_planning_quadratic.py`,
-`tests/test_planning_restoration.py`, `tests/test_planning_attribution.py`, `tests/power/test_planning_opf.py` (the
-accuracy claim: SLP over AD delta vectors reaches the AC-OPF optimum and beats
-DC-OPF, all three dispatches scored in the full AC model; and the termination
-claim, linear against quadratic).
+`tests/test_planning_restoration.py`, `tests/test_planning_attribution.py`. The
+accuracy claim (SLP over AD delta vectors reaches the AC-OPF optimum and beats
+DC-OPF, all three dispatches scored in the full AC model) and the termination
+claim (linear against quadratic) were measured when written; no test checks
+them any more, so check them by hand before changing the planner.

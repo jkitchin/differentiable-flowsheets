@@ -21,7 +21,6 @@
 # 11.17) and media cost (inside Raw Materials, Table 11.17). The source gives
 # labor, facility-dependent, QC and miscellaneous costs only as totals, not
 # the inputs behind them, so those are not reproduced and are zero here.
-# tests/bio/test_economics_benchmark.py holds the comparisons.
 
 basis:
   media_usd_L:

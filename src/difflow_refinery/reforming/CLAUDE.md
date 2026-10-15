@@ -59,4 +59,4 @@ reformer bit for bit; the CCR sets that per-reactor tuple itself.
   found; the rise is first principles only.
 
 Docs: `docs/unit-operations-refinery.md` (Catalytic reforming; "CCR reformer"). Tests:
-`tests/refinery/test_reforming.py` (flowsheet tests `slow`), `tests/refinery/test_ccr.py`.
+`tests/refinery/test_reforming.py`, `tests/refinery/test_ccr.py`.

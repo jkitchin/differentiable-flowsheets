@@ -233,8 +233,7 @@ Prausnitz & O'Connell 5e, or Landolt-Bornstein IV/20) and a fitted range
 `T_antoine_min`-`T_antoine_max`. The range is the source's own fit range,
 extended where a NIST reference-EOS saturation table shows the set stays within
 1%. Each set reproduces its species' normal boiling point to within
-max(0.5 K, the reference uncertainty); `tests/test_antoine_database.py`
-checks this. CO2 sublimes at 1 atm, so its set covers the liquid only, from the
+max(0.5 K, the reference uncertainty), checked when the data were added. CO2 sublimes at 1 atm, so its set covers the liquid only, from the
 triple point (216 K) to 289 K. An Antoine equation extrapolates badly, so a
 concrete temperature outside the range raises an `AntoineRangeWarning`, once per
 species and side. Under `jit`/`grad` the check is skipped, as for difflow's
@@ -259,7 +258,7 @@ Raoult K-value stays smooth. `difflow.database.WAGNER_COEFFS` holds sets for
 methane, ethane, propane, n-butane, isobutane, N2, O2, CO2, NH3, ethylene,
 propylene and CO, each within 1% of the reference equation of state from the
 triple point to $T_c$ (methane: 0.12%) and reproducing $T_b$ to 0.1 K
-(`tests/test_wagner.py`). They are opt-in, so existing Antoine-based results do
+(measured when the sets were added). They are opt-in, so existing Antoine-based results do
 not move:
 
 ```python
@@ -799,12 +798,12 @@ print(activity_gamma(MargulesParams.two_suffix(("a", "b"), 1.0), x, 300.0))
 print(activity_gamma(VanLaarParams(("a", "b"), 1.6798, 0.9227), x, 300.0))
 ```
 
-Validation, stated precisely (see `tests/test_phase_diagrams.py`): closed forms are
+Validation when the module was written, stated precisely: closed forms were
 checked against hand-computed values, the Gibbs-Duhem equation and the
 infinite-dilution identities; ethanol-water NRTL reproduces the azeotrope
 (x = 0.893, 351.29 K vs. the experimental 0.894, 351.3 K); the Wilson parameters
 above were **regressed** to the 1 atm methanol-water Txy table (Perry's) and the
-test checks the model reproduces it to 0.3 K and 0.01 in $y$. No textbook worked
+model reproduced it to 0.3 K and 0.01 in $y$. No textbook worked
 example is reproduced to three figures.
 
 (binary-parameter-database)=
@@ -835,7 +834,7 @@ in K, $z = 10$, and the Abrams-Prausnitz $r$, $q$.
 | UNIQUAC | water with ethanol, methanol, 2-propanol, 1-propanol, acetone; methanol and ethanol with benzene, toluene, chloroform; methanol-acetone, benzene-toluene, acetone-benzene, ethanol-n-hexane, methanol-ethanol | ChemSep UNIQUAC set (DECHEMA-regressed) |
 
 Every set is listed only because, with the database's own Antoine constants, it
-reproduces a fact independent of it (`tests/test_binary_params.py`): the 1-atm
+reproduced a fact independent of it when it was added: the 1-atm
 azeotrope composition and temperature from the CRC azeotrope tables (ethanol-water
 0.880 / 351.2 K against 0.894 / 351.3 K; isopropanol-water 0.69 / 353.4 K against
 0.68 / 353.4 K), no azeotrope where there is none, acetone-chloroform boiling above
@@ -1098,8 +1097,7 @@ the generator picks the source that agreed best with CoolProp:
   Density is the IAPWS SR1-86 saturated-liquid equation (form `IAPWS_SR186`),
   within 0.001 % of NIST below 400 K; the VDI-PPDS form used before was off by
   up to 0.6 % (+0.18 % at 15 °C, −0.23 % at 80 °C). The NIST
-  table is committed as `tests/reference/nist_water_saturated_liquid.csv`, and
-  `TestWaterAgainstNIST` checks all three properties against it.
+  table is committed as `tests/reference/nist_water_saturated_liquid.csv`.
 - Heavy water is in neither table. Its three correlations are fitted to
   CoolProp.
 - The four estimated species are 2,2,5-trimethylhexane,
@@ -1321,9 +1319,9 @@ thermo = CubicThermo(IdealThermo(sp), PengRobinson(crit))
 
 `DWSIM_NAMES` maps difflow's database names to DWSIM's for the refinery's
 50 species, every one checked to exist in DWSIM 9.0.5 (all in its ChemSep
-database). `tests/test_dwsim_import.py` (release) imports them from the real
-DWSIM in a subprocess and compares Tc, Pc, omega and MW with
-`difflow.database`; the differences are listed under
+database). When this was written they were imported from the real DWSIM in a
+subprocess and Tc, Pc, omega and MW compared with `difflow.database`; the
+differences are listed under
 [Validation against DWSIM](unit-operations-refinery.md#refinery-dwsim-validation).
 
 ### What is imported (and DWSIM units)
@@ -1339,8 +1337,8 @@ DWSIM in a subprocess and compares Tc, Pc, omega and MW with
 ```{note}
 DWSIM cannot run in difflow's per-commit CI (no .NET runtime). All DWSIM
 contact is isolated in `DWSIMBackend`; the import logic is backend-agnostic
-and unit-tested against a fake backend every commit, and against DWSIM 9.0.5
-itself in the release tier (skipped where DWSIM is not installed). For
+and unit-tested against a fake backend every commit; no test runs DWSIM
+itself any more. For
 another DWSIM build, replace `DWSIMBackend` and pass it via `backend=`.
 ```
 

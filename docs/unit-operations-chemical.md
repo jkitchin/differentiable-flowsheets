@@ -1085,8 +1085,7 @@ logistic function of that line, so each species' balance closes exactly.
 Before this was corrected the constants were $A = \log(d/b)_{LK} -
 \log(d/b)_{HK}$ and $C = \log(d/b)_{LK}/\log\alpha_{LK}$, a line that misses
 the heavy key: on a propane/isobutane depropanizer it sent 99.9 % of the
-n-butane overhead. `tests/test_distillation.py::TestShortcutColumnNonKeyDistribution`
-pins the line through both keys.
+n-butane overhead.
 
 Two consequences worth knowing, because the old estimate had neither: the end
 temperatures no longer move when you feed the same mixture in hotter, and they
@@ -1779,15 +1778,15 @@ component. Not provided: multicomponent tray-to-tray columns, holdup
 dynamics, optimal reflux policies other than the two classic modes, inverted
 or middle-vessel columns.
 
-What was and was not verified: the constant-alpha closed form and
+What was and was not verified (when the model was written): the constant-alpha closed form and
 `scipy.integrate.quad`; the quadrature path against the closed form to 1e-5; a
 separate NumPy/SciPy time integration of the batch balances (`solve_ivp`, tray
 march by `brentq`) for constant reflux with and without Murphree efficiency; the
 exact `W/F` and a NumPy quadrature of the time for constant composition; mass
 balances; `check_grads`. **No published textbook worked example (Geankoplis
 Sec. 11.3, McCabe-Smith-Harriott Ch. 21, Wankat Ch. 9) is reproduced**: the
-numbers could not be retrieved, so none is quoted. See
-`tests/test_batch_distillation.py`.
+numbers could not be retrieved, so none is quoted.
+`tests/test_batch_distillation.py` keeps the mass balance and finite gradients.
 
 ---
 
@@ -1930,7 +1929,7 @@ print(float(kremser_fraction(1.0, 3.0)))   # 0.75, the A -> 1 limit N/(N+1)
 The worked notebook is `examples/48_mccabe_thiele_staged.ipynb` (stepper vs
 `DistillationColumn`, optimum `R/R_min` by gradient).
 
-**What was and was not verified.** `tests/test_staged.py` checks the stepper
+**What was and was not verified.** When the model was written, the stepper was checked
 against a plain-Python staircase, `minimum_reflux` against the closed-form
 pinch at any `q` and (for the tangent pinch) against SciPy PCHIP on a dense
 grid, `total_reflux_stages` against Fenske, the stepper against Kremser at
@@ -2167,7 +2166,7 @@ Assumptions: dilute-to-moderate solutes with constant `K_i` per solute (no
 activity-coefficient model: modified Raoult with `thermo` is not implemented),
 isothermal unless `energy_balance`, no solvent volatility, no reaction.
 
-What was and was not verified: the Kremser closed form (including `A < 1`
+What was and was not verified (when the model was written): the Kremser closed form (including `A < 1`
 and `A = 1`); the stage-by-stage mode against a separate SciPy `fsolve` of the
 nonlinear tray equations; the Kremser/stages agreement for dilute linear
 equilibrium, with and without a Murphree efficiency; Colburn against the
@@ -2178,8 +2177,8 @@ absorber-stripper recycle flowsheet through `fs.solve`. **No published
 textbook worked example (Seader-Henley-Roper Ch. 6, McCabe-Smith-Harriott
 Ch. 18, Geankoplis Ch. 10, Wankat Ch. 12/16, Crittenden Ch. 14) is
 reproduced**: the issue's numbers are unverified recollections, so none is
-quoted. See `tests/test_absorption.py`. The energy balances
-(`tests/test_absorption_energy.py`) are checked for closure against the outlet
+quoted. `tests/test_absorption.py` keeps the per-species mass balances. The energy balances
+were checked for closure against the outlet
 streams, the stage `K` against the van 't Hoff form, the isothermal limit
 (`C = 0`), and `jax.grad` against finite differences; they are not checked
 against a published adiabatic column.
@@ -3053,7 +3052,7 @@ or jacket-side coefficients (no checkable source for the impeller constants).
 DeWitt Table 8.2 linearly: fully developed laminar flow, one surface at
 constant temperature and the other insulated, Nu based on
 $D_h=D_o-D_i$. Incropera's Example 11.1 interpolates the same way
-($\mathrm{Nu}_i=5.63$ at $D_i/D_o=0.56$; the test checks it).
+($\mathrm{Nu}_i=5.63$ at $D_i/D_o=0.56$; checked when the model was written).
 
 | $D_i/D_o$ | 0 | 0.05 | 0.10 | 0.25 | 0.50 | 1.00 |
 |---|---|---|---|---|---|---|
@@ -3061,7 +3060,7 @@ $D_h=D_o-D_i$. Incropera's Example 11.1 interpolates the same way
 | $\mathrm{Nu}_o$ | 3.66 | 4.06 | 4.11 | 4.23 | 4.43 | 4.86 |
 
 The table is reproduced to within 1% by a finite-difference solution of the
-Graetz eigenproblem in the test suite. Below $D_i/D_o=0.05$ the inner value
+Graetz eigenproblem (checked when the model was written). Below $D_i/D_o=0.05$ the inner value
 is held at 17.46; it diverges as the inner tube shrinks. For **turbulent**
 flow in an annulus use `internal_nusselt`/`internal_h` with Re and the
 diameter set to $D_h$ (Incropera Sec. 8.7).
@@ -3099,7 +3098,7 @@ through a jacket or coil from a medium at constant temperature.
 * `lumped_heating_time(m, cp, UA, T_st, T0, T)` computes
   $t=(mc_p/UA)\ln[(T_{st}-T_0)/(T_{st}-T)]$. It handles heating and cooling.
 
-The tests check these against `scipy.integrate.solve_ivp`.
+They were checked against `scipy.integrate.solve_ivp` when the model was written.
 
 ```python
 from difflow import heat_transfer as ht
@@ -3107,14 +3106,14 @@ t = ht.lumped_heating_time(1000.0, 4180.0, 2000.0, 393.15, 293.15, 353.15)  # ~1
 ```
 
 **What is validated (and what is not).** No textbook worked-example number is
-quoted, because none could be reproduced with confidence. Each correlation is
+quoted, because none could be reproduced with confidence. When the model was written, each correlation was
 checked against an independent hand/NumPy evaluation of the stated formula
 (1e-10 or better). Where a derivation exists the constant itself is checked:
 Nusselt's 0.943 against a numerical integral of the film-thickness solution,
 the cylinder resistance against numerical integration of Fourier's law, the
 fin efficiency against the exact convecting-tip solution, the critical
 insulation radius as the stationary maximum of the heat loss. Looser checks
-are labelled sanity bands in `tests/test_heat_transfer.py`: Gnielinski vs
+were sanity bands: Gnielinski vs
 Dittus-Boelter within 20% at Re 1e4 to 1e5; Mostinski vs Rohsenow within 30%
 for water at 1 atm; Zuber's water CHF within 5% of the commonly quoted 1.1
 MW/m². The published shell-and-tube `overall_U` example and the textbook
@@ -3205,8 +3204,8 @@ The paddle and coil constants are the textbook forms (Kern Ch. 20; Oldshue &
 Gretton, *Chem. Eng. Prog.* 50, 615, 1954). The turbine and anchor rows are
 recalled from secondary tabulations and were **not** checked against a printed
 copy; geometry corrections of fuller correlations (blade width, clearance,
-$D_a/D_T$) are not included. `tests/test_jacketed_vessel.py` checks the
-arithmetic and the gradients; no textbook worked example is reproduced.
+$D_a/D_T$) are not included. The arithmetic and the gradients were checked when the
+model was written; no textbook worked example is reproduced.
 
 ```python
 import jax
@@ -3253,7 +3252,7 @@ opt = lambda c_heat: economic_insulation_thickness(
 print(f"t_opt = {1000 * float(opt(10.0)):.0f} mm, dt/d(heat price) = {float(jax.grad(opt)(10.0)):.4f} m per $/GJ")
 ```
 
-`tests/test_insulation_cost.py` checks the optimum against a dense grid minimum and
+When the model was written, the optimum was checked against a dense grid minimum and
 the stationarity condition, and its gradients against finite differences.
 
 (gas-properties)=
@@ -3424,7 +3423,7 @@ float(one["F"]), bool(one["F_zero"]), float(two["F"]), float(two["area"])   # 0,
 
 **Non-unique fixed point.** With a fixed tube length, more area means more
 tubes, slower tube flow and a lower $h_i$: positive feedback, so the loop can
-have a second, large-area, laminar solution. In the test case a start at
+have a second, large-area, laminar solution. In one case measured when the model was written, a start at
 $U\le100$ lands on 211 m$^2$ at $\mathrm{Re}_t\approx1500$, against 13 m$^2$ at
 $\mathrm{Re}_t\approx23000$ from any typical start. It is a genuine root of the
 same equations; `tube_laminar` and a warning flag it, and fixing
@@ -3481,7 +3480,7 @@ subcooling zones are not split out; for a rigorous two-phase *rating* use
 
 **Design and rating agree.** `design.rate(...)` for the designed geometry returns the
 design duty to 1e-8, and `ShellAndTubeHX(UA=U*A, ...)` returns the same duty
-and outlet temperatures (`tests/test_shell_and_tube.py`). Making that true required
+and outlet temperatures (checked when the model was written). Making that true required
 two fixes to the existing rating code (see the changelog): `lmtd_correction_factor`
 returned its $R=1$ value for every $|R-1|>0.075$, and `ShellAndTubeHX` took
 $Q=F\,Q_{cc}(UA)$, a few percent off $Q=UAF\,\mathrm{LMTD}$; it now uses the exact
@@ -3494,10 +3493,8 @@ $Q=F\,Q_{cc}(UA)$, a few percent off $Q=UAF\,\mathrm{LMTD}$; it now uses the exa
   printed answers could not be reproduced from memory with confidence and no copy of
   either book was available, so no agreement with them is claimed. The issue's
   criterion "within 5 % of the textbook example" is therefore **open**: it needs
-  someone with the book to enter the example's inputs and compare
-  (`tests/test_shell_and_tube.py` has a hand-calculation harness that takes
-  the same arguments).
-* Checked: every Kern equation ($D_e$, $A_s$, $G_s$, $\mathrm{Re}_s$, $h_o$, $\Delta P_s$) and the
+  someone with the book to enter the example's inputs and compare.
+* Checked when the model was written: every Kern equation ($D_e$, $A_s$, $G_s$, $\mathrm{Re}_s$, $h_o$, $\Delta P_s$) and the
   tube-side equations (velocity, Re, Gnielinski $h_i$ with a brentq-solved
   Colebrook factor, friction and return $\Delta P$) against a plain-Python hand
   calculation (1e-12 to 1e-6); the whole loop against an independent plain-Python
@@ -3607,7 +3604,7 @@ from the table as it is reproduced in the secondary literature (e.g. Serth,
 *Process Heat Transfer*, Ch. 3; Kakac & Liu, *Heat Exchangers*). Where Incropera &
 DeWitt Table 11.1 (which was checked, and itself cites TEMA) overlaps, the
 converted values agree after rounding to its 4 decimal places (sea water, boiler
-feedwater, fuel oil, refrigerant liquids, oil-free steam; `tests/test_tema_fouling.py`);
+feedwater, fuel oil, refrigerant liquids, oil-free steam; checked when the model was written);
 the other entries are unchecked. Pre-1988 TEMA editions split crude oil into "dry"
 and "salt" columns with other values. The lookups are piecewise constant (zero
 derivative inside a bin) but jit-able and vectorised.
@@ -3817,7 +3814,7 @@ print("steam saved (kg/s):", round(float(m["steam_saved"]), 2))
 
 ### What was and was not verified
 
-* **Verified** (`tests/test_evaporator.py`): mass and energy closure; agreement
+* **Verified** when the model was written: mass and energy closure; agreement
   with an independent NumPy/SciPy re-implementation of the same equations (own
   steam properties, `fsolve`); `MultiEffectEvaporator(n_effects=1)` equals
   `Evaporator`; steam economy rises with N and stays near 0.8-1.0 N for a
@@ -3827,7 +3824,7 @@ print("steam saved (kg/s):", round(float(m["steam_saved"]), 2))
 * **Steam properties**: `Psat`/`Tsat` are the IAPWS-IF97 equations; `h_f` and
   `h_fg` are fits to eight steam-table points recalled from a standard table
   (not regenerated from IAPWS), within about 0.1 % over 20-200 C.
-* **Published examples** (`TestPublishedExamples`, issue #421): Geankoplis
+* **Published examples** (issue #421, measured when the model was written): Geankoplis
   4e Ex. 8.4-1 (single effect, steam 4108 kg/h, area 149.3 m^2, within 0.5 %),
   Ex. 8.4-3 (50 % NaOH: steam 3255 kg/h, economy 0.836, area 49.2 m^2, with the
   book's chart enthalpies passed as `enthalpy_fn`), Ex. 8.5-1 (triple effect,
@@ -4136,10 +4133,10 @@ print(f"carrier_b lost to the raffinate: {float(raffinate['F_carrier_b']):.3f}")
 ```
 
 With vanishing mutual solubility and a dilute solute the rigorous model
-reduces to the Kremser cascade (checked in `tests/test_lle.py`, where the
+reduces to the Kremser cascade (checked when the model was written; the
 discrepancy falls in proportion to the dilution). The ternary construction of
 the same stages, the Hunter-Nash stepping of the previous section, gives the
-same stage count (to better than 0.01 stage in that test). The system in the tests is
+same stage count (to better than 0.01 stage in that check). The system used is
 synthetic as well: no published acetic acid-water-MIBK data or NRTL set was
 available to check, so no agreement with Sherwood-Evans-Longcor or DECHEMA data
 is claimed, and the recalled parameter values are not used.
@@ -4202,8 +4199,8 @@ and the counter-current result obeys the closed form (solute-free solvent)
 
 $$N_{OR} = \frac{\ln\left[\frac{X_0}{X_L}\left(1 - \frac{1}{E}\right) + \frac{1}{E}\right]}{1 - 1/E}$$
 
-(Treybal, *Mass Transfer Operations* 3e, Ch. 10), which `tests/test_lle.py`
-checks. Profiles `info["profiles"]["c_aq"]`, `["c_org"]` are $X(z)$ and $Y(z)$.
+(Treybal, *Mass Transfer Operations* 3e, Ch. 10), checked when the model was
+written. Profiles `info["profiles"]["c_aq"]`, `["c_org"]` are $X(z)$ and $Y(z)$.
 
 ```python
 from difflow import make_stream, DifferentialContactor, ContactorParams
@@ -4313,9 +4310,9 @@ Geankoplis) is reproduced: their inputs and printed answers could not be
 retrieved, so no agreement with them is claimed. The construction is checked
 against the lever rule and component balances (exact), against the analytic
 Kremser stage count for an immiscible ternary (tie lines from edge to edge with
-$Y = KX$), for its own consistency (see `tests/test_phase_diagrams.py`) and
+$Y = KX$), for its own consistency and
 against the rigorous stage-by-stage solution of the same equilibrium model
-(`tests/test_lle.py`: same stage count to better than 0.01 stage).
+(same stage count to better than 0.01 stage), when the model was written.
 The stepping is limited to the range of the tabulated tie lines (it stops
 before the plait point) and reports `feasible=False` at a pinch (solvent at or
 below the minimum).
@@ -4484,7 +4481,7 @@ inert flow in every stage, isothermal. `stage_efficiency` is an overall
 efficiency: the number of ideal stages is $E \cdot n_{stages}$. The unit is
 checked against an independent dense-linear-system assembly of the stage
 balances, the closed washing form and a SciPy solve of the variable-underflow
-balances (`tests/test_leaching.py`); no published textbook example is
+balances (when the model was written); no published textbook example is
 reproduced (the McCabe-Smith-Harriott and Geankoplis worked examples named in
 the issue could not be retrieved, so no agreement with them is claimed), and
 the variable-underflow table above is synthetic.
@@ -4794,8 +4791,8 @@ $f=(1-w)\,64/\mathrm{Re}+w f_\mathrm{turb}$, with $w$ a C² smootherstep of
 $\ln\mathrm{Re}$ between Re = 2100 and 4000 (a sigmoid in log Re with compact
 support: exactly 0 below 2100, exactly 1 above 4000). Below 2100 the result is
 *exactly* 64/Re. No Python `if` is involved, so `jit`, `vmap` and `grad` all
-work, and the gradients are finite across the transition (tested at Re = 1e3,
-2300, 4000 and 1e5 against `check_grads`). In 2100 < Re < 4000 real flow is
+work, and the gradients are finite across the transition (checked at Re = 1e3,
+2300, 4000 and 1e5 against `check_grads` when the model was written). In 2100 < Re < 4000 real flow is
 intermittent and no correlation is accurate: the blend is a smooth
 interpolation, not a transition model. One consequence: across the blend ΔP is
 *not* monotonic in viscosity. A 5 km, 6-in Sch 40 crude line at 12 L/s
@@ -4803,7 +4800,7 @@ interpolation, not a transition model. One consequence: across the blend ΔP is
 (Re 3450, inside the blend), because the turbulent branch is switching on. A
 real line in that range may be laminar or turbulent; size it for both.
 
-**What was verified, and how** (`tests/test_fluids.py`):
+**What was verified when the model was written, and how**:
 
 - Colebrook agrees with an independent bracketing solution of the same
   equation (scipy `brentq`) to 1e-10 over Re 4e3-1e8, ε/D 0-0.05.
@@ -4863,7 +4860,7 @@ the Newtonian curve at He = 0 (it is about half of it at Re = 1e5); only the
 laminar branch has an exact Newtonian limit. `bingham_pressure_drop(Q, L, D,
 rho, tau_y, mu_p)` is the Darcy-Weisbach drop.
 
-What is tested (`tests/test_non_newtonian.py`): $n=1$ and $\tau_y=0$ give
+What was checked when the model was written: $n=1$ and $\tau_y=0$ give
 exactly 64/Re in laminar flow; Dodge-Metzner at $n=1$ (Prandtl's smooth-pipe
 law) is within 1 % of smooth Colebrook for Re 1e4-1e7; the laminar Bingham
 pressure drop reproduces the Buckingham flow equation
@@ -5000,8 +4997,8 @@ returns $Q$ and `rotameter_height(Q, ...)` inverts it (Newton in $\ln A_a$, one
 implicit-function step for the derivatives). $C_R$ depends on the float shape
 and Reynolds number and has no default: take it from the calibration. The mass
 flow at a given reading scales with $\sqrt{\rho(\rho_f-\rho)}$, the usual density
-correction. `tests/test_rotameter.py` checks the force-balance identity, the
-inverse, and the inverse-function derivative $\frac{dh}{dQ}\frac{dQ}{dh}=1$.
+correction. When the model was written, the force-balance identity, the
+inverse, and the inverse-function derivative $\frac{dh}{dQ}\frac{dQ}{dh}=1$ were checked.
 
 ### Pipe Networks
 
@@ -5050,7 +5047,7 @@ which supplies the pseudo-loops between reservoirs. It converges linearly and is
 offered for teaching and cross-checks. $|Q|$ is smoothed at zero flow, so a
 branch can reverse and stay differentiable.
 
-`tests/test_pipe_network.py` checks a laminar parallel header against
+When the model was written, a laminar parallel header was checked against
 Hagen-Poiseuille ($Q_k \propto D_k^4/L_k$), turbulent parallel pipes between two
 headers against `Pipe.flow_at_dp`, a two-loop network and a three-reservoir
 junction whose answers are known by construction (resistances set from chosen
@@ -5059,8 +5056,7 @@ zero pressure loss around every loop, agreement of the two methods, `jit`, and
 gradients (`check_grads`, and Hardy Cross vs Newton).
 
 For a single parallel pair the same answer is also a one-unknown root find on
-the split fraction $x$, $\Delta P_A(xQ)=\Delta P_B((1-x)Q)$, as in
-`tests/test_pipe.py::TestParallelBranches`.
+the split fraction $x$, $\Delta P_A(xQ)=\Delta P_B((1-x)Q)$.
 
 (compressible-module)=
 ## Compressible Gas Flow
@@ -5125,7 +5121,7 @@ ideal gas intercooled to the inlet temperature with equal stage efficiencies.
 These are ideal-gas relations; the EOS `Compressor`/`Turboexpander` units in
 `difflow.units.eos_units` integrate the real-gas entropy instead.
 
-**What was verified** (`tests/test_compressible.py`):
+**What was verified when the model was written**:
 
 - The isothermal equation and the Fanno relations agree with an independent
   `solve_ivp` integration of the differential momentum balance, to 1e-6 or
@@ -5231,8 +5227,6 @@ when `P` is a measured wall-tap pressure at the flange. NPSHa then adds
 $v_s^2/2g$, which needs `D_suction`. Older versions always added $v_s^2/2g$ when
 `D_suction` was set. That counted the velocity head twice for a `Pipe` outlet:
 0.28 m too much NPSHa for 40 m³/h in a 3-in line, enough to hide cavitation.
-`tests/test_pump.py::TestNPSH::test_pipe_outlet_to_pump_counts_velocity_head_once`
-checks the Bernoulli result for several nozzle sizes.
 Like `Pipe`, liquid density is an explicit input; see the design note under
 [Pipe](#op-pipe).
 
@@ -5292,8 +5286,7 @@ Q_star = operating_point(pump, sys_)                  # m^3/s; differentiable
 **Affinity laws and static head.** Doubling $N$ doubles $Q^*$ only when the
 system curve is pure friction ($H_\mathrm{sys}\propto Q^2$, no static head),
 because then the whole intersection scales. With a static lift the system
-curve does not scale, so $Q^*$ does not follow $N$; the tests check both
-(`tests/test_pump.py::TestAffinityLaws`).
+curve does not scale, so $Q^*$ does not follow $N$.
 
 **Verification, honestly stated.** The transfer-pump test (12 m lift, 400 m of
 4-in Sch 40 steel, fittings $K=5.3$, water at 20 °C) uses an *illustrative*
@@ -5565,7 +5558,7 @@ def bed_height(u0):
 print(f"H = {float(bed_height(u0)):.3f} m, dH/du0 = {float(jax.grad(bed_height)(u0)):.2f} s")
 ```
 
-**What is verified** (`tests/test_particles.py`): the Stokes limit; the Ergun
+**What was verified when the model was written**: the Stokes limit; the Ergun
 equation against hand arithmetic; $u_{mf}$ against the Ergun residual and an
 independent `scipy` root find; terminal velocity against an independent
 `scipy.optimize.brentq` solve of the force balance in the Stokes, intermediate
@@ -5575,15 +5568,15 @@ is reproduced from memory; compare against Perry's or McCabe/Geankoplis tables
 before relying on a result to better than the correlation scatter (typically
 5-10 %). The Richardson-Zaki exponent is piecewise (jumps of at most about 2 %
 at $Re_t = 0.2, 1, 500$).
-`tests/test_particles_worked_examples.py` (marked `release`) sets up problems the
-way McCabe, Smith & Harriott Ch. 7, Kunii & Levenspiel Ch. 3 and Geankoplis §3.1
-do (Ergun $u_{mf}$ in cgs, Wen-Yu, Stokes and Newton settling, drag on a sphere,
-Ergun in US customary units with $g_c$) and computes each expected value **by
-hand in the test**, in the book's units. None of them is a printed answer: the
-printed numbers could not be recalled with confidence. They check the equations
-and the unit conversions, not the correlations against data.
-`tests/test_bubbling_bed.py` evaluates the Mori-Wen equations in cgs as printed and
-compares with the SI functions.
+When the model was written, problems were set up the way McCabe, Smith &
+Harriott Ch. 7, Kunii & Levenspiel Ch. 3 and Geankoplis §3.1 do (Ergun $u_{mf}$
+in cgs, Wen-Yu, Stokes and Newton settling, drag on a sphere, Ergun in US
+customary units with $g_c$), with each expected value computed **by hand**, in
+the book's units. None of them is a printed answer: the printed numbers could
+not be recalled with confidence. They checked the equations and the unit
+conversions, not the correlations against data.
+The Mori-Wen equations were also evaluated in cgs as printed and compared
+with the SI functions.
 
 **References**: Haider & Levenspiel, *Powder Technol.* 58, 63 (1989); Turton &
 Levenspiel, *Powder Technol.* 47, 83 (1986); Ergun, *Chem. Eng. Prog.* 48(2), 89
@@ -5619,10 +5612,10 @@ not a stream property.
 **What is and is not verified.** The Ruth functions reproduce Geankoplis 5e Examples 14.2-1 to 14.2-3:
 `fit_ruth` on the CaCO3 test data gives $\alpha = 1.855\times10^{11}$ m/kg and $R_m = 10.64\times10^{10}$ m$^{-1}$
 (book: $1.863\times10^{11}$ and $10.63\times10^{10}$), the 20-frame press collects 3.37 m$^3$ in 269.6 s (book 269.7 s)
-and the wash at a quarter of the final rate takes 194 s (`TestGeankoplisFiltration`; the data and answers were
+and the wash at a quarter of the final rate takes 194 s (the data and answers were
 typed from memory, check them against the printed book). No published thickener or cyclone example
 (McCabe, Smith & Harriott Ch. 29-30, Coulson & Richardson Vol. 2, Cooper & Alley Ch. 4) was reproduced; those
-data below are synthetic and labelled illustrative. The tests check the closed forms against independent
+data below are synthetic and labelled illustrative. When the model was written, the closed forms were checked against independent
 oracles (a NumPy grid maximum, an analytic Coe-Clevenger area, a batch curve generated *from* a known settling
 law, `scipy` quadrature and scalar optimization, hand calculations) and `check_grads`. The Lapple/Shepherd-Lapple
 constants (K = 16, the standard proportions, the Stairmand set) are typed from memory and flagged
@@ -5668,7 +5661,7 @@ exponent $n$. **The exponent is piecewise in $Re_t$ (jumps of up to about 2 %): 
 at $(t, z)$ has slope $-v$ and meets $t=0$ at $z_i = z + v t$, where the concentration is
 $C = C_0 z_0/z_i$. `thickener_area_talmage_fitch` reads the underflow time $t_u$ from the tangent that meets
 $z_u = C_0 z_0/C_u$ latest and takes $A = Q_0 t_u/z_0$; on the same tangent nodes this is algebraically the
-Coe-Clevenger area (the tests verify the identity, which holds exactly in the sharpness limit). Slopes are
+Coe-Clevenger area (the identity, checked when the model was written, holds exactly in the sharpness limit). Slopes are
 PCHIP derivatives of the data (monotone, exact on straight segments); the test must be at or below the feed
 concentration, and a compression zone is part of the data, not modelled.
 
@@ -5991,7 +5984,7 @@ uses the local permeate composition $y_i = J_i/\sum_j J_j$ and RK4 along the are
 countercurrent use the bulk permeate composition in the driving force; countercurrent is solved by
 shooting from the closed (retentate) end, where the permeate is the local composition, with Newton's
 method on the retentate flows. All four have implicit-function gradients. The binary plug-flow
-results are tested against hand integrations in the feed-side mole fraction (`tests/test_membranes.py`).
+results were checked against hand integrations in the feed-side mole fraction when the model was written.
 At the same area, the permeate purity ranks countercurrent > cross flow > cocurrent > complete mixing.
 
 The flux per unit area depends on the feed-side mole fractions, not on how much gas is left, so a
@@ -6036,8 +6029,8 @@ for absorbers, strippers, packed-column hardware and any exercise that needs
 a diffusivity, a film coefficient or a transfer-unit height. Properties are
 *inputs*: core has no gas viscosity or surface-tension model, so the Onda
 functions take `mu_G` and `sigma` as required arguments (there is no hidden
-`sigma=0.072`). See the module docstring and `tests/test_mass_transfer.py` for
-exactly what was and was not verified. Fuller is checked against Poling et
+`sigma=0.072`). See the module docstring for
+exactly what was and was not verified. When the model was written, Fuller was checked against Poling et
 al. 5e Example 11-3 and Geankoplis Example 6.2-5, and Wilke-Chang (with Le Bas
 volumes) against Geankoplis Example 6.3-2; no published Onda worked example is
 reproduced, and the tables (diffusion volumes, Le Bas increments, packings)
@@ -6212,8 +6205,8 @@ silent `sigma = 0.02`).
 **What was and was not verified.** The correlation constants were first
 **written from memory**; each docstring says which are still unverified. They are
 fits of *charts*: expect 10-20 % on a diameter or a flooding velocity, and worse
-on a pressure drop. Printed worked examples are reproduced in
-`tests/test_column_design.py::TestPublishedExamples`:
+on a pressure drop. Printed worked examples, as reproduced when the model was
+written:
 
 | Check | Source | Printed | difflow |
 |---|---|---|---|
@@ -6613,7 +6606,7 @@ them with matplotlib (optional), overlaying process lines with arrows.
 Relative humidity is solid, wet bulb dashed, enthalpy dash-dot and volume
 dotted, so the families differ by line style as well as colour.
 
-<!-- doc-test: skip: draws a figure; the data call it uses is run just above and in the tests -->
+<!-- doc-test: skip: draws a figure; the data call it uses is run just above -->
 ```python
 import matplotlib.pyplot as plt
 from difflow.psychrometrics import (state, cool_dehumidify, sensible_heat,
@@ -6637,9 +6630,9 @@ print({k: len(d[k]) for k in ("rh", "wb", "h", "v")})
 
 **What was and was not verified.** There is no humid-air table in the
 repository and the textbook examples named in the issue could not be checked,
-so nothing here is a transcribed table value. The tests compare against an
+so nothing here is a transcribed table value. When the model was written, it was compared against an
 independent NumPy implementation of the Hyland-Wexler saturation pressure and
-the ASHRAE formulas (constants recalled, flagged in the test), round trips for
+the ASHRAE formulas (constants recalled), round trips for
 every pair of inputs, the Lewis identity, mixing and coil energy balances,
 `jax.test_util.check_grads` of $W$, $h$, $T_{wb}$ and $T_{dp}$ with respect to
 $T$, RH and $P$, and a few familiar state points (30 C / 50 % RH has a dew
@@ -6716,8 +6709,8 @@ print(f"approach {float(info['approach']):.1f} K, effectiveness {float(info['eff
 
 The example values at $L/G$ = 0.8, 1.0, 1.2 and 1.4 (1.24, 1.39, 1.59, 1.89) are
 the issue's own illustration (ideal-gas humid air, IAPWS saturation pressure,
-air saturated at 22 C, trapezoid rule), **not** published numbers; the tests
-reproduce them to 1 % and against an independent NumPy trapezoid integration of
+air saturated at 22 C, trapezoid rule), **not** published numbers; when the model was
+written they were reproduced to 1 % and against an independent NumPy trapezoid integration of
 the same $h_s$ to $10^{-4}$.
 
 Rating the same tower on a hot day, and the approach-versus-size trade-off
@@ -6779,8 +6772,8 @@ class CoolingTowerParams:
 - No fan, fill or spray pressure drop; the cold-water outlet is at the tower
   pressure (the basin), which is what closes a pumped loop.
 - The evaporation fraction comes out near the rule of thumb
-  $0.00085 \times 1.8 \times$ range (unverified, from recollection; the test
-  only checks it to 30 %).
+  $0.00085 \times 1.8 \times$ range (unverified, from recollection; checked
+  only to 30 % when the model was written).
 
 #### A cooling-water loop
 
@@ -6788,10 +6781,7 @@ A closed loop conserves its flow, so a recycle through `CoolingTower`,
 `CentrifugalPump` and `CounterCurrentHX` needs something that sets the
 circulation rate, as a level controller does on a real basin: the tower with
 `makeup_in_outlet=False` returns the cold water short by the evaporation and
-drift and a make-up unit tops it up. The converged loop is in
-`tests/test_cooling_tower.py::TestCoolingWaterLoop` (it converges, closes the
-exchanger/tower energy balance, and differentiates through the recycle with
-respect to the fill size). Use `species_order=["H2O"]` for a water-only loop.
+drift and a make-up unit tops it up. Use `species_order=["H2O"]` for a water-only loop.
 
 **Gradients.** Everything is differentiable: $KaV/L$ with respect to $L/G$,
 $T_{in}$, $T_{out}$ and the wet bulb, rating `T_out` with respect to $KaV/L$,
@@ -6855,7 +6845,7 @@ $X_b = X_a - \mathrm{sp}(X_a - X_2)$. The width is $s = (X_c - X^*)/\texttt{shar
 (default 200), so the result is within $e^{-200|X - X_c|/(X_c - X^*)}$ of the exact
 piecewise answer away from the corner; exactly at the corner ($X_1 = X_c$) the
 first-order offsets of the two periods cancel and the error is second order in $s$
-(about $5\times10^{-6}$ of the time on the tests' problem). Larger `sharpness`
+(about $5\times10^{-6}$ of the time on the problem measured when the model was written). Larger `sharpness`
 recovers the piecewise time, and the
 gradient with respect to $X_c$, $X_1$, $X_2$, $X^*$, $R_c$ and $L_s/A$ exists
 everywhere.
@@ -6882,7 +6872,7 @@ X = equilibrium_moisture(0.5, 300.0, "gab", gab)
 print(f"X_eq(a_w = 0.5) = {float(X):.4f}, back to a_w = {float(water_activity(X, 300.0, 'gab', gab)):.3f}")
 ```
 
-The numbers are an invented illustration. The tests (`TestGeankoplis`) reproduce
+The numbers are an invented illustration. When the model was written it reproduced
 Geankoplis (5e, Ch. 9) Examples 9.6-1 (constant rate from the tray correlation:
 wet bulb 28.9 C and $R_c$ = 3.39 kg/h/m$^2$ as in the book; the time for the
 constant-rate drop, 2.08 h), 9.7-1 (graphical falling-rate integral, 4.06 h
@@ -7144,11 +7134,10 @@ precipitation version (a solubility-product-driven conversion, no size distribut
 the `Crystallizer` is the generic solubility-driven one.
 
 **No solubility data, kinetic constant or hydrate transition temperature is built in.**
-Every curve and constant in this section is synthetic and labelled illustrative. The tests
-check the closed forms against independent oracles, and the yield balance against
-Geankoplis Example 12.11-1 (Na2CO3.10H2O from a cooled 30 wt% solution: 6360 and 6635 kg vs
-the printed 6370 and 6630 kg; the printed values are recalled, see
-`TestPublishedExamples`).
+Every curve and constant in this section is synthetic and labelled illustrative. When the
+model was written, the closed forms were checked against independent oracles, and the yield
+balance against Geankoplis Example 12.11-1 (Na2CO3.10H2O from a cooled 30 wt% solution: 6360
+and 6635 kg vs the printed 6370 and 6630 kg; the printed values are recalled).
 
 (op-crystallizer)=
 ### Crystallizer

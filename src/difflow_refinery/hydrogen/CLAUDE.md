@@ -78,5 +78,5 @@ furnace (supplementary fuel closes the duty). `H2Plant.from_smr`, `smr_block` /
 
 Docs: `docs/unit-operations-refinery.md` ("The hydrogen network", "Hydrogen PSA",
 "SMR hydrogen plant"). Tests:
-`tests/refinery/test_hydrogen.py`, `tests/refinery/test_hydrogen_loop.py` (slow),
+`tests/refinery/test_hydrogen.py`,
 `tests/refinery/test_psa.py`, `tests/refinery/test_smr.py`.

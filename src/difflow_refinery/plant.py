@@ -125,7 +125,7 @@ AD_MODES: dict[str, ADMode] = {m.name: m for m in (
     ADMode("crude unit", "unit.CrudeUnit / column.CrudeColumn", ("fwd", "rev"),
            "EO MESH Newton in lax.while_loop on stop-gradient inputs, then one Newton step with the "
            "converged Jacobian (implicit-function derivative)",
-           evidence="tests/refinery/test_column.py, test_unit.py (jax.grad); test_planning.py::TestBlock (cdu_block, "
+           evidence="tests/refinery/test_column.py, test_unit.py (jax.grad); test_planning.py (cdu_block, "
                     "forward mode by shape)"),
     ADMode("vacuum unit", "vacuum.VacuumColumn / vacuum.StageColumn", ("fwd", "rev"),
            "stage-network Newton, implicit step reusing the converged Jacobian",
@@ -142,8 +142,7 @@ AD_MODES: dict[str, ADMode] = {m.name: m for m in (
            "implicit step on the reverse-mode residual",
            switch="HydrotreaterParams(reactor=ReactorOptions(adjoint='forward')) integrates the beds with "
                   "diffrax.ForwardMode: then forward mode only (jax.jacfwd), same values",
-           evidence="tests/refinery/test_hydrotreating.py (jax.jacrev); tests/refinery/test_plant_chain.py "
-                    "(forward, against reverse and central differences)"),
+           evidence="tests/refinery/test_hydrotreating.py (jax.jacrev)"),
     ADMode("residue desulfurizer", "residue.ResidueDesulfurizer", ("rev",),
            "trickle beds with RecursiveCheckpointAdjoint (reverse only), quench mixing by implicit Newton",
            switch="RDSParams(reactor=ReactorOptions(adjoint='forward')) should give forward mode only, by the "
@@ -158,8 +157,7 @@ AD_MODES: dict[str, ADMode] = {m.name: m for m in (
            "(optimistix fixed point, implicit differentiation, which needs JVPs of the loop)",
            switch="none for the whole unit: CatalyticReformer(adjoint='reverse') makes a stand-alone "
                   "reactor reverse-capable, but the recycle's implicit derivative still needs JVPs",
-           evidence="tests/refinery/test_reforming.py::test_implicit_gradients_match_central_differences "
-                    "(jax.jacfwd)"),
+           evidence="tests/refinery/test_reforming.py (jax.jacfwd of one bed)"),
     ADMode("CCR reformer", "reforming.ccr.CCRReformer", ("fwd",),
            "the catalytic reformer per bed, inside an outer Python coke-activity loop on primal values "
            "(stop_gradient) closed by one implicit Newton step (I - dPhi/dC)^-1 with dPhi/dC by jax.jacfwd; "
@@ -169,11 +167,11 @@ AD_MODES: dict[str, ADMode] = {m.name: m for m in (
     ADMode("FCC", "fcc.FCCUnit", ("fwd", "rev"),
            "riser by constant-step Tsit5 with diffrax.DirectAdjoint (both modes), riser-regenerator "
            "heat balance by optimistix Newton with implicit adjoint",
-           evidence="tests/refinery/test_fcc.py::TestGradients::test_reverse_mode_matches_forward"),
+           evidence="tests/refinery/test_fcc.py (jax.grad of conversion)"),
     ADMode("isomerization", "isomerization.IsomerizationUnit", ("fwd",),
            "with a DIH the recycle is converged by the Flowsheet's Python Anderson loop and differentiated "
            "at its solution by a jax.custom_jvp",
-           evidence="tests/refinery/test_isomerization_dih_gradients.py (jax.jacfwd)"),
+           evidence="tests/refinery/test_isomerization.py (jax.jacfwd, once-through)"),
     ADMode("alkylation", "alkylation.AlkylationUnit", ("fwd",),
            "DIB-overhead tear: the Flowsheet's traced optimistix fixed point; the planning block "
            "differentiates it with jax.jacfwd",
@@ -193,7 +191,7 @@ AD_MODES: dict[str, ADMode] = {m.name: m for m in (
     ADMode("hydrogen network", "hydrogen.HydrogenNetwork", ("fwd", "rev"),
            "header balances, swing clips and the PSA purity target in pure JAX (the clips are kinks); "
            "close_hydrotreater_loop is a concrete Python iteration that returns a linear purity response",
-           evidence="tests/refinery/test_hydrogen.py, test_hydrogen_loop.py"),
+           evidence="tests/refinery/test_hydrogen.py"),
     ADMode("SMR hydrogen plant", "hydrogen.smr.smr_plant / hydrogen.smr.reformer_tube", ("fwd", "rev"),
            "reformer tube on diffrax Tsit5 (ReformerTubeParams.adjoint: RecursiveCheckpointAdjoint or "
            "ForwardMode); outlet-T duty by secant on stop-gradient inputs + one implicit step; "
