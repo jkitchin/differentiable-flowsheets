@@ -173,6 +173,8 @@ from difflow_refinery import hydrocracking  # VGO hydrocracker (#307); a library
 from difflow_refinery import properties  # noqa: E402  (#330; product property estimates)
 from difflow_refinery import hydrogen  # hydrogen header network (#329); a library, not registered
 from difflow_refinery import residue  # noqa: E402  (#331; residue desulfurizer + VLSFO pool, a library)
+from difflow_refinery import treating  # noqa: E402  (#471; amine treating unit, a library)
+from difflow_refinery import sulfur  # noqa: E402  (#472; Claus SRU + SCOT TGTU, a library)
 
 # The preheat train (#313): nested params are exported here for serialization.
 from difflow_refinery.preheat import (  # noqa: E402
@@ -248,7 +250,7 @@ __all__ = [
     "properties",
     "reforming",
     "thermochemistry",
-    "hydroprocessing", "hydrotreating", "hydrocracking", "residue",
+    "hydroprocessing", "hydrotreating", "hydrocracking", "residue", "treating", "sulfur",
     "alkylation",
     "hydrogen",
     "gasplant",

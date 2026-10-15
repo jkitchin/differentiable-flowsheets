@@ -92,6 +92,18 @@ checked, K on 1 bar, Cp-integrated), `tc.IdealGasSet(names)` for arrays.
   AST-scans every `difflow_refinery` module (allowlist: only the
   separation Cp of the gas plant and HP separator; the hydrotreater moved
   onto the table in #338). `difflow.database` is core's table, not read by the refinery.
+- #467 sulfur rows (S2-S8, COS, CS2): Hf/S0 READ from the primary JANAF
+  tables (status "evaluated table"; table ID in each note), Cp fits
+  constrained monotone (`JANAF_MONO`). `WIDE_CP` (298.15-1800 K) is opt-in
+  via `IdealGasSet(..., cp_basis="wide")`; the table `cp` stays as it was.
+  Liquid sulfur (JANAF S-004) hits H AND S at every node; keep it that way.
+  The JANAF vapour over S(l) puts the 1 atm point at ~745 K vs 717.75 K
+  measured (Stimson 1961): pinned by a test, never "fixed" by editing JANAF.
+- #470 `difflow_refinery.combustion`: coke burning (C/H/S/N, CO/CO2 given
+  or Arthur, air from flue O2 or given, flue enthalpy on the table) shared by
+  the FCC and CCR regenerators. `fcc.regenerator`/`fcc.species` re-export
+  its names; `tests/refinery/test_combustion.py` pins the FCC bits -- a
+  change there that moves them is an FCC change, not a refactor.
 - Benzothiophene Hf is 166.3 (calorimetric, Sabbah 1979 / Good 1972), not
   ChemSep's 137.0. Moving isomerization onto it moved the C5/C6 equilibria
   (iC5/C5 at 450 K 0.820 -> 0.772); `isom_reference.json` (IDAES) is STALE
@@ -161,6 +173,16 @@ is written down. Example 40, section 10, uses it. A library.
 Docs: `docs/unit-operations-refinery.md` ("Chaining units"). Tests:
 `tests/refinery/test_plant.py`.
 
-Subpackages carry their own CLAUDE.md: `alkylation/` is above; `vacuum/`,
+Amine treating (#471, `difflow_refinery.treating`, a library): KE absorber/
+regenerator/loop; see `treating/CLAUDE.md` for its sourced vs ILLUSTRATIVE constants.
+
+Plant closure (#475, `tests/reference/plant_closure_check.py`, run by hand): one
+crude through kerosene HDT, hydrocracker, FCC and CCR; H2 closed on the header
+(CCR net + SMR swing), S routed scrubbers/fuel gas -> amine -> Claus + SCOT.
+Every unit closes to round-off, so the plant does (rel 1e-8). Organic S in the
+off-gas/purge vapour (oil lumps) is NOT H2S: it burns with the fuel gas, booked
+as its own row. The H2 surplus is judged on throughput (loop tol), not on itself.
+
+Subpackages carry their own CLAUDE.md: `alkylation/` is above; `treating/`, `vacuum/`,
 `reforming/`, `hydroprocessing/` (shared by `hydrotreating/`, `hydrocracking/`,
 `residue/`), `hydrocracking/`, `hydrogen/`, `residue/`, `preheat/`, `gasplant/`, `fcc/`.

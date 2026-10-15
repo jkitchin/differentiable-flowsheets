@@ -507,6 +507,7 @@ export const OPERATION_SYMBOLS = {
   SemiBatchReactor: 'stirred_tank',
   FedBatchReactor: 'stirred_tank',
   StoichiometricReactor: 'stirred_tank',
+  GibbsReactor: 'stirred_tank',
 
   // bio
   ContinuousBioreactor: 'stirred_tank',

@@ -8,6 +8,7 @@ Core unit operations:
 - Mixer/Splitter: Stream combining and splitting
 - ComponentSplitter: per-species split fractions (ideal separator)
 - StoichiometricReactor: fixed conversion of a key reactant
+- GibbsReactor: equilibrium by Gibbs-energy minimisation
 - MultistageCascade: Liquid-liquid extraction
 - ShortcutColumn/DistillationColumn: Distillation
 - Heater/Cooler: Single-stream heat exchange with utility
@@ -52,6 +53,7 @@ from difflow.units.flash import (
     ComponentSplitter,
     ComponentSplitterParams,
 )
+from difflow.units.gibbs import GibbsReactor, GibbsReactorParams, GibbsThermo
 from difflow.units.stoichiometric import (
     StoichiometricReactor,
     StoichiometricReactorParams,
@@ -308,6 +310,9 @@ __all__ = [
     "ComponentSplitter",
     "ComponentSplitterParams",
     "StoichiometricReactor",
+    "GibbsReactor",
+    "GibbsReactorParams",
+    "GibbsThermo",
     "StoichiometricReactorParams",
     # LLE
     "MultistageCascade",

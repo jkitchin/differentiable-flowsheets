@@ -87,6 +87,16 @@ irreversible). 1,2,3,4-tetrahydrophenanthrene's ``S0`` is an estimate
 aromatic-saturation entropy equal to the di -> mono one, as the hydrotreater
 assumed before.
 
+Sulfur species (#467) -- S2...S8, COS and CS2 for the Claus unit and the
+tail-gas treater: ``Hf`` and ``S0`` read from the primary NIST-JANAF tables
+(janaf.nist.gov, Chase 1998; ``"JANAF_TABLE"``, table ID in each note), as
+one evaluation with JANAF's liquid sulfur (S-004, :func:`liquid_sulfur_gibbs`)
+so that the vapour over the liquid is consistent. The JANAF vapour is
+known-low: it puts the 1 atm point of sulfur at ~745 K against the measured
+717.75 K (:data:`SULFUR_NBP_MEASURED`). :data:`WIDE_CP` carries
+298.15-1800 K cubics (``IdealGasSet(..., cp_basis="wide")``) for furnace and
+reformer temperatures.
+
 ``cp`` -- cubics fitted by this project:
 
 * ``"TRC"``: least squares on a 1 K grid over 298.15-1000 K to the TRC
@@ -155,7 +165,9 @@ __all__ = [
     "HF_CROSSCHECK", "S0_CROSSCHECK", "species", "resolve", "Hf", "S0", "cp_coefficients", "cp",
     "sensible_enthalpy", "sensible_entropy", "enthalpy", "entropy", "gibbs", "elements",
     "check_balance", "reaction_enthalpy", "reaction_entropy", "reaction_gibbs", "ln_K",
-    "IdealGasSet",
+    "IdealGasSet", "WIDE_CP", "WIDE_CP_RANGE", "wide_cp_coefficients",
+    "SULFUR_NBP_MEASURED", "liquid_sulfur_enthalpy", "liquid_sulfur_entropy",
+    "liquid_sulfur_gibbs", "sulfur_vapor_pressures",
 ]
 
 #: Gas constant (J/mol/K), CODATA 2018 exact.
@@ -198,6 +210,13 @@ SOURCES: Mapping[str, str] = MappingProxyType({
               "in cp_range."),
     "SHOMATE": ("Cubic fitted by this project to the NIST Chemistry WebBook Shomate equations "
                 "(fits to Chase 1998), 1 K grid over cp_range."),
+    "JANAF_TABLE": ("NIST-JANAF Thermochemical Tables, 4th ed.: Chase, M.W., J. Phys. Chem. "
+                    "Ref. Data Monograph 9 (1998); the 298.15 K value of the table named in the "
+                    "row's note, read from the primary table at janaf.nist.gov/tables/<ID>.txt."),
+    "JANAF_MONO": ("Cubic fitted by this project to every tabulated Cp of the primary NIST-JANAF "
+                   "table (Chase 1998) in cp_range: least squares on the relative deviation, "
+                   "constrained to dCp/dT >= 0 (an unconstrained cubic turns over at the top of "
+                   "the range for the large sulfur rings)."),
     "JOBACK": ("Joback group-contribution ideal-gas Cp: Joback, K.G. and Reid, R.C., Chem. "
                "Eng. Commun. 57, 233-243 (1987), group values as in the thermo package; an "
                "estimate (1-3 % on tested polycyclic aromatics)."),
@@ -258,13 +277,16 @@ class FormationData:
     @property
     def status(self) -> str:
         """How far ``Hf`` was checked: ``"definition"`` (an element),
-        ``"key value"`` (CODATA), ``"cross-checked"`` (another independent
+        ``"key value"`` (CODATA), ``"evaluated table"`` (read from the primary
+        NIST-JANAF table, #467), ``"cross-checked"`` (another independent
         compilation -- ATcT, CRC or API TDB, not the chosen one -- within
         1.5 kJ/mol), ``"estimate"``, or ``"unverified"``."""
         if self.Hf_source == "ELEMENT":
             return "definition"
         if self.Hf_source == "CODATA":
             return "key value"
+        if self.Hf_source == "JANAF_TABLE":
+            return "evaluated table"
         if self.Hf_source == "estimate":
             return "estimate"
         alts = HF_CROSSCHECK.get(self.key, {})
@@ -536,12 +558,64 @@ _ROWS = (
     _r("aniline", "aniline", "62-53-3", "C6H7N",
        86.86, "API_TDB", 319.87, "YAWS",
        (-35.78656, 0.6058877, -0.0004551822, 1.331602e-07), (298.15, 1000.0), "TRC", 0.0020),
+    # --- sulfur vapour and sulfur-carbon species (#467), for the Claus SRU and
+    # tail-gas units. Every value read from the primary NIST-JANAF table named
+    # in the note (janaf.nist.gov/tables/<ID>.txt); Cp fits monotone (JANAF_MONO).
+    # Hf of the allotropes is relative to S(cr, rhombic), as JANAF tabulates it.
+    _r("sulfur_s2", "disulfur", "23550-45-0", "S2",
+       128.6, "JANAF_TABLE", 228.165, "JANAF_TABLE",
+       (26.55866, 0.02651961, -2.296511e-05, 7.205303e-09), (298.15, 1500.0), "JANAF_MONO", 0.0045,
+       "JANAF table S-012"),
+    _r("sulfur_s3", "trisulfur", "12597-03-4", "S3",
+       141.461, "JANAF_TABLE", 269.517, "JANAF_TABLE",
+       (35.24632, 0.05687274, -5.015262e-05, 1.561006e-08), (298.15, 1500.0), "JANAF_MONO", 0.0095,
+       "JANAF table S-016"),
+    _r("sulfur_s4", "tetrasulfur", "19269-85-3", "S4",
+       145.771, "JANAF_TABLE", 310.646, "JANAF_TABLE",
+       (46.24354, 0.09853277, -9.088173e-05, 2.826184e-08), (298.15, 1500.0), "JANAF_MONO", 0.0121,
+       "JANAF table S-017"),
+    _r("sulfur_s5", "pentasulfur", "12597-10-3", "S5",
+       109.37, "JANAF_TABLE", 308.638, "JANAF_TABLE",
+       (64.81546, 0.1157621, -0.00010669, 3.277657e-08), (298.15, 1500.0), "JANAF_MONO", 0.0138,
+       "JANAF table S-018"),
+    _r("sulfur_s6", "hexasulfur", "13798-23-7", "S6",
+       101.922, "JANAF_TABLE", 354.076, "JANAF_TABLE",
+       (84.12709, 0.1293806, -0.0001188025, 3.636339e-08), (298.15, 1500.0), "JANAF_MONO", 0.0137,
+       "JANAF table S-019"),
+    _r("sulfur_s7", "heptasulfur", "21459-04-1", "S7",
+       113.679, "JANAF_TABLE", 407.673, "JANAF_TABLE",
+       (100.4263, 0.1541693, -0.0001428261, 4.410611e-08), (298.15, 1500.0), "JANAF_MONO", 0.0110,
+       "JANAF table S-020"),
+    _r("sulfur_s8", "octasulfur (cyclo-S8)", "10544-50-0", "S8",
+       100.416, "JANAF_TABLE", 430.311, "JANAF_TABLE",
+       (121.2931, 0.1611416, -0.0001464285, 4.43532e-08), (298.15, 1500.0), "JANAF_MONO", 0.0094,
+       "JANAF table S-021"),
+    _r("carbonyl_sulfide", "carbonyl sulfide", "463-58-1", "COS",
+       -138.407, "JANAF_TABLE", 231.581, "JANAF_TABLE",
+       (25.26971, 0.06862005, -5.025203e-05, 1.34175e-08), (298.15, 1500.0), "JANAF_MONO", 0.0069,
+       "JANAF table C-094"),
+    _r("carbon_disulfide", "carbon disulfide", "75-15-0", "CS2",
+       116.943, "JANAF_TABLE", 237.977, "JANAF_TABLE",
+       (30.19823, 0.06617767, -5.08734e-05, 1.38622e-08), (298.15, 1500.0), "JANAF_MONO", 0.0052,
+       "JANAF table C-099"),
 )
 
 #: Ideal-gas Hf (kJ/mol) of each species in every compilation the chemicals
 #: 1.5.2 tables carry (ATcT 1.112, API TDB, CRC, Yaws): the cross-check
 #: behind each choice (see the module docstring).
 HF_CROSSCHECK: dict[str, dict[str, float]] = {
+    # #467 sulfur species: JANAF (chosen) against the other compilations in
+    # chemicals 1.5.2. TRC puts S3-S8 4-7 kJ/mol above JANAF; JANAF is kept
+    # (one evaluation for the whole S2-S8 + S(l) set, which the vapour model needs).
+    "sulfur_s2": {"JANAF": 128.6, "CRC": 128.6, "TRC": 128.2},
+    "sulfur_s3": {"JANAF": 141.461, "TRC": 134.7},
+    "sulfur_s4": {"JANAF": 145.771, "TRC": 140.2},
+    "sulfur_s5": {"JANAF": 109.37},
+    "sulfur_s6": {"JANAF": 101.922, "TRC": 106.9},
+    "sulfur_s7": {"JANAF": 113.679, "TRC": 118.4},
+    "sulfur_s8": {"JANAF": 100.416, "TRC": 106.8},
+    "carbonyl_sulfide": {"JANAF": -138.407, "CRC": -142.0, "TRC": -138.3, "YAWS": -138.41},
+    "carbon_disulfide": {"JANAF": 116.943, "CRC": 116.7, "API_TDB": 117.07, "TRC": 117.1},
     "hydrogen": {"ATcT": 0.0, "CRC": 0.0, "YAWS": 0.0},
     "nitrogen": {"ATcT": 0.0, "CRC": 0.0, "YAWS": 0.0},
     "oxygen": {"ATcT": 0.0, "CRC": 0.0, "YAWS": 0.0},
@@ -701,7 +775,10 @@ KEYS: tuple = tuple(TABLE)
 ALIASES: Mapping[str, str] = MappingProxyType({
     "H2": "hydrogen", "N2": "nitrogen", "O2": "oxygen", "H2O": "water", "steam": "water",
     "CO": "carbon_monoxide", "CO2": "carbon_dioxide", "SO2": "sulfur_dioxide",
-    "H2S": "hydrogen_sulfide", "NH3": "ammonia",
+    "H2S": "hydrogen_sulfide", "NH3": "ammonia", "CH4": "methane",
+    "S2": "sulfur_s2", "S3": "sulfur_s3", "S4": "sulfur_s4", "S5": "sulfur_s5",
+    "S6": "sulfur_s6", "S7": "sulfur_s7", "S8": "sulfur_s8",
+    "COS": "carbonyl_sulfide", "CS2": "carbon_disulfide",
     "propylbenzene": "n_propylbenzene", "butylbenzene": "n_butylbenzene",
     "isobutene": "isobutylene", "2_methylpropene": "isobutylene", "isooctane": "2_2_4_trimethylpentane",
     "1_2_3_4_tetrahydronaphthalene": "tetralin", "decalin": "trans_decalin",
@@ -857,6 +934,51 @@ def ln_K(nu: Mapping[str, float], T):
     return -reaction_gibbs(nu, T) / (R * T)
 
 
+# --- wide-range Cp (#467): furnaces and reformers run past the 1000 K fits
+
+#: Ideal-gas Cp cubics over 298.15-1800 K for the species of a Claus furnace,
+#: a steam reformer or a combustion: ``{key: (cubic, max_rel_dev, JANAF table)}``.
+#: Source ``"JANAF_MONO"`` (every tabulated JANAF Cp in 298.15-1800 K). The
+#: table's own ``cp`` is unchanged (it keeps every existing number); a model
+#: hotter than a row's ``cp_range`` opts in with ``IdealGasSet(...,
+#: cp_basis="wide")``. Why: the 1000 K cubics extrapolate badly (H2S -5.6 %,
+#: CH4 -16 % at 1500 K against JANAF).
+WIDE_CP_RANGE = (298.15, 1800.0)
+WIDE_CP: Mapping[str, tuple] = MappingProxyType({
+    "hydrogen": ((29.14754, -0.001384056, 2.987157e-06, -4.646626e-10), 0.0053, "H-050"),
+    "nitrogen": ((28.55056, -0.000378836, 6.855606e-06, -2.500035e-09), 0.0062, "N-023"),
+    "oxygen": ((25.44553, 0.0142321, -5.670775e-06, 7.690808e-10), 0.0061, "O-029"),
+    "water": ((32.10915, 0.001870778, 1.081022e-05, -3.576906e-09), 0.0028, "H-064"),
+    "carbon_monoxide": ((27.90362, 0.002457512, 4.603861e-06, -1.957861e-09), 0.0082, "C-093"),
+    "carbon_dioxide": ((22.13104, 0.06080828, -3.641404e-05, 7.9413e-09), 0.0046, "C-095"),
+    "sulfur_dioxide": ((25.61431, 0.05867708, -3.844995e-05, 8.813199e-09), 0.0039, "O-034"),
+    "hydrogen_sulfide": ((29.63716, 0.01343595, 5.836184e-06, -3.328362e-09), 0.0055, "H-080"),
+    "ammonia": ((25.03166, 0.0365508, -3.817033e-06, -1.359006e-09), 0.0062, "H-083"),
+    "methane": ((17.33765, 0.06083903, -1.563513e-06, -5.291129e-09), 0.0144, "C-067"),
+    "sulfur_s2": ((27.79762, 0.02059456, -1.498182e-05, 4.042515e-09), 0.0074, "S-012"),
+    "sulfur_s3": ((37.75036, 0.04478689, -3.370096e-05, 9.04244e-09), 0.0122, "S-016"),
+    "sulfur_s4": ((50.80452, 0.07651315, -6.09396e-05, 1.632566e-08), 0.0155, "S-017"),
+    "sulfur_s5": ((71.68677, 0.08417153, -6.625403e-05, 1.738374e-08), 0.0207, "S-018"),
+    "sulfur_s6": ((92.11335, 0.09308085, -7.292198e-05, 1.90432e-08), 0.0208, "S-019"),
+    "sulfur_s7": ((109.1026, 0.1137143, -9.014069e-05, 2.381822e-08), 0.0159, "S-020"),
+    "sulfur_s8": ((131.132, 0.1165761, -9.047862e-05, 2.340803e-08), 0.0155, "S-021"),
+    "carbonyl_sulfide": ((26.75685, 0.06127969, -4.016661e-05, 9.375506e-09), 0.0089, "C-094"),
+    "carbon_disulfide": ((31.76156, 0.05851154, -4.0409e-05, 9.691521e-09), 0.0072, "C-099"),
+})
+
+
+def wide_cp_coefficients(name: str) -> tuple:
+    """The 298.15-1800 K Cp cubic of ``name`` (:data:`WIDE_CP`).
+
+    Raises:
+        KeyError: The species has no wide-range fit.
+    """
+    k = resolve(name)
+    if k not in WIDE_CP:
+        raise KeyError(f"{k} has no wide-range (298.15-1800 K) Cp; have: {', '.join(WIDE_CP)}")
+    return WIDE_CP[k][0]
+
+
 class IdealGasSet:
     """The table's data over a unit's species list, as arrays: what a reactor
     integrates. Concrete numpy arrays ``HF`` (J/mol), ``S0`` (J/mol/K, NaN
@@ -865,15 +987,24 @@ class IdealGasSet:
 
     Args:
         names: Table keys or aliases, in the unit's array order.
+        cp_basis: ``"table"`` (each row's ``cp``) or ``"wide"`` (:data:`WIDE_CP`,
+            298.15-1800 K; raises ``KeyError`` for a species without one).
+            ``Hf`` and ``S0`` are the table's either way.
     """
 
-    def __init__(self, names: Sequence[str]):
+    def __init__(self, names: Sequence[str], cp_basis: str = "table"):
+        if cp_basis not in ("table", "wide"):
+            raise ValueError(f"cp_basis must be 'table' or 'wide', not {cp_basis!r}")
         self.names = tuple(names)
         self.keys = tuple(resolve(n) for n in self.names)
+        self.cp_basis = cp_basis
         rows = [TABLE[k] for k in self.keys]
         self.HF = np.array([r.Hf for r in rows], dtype=float)
         self.S0 = np.array([np.nan if r.S0 is None else r.S0 for r in rows], dtype=float)
-        self.CP = np.array([r.cp for r in rows], dtype=float)
+        if cp_basis == "wide":
+            self.CP = np.array([wide_cp_coefficients(k) for k in self.keys], dtype=float)
+        else:
+            self.CP = np.array([r.cp for r in rows], dtype=float)
         self.ELEMENTS = {e: np.array([r.elements.get(e, 0) for r in rows], dtype=float)
                          for e in ("C", "H", "N", "O", "S")}
         self.MW = np.array([r.MW for r in rows], dtype=float)
@@ -923,3 +1054,96 @@ class IdealGasSet:
         """``ln K`` (1 bar standard state) of stoichiometry rows ``nu`` at scalar ``T``."""
         T = jnp.asarray(T, dtype=float)
         return -(jnp.asarray(nu, dtype=float) @ self.gibbs(T)) / (R * T)
+
+
+# --- liquid sulfur and the sulfur vapour over it (#467)
+#
+# NIST-JANAF table S-004, S(l) per mol of S atoms (Chase 1998): tabulated
+# Cp (J/mol/K), H - H(298.15) (kJ/mol) and S (J/mol/K). The liquid is
+# metastable below the beta -> liquid point (388.36 K) and has a lambda
+# transition at 432.02 K (polymerisation; the Cp cusp). Between nodes Cp is
+# linear plus a per-segment linear correction chosen so that H and S hit
+# BOTH tabulated values at every node exactly: H, S and G are continuous,
+# G = H - TS is thermodynamically consistent (dG/dT = -S), and the model is
+# the table at the nodes. The 300 K and 882.117 K rows are left out: their
+# 3-decimal rounding over a 1.85 K / 17.9 K segment would put noise of
+# +-500 J/mol/K into the segment's Cp.
+_SL_T = np.array([298.15, 350.0, 388.36, 400.0, 432.02, 450.0, 500.0, 600.0, 700.0, 800.0,
+                  900.0, 1000.0, 1100.0, 1200.0, 1300.0, 1400.0, 1500.0])
+_SL_CP = np.array([22.531, 27.434, 31.058, 32.162, 53.829, 43.046, 37.986, 34.308, 32.681,
+                   31.699, 31.665, 31.665, 31.665, 31.665, 31.665, 31.665, 31.665])
+_SL_H = 1e3 * np.array([0.0, 1.295, 2.417, 2.785, 3.884, 4.711, 6.713, 10.298, 13.645, 16.856,
+                        20.023, 23.189, 26.356, 29.522, 32.689, 35.855, 39.021])
+_SL_S = np.array([36.825, 40.821, 43.859, 44.793, 47.431, 49.308, 53.532, 60.078, 65.241,
+                  69.530, 73.260, 76.596, 79.614, 82.369, 84.904, 87.250, 89.435])
+#: Enthalpy of formation of S(l) from S(cr) at 298.15 K (J/mol), JANAF S-004.
+_SL_HF = 1854.0
+
+
+def _sl_segments():
+    T0, T1 = _SL_T[:-1], _SL_T[1:]
+    dT = T1 - T0
+    b = np.diff(_SL_CP) / dT
+    rH = np.diff(_SL_H) - (_SL_CP[:-1] * dT + b * dT**2 / 2)
+    rS = np.diff(_SL_S) - ((_SL_CP[:-1] - b * T0) * np.log(T1 / T0) + b * dT)
+    alpha, beta = np.empty_like(dT), np.empty_like(dT)
+    for i in range(dT.size):          # Cp correction alpha + beta T on the segment
+        A = np.array([[dT[i], (T1[i]**2 - T0[i]**2) / 2], [np.log(T1[i] / T0[i]), dT[i]]])
+        alpha[i], beta[i] = np.linalg.solve(A, [rH[i], rS[i]])
+    c0 = _SL_CP[:-1] + alpha + beta * T0          # Cp at the segment start
+    return c0, b + beta                           # Cp = c0 + slope (T - T0)
+
+
+_SL_C0, _SL_SLOPE = _sl_segments()
+
+#: Measured normal boiling point of sulfur (K): 444.6 degC at 1 standard
+#: atmosphere, the IPTS-48 "sulfur point" (Stimson, H.F., J. Res. Natl. Bur.
+#: Stand. 65A, 139-145 (1961), Table 1). Not used by any model here: the
+#: JANAF S2-S8 + S(l) data put the 1 atm point at ~745 K (their total vapour
+#: pressure at 700 K, 0.56 bar summed straight from the tables, is low), a
+#: limitation of those tables that ``tests/refinery/test_thermochemistry.py``
+#: records. A sulfur condenser wants a measured vapour-pressure correlation.
+SULFUR_NBP_MEASURED = 273.15 + 444.6
+
+
+def _sl_state(T):
+    T = jnp.asarray(T, dtype=float)
+    i = jnp.clip(jnp.searchsorted(jnp.asarray(_SL_T), T, side="right") - 1, 0, _SL_T.size - 2)
+    T0 = jnp.asarray(_SL_T)[i]
+    c0, m = jnp.asarray(_SL_C0)[i], jnp.asarray(_SL_SLOPE)[i]
+    d = T - T0
+    H = jnp.asarray(_SL_H)[i] + c0 * d + m * d**2 / 2
+    S = jnp.asarray(_SL_S)[i] + (c0 - m * T0) * jnp.log(T / T0) + m * d
+    return H, S
+
+
+def liquid_sulfur_enthalpy(T):
+    """Molar enthalpy of liquid sulfur, J per mol of S ATOMS, on the table's
+    basis (S(cr) zero at 298.15 K): ``1854 + [H - H(298.15)]`` from JANAF
+    S-004, valid 298.15-1500 K (metastable below 388.36 K)."""
+    return _SL_HF + _sl_state(T)[0]
+
+
+def liquid_sulfur_entropy(T):
+    """Absolute entropy of liquid sulfur (J/mol S atoms/K), JANAF S-004."""
+    return _sl_state(T)[1]
+
+
+def liquid_sulfur_gibbs(T):
+    """``H - T S`` of liquid sulfur (J/mol S atoms), on the same basis as
+    :func:`gibbs`, so ``gibbs("S8", T) - 8 * liquid_sulfur_gibbs(T)`` is the
+    standard Gibbs energy of S8(g) over the liquid."""
+    H, S = _sl_state(T)
+    return _SL_HF + H - jnp.asarray(T, dtype=float) * S
+
+
+def sulfur_vapor_pressures(T, cp_basis: str = "wide"):
+    """Partial pressures (Pa) of S2...S8 in ideal-gas equilibrium with pure
+    liquid sulfur, ``p_n = P_STD exp(-(G_Sn - n G_l) / RT)``, as an array
+    ``(..., 7)`` in the order S2, S3, ..., S8. Their sum is the total vapour
+    pressure; on JANAF data it is low (see :data:`SULFUR_NBP_MEASURED`)."""
+    T = jnp.asarray(T, dtype=float)
+    gas = IdealGasSet([f"sulfur_s{n}" for n in range(2, 9)], cp_basis=cp_basis)
+    n = jnp.arange(2.0, 9.0)
+    dG = gas.gibbs(T) - n * liquid_sulfur_gibbs(T)[..., None]
+    return P_STD * jnp.exp(-dG / (R * T[..., None]))

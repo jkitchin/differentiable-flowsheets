@@ -272,6 +272,30 @@ class H2Plant(Import):
 
     name: str = "h2_plant"
     capacity: float = 100.0
+    ng_per_h2: object = None
+    marginal_cost: object = None
+
+    @classmethod
+    def from_smr(cls, result: dict, name: str = "h2_plant", ng_price=None, capacity=None,
+                 **kw) -> "H2Plant":
+        """The swing plant from an :func:`~difflow_refinery.hydrogen.smr.smr_plant`
+        result (#473): ``capacity`` its H2 product (mol/s), ``purity`` and
+        ``impurity`` its product's, ``P`` the PSA product pressure (the
+        knock-out pressure), ``ng_per_h2`` the natural gas (feed + fuel,
+        J LHV) per mol of H2 and, with ``ng_price`` ($/GJ LHV),
+        ``marginal_cost`` ($/kmol H2). The plant is homogeneous of degree
+        one in its feed, so the marginal natural gas per H2 is the average.
+        Arrays are kept, so a gradient runs through them. The header carries
+        no CO, CO2 or N2: the product's impurity is its header gases (CH4),
+        normalised.
+        """
+        prod = result["psa"]["product"]
+        imp = {g: prod[g] for g in prod if g != "hydrogen" and g in HEADER_GASES}
+        ng = result["ng_lhv"] / result["H2"]
+        kw.setdefault("P", result["ko"]["P"])
+        return cls(name=name, purity=result["purity"], impurity=imp or "methane",
+                   capacity=result["H2"] if capacity is None else capacity, ng_per_h2=ng,
+                   marginal_cost=None if ng_price is None else ng * 1e-9 * ng_price * 1e3, **kw)
 
 
 @dataclass
@@ -290,6 +314,14 @@ class PSA:
     recovery: float = 0.88
     purity: float = 0.999
     target_purity: float | None = None
+
+    @classmethod
+    def from_model(cls, result: dict, target_purity: float | None = None) -> "PSA":
+        """The shortcut from a :class:`~difflow_refinery.hydrogen.psa.HydrogenPSA`
+        result (#469): its ``recovery`` and ``purity``, left as arrays so a
+        gradient can run through them."""
+        return cls(recovery=result["recovery"], purity=result["purity"],
+                   target_purity=target_purity)
 
 
 @dataclass

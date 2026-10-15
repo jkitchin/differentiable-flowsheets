@@ -1,4 +1,5 @@
-"""Catalytic reforming (#309): naphtha to reformate and hydrogen, semi-regen train."""
+"""Catalytic reforming (#309): naphtha to reformate and hydrogen, semi-regen train;
+continuous catalyst regeneration (CCR, #474) in :mod:`.ccr`."""
 
 from difflow_refinery.reforming import feed, kinetics, products, separation, species, sulfur, thermo
 from difflow_refinery.reforming.feed import NaphthaFeed, lean_naphtha, rich_naphtha
@@ -8,6 +9,9 @@ from difflow_refinery.reforming.separation import (
     StabilizerParams)
 from difflow_refinery.reforming.unit import (
     OUTPUT_UNITS, CatalyticReformer, ReformerParams, ReformerResult, output_units)
+from difflow_refinery.reforming import ccr
+from difflow_refinery.reforming.ccr import (
+    CCRParams, CCRReformer, CCRResult, Regenerator, RegeneratorParams, ccr_reformer_params)
 from difflow_refinery.reforming.kinetics import RateModel, ReformingKinetics, build_network
 from difflow_refinery.reforming.reactor import (
     FiredHeater,
@@ -26,4 +30,6 @@ __all__ = [
     "RateModel", "ReformingKinetics", "build_network",
     "FiredHeater", "FiredHeaterParams", "ReformingReactor", "ReformingReactorParams",
     "integrate_bed",
+    "ccr", "CCRParams", "CCRReformer", "CCRResult", "Regenerator", "RegeneratorParams",
+    "ccr_reformer_params",
 ]

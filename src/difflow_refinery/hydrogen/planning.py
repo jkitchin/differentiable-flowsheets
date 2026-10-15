@@ -20,6 +20,10 @@ and ``("nht.h2.makeup", "h2.nht.makeup")`` (from
 :func:`~difflow_refinery.hydrotreating.planning.hdt_block`, Nm3/h).
 :func:`link_reformer` and :func:`link_hdt` write them.
 
+:func:`smr_block` wraps the SMR hydrogen plant (:mod:`.smr`, #473): levers
+natural gas, S/C and reformer outlet T; its ``h2.net_mol_s``/``h2.purity``
+link to a network producer by :func:`link_smr`.
+
 Outputs are any keys of :attr:`H2NetworkResult.outputs` (default:
 ``h2.surplus``, each header's purity and surplus, each consumer's purity and
 purity margin, fuel gas and swing H2). Purities come out in mole fractions,
@@ -182,4 +186,89 @@ def link_hdt(hdt_block_name: str, consumer: str | None = None, h2_block_name: st
     return [(f"{hdt_block_name}.h2.makeup", f"{h2_block_name}.{consumer or hdt_block_name}.makeup")]
 
 
-__all__ = ["H2PlanningModel", "h2_block", "default_levers", "default_outputs", "link_reformer", "link_hdt"]
+# ------------------------------------------------------------------ SMR plant
+#: levers of :func:`smr_block` and their units
+SMR_LEVERS = {"ng": "mol/s", "S_C": "mol/mol", "T_out": "K"}
+#: outputs of :func:`smr_block` and their units
+SMR_OUTPUTS = {"h2.net_mol_s": "mol/s", "h2.purity": "mol%", "ng.lhv_MW": "MW", "co2.mol_s": "mol/s",
+               "ch4_slip": "-", "reformer_duty_MW": "MW"}
+
+
+class SMRPlanningModel:
+    """``u -> y`` for :func:`~difflow_refinery.hydrogen.smr.smr_plant` (the ``fn`` of
+    :func:`smr_block`): the natural-gas feed is scaled at fixed composition."""
+
+    def __init__(self, feed, params, levers: Sequence[str], outputs: Sequence[str]):
+        from difflow_refinery.hydrogen import smr
+        self.smr = smr
+        self.feed = feed
+        F = sum(jnp.asarray(feed.get(f"F_{k}", 0.0), dtype=float) for k in smr.SPECIES)
+        self.params = dataclasses.replace(params, tube=dataclasses.replace(params.tube, adjoint="forward"))
+        self.levers, self.outputs = list(levers), list(outputs)
+        base = {"ng": F, "S_C": params.S_C, "T_out": params.T_out}
+        for k in self.levers + self.outputs:
+            if k not in SMR_LEVERS and k not in SMR_OUTPUTS:
+                raise ValueError(f"unknown {k!r}; levers {list(SMR_LEVERS)}, outputs {list(SMR_OUTPUTS)}")
+        self.u0 = [float(base[k]) for k in self.levers]
+        self._F0 = float(F)
+
+    def __call__(self, u) -> Array:
+        vals = dict(zip(self.levers, jnp.asarray(u, dtype=float)))
+        scale = vals.get("ng", self._F0) / self._F0
+        feed = dict(self.feed, **{f"F_{k}": scale * jnp.asarray(self.feed[f"F_{k}"], dtype=float)
+                                  for k in self.smr.SPECIES if f"F_{k}" in self.feed})
+        p = dataclasses.replace(self.params, **{k: vals[k] for k in ("S_C", "T_out") if k in vals})
+        r = self.smr.smr_plant(feed, p)
+        y = {"h2.net_mol_s": r["H2"], "h2.purity": 100.0 * r["purity"], "ng.lhv_MW": r["ng_lhv"] / 1e6,
+             "co2.mol_s": r["CO2"], "ch4_slip": r["CH4_slip"], "reformer_duty_MW": r["reformer_duty"] / 1e6}
+        return jnp.stack([jnp.asarray(y[k], dtype=float) for k in self.outputs])
+
+
+def smr_block(feed, params=None, levers: Sequence[str] = ("ng", "S_C", "T_out"),
+              outputs: Sequence[str] = ("h2.net_mol_s", "h2.purity", "ng.lhv_MW", "co2.mol_s"), *,
+              name: str = "smr", bounds: Mapping[str, tuple[float, float]] | None = None,
+              jit: bool = True, **kwargs: Any) -> Block:
+    """A :class:`~difflow.planning.Block` for the SMR hydrogen plant (#473).
+
+    Levers :data:`SMR_LEVERS` (natural-gas feed at fixed composition, S/C,
+    reformer outlet T); outputs :data:`SMR_OUTPUTS`. The H2 outputs are named
+    like the reformer block's, so :func:`link_smr` feeds an
+    :class:`~difflow_refinery.hydrogen.network.Producer` of the network.
+    The plant is differentiated in forward mode (the tube is put on
+    ``adjoint="forward"``); ``ad_mode`` defaults to ``"fwd"``.
+
+    Args:
+        feed: Natural-gas stream over :data:`~difflow_refinery.hydrogen.smr.SPECIES`.
+        params: :class:`~difflow_refinery.hydrogen.smr.SMRParams` (default: its defaults).
+        levers, outputs: Subsets of :data:`SMR_LEVERS`, :data:`SMR_OUTPUTS`.
+        name: Block name.
+        bounds: ``{lever: (lo, hi)}``; default ng and S/C +-20%, T_out +-40 K.
+        jit: Compile the block.
+        **kwargs: Passed to :class:`~difflow.planning.Block`.
+    """
+    from difflow_refinery.hydrogen.smr import SMRParams
+    model = SMRPlanningModel(feed, params or SMRParams(), levers, outputs)
+    bounds = dict(bounds or {})
+    lb, ub = [], []
+    for k, x in zip(model.levers, model.u0):
+        lo, hi = bounds.get(k, (x - 40.0, x + 40.0) if k == "T_out" else (0.8 * x, 1.2 * x))
+        if not lo <= x <= hi:
+            raise ValueError(f"{k}: base value {x:g} is outside its bounds ({lo:g}, {hi:g})")
+        lb.append(lo)
+        ub.append(hi)
+    kwargs.setdefault("ad_mode", "fwd")
+    metadata = dict(kwargs.pop("metadata", {}) or {})
+    metadata.setdefault("source", "difflow_refinery.hydrogen.smr_block")
+    metadata.setdefault("u_units", [SMR_LEVERS[k] for k in model.levers])
+    metadata.setdefault("y_units", [SMR_OUTPUTS[k] for k in model.outputs])
+    return Block(name=name, fn=model, u_names=model.levers, y_names=model.outputs, lb=lb, ub=ub,
+                 u0=model.u0, jit=jit, metadata=metadata, **kwargs)
+
+
+def link_smr(smr_block_name: str = "smr", producer: str = "smr", h2_block_name: str = "h2") -> list[tuple[str, str]]:
+    """Links from an :func:`smr_block`'s ``h2.net_mol_s``/``h2.purity`` to a producer's levers."""
+    return link_reformer(smr_block_name, producer, h2_block_name)
+
+
+__all__ = ["H2PlanningModel", "h2_block", "default_levers", "default_outputs", "link_reformer", "link_hdt",
+           "SMRPlanningModel", "smr_block", "link_smr", "SMR_LEVERS", "SMR_OUTPUTS"]
