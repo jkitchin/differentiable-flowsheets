@@ -2050,6 +2050,128 @@ Checked (`tests/refinery/test_reforming.py`; flowsheet tests are marked `slow`):
 | Thermochemistry of model compounds (the issue's suggestion) | Stull, D.R., Westrum, E.F., Sinke, G.C., *The Chemical Thermodynamics of Organic Compounds*, Wiley (1969) | **Not used**: the values come from the `chemicals` tables above. |
 | Reforming practice, yield vs. RON | Gary, J.H., Handwerk, G.E., Kaiser, M.J., *Petroleum Refining: Technology and Economics*, 5th ed., CRC Press (2007), catalytic reforming chapter | Not consulted; no cross-check made. |
 (refinery-hydroprocessing)=
+### CCR reformer (#474)
+
+`difflow_refinery.reforming.ccr` adds continuous catalyst regeneration to the
+reformer above. A library, like the reformer: the gas side is the same
+flowsheet; the CCR moves the catalyst. It flows R1 -> R2 -> ... -> Rn, is
+lifted to a regenerator and returns to R1.
+
+- **Activity from coke.** Every rate constant (coke make included) is
+  multiplied by `a(C) = exp(-alpha C)`, `C` in kg coke per kg catalyst;
+  `alpha` (and the form) is ILLUSTRATIVE -- no published coke-basis constant
+  could be verified.
+- **Moving bed.** Catalyst enters bed `k` with `C_{k-1}` (`C_0` the
+  regenerated catalyst's residual coke) and leaves with
+  `C_k = C_{k-1} + m_k / G`, `m_k` the bed's coke make (kg/s), `G` the
+  circulation (kg/s). The bed runs at the path-mean activity of a linear coke
+  rise, `(exp(-alpha C_{k-1}) - exp(-alpha C_k)) / (alpha (C_k - C_{k-1}))`
+  (`mean_activity`), carried into the reformer as `ReformerParams.activity`
+  (one entry per reactor; `None`, the default, is the semi-regen reformer
+  unchanged).
+- **The coke-activity fixed point.** Outer passes of warm-started reformer
+  solves, the beds' coke balances re-solved with the coke make per unit
+  activity held; about five passes. Gradients: under eager `jax.jacfwd` the
+  loop runs on the primal values and one implicit Newton step
+  `C = C* + (I - J)^-1 (Phi(C*, theta) - C*)` (`J = dPhi/dC` by `jax.jacfwd`)
+  carries the tangents. Not jit-able.
+- **Regenerator.** The spent catalyst's coke (H/C 0.6) burns fully to CO2 and
+  water (`difflow_refinery.combustion`) in an O2-limited burn zone whose
+  inlet is recycled flue gas plus exactly the make-up air the coke needs,
+  mixed to `y_O2`. The peak is the adiabatic temperature of the burn gas
+  after it has given up its O2 -- the burn-front rise, an upper bound (the
+  catalyst's sensible heat is left out), set by `y_O2` alone. Oxychlorination
+  and calcination are a specified chloride make-up and duty; the reduction
+  zone takes `2 mol H2 / mol Pt` (PtO2), reported as `ccr.reduction_H2_mol_s`
+  and subtracted in `h2.export_mol_s`.
+
+```python
+import jax
+jax.config.update("jax_enable_x64", True)
+from difflow_refinery.reforming.ccr import Regenerator, RegeneratorParams
+
+rg = Regenerator(RegeneratorParams(y_O2=0.008))(circulation=0.02, coke_spent=0.0525)
+print(f"burn {float(rg['coke_burn']) * 3600:.2f} kg/h, peak {float(rg['T_peak']) - 273.15:.0f} C, "
+      f"capacity used {float(rg['burn_capacity_used']):.2f}")
+```
+
+<!-- doc-test: skip: a full CCR solve is ~1 min (tests/refinery/test_ccr.py runs it) -->
+```python
+from difflow_refinery.reforming import lean_naphtha
+from difflow_refinery.reforming.ccr import CCRReformer, ccr_reformer_params
+
+res = CCRReformer(ccr_reformer_params()).solve(lean_naphtha())
+print(res.summary())
+```
+
+At the defaults (four reactors, 3.5 bar separator, H2/HC 2.5, WAIT 500 C,
+`lean_naphtha()`):
+
+| quantity | model | published |
+|---|---|---|
+| reformate RON | 102.0 | 102 design target [US7285205]; 100-104 (#474) |
+| spent-catalyst coke | 5.25 wt% (the design circulation, by construction) | 5.25 wt% design, normal up to 7.4 [AFPM16]; 3 at turndown [AFPM18] |
+| `rich_naphtha()` at the same circulation | 6.4 wt% spent coke | inside 3-7.4 |
+| bed activities | 0.96, 0.91, 0.83, 0.68 | -- (ILLUSTRATIVE alpha) |
+| burn-zone O2 / peak | 0.8 % / 567 C (28 K margin) | 0.5-1.5 % [US5498756]; peak below 595 C [AFPM16] |
+| burn capacity used | 0.97 | design 52 lb coke/h per 1000 lb/h [AFPM13] |
+| reactor pressure | 5.5 bar | 0.3-0.8 MPa [US7285205] |
+
+Validation (`tests/refinery/test_ccr.py`):
+
+- `mean_activity` against quadrature, including the series branch near zero
+  coke pick-up; `check_grads` to second order.
+- Burn zone: C, H, O and N element balances to round-off; inlet O2 equal to
+  `y_O2`; the peak closes the energy balance to 1e-10 and is independent of
+  the burn rate; ~11 K per 0.1 % O2, inside a hand estimate of 12-13 K
+  (CH0.6 releases ~400 kJ per mol O2 over a gas Cp of ~31-33 J/mol/K; no
+  published rule of thumb was found to compare against).
+- Flowsheet (`slow`): coke made = coke burned, each bed's balance, and mass,
+  C and H closures to round-off; activities fall and coke rises along the
+  train; infinite circulation with zero regenerated coke reproduces the
+  fresh-catalyst reformer to 1e-8; more circulation gives less coke, more
+  activity and more octane; `jax.jacfwd` of spent coke and RON with respect to
+  circulation and WAIT matches central differences (2e-4).
+
+What is not validated: the coke rate law is the reformer's ILLUSTRATIVE one,
+and on it the design circulation of this 10 kg/s feed is ~11 kg/h, a catalyst
+turnover of ~80 days -- far slower than a plant's, because the model's
+coke make is low. The circulation is therefore not a plant number. No plant
+data set for a CCR was reproduced.
+
+### CCR reformer: references
+
+Every number here was read in the source (quotes in
+`src/difflow_refinery/reforming/ccr.py`).
+
+- [AFPM16] Crocker, M. & Philoon, D. (Honeywell UOP), AFPM Q&A 2016,
+  Question 12: design at "5 wt% carbon on catalyst or about 5.25 wt.% coke at
+  the design catalyst circulation rate"; "operate normally at coke levels 40%
+  above the design (about 7.4 wt.% coke)"; "peak burn-zone temperatures are
+  kept below 1100 F (595 C)".
+  <https://afpm.org/data-reports/technical-papers/qa-search/question-12-what-operating-strategies-do-you-employ>
+- [AFPM18] Ghosh (UOP), AFPM Q&A 2018, Question 10: "approximately 60% of
+  design coke load (about 3 wt% coke at design catalyst circulation rate)".
+  <https://afpm.org/data-reports/technical-papers/qa-search/question-10-what-are-problems-low-coke-operation-ccr>
+- [AFPM13] Bullen (UOP), AFPM Q&A 2013, Question 19: "1000 pph CCR section is
+  designed to burn 52 pounds of coke per hour".
+  <https://afpm.org/data-reports/technical-papers/qa-search/question-19-how-are-refiners-managing-low-coke-operations>
+- [US7638101] UOP, US Patent 7,638,101: regenerated catalyst "approximately
+  0.2% or less" coke; burn-zone inlet 370-550 C.
+  <https://patents.google.com/patent/US7638101B2/en>
+- [US5498756] UOP, US Patent 5,498,756: burn-zone "oxygen usually on the
+  order of 0.5 to 1.5% by volume"; chloride 0.4-1.4 wt% (0.8-1.2 preferred).
+  <https://patents.google.com/patent/US5498756A/en>
+- [US7285205] IFP, US Patent 7,285,205: moving-bed units at 0.3-0.8 MPa;
+  H2/HC "generally between 2 and 3"; reformate RON 102; spent coke 3-10 wt%.
+  <https://patents.google.com/patent/US7285205B2/en>
+- [US5376607] US Patent 5,376,607, citing Beltramini et al., Appl. Catal. 19,
+  203 (1985): coke "from about 0.5 to about 0.7 H/C molar ratio" (read
+  second-hand). <https://patents.google.com/patent/US5376607A/en>
+- [Hameed17] Hameed, Iraqi J. Chem. Pet. Eng. 18(2), 109-123 (2017), Table 1:
+  CCR catalyst Pt 0.3 wt%, Sn 0.3 wt%.
+  <https://distantreader.org/stacks/journals/ijcpe/ijcpe-207.pdf>
+
 ## Hydroprocessing building blocks
 
 `difflow_refinery.hydroprocessing` holds the parts every hydroprocessing unit shares: the stream state, a Peng-Robinson flash, an adiabatic trickle-bed reactor that runs *any* kinetic model, the recycle-gas loop and a product stripper. The hydrotreater ([below](#refinery-hydrotreater)) is these parts plus its own kinetics (`difflow_refinery.hydrotreating`); a hydrocracker is meant to be these parts plus another kinetic model. Nothing in this module knows what HDS is.
@@ -3303,6 +3425,163 @@ superstructure optimisation; the HDT's traced makeup composition (see AD mode).
 | PSA recovery 0.88, product 99.9 mol% | none | Illustrative defaults, inside the range usually quoted for refinery PSA units (unverified). Set them from the unit's data. |
 | Nm3 at 0 C, 1 atm | `MOL_PER_NM3 = 101325/(R 273.15)` | As in the hydroprocessing blocks. |
 
+### Hydrogen PSA: a layered-bed cycle model (#469)
+
+`difflow_refinery.hydrogen.psa.HydrogenPSA` is a library. It takes a feed
+(`{species: mol/s}`) and returns the product, the tail gas (fuel for the SMR
+furnace), the purity and the recovery. These come from the bed, the
+isotherms and the cycle rather than being given numbers.
+`PSA.from_model(result)` turns a result into the network's shortcut
+`PSA(recovery, purity)`, keeping them as arrays so a gradient runs through.
+
+```python
+import difflow_refinery.hydrogen as h2
+feed = {"hydrogen": 9.4e-3, "methane": 3.7e-4, "carbon_monoxide": 5.0e-4,
+        "carbon_dioxide": 2.1e-3}
+out = h2.HydrogenPSA(h2.HydrogenPSAParams(t_ads=200.0, purge_to_feed=0.11))(feed)
+out["purity"], out["recovery"], out["tail_gas"]
+```
+
+The bed has an activated-carbon layer (feed end) and a zeolite 5A layer and
+runs a Skarstrom-type cycle with one pressure equalization. The model works
+in four steps.
+
+- **Isotherms.** Competitive dual-site Langmuir, with Park et al.'s
+  parameters as tabulated by Zhang et al. (Table 2).
+- **Fronts.** Each impurity loads the bed at its feed loading, giving a
+  stoichiometric breakthrough time through the layers. The effluent is the
+  Klinkenberg approximation to the linear-driving-force solution, averaged
+  over the step.
+- **Purge heel.** Equilibrium theory gives the heel as a simple wave:
+  $H = V_s\int_0^{c_L}(n'(c) - V_p/V_s)^+\,dc$. For a linear isotherm this
+  is exactly Skarstrom's $(1-\gamma)^+$. A favourable isotherm keeps a heel
+  even with excess purge, which is why more purge still buys purity. The
+  heel moves the next front forward.
+- **Recovery.** The H2 lost is the bed inventory (voids plus adsorbed) left
+  after equalization, less a clean bed at the purge pressure, plus the
+  purge H2. P/F is purge H2 / feed H2, as defined by Yang & Lee and used by
+  Zhang et al.
+
+Species outside H2/CH4/CO/CO2 follow a stated rule:
+
+- `TO_TAIL` (C2+, H2S, water): held, like CH4 or more strongly.
+- `TO_PRODUCT` (N2, Ar): passed, which is conservative.
+
+Any other species raises.
+
+Not modelled: heat effects, roll-up, axial dispersion, pressure drop.
+
+**What is tested** (`tests/refinery/test_psa.py`, a few seconds):
+
+- Isotherm values on Table 2 read as mol/g.
+- The affinity orders Zhang et al. state for each adsorbent, and their
+  Fig. 4 breakthrough order: CO first in AC, CH4 first in 5A, and the two
+  close together in a 0.7 AC layered bed.
+- The Klinkenberg form against the exact Anzelius/Thomas solution, to
+  0.005 for $\xi = 5$-$80$.
+- The simple-wave heel against Skarstrom's linear result.
+- Balances per species to round-off, and the recovery against a by-hand H2
+  inventory.
+- The Table 6 trade-offs: purity falls and recovery rises with $t_{ads}$;
+  purity rises and recovery falls with P/F and with $P_H$.
+- `check_grads` in $t_{ads}$, P/F, $P_H$ and $T$.
+
+**What is not reproduced:**
+
+- **Absolute purity and recovery.** Zhang's bed has a third (UTSA-16)
+  layer, a non-isothermal model and fitted LDF constants. At its base case
+  this model gives about 99.6 % purity and 77 % recovery, against their
+  99.99 % and 62 %.
+- **Purity sensitivity.** Purity depends on the illustrative LDF constants
+  (`ldf_scale`); recovery hardly does.
+
+### Hydrogen PSA: references
+
+| What | Source | Status |
+|---|---|---|
+| Dual-site Langmuir parameters (AC, 5A), bed and pellet data, cycle, feed, Table 6 trends | Zhang, N., Hu, S., Xin, Q., *Sci. Rep.* 15, 14193 (2025), doi:10.1038/s41598-025-97139-4 | Read from the open-access full text (PMC12019191). Table 2's header says mmol/g, but the magnitudes are mol/g (see the module). |
+| Origin of those isotherm parameters | Park, J.H., Kim, J.N., Cho, S.H., *Chem. Eng. Sci.* 53, 3951-3963 (1998), doi:10.1016/S0009-2509(98)00196-1 | Via Zhang et al.; not seen directly. |
+| Breakthrough approximation | Klinkenberg, A., *Ind. Eng. Chem.* 40, 1992-1994 (1948) | The form is checked numerically against the exact solution, which caught a sign slip. |
+| Purge condition; simple-wave desorption | Skarstrom, C.W., *Ann. N.Y. Acad. Sci.* 72, 751-763 (1959); Ruthven, D.M., *Principles of Adsorption and Adsorption Processes*, Wiley (1984), ch. 8 | Standard results. Not re-read; the linear limit is tested. |
+| P/F definition | Yang, J., Lee, C.-H., *AIChE J.* 44, 1325-1334 (1998) | Via Zhang et al. (their Ref. 42). |
+| LDF coefficients | none | ILLUSTRATIVE. |
+
+### SMR hydrogen plant (#473)
+
+`difflow_refinery.hydrogen.smr` models the steam-methane-reforming hydrogen plant. It is a library, not a palette operation. The chain runs:
+
+1. ZnO guard
+2. Steam at S/C
+3. Adiabatic prereformer
+4. Reformer tubes
+5. Process-gas boiler
+6. HT shift, with an optional LT shift
+7. Knock-out
+8. PSA
+9. Furnace: the PSA tail gas plus supplementary natural gas closes the reformer duty
+
+```python
+from difflow import make_stream
+import difflow_refinery.hydrogen as h2
+y = {"methane": 0.89, "ethane": 0.07, "propane": 0.01, "n_butane": 0.0011,   # IEAGHG 2017/02 stream 2
+     "carbon_dioxide": 0.02, "nitrogen": 0.0089, "hydrogen_sulfide": 5e-6}
+natural_gas = make_stream({k: v * 1455.8 / 3.6 for k, v in y.items()}, 401.15, 3.71e6)   # mol/s
+r = h2.smr_plant(natural_gas, h2.SMRParams(n_tubes=240, psa=h2.PSA(recovery=0.90, purity=0.9999)))
+r["H2"], r["CH4_slip"], r["reformer_duty"], r["fuel"], r["CO2_per_H2"], r["efficiency"]
+plant = h2.H2Plant.from_smr(r, ng_price=4.0)        # a swing producer for the network
+```
+
+- **Reformer tube** (`reformer_tube`):
+  - A 1-D pseudo-homogeneous packed bed with Xu & Froment (1989) intrinsic kinetics times effectiveness factors, integrated along the tube by diffrax (Tsit5).
+  - In `mode="flux"` the total duty of a flux profile is solved so the outlet reaches `T_out`. The solve is a secant on stop-gradient inputs followed by one implicit step. In `mode="wall"` a wall-temperature profile and `U` set the heat input.
+  - The rates use equilibrium constants from the formation table, so a fast tube ends at the `GibbsReactor` equilibrium (tested).
+  - `info["approach"]` is the approach to the reforming equilibrium, in K.
+- **Prereformer** (`prereform`):
+  - Adiabatic Gibbs equilibrium over the C1–C4 feed.
+  - The equilibrium leaves a few ppm C2+, because 2 CH4 = C2H6 + H2. That residue is carried on as its element-equivalent CH4 + H2, so the balances stay exact.
+- **Shift** (`shift`): adiabatic water-gas-shift equilibrium, with an approach ΔT.
+- **Knock-out** (`knock_out`): water condensed to IAPWS-IF97 saturation.
+- **PSA** (`purify`): either the `PSA(recovery, purity)` shortcut, or the cycle model `HydrogenPSA` numbered up from Zhang's reference bed.
+  - The cycle model is calibrated on a ~7 bar bed, so it gives a low recovery at 25 bar (about 0.57).
+  - Use the shortcut to represent a plant's PSA.
+- **Furnace** (`furnace`):
+  - Tail gas plus fuel burnt with air at a flue O2.
+  - The radiant duty is the heat released down to `T_bridgewall`.
+  - The supplementary fuel is solved in closed form, because the balance is affine in the fuel.
+- **AD:**
+  - The plant differentiates in both modes. Set the tube's mode with `ReformerTubeParams(adjoint="reverse" | "forward")`.
+  - Both modes are tested against finite differences, and against each other through the whole plant.
+  - `smr_block` is the planning block, with levers natural gas, S/C and `T_out`. `link_smr` feeds a producer of `h2_block`.
+
+**Validation against the IEAGHG 2017/02 base case** (`TestIEAGHG`): the same natural gas at 1455.8 kmol/h, 240 tubes, S/C 2.75, `T_out` 920 °C, and PSA recovery 0.90 taken from the report's streams 7 and 12–13.
+
+| | IEAGHG 2017/02 | difflow |
+|---|---|---|
+| H2 (product + recycle), kmol/h | 4490.6 | 4455.5 |
+| CH4 slip, dry | 3.3–4% | 3.57% |
+| Radiant duty, MW | 96.1 (82.63 MMkcal/h) | 98.3 |
+| HTS outlet, °C | 412 | 412.3 |
+| PSA inlet H2 | 75.63% | 75.52% |
+| Prereformer C2+ | ≤ 500 ppmv | 5 ppm |
+| HTS alone, from stream 5: outlet T, CO | 412 °C, 3.66% | 413.0 °C, 3.47% |
+
+The equilibrium T of the report's reformer outlet gas lies between its stated 900 and 950 °C, at about 918 °C.
+
+Two quantities are deliberately not compared:
+
+- **Supplementary fuel.** The report does not give the combustion-air preheat temperature, and the fuel moves with it: 449 kmol/h with cold air, 314 kmol/h with air at 300 °C, against the report's 240.
+- **Efficiency.** The report exports steam, which this model does not credit.
+
+### SMR hydrogen plant: references
+
+| What | Source | Status |
+|---|---|---|
+| Rate equations, k and K pre-exponentials (Table 6, reference activity), E and ΔH (Table 5) | Xu, J., Froment, G.F., *AIChE J.* 35, 88–96 (1989), doi:10.1002/aic.690350109 | Read in the primary source. Fresh catalyst is ×2.246 (p. 94), so k1 becomes 9.49e15. The data span 773–848 K and 3–15 bar, so a reformer tube is an extrapolation, as it is in Part II. |
+| K1, K2, K3 expressions used with those rates | Hou, K., Hughes, R., *Chem. Eng. J.* 82, 311–328 (2001), doi:10.1016/S1385-8947(00)00367-3, Table 3 | Secondary source (Part I has none). Converted from kPa² to bar². The model uses the formation table instead, and the two agree within 11% in K over 700–1200 K. |
+| Tube heated length (11.12 m), inside diameter, η ≈ 0.03, pressure drop | Xu, J., Froment, G.F., *AIChE J.* 35, 97–103 (1989), doi:10.1002/aic.690350110, Table 2, Figs. 3 and 6 | Table 2 read in the primary source. η and ΔP were read off the figures, so they are approximate. |
+| Plant defaults and the benchmark: S/C, temperatures, pressures, flue O2, stream compositions, radiant duty, PSA recovery | IEAGHG Technical Report 2017/02, Amec Foster Wheeler (2017), base case: §2 text, heat and material balance, equipment list | Read in the primary source. |
+| Catalyst bulk density, wall-mode `U` and wall profile, flux shape, air preheat, stack T, reformer inlet T | none | ILLUSTRATIVE. |
+
 ---
 
 (refinery-plant)=
@@ -3692,6 +3971,312 @@ which is its own source). The notes behind each choice are in the module
 | `indole` | C8H7N | 156.6 | API TDB | cross-checked | 328.44 | Yaws | Joback | 298.15-1000, estimate |
 | `carbazole` | C12H9N | 200.7 | CRC | unverified | -- | -- | Joback | 298.15-1000, estimate |
 | `aniline` | C6H7N | 86.86 | API TDB | cross-checked | 319.87 | Yaws | TRC fit | 298.15-1000, 0.2 % |
+
+### Sulfur species, wide-range Cp and liquid sulfur (#467)
+
+The Claus unit and the tail-gas treater need the sulfur vapour species,
+carbonyl sulfide and carbon disulfide, and they need them at furnace
+temperatures (1300-1600 K). #467 adds them, read from the primary
+NIST-JANAF tables (Chase 1998, janaf.nist.gov):
+
+| Species | Key | JANAF table | Hf (kJ/mol) | S° (J/mol/K) | Cp fit (K), max dev |
+| --- | --- | --- | --- | --- | --- |
+| S2 | `sulfur_s2` | S-012 | 128.600 | 228.165 | 298.15-1500, 0.5 % |
+| S3 | `sulfur_s3` | S-016 | 141.461 | 269.517 | 298.15-1500, 1.0 % |
+| S4 | `sulfur_s4` | S-017 | 145.771 | 310.646 | 298.15-1500, 1.2 % |
+| S5 | `sulfur_s5` | S-018 | 109.370 | 308.638 | 298.15-1500, 1.4 % |
+| S6 | `sulfur_s6` | S-019 | 101.922 | 354.076 | 298.15-1500, 1.4 % |
+| S7 | `sulfur_s7` | S-020 | 113.679 | 407.673 | 298.15-1500, 1.1 % |
+| S8 | `sulfur_s8` | S-021 | 100.416 | 430.311 | 298.15-1500, 0.9 % |
+| COS | `carbonyl_sulfide` | C-094 | -138.407 | 231.581 | 298.15-1500, 0.7 % |
+| CS2 | `carbon_disulfide` | C-099 | 116.943 | 237.977 | 298.15-1500, 0.5 % |
+
+The allotropes' Hf is relative to rhombic S(cr), as JANAF gives it. Their
+`status` is `evaluated table`. TRC puts S3-S8 4-7 kJ/mol above JANAF. JANAF
+is kept so that the whole S2-S8 set and liquid sulfur come from one
+evaluation (`tc.HF_CROSSCHECK` has the alternatives). The Cp cubics are
+least squares on the relative deviation, constrained to rise with T
+(source `JANAF_MONO`); an unconstrained cubic turns over near the top of
+the range for the large rings.
+
+**Wide-range Cp.** The table's cubics stop at 1000 K for H2S, NH3 and CH4,
+and they extrapolate badly beyond it: against JANAF at 1500 K, H2S is 5.6 %
+low, NH3 6.6 % and CH4 16 %. `tc.WIDE_CP` holds 298.15-1800 K JANAF fits
+(within 2.1 %) for H2, N2, O2, H2O, CO, CO2, SO2, H2S, NH3, CH4, S2-S8, COS
+and CS2. A model opts in:
+
+```python
+gas = tc.IdealGasSet(["H2S", "SO2", "S2", "H2O"], cp_basis="wide")
+gas.ln_K([-2, -1, 1.5, 2], 1300.0)    # Claus reaction to S2 in the furnace
+```
+
+The table's own `cp` is unchanged, so no existing number moves. A species
+without a wide fit raises `KeyError`.
+
+**Liquid sulfur.** `tc.liquid_sulfur_enthalpy/entropy/gibbs(T)` are per
+mol of S atoms, on the table's basis, from JANAF S-004 (298.15-1500 K,
+metastable below 388.36 K). Cp is piecewise linear between the tabulated
+points, plus a per-segment correction chosen so that H **and** S equal the
+table at every node. G is then exactly consistent (dG/dT = -S, tested), and
+the λ-transition at 432 K (the polymerisation Cp cusp) is carried in H and
+S. `tc.sulfur_vapor_pressures(T)` gives the partial pressures of S2...S8 over
+the liquid.
+
+Validated against JANAF itself:
+
+- ln K of 2 H2S + SO2 → 3/2 S2 + 2 H2O, S8 → 4 S2, S6 → 3 S2, COS and CS2
+  hydrolysis at 600-1500 K agrees with JANAF's tabulated log Kf to < 1 kJ/mol
+  in ΔrG°.
+- The S(l) → ½ S2(g) changeover falls at JANAF's 882.117 K (±1 K).
+- The S2, S6 and S8 pressures at 600 and 800 K are within 0.4 kJ/mol of
+  10^log Kf.
+
+**A limitation of the JANAF data.** Summed straight from the tables, the
+total vapour pressure is 0.56 bar at 700 K, and 1 atm falls near 745 K. The
+measured sulfur point is 444.6 °C = 717.75 K (Stimson 1961, IPTS-48). The
+JANAF S6-S8 data make the vapour about 2× too low near the boiling point. A
+test pins the gap, so the JANAF vapour is not mistaken for a vapour-pressure
+correlation: a sulfur condenser should use a measured one.
+
+References:
+
+- Chase, M.W., *NIST-JANAF Thermochemical Tables*, 4th ed., J. Phys. Chem.
+  Ref. Data Monograph 9 (1998). Tables S-004, S-012, S-016 to S-021, C-094,
+  C-099, H-080, H-083, C-067, O-034, H-064, C-093, C-095, H-050, N-023 and
+  O-029 were read at janaf.nist.gov/tables/.
+- Stimson, H.F., "International Practical Temperature Scale of 1948: Text
+  Revision of 1960", J. Res. Natl. Bur. Stand. 65A, 139-145 (1961), Table 1.
+
+### Coke combustion (shared by the FCC and CCR regenerators, #470)
+
+`difflow_refinery.combustion` burns coke given as element mass flows (C, H,
+S, N; kg/s). The FCC regenerator uses it, and so does the CCR reformer's
+continuous regenerator. It is a library.
+
+```python
+from difflow_refinery import combustion as cb
+
+el = {"C": 0.9, "H": 0.07, "S": 0.02, "N": 0.01}             # kg/s
+out = cb.burn(el, cb.arthur_co_co2(980.0), flue_o2=0.02)      # or air_rate= (kg/s)
+out["air"], out["flue"], out["o2_required"]                   # mol/s
+cb.gas_enthalpy(out["flue"], 980.0)                           # W, Hf + int Cp
+cb.heat_of_combustion(el, 0.0)                                # W released, LHV basis
+```
+
+| Item | Model | Source |
+|---|---|---|
+| Stoichiometry | C to CO2/CO, H to H2O, S to SO2, N to N2 | -- |
+| CO/CO2 | given, or `10^3.4 exp(-12400/RT)` (R in cal/mol/K) | Arthur (1951), constants as quoted (unverified) |
+| Air | dry, 20.95 mol% O2, Ar lumped into N2 | U.S. Standard Atmosphere (1976) |
+| Atomic weights | C 12.011, H 1.008, N 14.007, O 15.999, S 32.06 | IUPAC CIAAW 2021 |
+| Gas enthalpy | `Hf(298) + int Cp dT`, the shared table | CODATA Hf, JANAF Cp fits |
+
+Coke's enthalpy of formation is taken as zero (it is treated as the
+elements). Its heat of combustion therefore follows from its composition.
+
+**Validation** (`tests/refinery/test_combustion.py`):
+
+- `heat_of_combustion` returns the CODATA values: 393.51 kJ/mol for C to
+  CO2, 110.53 kJ/mol for C to CO, 120.913 kJ/mol for H to H2O(g), and 296.81
+  kJ/mol for S to SO2.
+- The C, H, S, N and O balances close to 1e-12, and so does the flue-O2
+  spec.
+- The `flue_o2` and `air_rate` specs give the same result when run each way.
+- `check_grads` passes in forward and reverse mode.
+
+The FCC regenerator is **bit-identical** after the move. The test checks the
+float.hex of its combustion and of the flue enthalpy. Four whole FCC solves
+were also compared bit for bit when the module was moved.
+
+The Arthur constants (A = 2512, E = 51.88 kJ/mol) give a CO/CO2 ratio of 7.49
+at 1073 K. That matches the 7.5 quoted alongside them for 730-1170 K. The
+paper itself was not accessible, so the constants are still marked
+unverified.
+
+References:
+
+- Arthur, J.R., "Reactions between carbon and oxygen", Trans. Faraday Soc.
+  47, 164-178 (1951), doi:10.1039/TF9514700164.
+- Prohaska, T. et al. (IUPAC CIAAW), "Standard atomic weights of the
+  elements 2021", Pure Appl. Chem. 94, 573-600 (2022),
+  doi:10.1515/pac-2019-0603.
+- *U.S. Standard Atmosphere, 1976*, NOAA/NASA/USAF (NASA-TM-X-74335; DTIC
+  ADA035728): O2 20.9476 % by volume in sea-level dry air.
+
+### Amine treating unit (#471)
+
+`difflow_refinery.treating` models refinery amine treating with real
+equilibrium, rates and heat. It covers the contactors, the rich flash, the
+lean/rich exchanger and a steam-stripped regenerator, all in one
+differentiable closed loop. It is a library. The gas plant's `AmineTreater`
+remains the fixed-removal-fraction shortcut.
+
+<!-- doc-test: skip: API sketch on the user's sour_gas stream; executed in tests/refinery/test_treating.py -->
+```python
+from difflow_refinery import treating as tr
+
+tray = tr.TrayParams(area=200.0, k_G=1e-5, k_L=1e-4)   # per stage; your column's values
+p = tr.AmineUnitParams("MDEA", 0.45, (tr.Contactor("fuel", 120.0, 8, tray),),
+                       Q_reboiler=5e6, n_regenerator=6)
+r = tr.solve_amine_unit(p, {"fuel": sour_gas})       # sour_gas: F_<name>, T, P
+r.sweet["fuel"], r.acid_gas, r.flash_gas, r.lean, r.duties, r.makeup_water
+jax.jacfwd(lambda x: tr.solve_amine_unit(p, {"fuel": sour_gas}, circulation=(x[0],),
+                                         Q_reboiler=x[1]).sweet["fuel"]["F_hydrogen_sulfide"])
+```
+
+| Part | Model | Source |
+|---|---|---|
+| Equilibrium | Kent-Eisenberg (`difflow_cc.equilibrium.acid_gas`) | see that module |
+| Absorber | stages with a Murphree vapor efficiency `E = 1 - exp(-N_OG)` | Murphree (1925); Lockett (1986) |
+| H2S transfer | gas-film controlled, `K_OG = k_G` | Kohl & Nielsen (1997) |
+| CO2 transfer | `1/K_OG = 1/k_G + He/(E k_L)`, `E = sqrt(1+Ha^2)`, Ha computed on the free amine | Danckwerts (1970) |
+| k2 CO2 + MDEA | `1.19e8 exp(-5103/T)` m3/kmol/s | Versteeg & van Swaaij (1988), CES |
+| k2 CO2 + DEA | `log10 k2 = 10.4493 - 2274.5/T` L/mol/s (apparent) | Blanc & Demarais (1981), via Blauwhoff et al. (1983) |
+| D_CO2, He_CO2 | water's values, with `D ~ eta^-0.8` | Versteeg & van Swaaij (1988), JCED |
+| Viscosity | MDEA from a table fit; DEA at 298 K; water from IAPWS 2008 | Karunarathne et al. (2020); Versteeg & van Swaaij (1988); Huber et al. (2009) |
+| Dissolved light gases | Henry's law | Sander (2015) |
+| Regenerator | equilibrium stages, condenser with water reflux, MESH equations solved by Newton | Kohl & Nielsen (1997) |
+| Heats of absorption, amine Cp, density | constants | **ILLUSTRATIVE** |
+
+**Validation** (`tests/refinery/test_treating.py`):
+
+- The property correlations match their source tables:
+  - k2 matches Versteeg's Table 3 to within 7%.
+  - The MDEA viscosity matches Karunarathne's Table A5 to within 1.5%.
+  - The water viscosity matches IAPWS 2008 to within 0.2%.
+- The constant heats of absorption fall inside the KE model's own van 't Hoff
+  heat over 313–383 K.
+- The regenerator reproduces J.M. Campbell's MDEA case: 50 wt%, 214 kPa, 10
+  stages, 1.1 lb of steam per gallon.
+  - Reboiler: 126.9 °C (case: about 126 °C).
+  - Lean loading: 0.0037 (case: 0.002–0.004).
+  - The mass and energy balances close to 1e-8.
+- MDEA lets more than 80% of the CO2 through, while DEA lets less than 60%
+  through, with a Hatta number 5 or more times larger. H2S efficiency is the
+  same for both amines because H2S is gas-film controlled.
+- With a very large tray area every stage reaches equilibrium.
+- In the closed loop, the S, C and water balances close, and the gradients
+  with respect to circulation and duty match finite differences.
+
+Limitations:
+
+- The absorber is isothermal, so there is no temperature bulge.
+- The physical solubility of CO2 in the solution is taken as water's
+  (ILLUSTRATIVE).
+- The tray coefficients are user inputs.
+- The regenerator check is against a trade article (Moshfeghian, J.M.
+  Campbell Tip of the Month, July 2018), not GPSA.
+
+References:
+
+- Versteeg, G.F., van Swaaij, W.P.M., Chem. Eng. Sci. 43, 587-591 (1988),
+  doi:10.1016/0009-2509(88)87018-0.
+- Versteeg, G.F., van Swaaij, W.P.M., J. Chem. Eng. Data 33, 29-34 (1988),
+  doi:10.1021/je00051a011.
+- Blauwhoff, P.M.M., Versteeg, G.F., van Swaaij, W.P.M., Chem. Eng. Sci. 38,
+  1411-1429 (1983), doi:10.1016/0009-2509(83)80077-3.
+- Karunarathne, S.S., Eimer, D.A., Øi, L.E., Appl. Sci. 10, 3196 (2020),
+  doi:10.3390/app10093196.
+- Huber, M.L. et al., J. Phys. Chem. Ref. Data 38, 101-125 (2009),
+  doi:10.1063/1.3088050.
+- Sander, R., Atmos. Chem. Phys. 15, 4399-4981 (2015),
+  doi:10.5194/acp-15-4399-2015.
+- Kohl, A.L., Nielsen, R.B., *Gas Purification*, 5th ed., Gulf (1997).
+
+### Sulfur recovery unit: Claus + SCOT tail-gas treating (#472)
+
+`difflow_refinery.sulfur` is a modified-Claus train with air-demand control
+and a SCOT-type tail-gas unit whose acid gas is recycled to the furnace. It
+is a library, built on the `GibbsReactor` and on the amine absorber of
+`difflow_refinery.treating`.
+
+<!-- doc-test: skip: API sketch on the user's acid_gas stream; full SRU solve, executed in tests/refinery/test_sulfur.py -->
+```python
+from difflow_refinery import sulfur as su
+from difflow_refinery.treating import TrayParams
+
+beds = (su.ConverterParams(523.15, hydrolysis=(0.9, 0.7)), su.ConverterParams(483.15))
+claus = su.ClausParams(converters=beds, T_condensers=(443.15, 438.15, 413.15), T_air=473.15)
+air, r = su.solve_air(acid_gas, claus)            # tail gas H2S = 2 SO2
+r["recovery"], r["sulfur_by_condenser"], r["steam_whb"], r["bed"][0]["dew_margin"]
+
+tgtu = su.TGTUParams(tray=TrayParams(area=200.0, k_G=1e-5, k_L=1e-4), L=30.0, n_stages=12)
+sru = su.solve_sru(acid_gas, claus, tgtu)         # Claus + TGTU + acid-gas recycle
+sru["recovery"], sru["SO2_emitted_kg_h"], sru["recycle"]
+jax.grad(lambda h: su.solve_sru(dict(acid_gas, F_hydrogen_sulfide=h), claus, tgtu)["SO2_emitted"])
+```
+
+| Part | Model | Source |
+|---|---|---|
+| Furnace | adiabatic Gibbs minimisation over H2S, SO2, S2–S8, H2, CO, CO2, COS, CS2, H2O, N2, O2, NH3, CH4 | JANAF via `thermochemistry` |
+| Air | O2 20.946 mol%, the rest as N2 | U.S. Standard Atmosphere (1976) |
+| WHB, condensers | non-sulfur gas frozen; S2–S8 in gas equilibrium; condensation to saturation; duty to steam | JANAF; liquid S JANAF S-004 |
+| Sulfur vapour pressure | Wagner equation, liquid Gibbs energy corrected so the saturated total matches it | Ferreira & Lobo (2011) |
+| Converters | reheat; specified COS/CS2 hydrolysis; adiabatic equilibrium restricted to Claus + allotropes, with an approach dT | — |
+| Air demand | secant on tail-gas `H2S - 2 SO2 = 0`, implicit derivative | Kohl & Nielsen (1997) |
+| Hydrogenation | adiabatic equilibrium restricted to SO2/S hydrogenation, COS/CS2 hydrolysis, shift | — |
+| Quench | water to saturation | IAPWS-IF97 |
+| Absorber | Kent-Eisenberg MDEA, Murphree trays | see the amine section |
+| Regenerator | NOT solved: the solvent is returned to its lean loading; acid gas leaves the reflux drum saturated | — |
+| Recycle | substitution, then one implicit Newton step | — |
+
+**Validation** (`tests/refinery/test_sulfur.py`):
+
+- The vapour pressure reproduces Ferreira & Lobo's own point (28.4 Pa at
+  424.79 K) and their normal boiling point. Before correction, the JANAF
+  liquid is 24% high at 400 K and 30% low at 700 K.
+- The Gamson-Elkins curve is computed for stoichiometric H2S/SO2 in air at
+  1 atm, both with S2/S6/S8 and with S2–S8:
+  - Its minimum lies at 760–880 K (Kohl & Nielsen: about 811 K).
+  - Conversion exceeds 99% at 400 K.
+  - Between 1300 and 1600 K, conversion is 60–78% (furnace values: 60–75%).
+- Pure H2S burnt with cold air reaches an adiabatic flame of 1560 K, inside
+  Kohl & Nielsen's 1800–2500 °F range.
+- The S, H, O, C and N balances close through the train. The condenser and
+  converter energy balances close to round-off.
+- Recovery at equilibrium:
+
+  | Beds | Recovery |
+  |---|---|
+  | 2 | 97.5% |
+  | 3 | 98.6% |
+  | 4 | 98.9% |
+
+  These sit at or a little above the AP-42 practical ranges, as an ideal
+  upper bound should. AP-42 gives 92–95/95–96/96–97% (2015) and
+  94–96/96–97.5/97–98.5% (1995). The fourth bed adds less than 1%, as Kohl &
+  Nielsen state.
+- With the TGTU and the recycle closed (2 beds), recovery is 99.987% and the
+  treated gas carries about 60 ppmv S. Kohl & Nielsen give SCOT 10–400 ppmv,
+  and AP-42 gives about 99.9%.
+- The gradients match finite differences:
+  - air with respect to feed H2S;
+  - recovery with respect to air and bed temperatures;
+  - the closed plant's SO2 emissions.
+
+Limitations:
+
+- The furnace is at equilibrium. Real furnaces fall short in H2, COS and
+  CS2.
+- The Sames-Paskall furnace correlations were not used: their two secondary
+  transcriptions disagree, and the original could not be read.
+- The Gamson-Elkins comparison is against features of the curve (minimum,
+  limits), not against digitised points.
+- The regenerator is not solved inside the SRU.
+- H2S and CO2 dissolved in the quench water are neglected.
+- Sulfur mist entrainment is not modelled.
+
+References:
+
+- Ferreira, A.G.M., Lobo, L.Q., "The low-pressure phase diagram of sulfur",
+  J. Chem. Thermodyn. 43, 95-104 (2011), doi:10.1016/j.jct.2010.07.007.
+- Gamson, B.W., Elkins, R.H., Chem. Eng. Prog. 49, 203-215 (1953).
+- Kohl, A.L., Nielsen, R.B., *Gas Purification*, 5th ed., ch. 8 (1997),
+  doi:10.1016/B978-088415220-0/50008-2.
+- U.S. EPA, AP-42 Section 8.13, Sulfur Recovery (1995; 4/2015).
+- El-Bishtawi, R., Haimour, N., Fuel Process. Technol. 86, 245-260 (2004),
+  doi:10.1016/j.fuproc.2004.04.001.
+- U.S. Standard Atmosphere, 1976, NOAA-S/T 76-1562.
 
 (refinery-validation)=
 ## Validation
