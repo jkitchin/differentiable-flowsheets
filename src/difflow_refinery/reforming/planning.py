@@ -166,4 +166,106 @@ def reformer_block(reformer: CatalyticReformer, feed: NaphthaFeed, levers: Seque
                  u0=model.u0, jit=jit, metadata=metadata, **kwargs)
 
 
-__all__ = ["DEFAULT_OUTPUTS", "LEVERS", "ReformerPlanningModel", "reformer_block"]
+
+#: Levers of :func:`ccr_block`: the reformer's plus the catalyst circulation.
+CCR_LEVERS: dict[str, str] = {**LEVERS, "circulation": "kg/h"}
+
+#: Default outputs of :func:`ccr_block`.
+CCR_OUTPUTS: tuple[str, ...] = (
+    "reformate.yield_vol", "reformate.RON", "h2.net_mol_s", "h2.export_mol_s",
+    "ccr.spent_coke_wt", "ccr.coke_burn_kg_h", "ccr.burn_capacity_used", "ccr.burn_T_margin_K")
+
+
+class CCRPlanningModel(ReformerPlanningModel):
+    """``u -> y`` for a CCR reformer (the ``fn`` of :func:`ccr_block`).
+
+    The reformer's levers plus ``circulation`` (kg/h). Not jit-able: the CCR's
+    coke-activity loop is Python on the inputs' primal values
+    (:mod:`.ccr`), so the block is built with ``jit=False``.
+    """
+
+    def __init__(self, ccr, feed: NaphthaFeed, levers: Sequence[str], outputs: Sequence[str],
+                 max_iter: int = 400, tol: float = 1e-10):
+        unknown = sorted(set(levers) - set(CCR_LEVERS))
+        if unknown:
+            raise ValueError(f"unknown levers {unknown}; available: {sorted(CCR_LEVERS)}")
+        self.reformer = ccr.reformer
+        self.ccr_reformer = ccr
+        self.feed = feed
+        self.levers = list(levers)
+        self.outputs = list(outputs)
+        self.max_iter = max_iter
+        self.tol = tol
+        base = ccr.solve(feed, tol=tol)
+        if not base.converged:
+            raise RuntimeError("the CCR reformer did not converge at the base point")
+        self.base = base
+        self.tear = base.tear
+        self.last_solve_method = base.reformer.solve_method
+        self.last_solve_acceleration = base.reformer.acceleration
+        missing = sorted(set(self.outputs) - set(base.outputs()))
+        if missing:
+            raise ValueError(f"unknown outputs {missing}")
+        p = ccr.params
+        g = feed.group_fractions("volume")
+        self._base_values = {
+            "wait": float(p.wait) - 273.15, "P_separator": float(p.P_separator) / 1e5,
+            "H2_HC": float(p.H2_HC), "LHSV": float(p.LHSV), "feed.rate": float(feed.mass_flow),
+            "feed.naphthenes": 100.0 * float(g["naphthenes"]), "c4_recovery": float(p.c4_recovery),
+            "circulation": float(ccr.ccr.circulation) * 3600.0,
+        }
+        self.u0 = [self._base_values[k] for k in self.levers]
+
+    def solve(self, u):
+        from dataclasses import replace
+
+        u = jnp.asarray(u, dtype=float)
+        rl = [k for k in self.levers if k != "circulation"]
+        sub = jnp.stack([u[self.levers.index(k)] for k in rl]) if rl else jnp.zeros(0)
+        levers, self.levers = self.levers, rl
+        try:
+            p, feed = self._params_and_feed(sub)
+        finally:
+            self.levers = levers
+        ccr = self.ccr_reformer.ccr
+        if "circulation" in self.levers:
+            ccr = replace(ccr, circulation=u[self.levers.index("circulation")] / 3600.0)
+        res = self.ccr_reformer.solve(feed, p, ccr, tear_initial=self.tear, tol=self.tol,
+                                      max_iter=self.max_iter)
+        self.last_solve_method = res.reformer.solve_method
+        self.last_solve_acceleration = res.reformer.acceleration
+        return res
+
+
+def ccr_block(ccr, feed: NaphthaFeed, levers: Sequence[str], outputs: Sequence[str] | None = None,
+              *, name: str = "ccr", bounds: Mapping[str, tuple[float, float]] | None = None,
+              span: float = 0.05, **kwargs: Any) -> Block:
+    """A :class:`~difflow.planning.Block` for a CCR reformer
+    (:class:`~difflow_refinery.reforming.ccr.CCRReformer`).
+
+    As :func:`reformer_block`, with the lever ``circulation`` (kg/h) and the
+    ``ccr.*`` outputs (default :data:`CCR_OUTPUTS`). Forward mode
+    (``ad_mode="fwd"``), never jitted (``jit=False``, see :class:`CCRPlanningModel`).
+    """
+    outputs = list(outputs or CCR_OUTPUTS)
+    model = CCRPlanningModel(ccr, feed, levers, outputs)
+    bounds = dict(bounds or {})
+    lb, ub = [], []
+    for k, x in zip(model.levers, model.u0):
+        lo, hi = bounds.get(k, (x - abs(x) * span, x + abs(x) * span))
+        if not lo <= x <= hi:
+            raise ValueError(f"{k}: base value {x:g} is outside its bounds ({lo:g}, {hi:g})")
+        lb.append(lo)
+        ub.append(hi)
+    kwargs.setdefault("ad_mode", "fwd")
+    kwargs["jit"] = False
+    metadata = dict(kwargs.pop("metadata", {}) or {})
+    metadata.setdefault("source", "difflow_refinery.reforming.ccr_block")
+    metadata.setdefault("u_units", [CCR_LEVERS[k] for k in model.levers])
+    metadata.setdefault("y_units", [output_units(k) for k in outputs])
+    return Block(name=name, fn=model, u_names=list(levers), y_names=outputs, lb=lb, ub=ub,
+                 u0=model.u0, metadata=metadata, **kwargs)
+
+
+__all__ = ["DEFAULT_OUTPUTS", "LEVERS", "ReformerPlanningModel", "reformer_block",
+           "CCR_LEVERS", "CCR_OUTPUTS", "CCRPlanningModel", "ccr_block"]
