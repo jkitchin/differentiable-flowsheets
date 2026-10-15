@@ -351,9 +351,10 @@ class TestParameters:
         non_declarative = [n for n, s in cat.items() if not s.is_declarative]
         assert len(non_declarative) < 10, non_declarative
         # every one of them is a reactor, and it is always the rate law
+        # (or, for the equilibrium reactor, its thermodynamics object)
         for name in non_declarative:
             assert any(
-                "fn" in p for p in cat[name].callable_parameters
+                "fn" in p or p == "thermo" for p in cat[name].callable_parameters
             ), f"{name}: {cat[name].callable_parameters}"
 
     def test_params_class_is_found(self, cat):

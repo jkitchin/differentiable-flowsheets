@@ -512,6 +512,92 @@ def methanol_out(X):
 print(float(methanol_out(0.25)), float(jax.grad(methanol_out)(0.25)))   # 25.0, 100.0
 ```
 
+### GibbsReactor
+
+**Location**: `difflow/units/gibbs.py`
+
+**Class**: `GibbsReactor` (parameters: `GibbsReactorParams`; thermodynamics: `GibbsThermo`)
+
+**Description**: Equilibrium reactor, like a simulator's `RGibbs` block. The
+outlet minimises the total Gibbs energy of an ideal-gas mixture subject to the
+element balances. No reactions need to be listed. The modes are:
+
+- **Isothermal**: at `T_out`, or the inlet T.
+- **Adiabatic**: `mode="adiabatic"`, with an optional `heat_duty`.
+
+It can also run short of equilibrium:
+
+- **Overall**: `approach_dT`.
+- **Per reaction**: `reactions` plus `reaction_approach_dT`. The outlet is then
+  restricted to those reactions, and species in none of them pass through as
+  inerts.
+
+The thermodynamics are pluggable. `GibbsThermo` takes Hf, S° and a Cp cubic.
+The refinery's `IdealGasSet` also works, as does any object with `names`,
+`gibbs(T)`, `enthalpy(T)` and `ELEMENTS`. A species that contains an element
+the feed lacks comes out at exactly zero.
+
+#### Governing Equations
+
+$$\min_n \sum_i n_i\left[\frac{g_i^\circ(T)}{RT} + \ln\frac{n_i}{N} + \ln\frac{P}{P^\circ}\right]
+\quad \text{s.t.}\quad A n = A n^{in},\qquad P^\circ = 1\ \text{bar}$$
+
+The solver is the element-potential method (Smith & Missen 1982; Reynolds's
+STANJAN). At the minimum,
+$n_i = N\exp\left(\sum_k A_{ki}\lambda_k - g_i^\circ/RT - \ln P/P^\circ\right)$.
+Newton's method, with a backtracking line search, then solves for one
+potential $\lambda_k$ per independent element plus $\ln N$. Adiabatic mode
+adds $T$ and $\sum_i n_i h_i(T) = H_{in} + Q$.
+
+Every $n_i$ is an exponential, so trace species stay positive. Gradients come
+from the implicit-function theorem at the converged point, not from unrolling
+Newton, so `jax.grad`, `jax.jacfwd` and `jit` all work.
+
+`info` reports:
+
+- `converged`, `residual` and `iterations`;
+- `element_potentials`;
+- `T`;
+- `heat_duty`;
+- `element_balance`.
+
+#### Validation
+
+`tests/test_gibbs_reactor.py` and `tests/test_gibbs_reactor_idaes_reference.py` check:
+
+- **Closed forms**: WGS and SMR equilibrium quotients equal $K(T)$ to 1e-9 in
+  $\ln K$.
+- **JANAF**: a `GibbsThermo` built from the NIST-JANAF tables (CO C-093,
+  CO2 C-095, H2O H-064, H2 H-050, CH4 C-067) reproduces JANAF's $\log K_f$ at
+  800–1200 K. The worst miss is 0.019 in $\ln K$, which is the Cp-cubic fit;
+  the JANAF columns themselves agree to 0.001.
+- **The refinery thermo table**: it agrees with JANAF to within 0.03.
+- **IDAES**: the `GibbsReactor` of IDAES 2.10 + IPOPT, on the same
+  constants, agrees in flow to 1e-6 (relative) and in adiabatic T to 1e-9 K.
+- **Balances, energy closure and gradients**: element balances close to
+  round-off, the energy balance closes, and `check_grads` passes in T, P, the
+  feed and Q. $dx_B/dT$ for A ⇌ B equals the van 't Hoff closed form.
+
+#### Example Usage
+
+```python
+import jax
+from difflow import GibbsReactor, GibbsReactorParams, make_stream
+from difflow_refinery.thermochemistry import IdealGasSet
+
+th = IdealGasSet(["methane", "water", "carbon_monoxide", "carbon_dioxide", "hydrogen"])
+feed = make_stream({"methane": 1.0, "water": 3.0}, T=1100.0, P=20e5)
+
+def h2(T_out):
+    out, info = GibbsReactor(GibbsReactorParams(thermo=th, T_out=T_out))(feed)
+    return out["F_hydrogen"]
+
+print(float(h2(1100.0)), float(jax.grad(h2)(1100.0)))   # mol/s, mol/s/K
+
+out, info = GibbsReactor(GibbsReactorParams(thermo=th, mode="adiabatic"))(feed)
+print(float(info["T"]))                                  # ~855 K: SMR is endothermic
+```
+
 ---
 
 (separators)=
