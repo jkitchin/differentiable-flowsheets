@@ -62,3 +62,9 @@ def test_blend_grid_from_the_characterization(char):
     assert np.isfinite(float(comp.properties["SG"]))
     with pytest.raises(ValueError, match="outside the characterization"):
         grid.flows({"F_benzene": 1.0})
+
+
+def test_warns_when_the_curve_starts_above_the_light_ends():
+    # PCT starts at 5 vol%, LIGHT totals 3 vol%: 2 vol% joins the first cut.
+    with pytest.warns(UserWarning, match="joins the first cut"):
+        dr.characterize(_assay())
