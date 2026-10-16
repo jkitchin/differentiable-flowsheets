@@ -128,3 +128,13 @@ def test_hydrogen_matched_feed_gradients_are_finite(grid_with_hydrogen):
     _, jv = jax.jvp(lambda x: n2a(x, 0.0), (x0,), (jnp.ones_like(x0),))
     assert np.all(np.isfinite(np.asarray(gx))) and np.isfinite(float(gh)) and np.isfinite(float(jv))
     assert float(gh) < 0.0          # more hydrogen, fewer rings
+
+
+def test_a_grid_with_hydrogen_blends(grid_with_hydrogen):
+    g, stream = grid_with_hydrogen
+    c = dr.BlendComponent.from_stream("naphtha", stream, g)
+    m = jnp.stack([jnp.asarray(stream[f"F_{n}"]) for n in g.names]) * jnp.asarray(g.MW)
+    assert float(c.properties["H_wt"]) == pytest.approx(float(jnp.sum(m * g.qualities["H_wt"]) / jnp.sum(m)),
+                                                        rel=1e-12)
+    pool = dr.BlendPool("gasoline")([c], [1.0])
+    assert float(pool.properties["H_wt"]) == pytest.approx(float(c.properties["H_wt"]), rel=1e-12)

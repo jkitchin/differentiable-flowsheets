@@ -429,7 +429,7 @@ def cetane_index_d4737(density: Array, t10_C: Array, t50_C: Array,
 #: linear on that basis; the rest are the nonlinear rules above.
 PROPERTY_RULES: dict[str, str] = {
     "SG": "volume",
-    "S_ppm": "mass", "N_ppm": "mass", "CCR_wt": "mass",
+    "S_ppm": "mass", "N_ppm": "mass", "CCR_wt": "mass", "H_wt": "mass",
     "aromatics_vol": "volume", "olefins_vol": "volume",
     "benzene_vol": "volume", "naphthenes_vol": "volume",
     "paraffins_vol": "volume", "smoke_mm": "volume",
