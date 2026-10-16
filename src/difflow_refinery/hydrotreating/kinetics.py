@@ -7,7 +7,8 @@ sulfur atoms in each of the composition module's five
 :data:`~difflow_refinery.composition.SULFUR_CLASSES`, nitrogen atoms in its two
 :data:`~difflow_refinery.composition.NITROGEN_CLASSES`, and counts of
 molecules that are mono-, di- and poly-aromatic, olefinic and naphthenic (the
-paraffins are the rest).
+paraffins are the rest), and the hydro-aromatic sub-counts
+(:data:`HYDRO_ATTRIBUTES`) of the di, mono and naphthene classes.
 
 Reactions (each per cut, on the cut's own attribute concentrations; ``c`` are
 the fugacity-equivalent liquid concentrations of
@@ -16,9 +17,9 @@ the fugacity-equivalent liquid concentrations of
     HDS, class j:   S_j + nu_j H2 -> H2S       r = f k_j c_Sj h(c_H2) / D^2
                                                D = 1 + K_H2S c_H2S + K_N c_Nbasic
     HDN, class j:   N_j + nu_j H2 -> NH3       r = f k_j c_Nj h(c_H2) / (1 + K_H2S c_H2S)
-    poly-aromatic + 2 H2 <-> di-aromatic       r = f k (c_A3 - c_A2 / (K3 (pH2/p0)^2))
-    di-aromatic   + 2 H2 <-> mono-aromatic     r = f k (c_A2 - c_A1 / (K2 (pH2/p0)^2))
-    mono-aromatic + 3 H2 <-> naphthene         r = f k (c_A1 - c_Nn / (K1 (pH2/p0)^3))
+    poly-aromatic + 2 H2 <-> di-aromatic       r = f k (c_A3 - c_A2h / (K3 (pH2/p0)^2))
+    di-aromatic   + 2 H2 <-> mono-aromatic     r = f k (c_A2 - c_A1h / (K2 (pH2/p0)^2))
+    mono-aromatic + 3 H2 <-> naphthene         r = f k (c_A1 - c_Nnh / (K1 (pH2/p0)^3))
     olefin        +   H2 -> paraffin           r = f k c_O h(c_H2)
     cut molecule  +   H2 -> lighter molecule + C1-C4 gas   (the cracking leak)
 
@@ -47,6 +48,24 @@ rises). Every rate is per kg of catalyst.
   1 bar, so ``pH2/p0`` is the H2 partial pressure in bar. Saturation is
   exothermic and loses three or two moles of gas, so the equilibrium recedes
   with temperature and aromatics pass through a minimum.
+* **Only hydro-aromatics dehydrogenate.** The reverse of each step acts on
+  ``c_A2h``, ``c_A1h``, ``c_Nnh`` (:data:`HYDRO_ATTRIBUTES`): the molecules
+  of the lower class that have a partly saturated ring of the higher one --
+  those the forward step made in the bed. The forward step of a class takes
+  its hydro sub-count with it in proportion; the reverse of the di step
+  gives an ordinary di-aromatic. The rest of a lower class has no ring to
+  re-aromatize into the higher one: a naphthalene or biphenyl (the bulk of
+  a gas oil's "di-aromatics") cannot become a phenanthrene, nor an
+  alkylbenzene a naphthalene, and on a sulfided CoMo or NiMo catalyst there
+  is no acid-metal function to make a cyclopentyl naphthene aromatic (that
+  is reforming). Applying the reverse rate to the whole class instead (the
+  code before this note) turned the feed's di-aromatics into
+  poly-aromatics at low H2 pressure and high temperature: a straight-run gas
+  oil at 370 C and 20 bar *made* hydrogen (-4.5 Nm3/m3 chemical) while its
+  poly-aromatics quadrupled. The feed's hydro sub-counts are zero
+  (:func:`~difflow_refinery.hydrotreating.feed.hdt_feed`): tetralins and
+  similar molecules already in a feed are taken as unable to dehydrogenate,
+  which under-states the end-of-run aromatics of a feed rich in them.
 * **H2 stoichiometry** per class (:data:`HDS_H2`, :data:`HDN_H2`) is that of a
   model compound of the class, and the hydrogen not leaving as H2S or NH3
   goes onto the cut (``H += 2 nu - 2`` per sulfur, ``2 nu - 3`` per
@@ -135,14 +154,21 @@ P0_BAR = 1e5
 #: Aromatic classes tracked per cut (molecules with 1, 2, 3+ aromatic rings).
 AROMATIC_CLASSES: tuple[str, ...] = ("mono", "di", "poly")
 
+#: The hydro-aromatic sub-populations: the molecules of a class that were
+#: made in the bed by saturating one ring of the next more aromatic class
+#: (tetrahydrophenanthrene-like di-aromatics, tetralin-like mono-aromatics,
+#: cyclohexyl naphthenes from a mono-aromatic). Each is counted INSIDE its
+#: class as well (``A_di_hydro <= A_di``), and only these can dehydrogenate
+#: back: see "Aromatics saturation" in the module docstring.
+HYDRO_ATTRIBUTES: tuple[str, ...] = ("A_di_hydro", "A_mono_hydro", "naphthenes_hydro")
 #: The hydrotreater's per-cut attributes, in array order.
 HDT_ATTRIBUTES: tuple[str, ...] = (
     ("C", "H") + tuple(f"S_{c}" for c in SULFUR_CLASSES) + tuple(f"N_{c}" for c in NITROGEN_CLASSES)
-    + tuple(f"A_{c}" for c in AROMATIC_CLASSES) + ("olefins", "naphthenes"))
+    + tuple(f"A_{c}" for c in AROMATIC_CLASSES) + ("olefins", "naphthenes") + HYDRO_ATTRIBUTES)
 #: Element counted by each attribute (``None``: a molecule count).
 HDT_ATTRIBUTE_ELEMENTS: tuple[str | None, ...] = (
     ("C", "H") + ("S",) * len(SULFUR_CLASSES) + ("N",) * len(NITROGEN_CLASSES)
-    + (None,) * (len(AROMATIC_CLASSES) + 2))
+    + (None,) * (len(AROMATIC_CLASSES) + 2 + len(HYDRO_ATTRIBUTES)))
 
 # -----------------------------------------------------------------------------
 # Model-compound thermochemistry: read from the refinery's one table
@@ -444,14 +470,22 @@ class HDTKinetics:
         lnK = aromatic_ln_K(T)                                         # 1 bar standard state
         lnK_p = lnK + nuA * jnp.log(jnp.maximum(pH2, 1e-30))        # products/reactant at equilibrium
         inv = jnp.exp(-lnK_p)
-        a3, a2, a1, nn = (cA[:, ai["A_poly"]], cA[:, ai["A_di"]], cA[:, ai["A_mono"]], cA[:, ai["naphthenes"]])
-        r3 = f * kA[0] * (a3 - a2 * inv[0])
-        r2 = f * kA[1] * (a2 - a1 * inv[1])
-        r1 = f * kA[2] * (a1 - nn * inv[2])
+        a3, a2, a1 = cA[:, ai["A_poly"]], cA[:, ai["A_di"]], cA[:, ai["A_mono"]]
+        h2c, h1c, hnc = cA[:, ai["A_di_hydro"]], cA[:, ai["A_mono_hydro"]], cA[:, ai["naphthenes_hydro"]]
+        # forward (saturation) and reverse (dehydrogenation, hydro-aromatics only) rates
+        f3, f2, f1 = f * kA[0] * a3, f * kA[1] * a2, f * kA[2] * a1
+        b3, b2, b1 = f * kA[0] * h2c * inv[0], f * kA[1] * h1c * inv[1], f * kA[2] * hnc * inv[2]
+        r3, r2, r1 = f3 - b3, f2 - b2, f1 - b1
         d_attr = d_attr.at[:, ai["A_poly"]].add(-r3)
         d_attr = d_attr.at[:, ai["A_di"]].add(r3 - r2)
         d_attr = d_attr.at[:, ai["A_mono"]].add(r2 - r1)
         d_attr = d_attr.at[:, ai["naphthenes"]].add(r1)
+        # a saturation step's products are hydro-aromatics of the lower class; saturating a
+        # class takes its hydro share along (f k c_h); the reverse of the di step gives an
+        # ordinary di-aromatic
+        d_attr = d_attr.at[:, ai["A_di_hydro"]].add(r3 - f * kA[1] * h2c)
+        d_attr = d_attr.at[:, ai["A_mono_hydro"]].add(r2 - f * kA[2] * h1c)
+        d_attr = d_attr.at[:, ai["naphthenes_hydro"]].add(r1)
         d_attr = d_attr.at[:, ai["H"]].add(2.0 * nuA[0] * r3 + 2.0 * nuA[1] * r2 + 2.0 * nuA[2] * r1)
         d_gas = d_gas.at[gi["hydrogen"]].add(-jnp.sum(nuA[0] * r3 + nuA[1] * r2 + nuA[2] * r1))
         heat = heat - jnp.sum(dHs[0] * r3 + dHs[1] * r2 + dHs[2] * r1)
@@ -503,7 +537,7 @@ def crack_targets(carbon_per_molecule) -> tuple[int, ...]:
     return tuple(out)
 
 
-__all__ = ["AROMATIC_CLASSES", "HDT_ATTRIBUTES", "HDT_ATTRIBUTE_ELEMENTS", "MODEL_COMPOUNDS",
+__all__ = ["AROMATIC_CLASSES", "HYDRO_ATTRIBUTES", "HDT_ATTRIBUTES", "HDT_ATTRIBUTE_ELEMENTS", "MODEL_COMPOUNDS",
            "MODEL_COMPOUND_NAMES", "HDS_ROUTE_DDS", "HDS_H2", "HDS_HEAT", "HDN_H2", "HDN_HEAT", "HDA_H2",
            "AROMATIC_REACTIONS", "AROMATIC_DH298", "aromatic_ln_K", "aromatic_heat",
            "OLEFIN_HEAT", "CRACK_HEAT", "CRACK_GAS_SPLIT", "HDTKineticParams", "NAPHTHA_HDT_PARAMS", "HDTKinetics",
