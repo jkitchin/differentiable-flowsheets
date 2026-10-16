@@ -81,11 +81,16 @@ naphthene hydrocracking (2 H2 each). The constants were tuned for octane and
 yield, not hydrogen. This is a defect of the parameter set, not of the
 model, and fitting the kinetics is what removes it.
 
-Coke make (kg coke per kg catalyst per second) is an illustrative
-precursor-over-hydrogen form, ``k_c (p_N + p_A) / p_H2`` with an Arrhenius
-``k_c``: coke rises with severity and falls with the hydrogen partial
-pressure, which is the dependence the deactivation literature (e.g. Taskar &
-Riggs 1997) describes; the form and constants are this project's.
+Coke make (kg coke per kg catalyst per second) is first order in the
+precursors and mixed negative first and second order in hydrogen,
+``k_c (p_N + p_A) (1 + K_H p_ref) / (p_H2 (1 + K_H p_H2))`` with an Arrhenius
+``k_c`` and ``p_ref`` = :data:`COKE_P_H2_REF`. That is the form Liu, Fung, Ho &
+Rumschitzki (Ind. Eng. Chem. Res. 36, 3264 (1997), doi:10.1021/ie970055i)
+report for coking on Pt-Re/Al2O3 (from the abstract; their constants were not
+read). At a fixed H2/HC ratio it falls about as 1/P, so a low-pressure (CCR)
+unit cokes several times faster than a semi-regen one, which is why it
+regenerates continuously. ``k_c`` is the rate at ``p_H2 = p_ref``, so
+``coke_A`` kept its meaning. ``K_H`` and the constants are ILLUSTRATIVE.
 """
 
 from __future__ import annotations
@@ -103,6 +108,7 @@ from difflow_refinery.reforming import thermo as th
 
 #: Reference temperature of the Arrhenius form (K).
 T_REF_KINETICS = 773.15
+COKE_P_H2_REF = 10.0   # bar: the H2 partial pressure at which coke_A is the rate
 
 #: Reaction families.
 FAMILIES: tuple[str, ...] = ("dehydrogenation", "ring_expansion", "ring_opening", "isomerization",
@@ -138,6 +144,8 @@ class ReformingKinetics(ParamsMixin):
             estimate from plant data as the catalyst deactivates.
         coke_A: Coke-make pre-exponential at ``T_ref`` (kg coke/kg cat/s).
         coke_E: Coke-make activation energy (J/mol).
+        coke_K_H: Hydrogen constant of the coke rate (1/bar): the order in H2
+            goes from -1 well below ``1/K_H`` to -2 well above it. ILLUSTRATIVE.
     """
 
     A: dict = field(default_factory=lambda: {
@@ -171,11 +179,12 @@ class ReformingKinetics(ParamsMixin):
     activity: float = 1.0
     coke_A: float = 1.7e-7
     coke_E: float = 120.0e3
+    coke_K_H: float = 1.0
 
 
 jax.tree_util.register_dataclass(
     ReformingKinetics,
-    data_fields=["A", "E", "carbon_factor", "activity", "coke_A", "coke_E"],
+    data_fields=["A", "E", "carbon_factor", "activity", "coke_A", "coke_E", "coke_K_H"],
     meta_fields=["iso_fraction"],
 )
 
@@ -305,14 +314,15 @@ class RateModel:
         return k * drive
 
     def coke_rate(self, kin: ReformingKinetics, p: Array, T: Array) -> Array:
-        """Coke make (kg coke/kg cat/s): ``k_c (p_N + p_A) / p_H2`` (ILLUSTRATIVE).
-
-        A ratio of partial pressures, so nearly independent of total pressure at a
-        fixed H2/HC ratio: it does not show the extra coking of low-pressure units.
-        """
+        """Coke make (kg coke/kg cat/s):
+        ``k_c (p_N + p_A) (1 + K_H p_ref) / (p_H2 (1 + K_H p_H2))`` (ILLUSTRATIVE
+        constants; the form is Liu et al. 1997's, see the module docstring)."""
         kc = (jnp.asarray(kin.activity) * jnp.asarray(kin.coke_A)
               * jnp.exp(-jnp.asarray(kin.coke_E) / th.R * (1.0 / T - 1.0 / T_REF_KINETICS)))
-        return kc * jnp.sum(jnp.where(self.coke_precursors, p, 0.0)) / p[sp.INDEX["H2"]]
+        pH = p[sp.INDEX["H2"]]
+        KH = jnp.asarray(kin.coke_K_H)
+        h2 = (1.0 + KH * COKE_P_H2_REF) / (pH * (1.0 + KH * pH))
+        return kc * jnp.sum(jnp.where(self.coke_precursors, p, 0.0)) * h2
 
     def heats_of_reaction(self, T: Array) -> Array:
         """``(n_reactions,)`` standard enthalpies of reaction at ``T`` (J/mol)."""

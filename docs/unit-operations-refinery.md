@@ -1954,7 +1954,7 @@ For C6 the ring a paraffin closes to is methylcyclopentane, which must expand to
 
 **Equilibrium constants come from the Gibbs energies**, never from a kinetic paper: `ln K = -ΔG°(T)/(RT)`, with `ΔG° = ΔH°(T) - TΔS°(T)` from the species' ideal-gas `Hf`, `S0` and Cp, 1-bar standard state. Dehydrogenation therefore limits correctly at low pressure and high temperature. The heats of reaction come from the same data (cyclohexane to benzene: +206.06 kJ/mol at 298 K). Tests pin `ln K` to the Gibbs energy, check van 't Hoff against the coded heats of reaction, and check that a long bed relaxes the C7 dehydrogenation quotient to `K(T_out)`.
 
-**Coke** (kg per kg catalyst per s) is `k_c (p_N + p_A) / p_H2` with an Arrhenius `k_c`. It rises with severity and falls with hydrogen partial pressure, the dependence the deactivation literature describes; the form and constants are this module's (ILLUSTRATIVE). Because it is a ratio of partial pressures, it is nearly independent of TOTAL pressure at a fixed H2/HC ratio: spent CCR coke at 3.5, 7 and 14 bar is 5.25, 4.84 and 5.07 wt%. The model therefore shows the yield benefit of low pressure but not the coking penalty that real low-pressure units pay. The cycle length is the days to `coke_capacity` (default 0.15 kg/kg, ILLUSTRATIVE) of coke on catalyst. Coke is reported, not withdrawn from the balances (about 1e-5 of the feed).
+**Coke** (kg per kg catalyst per s) is `k_c (p_N + p_A) (1 + K_H p_ref) / (p_H2 (1 + K_H p_H2))` with an Arrhenius `k_c`, `K_H` = `coke_K_H` (1/bar, default 1) and `p_ref` = 10 bar, so `k_c` is the rate at 10 bar of H2. It is first order in the precursors and mixed negative first and second order in hydrogen, the form Liu, Fung, Ho & Rumschitzki (*Ind. Eng. Chem. Res.* 36, 3264 (1997), doi:10.1021/ie970055i) report for coking on Pt-Re/Al2O3 (read from the abstract only; their constants were not used). The constants are ILLUSTRATIVE. At a fixed H2/HC ratio the coke make falls about as 1/P, so a low-pressure unit cokes several times faster: at the CCR's design circulation (`ccr_reformer_params()`, H2/HC 2.5), spent coke at 3.5, 7 and 14 bar separator pressure is 5.25, 3.4 and 2.4 wt% (the activity feedback damps the 1/P). Under the old `k_c (p_N + p_A) / p_H2` it was flat (5.3, 4.8 and 5.1 wt%): no low-pressure coking penalty. The cycle length is the days to `coke_capacity` (default 0.15 kg/kg, ILLUSTRATIVE) of coke on catalyst (408 days for the default semi-regen unit, 361 under the old law). Coke is reported, not withdrawn from the balances (about 1e-5 of the feed). The cycle length is the days to `coke_capacity` (default 0.15 kg/kg, ILLUSTRATIVE) of coke on catalyst. Coke is reported, not withdrawn from the balances (about 1e-5 of the feed).
 
 ### Reactors and heaters
 
@@ -2137,8 +2137,8 @@ Validation (`tests/refinery/test_ccr.py`):
   about ten minutes, so it runs outside the per-commit suite).
 
 What is not validated: the coke rate law is the reformer's ILLUSTRATIVE one,
-and on it the design circulation of this 10 kg/s feed is ~11 kg/h, a catalyst
-turnover of ~80 days -- far slower than a plant's, because the model's
+and on it the design circulation of this 10 kg/s feed is ~24 kg/h, a catalyst
+turnover of ~36 days -- slower than a plant's, because the model's
 coke make is low. The circulation is therefore not a plant number. No plant
 data set for a CCR was reproduced.
 
