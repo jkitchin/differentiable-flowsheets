@@ -305,7 +305,11 @@ class RateModel:
         return k * drive
 
     def coke_rate(self, kin: ReformingKinetics, p: Array, T: Array) -> Array:
-        """Coke make (kg coke/kg cat/s)."""
+        """Coke make (kg coke/kg cat/s): ``k_c (p_N + p_A) / p_H2`` (ILLUSTRATIVE).
+
+        A ratio of partial pressures, so nearly independent of total pressure at a
+        fixed H2/HC ratio: it does not show the extra coking of low-pressure units.
+        """
         kc = (jnp.asarray(kin.activity) * jnp.asarray(kin.coke_A)
               * jnp.exp(-jnp.asarray(kin.coke_E) / th.R * (1.0 / T - 1.0 / T_REF_KINETICS)))
         return kc * jnp.sum(jnp.where(self.coke_precursors, p, 0.0)) / p[sp.INDEX["H2"]]
