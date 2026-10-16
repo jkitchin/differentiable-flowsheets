@@ -6,6 +6,7 @@ pretreat bed plus one cracking bed on the real VGO layout cover the reactor path
 
 from __future__ import annotations
 
+import dataclasses
 import warnings
 
 import jax
@@ -76,3 +77,19 @@ def test_pretreat_and_cracking_bed_smoke():
     assert np.isfinite(float(b.T_out)) and float(b.T_out) > 643.15
     e_in, e_out = (r.outlet + gas.scale(0.1)).elements(lay), b.outlet.elements(lay)
     np.testing.assert_allclose(np.asarray(e_out), np.asarray(e_in), rtol=1e-10)
+
+
+def test_makeup_is_data():
+    # the makeup composition is a theta entry, not a shape: a hydrogen loop
+    # (hydrogen.close_hydrotreater_loop) re-solves the unit at a new purity
+    a = dr.Assay(TBP_PCT, jnp.asarray([t + 273.15 for t in TBP_A]), sg=0.86,
+                 heavy_end=dr.HeavyEnd(), sulfur_wt=1.8, nitrogen_wppm=1500.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        char = dr.characterize(a, composition=True)
+    feed = straight_run_cut(char, rate=50.0, cuts=select_cuts(char, *VGO_RANGE))
+    unit = Hydrocracker(char, feed, HydrocrackerParams())
+    p = dataclasses.replace(unit.params, makeup={"hydrogen": 0.999, "methane": 0.001})
+    unit._jit = lambda th: th                     # check the guard and theta, not the solve
+    th = unit.solve(feed, params=p, warn=False)
+    assert float(th["makeup_y"][unit.layout.gas_index("hydrogen")]) == 0.999

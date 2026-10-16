@@ -830,7 +830,7 @@ class Hydrocracker:
         a gradient with respect to the assay or a spec is taken.
         """
         if params is not None:
-            for k in ("reactor", "tear_tol", "uco_tol", "uco_max_steps", "kij", "makeup"):
+            for k in ("reactor", "tear_tol", "uco_tol", "uco_max_steps", "kij"):
                 if getattr(params, k) != getattr(self.params, k):
                     raise ValueError(f"params.{k} shapes the solve; build a new Hydrocracker to change it")
             for k in ("pretreat_beds", "crack_beds", "quench_pretreat", "quench_crack"):
