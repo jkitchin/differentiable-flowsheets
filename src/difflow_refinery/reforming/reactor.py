@@ -29,6 +29,10 @@ equilibrium at the bed inlet, is a few hundred per unit ``w`` with the
 default kinetics, which an explicit method handles in a few hundred steps
 and compiles several times faster than an implicit one. ``solver_name=
 "kvaerno5"`` (an L-stable ESDIRK) is there for much faster kinetics.
+At high severity (high WAIT, low LHSV) the beds get stiff and Tsit5 takes
+many more steps, so the step cap (``max_steps``, default
+:data:`DEFAULT_MAX_STEPS`) is set well above what the ordinary operating
+box needs (#479); it costs nothing where the steps are not taken.
 Gradients use ``diffrax.ForwardMode`` by default, because a reformer is
 differentiated through the recycle's implicit fixed point, which needs
 forward-mode (JVP) derivatives of everything inside the loop; pass
@@ -53,6 +57,13 @@ from difflow_refinery.reforming.kinetics import RateModel, ReformingKinetics
 
 PA_PER_BAR = 1.0e5
 
+#: Bed ODE solvers ``integrate_bed`` accepts (``solver_name``).
+SOLVERS = ("tsit5", "kvaerno5")
+
+#: Default step cap of a bed integration. 8192 was too few at the severe
+#: corner of an ordinary box (WAIT 525 C at low LHSV, #479).
+DEFAULT_MAX_STEPS = 200_000
+
 
 def flows_of(stream: Stream) -> Array:
     """``(N_SPECIES,)`` flows of the reformer species in a difflow stream (missing = 0)."""
@@ -76,15 +87,32 @@ def _rate_model(iso_fraction: float) -> RateModel:
 _RATE_MODELS: dict[float, RateModel] = {}
 
 
-@partial(jax.jit, static_argnames=("iso_fraction", "adjoint", "n_save", "rtol", "solver_name"))
+def _check_solver(solver_name: str, max_steps: int) -> None:
+    if solver_name not in SOLVERS:
+        raise ValueError(f"unknown solver_name {solver_name!r}; available: {SOLVERS}")
+    if int(max_steps) < 1:
+        raise ValueError(f"max_steps must be a positive integer, got {max_steps}")
+
+
 def integrate_bed(F_in: Array, T_in: Array, P: Array, W: Array, kin: ReformingKinetics,
                   iso_fraction: float = 0.5, adjoint: str = "forward", n_save: int = 0,
-                  rtol: float = 1e-8, solver_name: str = "tsit5"):
+                  rtol: float = 1e-8, solver_name: str = "tsit5",
+                  max_steps: int = DEFAULT_MAX_STEPS):
     """Integrate one adiabatic bed. Returns ``(F_out, T_out, coke_kg_s, profile)``.
 
     ``profile`` is ``None`` unless ``n_save > 0``, then ``(w, F, T)`` at
     ``n_save`` evenly spaced bed fractions (inlet and outlet included).
+    ``solver_name`` is one of :data:`SOLVERS`; ``max_steps`` caps the
+    adaptive steps (diffrax raises when the cap is reached).
     """
+    _check_solver(solver_name, max_steps)
+    return _integrate_bed(F_in, T_in, P, W, kin, iso_fraction=iso_fraction, adjoint=adjoint,
+                          n_save=n_save, rtol=rtol, solver_name=solver_name, max_steps=int(max_steps))
+
+
+@partial(jax.jit, static_argnames=("iso_fraction", "adjoint", "n_save", "rtol", "solver_name",
+                                   "max_steps"))
+def _integrate_bed(F_in, T_in, P, W, kin, iso_fraction, adjoint, n_save, rtol, solver_name, max_steps):
     rm = _rate_model(iso_fraction)
     F_in = jnp.asarray(F_in, dtype=float)
     F0 = jnp.sum(F_in)
@@ -111,7 +139,7 @@ def integrate_bed(F_in: Array, T_in: Array, P: Array, W: Array, kin: ReformingKi
     adj = diffrax.ForwardMode() if adjoint == "forward" else diffrax.RecursiveCheckpointAdjoint()
     saveat = diffrax.SaveAt(ts=jnp.linspace(0.0, 1.0, n_save)) if n_save else diffrax.SaveAt(t1=True)
     sol = diffrax.diffeqsolve(term, solver, t0=0.0, t1=1.0, dt0=1e-4, y0=y0, stepsize_controller=ctrl,
-                              adjoint=adj, saveat=saveat, max_steps=8192)
+                              adjoint=adj, saveat=saveat, max_steps=max_steps)
     ys = sol.ys
     x_out = ys[-1, :-1]
     coke = ys[-1, -1]
@@ -133,12 +161,20 @@ class ReformingReactorParams(ParamsMixin):
         kinetics: The rate parameters (:class:`ReformingKinetics`).
         P: Bed pressure (Pa); ``None`` uses the inlet stream's.
         rtol: Relative tolerance of the ODE integration.
+        solver_name: Bed ODE solver, ``"tsit5"`` (explicit) or ``"kvaerno5"``
+            (implicit, for stiff high-severity beds).
+        max_steps: Cap on the adaptive ODE steps of the bed.
     """
 
     catalyst_mass: float
     kinetics: ReformingKinetics
     P: float | None = None
     rtol: float = 1e-8
+    solver_name: str = "tsit5"
+    max_steps: int = DEFAULT_MAX_STEPS
+
+    def __post_init__(self):
+        _check_solver(self.solver_name, self.max_steps)
 
 
 class ReformingReactor:
@@ -150,7 +186,8 @@ class ReformingReactor:
     """
 
     symbol = "RX"
-    parameter_units = {"catalyst_mass": "kg", "P": "Pa", "rtol": "-"}
+    parameter_units = {"catalyst_mass": "kg", "P": "Pa", "rtol": "-", "solver_name": "-",
+                       "max_steps": "-"}
 
     def __init__(self, params: ReformingReactorParams, adjoint: str = "forward"):
         self.params = params
@@ -164,7 +201,8 @@ class ReformingReactor:
         kin = p.kinetics
         F_out, T_out, coke, _ = integrate_bed(F_in, T_in, P, jnp.asarray(p.catalyst_mass, dtype=float),
                                               kin, iso_fraction=float(kin.iso_fraction),
-                                              adjoint=self.adjoint, rtol=p.rtol)
+                                              adjoint=self.adjoint, rtol=p.rtol,
+                                              solver_name=p.solver_name, max_steps=p.max_steps)
         info = {"T_in": T_in, "T_out": T_out, "dT": T_out - T_in, "coke": coke,
                 "H_in": th.total_enthalpy_flash(F_in, T_in, P),
                 "H_out": th.total_enthalpy_flash(F_out, T_out, P)}
