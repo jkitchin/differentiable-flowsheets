@@ -278,6 +278,12 @@ class NaphthaFeed:
           feed's mass is the product's (``res.stream_mass``) to round-off.
           ``from_characterization`` on the same flows uses the untreated
           crude's molar masses (example 40 lost 4e-4 of the mass that way).
+        * **Hydrogen is not kept.** The model compounds' H/C is fixed by
+          their group and carbon number, not by the cut's own hydrogen
+          content, so the feed carries a few percent less (or more) hydrogen
+          than the product's attribute flows -- 3 % less for a hydrotreated
+          Upper Zakum heavy naphtha. A refinery hydrogen balance across this
+          hand-over closes only to that.
         * **Types.** The cuts' hydrocarbon types are the grid's
           ``paraffins_vol``, ``naphthenes_vol``, ``aromatics_vol`` and
           ``olefins_vol`` qualities: what is left after the hydrotreater's
