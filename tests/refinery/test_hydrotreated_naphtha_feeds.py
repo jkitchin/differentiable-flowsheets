@@ -69,3 +69,72 @@ def test_hydroprocessed_feed(grid):
 def test_resolve_refuses_what_it_cannot_read():
     with pytest.raises(ValueError, match="char="):
         resolve_product({"F_x": 1.0})
+
+
+@pytest.fixture(scope="module")
+def grid_with_hydrogen(grid):
+    """The fixture grid with each component's hydrogen (wt%), as a hydrotreater grid carries it."""
+    g, stream = grid
+    assay = dr.Assay([0, 10, 30, 50, 70, 90, 100], [t + C for t in [30, 60, 95, 120, 145, 170, 190]], sg=0.74,
+                     light_ends={"isopentane": 2.0, "n_pentane": 2.5}, sulfur_wt=0.05)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", CompositionRangeWarning)
+        char = dr.characterize(assay, [C + t for t in (60, 100, 140, 180)], composition=True)
+    H = 100.0 * jnp.asarray(char.composition.hydrogen)
+    return dataclasses.replace(g, qualities=dict(g.qualities, H_wt=H)), stream
+
+
+def _feed_elements(f):
+    from difflow_refinery.reforming import species as sp
+    return (float(f.flows @ jnp.asarray(sp.ELEMENTS[0])), float(f.flows @ jnp.asarray(sp.ELEMENTS[1])))
+
+
+def test_from_hydrotreater_conserves_mass_and_hydrogen(grid_with_hydrogen):
+    g, stream = grid_with_hydrogen
+    m = jnp.stack([jnp.asarray(stream[f"F_{n}"]) for n in g.names]) * jnp.asarray(g.MW) / 1000.0
+    H_src = float(jnp.sum(m * g.qualities["H_wt"] / 100.0)) * 1000.0 / 1.00794          # mol/s of H
+    S_mass = float(jnp.sum(m * g.qualities["S_ppm"])) * 1e-6
+    f = NaphthaFeed.from_hydrotreater(stream, char=g)
+    C_f, H_f = _feed_elements(f)
+    assert float(f.mass_flow) == pytest.approx(float(jnp.sum(m)), rel=1e-12)
+    # cuts exactly; the fixture's light ends (characterization molar masses and hydrogen against
+    # the reformer species') agree to the sixth figure
+    assert H_f == pytest.approx(H_src, rel=2e-6)
+    # carbon takes the rest of the mass, less the sulfur still on the cuts
+    C_src = (float(jnp.sum(m)) - S_mass - H_src * 1.00794e-3) * 1000.0 / 12.0107
+    assert C_f == pytest.approx(C_src, rel=2 * S_mass / float(jnp.sum(m)) + 1e-6)
+    # without the match the model compounds' hydrogen differs from the grid's
+    _, H_0 = _feed_elements(NaphthaFeed.from_hydrotreater(stream, char=g, match_hydrogen=False))
+    assert abs(H_0 / H_src - 1.0) > 1e-3
+
+
+def test_match_hydrogen_needs_the_quality(grid):
+    g, stream = grid
+    with pytest.raises(ValueError, match="H_wt"):
+        NaphthaFeed.from_hydrotreater(stream, char=g, match_hydrogen=True)
+
+
+def test_hydrogen_matched_feed_gradients_are_finite(grid_with_hydrogen):
+    g, stream = grid_with_hydrogen
+    names = [f"F_{n}" for n in g.names]
+    x0 = jnp.stack([jnp.asarray(stream[k]) for k in names])
+
+    def n2a(x, dH):
+        s = dict(stream, **{k: x[i] for i, k in enumerate(names)})
+        gg = dataclasses.replace(g, qualities=dict(g.qualities, H_wt=g.qualities["H_wt"] + dH))
+        return NaphthaFeed.from_hydrotreater(s, char=gg).n_plus_2a()
+
+    gx, gh = jax.grad(n2a, argnums=(0, 1))(x0, 0.0)
+    _, jv = jax.jvp(lambda x: n2a(x, 0.0), (x0,), (jnp.ones_like(x0),))
+    assert np.all(np.isfinite(np.asarray(gx))) and np.isfinite(float(gh)) and np.isfinite(float(jv))
+    assert float(gh) < 0.0          # more hydrogen, fewer rings
+
+
+def test_a_grid_with_hydrogen_blends(grid_with_hydrogen):
+    g, stream = grid_with_hydrogen
+    c = dr.BlendComponent.from_stream("naphtha", stream, g)
+    m = jnp.stack([jnp.asarray(stream[f"F_{n}"]) for n in g.names]) * jnp.asarray(g.MW)
+    assert float(c.properties["H_wt"]) == pytest.approx(float(jnp.sum(m * g.qualities["H_wt"]) / jnp.sum(m)),
+                                                        rel=1e-12)
+    pool = dr.BlendPool("gasoline")([c], [1.0])
+    assert float(pool.properties["H_wt"]) == pytest.approx(float(c.properties["H_wt"]), rel=1e-12)

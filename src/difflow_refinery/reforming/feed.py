@@ -17,7 +17,8 @@ from one of two sources:
 * :meth:`NaphthaFeed.from_hydrotreater` -- a hydrotreater's (or its
   fractionator's) product, on the TREATED cuts of its product grid: the
   same mapping, with the grid's molar masses, its hydrocarbon types after
-  saturation, and its sulfur (#327). This is the path for a reformer that
+  saturation (adjusted to its hydrogen content, so the hand-over conserves
+  hydrogen), and its sulfur (#327). This is the path for a reformer that
   follows a naphtha hydrotreater, as every reformer does.
 
 Mapping a characterization to lumps (``from_characterization``):
@@ -90,13 +91,62 @@ def _series(kind: str, attr: str) -> np.ndarray:
 
 
 
-def _lump_cuts(m_cut: Array, Tb: Array, phi: Array, iso_fraction, mcp_fraction) -> Array:
+def _hydrogen_series(kind: str) -> np.ndarray:
+    """Hydrogen mass fraction of a type's model compounds at C6..C10."""
+    keys = {"P": [f"nP{n}" for n in sp.CARBON_NUMBERS],
+            "N": [f"N{n}" for n in sp.CARBON_NUMBERS],
+            "A": [f"A{n}" for n in sp.CARBON_NUMBERS]}[kind]
+    return np.array([sp.ELEMENTS[1][sp.INDEX[k]] * 1.00794 / sp.MW[sp.INDEX[k]] for k in keys])
+
+
+def _match_hydrogen(w: Array, h: Array, H: Array) -> Array:
+    """Type mass fractions nearest ``w`` whose hydrogen content is ``H``.
+
+    ``w`` is ``(n_cuts, 3)`` P/N/A mass fractions (rows sum to one), ``h`` the
+    ``(n_cuts, 3)`` hydrogen mass fraction of each type's model compounds at
+    the cut's carbon number, ``H`` the ``(n_cuts,)`` hydrogen mass fraction to
+    match. Returns the Euclidean projection of ``w`` onto ``{sum w = 1,
+    h . w = H, w >= 0}``: the full three-type projection when it stays
+    non-negative, otherwise the two-type solution (one type at zero) nearest
+    ``w``. ``H`` outside the model compounds' range ``[min h, max h]`` is
+    clipped to it, so the cut is then all aromatics or all paraffins. Linear
+    in ``w`` and ``H`` on each piece, so differentiable almost everywhere.
+    """
+    H = jnp.clip(H, jnp.min(h, axis=1), jnp.max(h, axis=1))
+    d = h - jnp.mean(h, axis=1, keepdims=True)
+    mu = (H - jnp.sum(h * w, axis=1)) / jnp.sum(d * d, axis=1)
+    full = w + mu[:, None] * d
+    best = full
+    best_ok = jnp.all(full >= 0.0, axis=1)
+    best_dist = jnp.where(best_ok, 0.0, jnp.inf)
+    for k in range(3):
+        i, j = [t for t in range(3) if t != k]
+        hi, hj = h[:, i], h[:, j]
+        den = hi - hj
+        safe = jnp.where(jnp.abs(den) > 0.0, den, 1.0)
+        wi = jnp.clip((H - hj) / safe, 0.0, 1.0)
+        cand = jnp.zeros_like(w).at[:, i].set(wi).at[:, j].set(1.0 - wi)
+        dist = jnp.sum((cand - w) ** 2, axis=1)
+        take = (~best_ok) & (dist < best_dist)
+        best = jnp.where(take[:, None], cand, best)
+        best_dist = jnp.where(take, dist, best_dist)
+    return best
+
+
+def _lump_cuts(m_cut: Array, Tb: Array, phi: Array, iso_fraction, mcp_fraction,
+               hydrogen: Array | None = None) -> Array:
     """Reformer-species molar flows (mol/s) of cuts: steps 1-3 of the module docstring.
 
     ``m_cut`` is each cut's mass flow (kg/s), ``Tb`` its boiling point (K) and
     ``phi`` its ``(n_cuts, 4)`` hydrocarbon-type VOLUME fractions over P, N,
     A, O (olefins are counted as paraffins). Mass is conserved to round-off:
     the type weights and the hat weights each sum to one per cut.
+
+    With ``hydrogen`` (each cut's hydrogen mass fraction), the type mass
+    fractions are moved the least distance that gives each cut that hydrogen
+    content (:func:`_match_hydrogen`), so hydrogen and carbon are conserved
+    too. The hydrogen a type carries at a cut's position is the linear
+    interpolation of its model compounds', which is exact under the hat split.
     """
     out = jnp.zeros(sp.N_SPECIES)
     cn = np.asarray(sp.CARBON_NUMBERS, dtype=float)
@@ -113,6 +163,10 @@ def _lump_cuts(m_cut: Array, Tb: Array, phi: Array, iso_fraction, mcp_fraction) 
     vol = jnp.stack([phi[:, 0] + phi[:, 3], phi[:, 1], phi[:, 2]], axis=1)
     w = vol * rho
     w = w / jnp.sum(w, axis=1, keepdims=True)
+    if hydrogen is not None:
+        h = jnp.stack([jnp.interp(pos[ti], jnp.asarray(cn), jnp.asarray(_hydrogen_series(t)))
+                       for ti, t in enumerate(kinds)], axis=1)
+        w = _match_hydrogen(w, h, jnp.asarray(hydrogen, dtype=float))
     m_type = m_cut[:, None] * w                                  # (n_cuts, 3) kg/s
     # Hat-function weights onto C6..C10.
     for ti, t in enumerate(kinds):
@@ -250,7 +304,8 @@ class NaphthaFeed:
     @classmethod
     def from_hydrotreater(cls, source, product: str | tuple | None = None, *, char=None,
                           iso_fraction: float | Array = 0.5, mcp_fraction: float | Array = 0.6,
-                          drop_gases: bool = False, T: float = 311.0, P: float = 15.0e5) -> "NaphthaFeed":
+                          drop_gases: bool = False, match_hydrogen: bool | None = None,
+                          T: float = 311.0, P: float = 15.0e5) -> "NaphthaFeed":
         """A feed from a hydrotreated naphtha, on its TREATED composition (#327).
 
         Args:
@@ -267,6 +322,12 @@ class NaphthaFeed:
             drop_gases: Leave out the dissolved H2, H2S, NH3 (and water) a
                 wild naphtha carries; without it they are refused. Methane
                 and ethane map to ``C1`` and ``C2`` either way.
+            match_hydrogen: Adjust each cut's P/N/A split so the feed
+                carries the product's hydrogen. Needs the grid's ``H_wt``
+                quality, which hydrotreater and hydrocracker grids carry;
+                ``None`` (default) matches when the grid has it. ``False``
+                maps the types as they are, as :meth:`from_characterization`
+                does.
 
         What differs from :meth:`from_characterization` is where the cut data
         come from: the hydrotreater's product grid (``product_char``), not the
@@ -278,19 +339,29 @@ class NaphthaFeed:
           feed's mass is the product's (``res.stream_mass``) to round-off.
           ``from_characterization`` on the same flows uses the untreated
           crude's molar masses (example 40 lost 4e-4 of the mass that way).
-        * **Hydrogen is not kept.** The model compounds' H/C is fixed by
-          their group and carbon number, not by the cut's own hydrogen
-          content, so the feed carries a few percent less (or more) hydrogen
-          than the product's attribute flows -- 3 % less for a hydrotreated
-          Upper Zakum heavy naphtha. A refinery hydrogen balance across this
-          hand-over closes only to that.
+        * **Hydrogen.** A model compound's H/C is fixed by its group and
+          carbon number, so mapping the grid's types as they are gives the
+          feed a few percent less (or more) hydrogen than the product's
+          attribute flows: about 3 % less for a hydrotreated heavy naphtha
+          of example 40's crude. With ``match_hydrogen`` (the default on a
+          grid with ``H_wt``) each cut's P/N/A mass split is moved the least
+          distance (Euclidean, in mass fractions) that gives it the grid's
+          ``H_wt``, so the feed carries the product's mass and hydrogen to
+          round-off, and its carbon to the mass of the sulfur and nitrogen
+          left on the cuts (ppm). A refinery balance then closes across this
+          hand-over. The price is the types, which give way to the
+          hydrogen: on that naphtha the aromatics fall from about 21 to 15
+          vol% and N+2A from 67 to 57. The two are not independent data --
+          the #305 composition estimates the hydrogen (Goossens) and derives
+          the types from it -- and a measured hydrogen content is the more
+          direct of the two.
         * **Types.** The cuts' hydrocarbon types are the grid's
           ``paraffins_vol``, ``naphthenes_vol``, ``aromatics_vol`` and
           ``olefins_vol`` qualities: what is left after the hydrotreater's
           aromatics saturation and olefin hydrogenation. (The hydrotreater
           tracks them per molecule and reports them back on the rule it read
-          them in by, so an unreacted cut maps exactly as
-          ``from_characterization`` maps it.) Olefins, if any are left, count
+          them in by, so with ``match_hydrogen=False`` an unreacted cut
+          maps exactly as ``from_characterization`` maps it.) Olefins, if any are left, count
           as paraffins. Placement on the carbon-number grid (by the grid's
           ``Tb``) and the iso/normal and MCP/cyclohexane splits are the
           module docstring's steps 2-3.
@@ -345,8 +416,13 @@ class NaphthaFeed:
             o = q["olefins_vol"][ci] if "olefins_vol" in q else jnp.zeros(len(cut_i))
             phi = jnp.stack([q["paraffins_vol"][ci], q["naphthenes_vol"][ci], q["aromatics_vol"][ci], o],
                             axis=1) / 100.0
+            if match_hydrogen is None:
+                match_hydrogen = "H_wt" in q
+            if match_hydrogen and "H_wt" not in q:
+                raise ValueError("the product grid has no H_wt quality to match; pass match_hydrogen=False")
+            hyd = q["H_wt"][ci] / 100.0 if match_hydrogen else None
             out = out + _lump_cuts(mass[ci], jnp.asarray(grid.Tb, dtype=float)[ci], phi,
-                                   iso_fraction, mcp_fraction)
+                                   iso_fraction, mcp_fraction, hydrogen=hyd)
         S = (jnp.sum(mass * q["S_ppm"]) / jnp.maximum(m_hc, 1e-300)) if "S_ppm" in q else jnp.asarray(0.0)
         return cls(out, jnp.asarray(T, dtype=float), jnp.asarray(P, dtype=float), S)
 

@@ -675,9 +675,9 @@ class Hydrocracker:
             Tb=cat(lv(1), c["Tb"]), SG=cat(l_sg, sg_cut), MW=cat(jnp.asarray([gas_mw(nm) for nm in lights],
                                                                           dtype=float).reshape(-1), mw_cut),
             Tc=cat(lv(2), c["Tc"]), Pc=cat(lv(3), c["Pc"]), omega=cat(lv(4), c["omega"]),
-            qualities={k: cat(100.0 + zl if k == "paraffins_vol" else zl, v)
-                       for k, v in qual.items() if k != "H_wt"})
-        h_grid = cat(l_h, qual["H_wt"])          # wt% H per component (not a blend quality)
+            qualities={k: cat(l_h if k == "H_wt" else (100.0 + zl if k == "paraffins_vol" else zl), v)
+                       for k, v in qual.items()})
+        h_grid = grid.qualities["H_wt"]          # wt% H per component, mass-averaged
 
         def light_flows(f: Flows):
             return jnp.stack([f.gas[lay.gas_index(nm)] for nm in lights]) if lights else jnp.zeros(0)
