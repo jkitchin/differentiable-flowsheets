@@ -3654,7 +3654,7 @@ These were measured on this 4-core, 15 GB machine while other jobs were running 
 |---|---|---|---|
 | Naphtha hydrotreater alone, d(product S)/d(bed inlet T), `jax.jacrev`, default beds | 227 s | 2.4 s | |
 | The same, `jax.jacfwd`, `ReactorOptions(adjoint="forward")` | 132 s | 1.0 s | |
-| NHT → fractionator → reformer → gasoline pool, 2 inputs × 5 outputs, `method="fwd"`, stages `jit=True` | 487 s (435 s inside example 40, after `jax.clear_caches()`) | 34 s (31 s) | 7.1 GB (the whole process, prototype) |
+| NHT → fractionator → reformer → gasoline pool, 2 inputs × 5 outputs, `method="fwd"`, stages `jit=True` | 487 s (236 s inside example 40, after `jax.clear_caches()`, on its 2026-10 re-run) | 34 s (3 s) | 7.1 GB (the whole process, prototype) |
 | The same, stages not jitted, `vectorize=False` | 671 s | 511 s | 8.6 GB |
 | The same, stages not jitted, `vectorize=True` (plain `jax.jacfwd`) | killed by the out-of-memory killer at 5.6 GB resident, with another 10 GB in use on the machine | | |
 
@@ -3665,7 +3665,7 @@ Two findings come from those rows.
 - **Jit the stages.** The reformer's solve is a `Flowsheet` with a Python-level recycle. Under a transform it switches to its traced path, which is built afresh on every call. Without `jit`, every JVP and every repeated Jacobian traces and compiles the reformer again: in the fourth row, two tangents cost two compiles, and so does the second call. With `Stage(..., jit=True)` the stage is one jitted function. Its derivative is compiled once (most of the 487 s is the reformer's JVP), and a repeated Jacobian costs only its 34 s run.
 - **Memory, not time, is what limits a chain on a machine like this.** Every compiled solve stays resident. Example 40 calls `jax.clear_caches()` before it differentiates, after its central differences, and that keeps the derivative's compile inside the machine.
 
-In example 40 (section 10) the ten entries of that Jacobian agree with central differences at h = 0.25 K to 0.1 % or better. The exception is d(gasoline S)/d(T_NHT), at 0.5 %, which is the truncation error of a sulfur that falls exponentially with temperature. Four central-difference evaluations of the already compiled units took 38 s, against 435 s for the first AD Jacobian. For a single gradient on this machine, finite differences are cheaper. AD pays off in exactness, and for a planner that relinearizes a compiled chain, which costs 29 s per Jacobian after the first.
+In example 40 (section 10) the ten entries of that Jacobian agree with central differences at h = 0.25 K to 0.1 % or better. The exception is d(gasoline S)/d(T_NHT), at 0.5 %, which is the truncation error of a sulfur that falls exponentially with temperature. Four central-difference evaluations of the already compiled units took 28 s, against 236 s for the first AD Jacobian (the example's latest run; the earlier one, on a busier machine, took 38 s and 435 s). For a single gradient on this machine, finite differences are cheaper. AD pays off in exactness, and for a planner that relinearizes a compiled chain, which costs 3 s per Jacobian after the first (29 s on the earlier run).
 
 ### Gotchas
 
