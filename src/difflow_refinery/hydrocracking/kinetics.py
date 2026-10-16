@@ -224,7 +224,7 @@ class HCKineticParams(ParamsMixin):
     effectiveness: float = 1.0
     wetting: float = 1.0
     scheme: str = "continuous"
-    k_max: float = 1.5e-6
+    k_max: float = 0.8e-6
     E: float = 130e3
     T_ref: float = 653.15
     T_low: float = 111.66

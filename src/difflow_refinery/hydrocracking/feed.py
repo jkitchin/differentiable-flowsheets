@@ -22,14 +22,21 @@ from difflow_refinery.hydrotreating.kinetics import HDTKineticParams
 
 #: Pretreat-bed (hydrotreating) constants for a VGO on a NiMo pretreat
 #: catalyst. ILLUSTRATIVE, like the hydrotreater's defaults they modify:
-#: HDN is made several times faster (a NiMo catalyst at 150 bar is chosen for
-#: HDN, which is what protects the cracking catalyst), so that a VGO of about
-#: 1000-2000 wppm N leaves the pretreat bed at 385 C, LHSV ~1.5 1/h with a few
-#: tens of wppm organic N; the cracking leak is kept small.
+#: HDN is made much faster (a NiMo catalyst at 150 bar is chosen for HDN,
+#: which is what protects the cracking catalyst). The HDN constants are set
+#: against one measurement: in the pilot of Sadighi, Ahmad & Rashidzadeh,
+#: Korean J. Chem. Eng. 27, 1099 (2010), doi:10.1007/s11814-010-0172-0, a
+#: 700 wppm N charge over a commercial pretreat catalyst at 360-390 C and
+#: 2.7-3.6 1/h left less than 50 wppm N in the liquid product in all twelve
+#: runs (p. 1105). With these constants the model leaves at most 27 wppm
+#: there; with the earlier, three times slower ones it left up to 194 wppm,
+#: and the cracking catalyst's nitrogen inhibition then relieved so fast with
+#: temperature that conversion's apparent activation energy was five times
+#: the pilot's. The cracking leak is kept small.
 VGO_PRETREAT_PARAMS = HDTKineticParams(
     T_ref=653.15,
     hds_k=(4.0e-5, 2.0e-5, 1.2e-5, 1.0e-5, 6.0e-6),
-    hdn_k=(3.0e-6, 4.0e-6),
+    hdn_k=(9.0e-6, 1.2e-5),
     hdn_E=(110e3, 110e3),
     hda_k=(1.5e-6, 6.0e-7, 1.0e-7),
     crack_k=1.0e-10,

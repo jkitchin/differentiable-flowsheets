@@ -117,9 +117,11 @@ def _gas(flows, layout):
 
 
 class _Rebuilt:
-    """A hydrocracker for :func:`close_hydrotreater_loop`: its ``makeup`` shapes
-    the compiled solve (``Hydrocracker.solve`` refuses a new one), so each new
-    makeup builds a new unit."""
+    """A hydrocracker for :func:`close_hydrotreater_loop` that builds a new unit
+    for each new ``makeup``. Written when ``Hydrocracker.solve`` refused a new
+    makeup composition; since #481 the makeup is data and ``solve`` takes it,
+    so the rebuild is no longer needed, only kept (it costs a recompile per
+    makeup, not a different answer)."""
 
     def __init__(self, char, feed, params):
         self.char, self.unit = char, Hydrocracker(char, feed, params)
