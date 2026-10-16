@@ -40,6 +40,11 @@ References:
         calculation", Fluid Phase Equilib. 9(1), 21-40 (1982),
         doi:10.1016/0378-3812(82)85002-4 (unverified) -- successive
         substitution then Newton in ln K.
+    Nichita, D.V. and Leibovici, C.F., "A rapid and robust method for
+        solving the Rachford-Rice equation using convex transformations",
+        Fluid Phase Equilib. 353, 38-49 (2013),
+        doi:10.1016/j.fluid.2013.05.030 -- the change of
+        variable to the denominator nearest a pole.
 """
 
 from __future__ import annotations
@@ -80,23 +85,34 @@ def phase_denominator(z: Array, K: Array, V: Array) -> Array:
     return jnp.where(_present(z) | (d > 0.0), d, 1.0)
 
 
-def rachford_rice(z: Array, K: Array) -> Array:
-    """Vapour fraction of the negative flash: the root of ``sum z (K-1)/(1+V(K-1))``.
+def rachford_rice_denominators(z: Array, K: Array) -> tuple[Array, Array]:
+    """Negative-flash vapour fraction ``V`` and the denominators ``d = 1 + V (K - 1)``.
 
-    Bisection between the poles under ``stop_gradient``, then two Newton
-    steps on the live inputs. The first attaches the implicit-function
-    derivative ``dV/d(z, K)``; the second makes the *second* derivatives
-    exact too (each step from the root doubles the order to which the
-    derivatives are right), which matters because the reactor differentiates
-    a quantity that is itself a derivative (``C_eff = dH/dT``, ``d ln K/dT``).
+    The root of ``sum z (K-1)/(1+V(K-1))`` lies between the poles of the
+    components actually present (``z > 1e-20`` of the total; :data:`TRACE`):
+    an absent species -- the floored zero flow of hydrogen in a feed oil,
+    say -- has a pole of its own that the physical root may lie beyond, and
+    bracketing on it put the root at the bracket's edge and the Newton polish
+    across the pole, with every mole fraction NaN from there on (#332).
+
+    Far outside the two-phase region the root crowds the pole of the least
+    (or most) volatile component present: a hydrogen-rich naphtha bed at
+    V = 1.8 has its root within 1e-9 of the heaviest cut's pole, with that cut
+    at z = 1e-9. ``1 + V (K - 1)`` is then a difference of O(1) numbers that
+    leaves O(1e-9), with only seven digits left, and the fictitious phase it
+    sets (nearly pure trace) carried that noise into the flash's ``ln K`` and,
+    much amplified, into its implicit derivative. So, after bisection in
+    ``V`` (under ``stop_gradient``) locates the root, the unknown becomes the
+    denominator ``u = d_m`` of the component ``m`` whose pole is nearest, and
+    every other denominator is formed without cancellation,
+    ``d_i = (K_m - K_i + u (K_i - 1)) / (K_m - 1)`` (the variable change of
+    Nichita & Leibovici 2013). Newton on ``u * f(u)``, smooth through the
+    pole, polishes ``u`` under ``stop_gradient``; two more steps on the live
+    inputs attach the implicit-function derivatives -- the first makes the
+    first derivatives exact, the second the second derivatives, which the
+    reactor needs because it differentiates a quantity that is itself a
+    derivative (``C_eff = dH/dT``, ``d ln K/dT``).
     Needs ``K_max > 1 > K_min`` (otherwise returns the nearer bound).
-
-    The bracket is set by the poles of the components actually present
-    (``z > 1e-20`` of the total; :data:`TRACE`): an absent species -- the
-    floored zero flow of hydrogen in a feed oil, say -- has a pole of its own
-    that the physical root may lie beyond, and bracketing on it put the root
-    at the bracket's edge and the Newton polish across the pole, with every
-    mole fraction NaN from there on (#332).
     """
     zs, Ks = jax.lax.stop_gradient(z), jax.lax.stop_gradient(K)
     sig = _present(z)
@@ -115,16 +131,47 @@ def rachford_rice(z: Array, K: Array) -> Array:
         return jnp.where(right, mid, lo), jnp.where(right, hi, mid)
 
     lo, hi = jax.lax.fori_loop(0, _RR_BISECT, body, (lo, hi))
-    V = 0.5 * (lo + hi)
+    Vb = 0.5 * (lo + hi)
+    # the component whose pole is nearest the root (constant: no gradient)
+    db = 1.0 + Vb * (Ks - 1.0)
+    m = jnp.argmin(jnp.where(sig, jnp.abs(db), jnp.inf))
+    other = sig & (jnp.arange(z.shape[0]) != m)
+
+    def dens(u, K):
+        Km = K[m]
+        return (Km - K + u * (K - 1.0)) / (Km - 1.0)
+
+    def h(u, z, K):                               # u * f, smooth through u = 0
+        d = dens(u, K)
+        return z[m] * (K[m] - 1.0) + u * jnp.sum(
+            jnp.where(other, z * (K - 1.0) / jnp.where(other, d, 1.0), 0.0))
+
+    def newton(u, z, K):
+        return u - h(u, z, K) / jax.grad(h)(u, z, K)
+
+    u = jax.lax.fori_loop(0, 4, lambda _, u: newton(u, zs, Ks), db[m])
+    u = jnp.where(jnp.isfinite(u) & (u > 0.0), u, db[m])
     for _ in range(2):
-        V = V - f(V, z, K) / jax.grad(f)(V, z, K)
-    return V
+        u = newton(u, z, K)
+    d = dens(u, K)
+    V = (u - 1.0) / (K[m] - 1.0)
+    return V, jnp.where(sig | (d > 0.0), d, 1.0)
+
+
+def rachford_rice(z: Array, K: Array) -> Array:
+    """Vapour fraction of the negative flash: the root of ``sum z (K-1)/(1+V(K-1))``.
+
+    See :func:`rachford_rice_denominators`, which also returns the phase
+    denominators accurately; use those, not ``1 + V (K - 1)``, when the root
+    may lie near a pole.
+    """
+    return rachford_rice_denominators(z, K)[0]
 
 
 def _phases(z, lnK):
     K = jnp.exp(lnK)
-    V = rachford_rice(z, K)
-    x = z / phase_denominator(z, K, V)
+    V, d = rachford_rice_denominators(z, K)
+    x = z / d
     y = K * x
     return V, x / jnp.sum(x), y / jnp.sum(y)
 
@@ -287,5 +334,5 @@ class HPSeparator:
         return vap, liq, water, fr
 
 
-__all__ = ["TRACE", "phase_denominator", "rachford_rice", "pr_flash", "FlashResult", "HPSeparator", "flash_components",
+__all__ = ["TRACE", "phase_denominator", "rachford_rice", "rachford_rice_denominators", "pr_flash", "FlashResult", "HPSeparator", "flash_components",
            "split_by_vapor_fraction"]

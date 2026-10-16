@@ -34,6 +34,7 @@ caller brings.
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from dataclasses import dataclass, field
 from typing import Literal, Mapping, Sequence
 
@@ -1045,7 +1046,14 @@ def _characterize_heavy(assay: Assay, points: Array, method: str, prefix: str) -
     T_start = _heavy_start(assay, curve, x_le)
     T_max = jnp.asarray(he.T_max, dtype=float)
 
-    if not _traced((points, T_start)):
+    if not _traced((points, T_start, assay.tbp_percent, x_le)):
+        gap = float(np.asarray(assay.tbp_percent, dtype=float)[0]) - 100.0 * float(x_le)
+        if gap > 0.5:
+            warnings.warn(
+                f"the TBP curve starts at {float(assay.tbp_percent[0]):.2f} vol% but the light "
+                f"ends total only {100.0 * float(x_le):.2f} vol%; the {gap:.2f} vol% in between "
+                "joins the first cut. Add a lower TBP point to resolve it.",
+                stacklevel=3)
         pts = np.asarray(points)
         if np.any(np.diff(pts) <= 0):
             raise ValueError("cut_points must be strictly increasing")

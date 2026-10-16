@@ -130,6 +130,18 @@ class TestFurnace:
         np.testing.assert_allclose(atoms(out), atoms(acid) + air_atoms(air), atol=1e-9)
         assert abs(float(info["heat_duty"])) < 1e-3
 
+    @pytest.mark.parametrize("co2", [1e-27, 1e-9])
+    def test_carbon_trace(self, co2):
+        # an amine regenerator passes a 1e-27 CO2 trace; its own balance row
+        # used to throw the element-potential Newton off (furnace at 411 K)
+        acid = make_stream({"hydrogen_sulfide": 50.0, "water": 5.0, "carbon_dioxide": co2},
+                           T=330.0, P=1.6e5)
+        air = cl.oxygen_demand(acid) / cl.AIR_O2
+        out, info = cl.furnace(acid, air, T_air=473.15)
+        ref, _ = cl.furnace(dict(acid, F_carbon_dioxide=0.0), air, T_air=473.15)
+        assert bool(info["converged"])
+        assert float(info["T"]) == pytest.approx(float(ref["T"]), rel=1e-9)
+
 
 # ---------------------------------------------------------------- train pieces
 class TestTrain:
@@ -272,6 +284,19 @@ class TestSRU:
         r = sru[1]
         # S in = liquid sulfur + S burnt in the incinerator (the recycle is internal)
         assert float(r["claus"]["sulfur"] + r["SO2_emitted"]) == pytest.approx(90.0, rel=1e-9)
+
+    def test_element_closure(self, sru):
+        # acid gas + air + the solvent's makeup water = off-gas + quench water
+        # + liquid sulfur + the inerts dissolved in the rich solvent
+        tp, r, _ = sru
+        t = r["tgtu"]
+        w = np.array([0.0, 2.0, 1.0, 0.0, 0.0])
+        d = t["absorber"].dissolved
+        lost = cl.to_vec({f"F_{k}": v for k, v in d.items()})
+        into = atoms(acid_gas()) + air_atoms(float(r["air"])) + w * float(t["makeup_water"])
+        out = (atoms(t["off_gas"]) + w * float(t["quench_water"]) + atoms(lost)
+               + np.array([float(r["claus"]["sulfur"]), 0.0, 0.0, 0.0, 0.0]))
+        np.testing.assert_allclose(out, into, rtol=0, atol=1e-9)
 
     def test_recycle_small(self, sru):
         r = sru[1]

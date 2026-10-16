@@ -1915,7 +1915,7 @@ The model cannot run on a boiling curve and a gravity. It needs paraffins, napht
   4. light ends kept as real species map to themselves (`n_hexane` -> `nP6`, `isopentane` -> `iC5`, ...); water is dropped.
 
   The #305 estimate is coarse at carbon-number resolution; the lumped feed's hydrogen content is the model compounds', not the #305 hydrogen estimate (`feed.hydrogen_wt()` reports it for comparison).
-- **`NaphthaFeed.from_hydrotreater(res_or_fractionation, product)`** (#327), a hydrotreater's product (or a `FractionationResult` product such as `"heavy_naphtha"`) on its TREATED product grid: the same mapping as `from_characterization`, but with the grid's molar masses (so the feed's mass is the hydrotreater product's to round-off), its hydrocarbon types after aromatics saturation, and its sulfur as `feed.sulfur_wppm`, which the reformer's trace-sulfur balance takes when `ReformerParams.feed_sulfur_wppm` is `None`. See [Hydrotreated naphtha to the splitter and the reformer](#refinery-hydrotreated-naphtha-downstream).
+- **`NaphthaFeed.from_hydrotreater(res_or_fractionation, product)`** (#327), a hydrotreater's product (or a `FractionationResult` product such as `"heavy_naphtha"`) on its TREATED product grid: the same mapping as `from_characterization`, but with the grid's molar masses (so the feed's mass is the hydrotreater product's to round-off), its hydrocarbon types after aromatics saturation, and its sulfur as `feed.sulfur_wppm`. It keeps mass, not hydrogen: the model compounds' H/C is set by group and carbon number, so the feed's hydrogen can differ from the product's by a few percent (3 % less for a hydrotreated Upper Zakum heavy naphtha). The reformer's trace-sulfur balance takes that sulfur when `ReformerParams.feed_sulfur_wppm` is `None`. See [Hydrotreated naphtha to the splitter and the reformer](#refinery-hydrotreated-naphtha-downstream).
 - `lean_naphtha()` and `rich_naphtha()` are two made-up, ILLUSTRATIVE feeds (not any crude's assay).
 
 `feed.with_group_fraction("naphthenes", x)` is the naphthene-content lever (other groups rescaled at constant volume or mass); `feed.n_plus_2a()` is the reformability index.
@@ -1954,7 +1954,7 @@ For C6 the ring a paraffin closes to is methylcyclopentane, which must expand to
 
 **Equilibrium constants come from the Gibbs energies**, never from a kinetic paper: `ln K = -ΔG°(T)/(RT)`, with `ΔG° = ΔH°(T) - TΔS°(T)` from the species' ideal-gas `Hf`, `S0` and Cp, 1-bar standard state. Dehydrogenation therefore limits correctly at low pressure and high temperature. The heats of reaction come from the same data (cyclohexane to benzene: +206.06 kJ/mol at 298 K). Tests pin `ln K` to the Gibbs energy, check van 't Hoff against the coded heats of reaction, and check that a long bed relaxes the C7 dehydrogenation quotient to `K(T_out)`.
 
-**Coke** (kg per kg catalyst per s) is `k_c (p_N + p_A) / p_H2` with an Arrhenius `k_c`. It rises with severity and falls with hydrogen partial pressure, the dependence the deactivation literature describes; the form and constants are this module's (ILLUSTRATIVE). The cycle length is the days to `coke_capacity` (default 0.15 kg/kg, ILLUSTRATIVE) of coke on catalyst. Coke is reported, not withdrawn from the balances (about 1e-5 of the feed).
+**Coke** (kg per kg catalyst per s) is `k_c (p_N + p_A) (1 + K_H p_ref) / (p_H2 (1 + K_H p_H2))` with an Arrhenius `k_c`, `K_H` = `coke_K_H` (1/bar, default 1) and `p_ref` = 10 bar, so `k_c` is the rate at 10 bar of H2. It is first order in the precursors and mixed negative first and second order in hydrogen, the form Liu, Fung, Ho & Rumschitzki (*Ind. Eng. Chem. Res.* 36, 3264 (1997), doi:10.1021/ie970055i) report for coking on Pt-Re/Al2O3 (read from the abstract only; their constants were not used). The constants are ILLUSTRATIVE. At a fixed H2/HC ratio the coke make falls about as 1/P, so a low-pressure unit cokes several times faster: at the CCR's design circulation (`ccr_reformer_params()`, H2/HC 2.5), spent coke at 3.5, 7 and 14 bar separator pressure is 5.25, 3.4 and 2.4 wt% (the activity feedback damps the 1/P). Under the old `k_c (p_N + p_A) / p_H2` it was flat (5.3, 4.8 and 5.1 wt%): no low-pressure coking penalty. The cycle length is the days to `coke_capacity` (default 0.15 kg/kg, ILLUSTRATIVE) of coke on catalyst (408 days for the default semi-regen unit, 361 under the old law). Coke is reported, not withdrawn from the balances (about 1e-5 of the feed). The cycle length is the days to `coke_capacity` (default 0.15 kg/kg, ILLUSTRATIVE) of coke on catalyst. Coke is reported, not withdrawn from the balances (about 1e-5 of the feed).
 
 ### Reactors and heaters
 
@@ -2137,8 +2137,8 @@ Validation (`tests/refinery/test_ccr.py`):
   about ten minutes, so it runs outside the per-commit suite).
 
 What is not validated: the coke rate law is the reformer's ILLUSTRATIVE one,
-and on it the design circulation of this 10 kg/s feed is ~11 kg/h, a catalyst
-turnover of ~80 days -- far slower than a plant's, because the model's
+and on it the design circulation of this 10 kg/s feed is ~24 kg/h, a catalyst
+turnover of ~36 days -- slower than a plant's, because the model's
 coke make is low. The circulation is therefore not a plant number. No plant
 data set for a CCR was reproduced.
 
@@ -2213,6 +2213,7 @@ with `V` from Rachford-Rice solved as a **negative flash** (Whitson & Michelsen 
 Two robustness rules (#332):
 
 - **The Rachford-Rice bracket is set by the components present** (`z` above `TRACE = 1e-20` of the feed). A species that is absent -- the floored zero flow of hydrogen in a feed oil -- has a pole of its own that the physical root can lie beyond; bracketing on it left the root at the bracket's edge, the Newton polish crossed the pole, and every mole fraction came out NaN. A trace component beyond its pole gets `x = z` (`phase_denominator`), its own negligible amount.
+- **Near a pole the denominators are solved for directly** (`rachford_rice_denominators`; Nichita & Leibovici 2013, doi:10.1016/j.fluid.2013.05.030). Far outside the two-phase region the root crowds the pole of the least volatile component present: an all-vapour naphtha hydrotreater bed (`V = 1.8`, refinery-units notebook 09) had its root within 1e-9 of the pole of a cut at `z = 1.4e-9`. `1 + V (K - 1)` then kept seven digits, the fictitious liquid (nearly pure trace cut) and the flash's `ln K` were noisy at 1e-7, and the implicit derivative was wrong by orders of magnitude: d(WABT)/d(T_in) came out -2288 against +0.997, and the recycle tear stalled at 1e-4 because its Newton Jacobian inherited the error. Bisection in `V` now locates the root, the unknown becomes the nearest component's denominator `u`, and every other denominator is formed without cancellation, `d_i = (K_m - K_i + u (K_i - 1)) / (K_m - 1)`. The flash converges to 1e-15 there and its derivatives match central differences.
 - **A flash that fails reports, it does not raise.** Near a mixture's critical region Newton can diverge to a non-finite `ln K`. The flash then returns its successive-substitution start with a large `FlashResult.residual`. optimistix's implicit adjoint is not used because its linear solve raises on a non-finite Jacobian -- the "equinox NaN in linear solve" error a naphtha unit at 320 °C / 50 bar / LHSV 0.5 / 150 Nm³/m³ used to stop with. Callers read the residual: the hydrotreater's `converged` includes every flash (`outputs["flash.residual"]`), and `compress` returns NaN, not an exception, for a non-finite inlet.
 
 `HPSeparator(layout)(flows, T, P, comps)` returns `(vapour, liquid, water, FlashResult)`: gases and cut molecules split by the flash, every attribute with its cut, water decanted whole (no free-water VLE).
@@ -2615,6 +2616,7 @@ A crude-unit product carries every cut at some trace level. `Hydrotreater(..., t
 | H4 | Whitson, C.H.; Michelsen, M.L. "The negative flash." *Fluid Phase Equilib.* **1989**, 53, 51--71. doi:10.1016/0378-3812(89)80072-X | Negative flash | Unverified (not reached). |
 | H5 | Rachford, H.H.; Rice, J.D. *J. Petrol. Technol.* **1952**, 4(10), sec. 1 p. 19, sec. 2 p. 3 | Rachford-Rice | Unverified. |
 | H6 | Michelsen, M.L. "The isothermal flash problem. Part II. Phase-split calculation." *Fluid Phase Equilib.* **1982**, 9(1), 21--40 | SS then Newton in ln K | Unverified. |
+| H6a | Nichita, D.V.; Leibovici, C.F. "A rapid and robust method for solving the Rachford-Rice equation using convex transformations." *Fluid Phase Equilib.* **2013**, 353, 38--49. doi:10.1016/j.fluid.2013.05.030 | Rachford-Rice in the denominator nearest a pole | Title, authors, volume, pages and DOI confirmed via Crossref. |
 | H7 | Korsten, H.; Hoffmann, U. "Three-phase reactor model for hydrotreating in pilot trickle-bed reactors." *AIChE J.* **1996**, 42(5), 1350--1360. doi:10.1002/aic.690420515 | LHHW HDS form with squared H2S inhibition | Title, journal and year confirmed by web search (citing literature); volume/issue/pages/DOI as recalled (unverified). Their rate constants, solubility and density correlations are **not** used; their published profiles are **not** reproduced (below). |
 | H8 | Froment, G.F.; Depauw, G.A.; Vanrysselberghe, V. "Kinetic modeling and reactor simulation in hydrodesulfurization of oil fractions." *Ind. Eng. Chem. Res.* **1994**, 33(12), 2975--2988 | LHHW HDS by sulfur class | Title, pages and DOI not verified (unverified). Form only; constants not used. |
 | H9 | Vanrysselberghe, V.; Froment, G.F. "Hydrodesulfurization of dibenzothiophene on a CoMo/Al2O3 catalyst: reaction network and kinetics." *Ind. Eng. Chem. Res.* **1996**, 35(10), 3311--3318 | DBT network (DDS/HYD routes), LHHW form | Web search did not return the paper; details unverified. Qualitative use only. |
@@ -3065,7 +3067,7 @@ Recomputed for #338, which made the pretreat bed's aromatics equilibria Cp-integ
 
 Read these as the shape of the answer: every cracking constant is illustrative. A few things they show, all of which follow from the model rather than being tuned in: the recycle at the same catalyst and temperature *lowers* the per-pass conversion (a recycle reactor is less efficient than plug flow) and the overall conversion slightly, and buys selectivity -- 2.6 wt% more diesel, less naphtha per middle distillate, less H2; the heavy, aromatic VGO consumes more hydrogen, gives denser, lower-cetane products (its products inherit its lower Watson K through `Kw_feed + dKw`) and a higher-BMCI UCO; its pretreat bed rises 78 K, which a real unit would quench harder (the pretreat quench is a spec).
 
-Compiling a once-through unit takes about 2.5 min and a solve about 7--9 s (the gas tear: 12 substitution passes, then Newton); with the UCO recycle the compile is about 6.5 min and a solve about 40 s. A reverse-mode gradient adds one compile: the once-through gradient test takes about 10 min, the recycle-ratio one about 30 min and 11 GB (its adjoint runs 60 vector-Jacobian products of the loop per cotangent), and both are marked `slow` and `release`.
+Measured 2026-10-16 on an Apple-silicon laptop (CPU), 50 kg/s straight-run VGO: compiling a once-through unit and its first solve take about 50 s and a further solve about 2.5 s (the gas tear: substitution passes, then Newton); with the UCO recycle (`uco_recycle=0.5`) the compile is about 2 min and a solve about 12 s. A reverse-mode gradient adds one compile: `jax.grad` of the once-through per-pass conversion with respect to `T_crack` takes about 80 s and 6 GB. The recycle-ratio gradient was last measured at about 30 min and 11 GB (its adjoint runs 60 vector-Jacobian products of the loop per cotangent) and has not been re-timed. Neither gradient is in the per-commit suite.
 
 **Gradients** (measured when the model was written): kerosene yield, per-pass conversion and chemical H2 consumption with respect to the cracking inlet temperature, the reactor pressure and the 70 % TBP point of the assay (the feed's mass per cut held, so its moles move with the cut molecular weights), on the once-through light VGO; and overall conversion, diesel yield and chemical H2 with respect to the UCO recycle fraction, through the UCO tear's adjoint. One reverse-mode Jacobian each, against Richardson-extrapolated central differences (steps 0.5 K, 1 bar, 1 K; 0.02 in the recycle fraction) at `rtol` 1e-5.
 
@@ -3567,7 +3569,7 @@ The equilibrium T of the report's reformer outlet gas lies between its stated 90
 
 Two quantities are deliberately not compared:
 
-- **Supplementary fuel.** The report does not give the combustion-air preheat temperature, and the fuel moves with it: 449 kmol/h with cold air, 314 kmol/h with air at 300 °C, against the report's 240.
+- **Supplementary fuel.** The report does not give the combustion-air preheat temperature, and the fuel moves with it: 322 kmol/h with cold air, 220 kmol/h with air at 300 °C, against the report's 240.
 - **Efficiency.** The report exports steam, which this model does not credit.
 
 ### SMR hydrogen plant: references
@@ -4215,7 +4217,7 @@ jax.grad(lambda h: su.solve_sru(dict(acid_gas, F_hydrogen_sulfide=h), claus, tgt
 | Hydrogenation | adiabatic equilibrium restricted to SO2/S hydrogenation, COS/CS2 hydrolysis, shift | — |
 | Quench | water to saturation | IAPWS-IF97 |
 | Absorber | Kent-Eisenberg MDEA, Murphree trays | see the amine section |
-| Regenerator | NOT solved: the solvent is returned to its lean loading; acid gas leaves the reflux drum saturated | — |
+| Regenerator | NOT solved: the solvent is returned to its lean loading; acid gas leaves the reflux drum saturated; the water the solvent loses (to the saturated off-gas and the recycle) is reported as `makeup_water` | — |
 | Recycle | substitution, then one implicit Newton step | — |
 
 **Validation** (`tests/refinery/test_sulfur.py`; the Gamson-Elkins curve and
@@ -4263,7 +4265,11 @@ Limitations:
   transcriptions disagree, and the original could not be read.
 - The Gamson-Elkins comparison is against features of the curve (minimum,
   limits), not against digitised points.
-- The regenerator is not solved inside the SRU.
+- The regenerator is not solved inside the SRU. Its makeup water
+  (`tgtu["makeup_water"]`) is a feed of the SRU's H and O balance, and the
+  inerts dissolved in the rich solvent (`absorber.dissolved`, some H2 and N2)
+  leave with it; with both, the SRU closes every element to 1e-9 mol/s
+  (tested).
 - H2S and CO2 dissolved in the quench water are neglected.
 - Sulfur mist entrainment is not modelled.
 

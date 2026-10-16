@@ -22,6 +22,17 @@ one. Newton's method with a backtracking line search solves the element
 balances and :math:`\sum_i n_i = N`. Every :math:`n_i` is an exponential, so
 trace species are never negative or NaN.
 
+**Absent and trace elements.** An element that is not fed has no potential to
+solve for: its row is dropped and every species containing it is exactly 0.
+An element fed at a trace -- below :data:`TRACE_ELEMENT` of the fed atoms,
+such as the 1e-27 mol/s of CO2 an amine regenerator passes to a Claus furnace
+-- is treated the same way. Its balance row, scaled by its own abundance,
+otherwise dominates the Newton step: a furnace fed 1e-9 mol/s of CO2 in 175
+mol/s of acid gas and air diverged, with the temperature and every other
+species thrown off. The trace's atoms are dropped from the outlet, an
+element-balance error at most :data:`TRACE_ELEMENT` of the feed (reported in
+``info["element_balance"]``).
+
 **Modes.**
 
 - **Isothermal**: the outlet is at ``T_out``, or at the inlet T if
@@ -78,6 +89,9 @@ from difflow.streams import Stream, get_flows, make_stream
 
 R_GAS = 8.314462618        # J/mol/K, CODATA 2018 (exact)
 P_STANDARD = 1.0e5         # Pa: the 1 bar standard state
+#: An element fed below this fraction of the fed atoms counts as absent (see
+#: the module docstring).
+TRACE_ELEMENT = 1e-10
 T_REF = 298.15
 
 
@@ -309,12 +323,12 @@ class GibbsReactor:
         return g
 
     def _absent(self, theta: dict) -> tuple[Array, Array]:
-        """Rows with nothing fed, and the species they rule out."""
+        """Rows with nothing (or a trace) fed, and the species they rule out."""
         m = self.B.shape[0]
         if not self.masking:
             return jnp.zeros(m, bool), jnp.zeros(len(self.active), bool)
-        b = jnp.asarray(self.B) @ theta["n_in"][self.active]
-        absent = b <= 0.0
+        b = lax.stop_gradient(jnp.asarray(self.B) @ theta["n_in"][self.active])
+        absent = b <= TRACE_ELEMENT * jnp.sum(b)
         excluded = jnp.any(absent[:, None] & (jnp.asarray(self.B) > 0), axis=0)
         return absent, excluded
 
@@ -448,4 +462,4 @@ class GibbsReactor:
         return make_stream(dict(zip(self.names, n)), T_out, P), info
 
 
-__all__ = ["GibbsThermo", "GibbsReactorParams", "GibbsReactor", "R_GAS", "P_STANDARD"]
+__all__ = ["GibbsThermo", "GibbsReactorParams", "GibbsReactor", "R_GAS", "P_STANDARD", "TRACE_ELEMENT"]

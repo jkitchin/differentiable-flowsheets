@@ -17,7 +17,13 @@ stripped and recycled to the furnace (the second tear of the SRU).
 * Regenerator: NOT solved here. The solvent is taken back to its lean
   loading, so the recycled acid gas is the absorbed H2S and CO2, saturated
   with water at the reflux drum (``T_reflux``, ``P_reflux``). The full
-  stripper is :func:`difflow_refinery.treating.regenerate`.
+  stripper is :func:`difflow_refinery.treating.regenerate`. The water the
+  solvent gives up -- to the off-gas, which leaves the absorber saturated,
+  and to the recycled acid gas -- is replaced by makeup water so that the
+  solvent returns at its lean strength; ``makeup_water`` reports it, and an
+  SRU water (H, O) balance needs it as a feed. The inerts physically
+  dissolved in the rich solvent (``absorber.dissolved``: some H2 and N2) are
+  not recycled; they leave with it.
 * Incinerator (:func:`incinerate`): every S species of the off-gas to SO2.
 """
 
@@ -134,7 +140,9 @@ def tgtu(tail_gas, p: TGTUParams):
     Returns:
         dict: ``off_gas`` (to the incinerator), ``recycle`` (acid gas stream
         to the furnace), ``SO2_emitted`` (mol/s), ``hydrogenation``,
-        ``quench_water``, ``absorber`` (:class:`AbsorberResult`), ``converged``.
+        ``quench_water``, ``makeup_water`` (mol/s: the solvent loop's water
+        loss, to the off-gas and the recycle), ``absorber``
+        (:class:`AbsorberResult`), ``converged``.
     """
     h, hinfo = hydrogenate(tail_gas, p.T_hydrogenation, p.h2_makeup)
     q, cond, q_duty = quench(h, p.T_quench)
@@ -155,8 +163,10 @@ def tgtu(tail_gas, p: TGTUParams):
     recycle = cl.to_stream(jnp.zeros(len(SPECIES)).at[_IDX[H2S]].set(r_h2s)
                            .at[_IDX[CO2]].set(r_co2).at[_IDX[H2O]].set(r_w),
                            p.T_reflux, p.P_reflux)
+    makeup = lean["W"] - ab.rich["W"] + r_w
     return {"off_gas": off, "recycle": recycle, "SO2_emitted": incinerate(off),
             "hydrogenation": hinfo, "hydrogenated": h, "quench_water": cond,
+            "makeup_water": makeup,
             "quench_duty": q_duty, "absorber": ab,
             "converged": hinfo["converged"] & ab.converged}
 

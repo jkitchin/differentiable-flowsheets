@@ -561,16 +561,17 @@ def refinery() -> Path:
 
     95,000 BPD of the crude of examples/36_crude_to_vacuum (SG 0.86,
     1.8 wt% S, with a heavy end, so the CDU and the VDU share one
-    characterization and the CDU residue feeds the VDU with no re-cut)
-    arrives at 143.5 C and 15 bar with 0.2 vol% BS&W: the crude after
+    characterization and the CDU residue feeds the VDU with no re-cut;
+    here with a TBP point added at 3 vol% so the curve meets the light
+    ends) arrives at 143.5 C and 15 bar with 0.2 vol% BS&W: the crude after
     exchanger E3, the train pressure and the tank BS&W of
     examples/37_crude_preheat_train. The desalter (5 vol% wash water,
     95 % salt removal) and the adiabatic 3 bar preflash drum are that
     notebook's; its exchangers E4 and E5 between them (3.24 + 2.19 MW)
     are the drum's duty here. The atmospheric column is example 36's (30
     stages, three side strippers, two pumparounds, 5 % overflash, cuts as
-    fractions of the crude's standard volume). The preflash vapour (4.1
-    vol% of the crude, mostly C3-C5) leaves before the column instead of
+    fractions of the crude's standard volume). The preflash vapour (about
+    4 vol% of the crude in example 37, mostly C3-C5) leaves before the column instead of
     entering it, so the naphtha draw is example 36's 20 % less that. The
     VDU runs at the plugin's defaults, as in example 36. Every parameter
     is a plain dataclass, so the file needs no code context.
@@ -589,9 +590,12 @@ def refinery() -> Path:
 
     C = 273.15
     BPD = 95_000.0
+    # The 3 vol% point (the n-pentane boiling point) closes the TBP curve onto
+    # the light ends; without it the 3-5 vol% between them joins the first cut,
+    # and characterize warns.
     assay = dr.Assay(
-        [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95],
-        [t + C for t in (60, 95, 150, 205, 260, 315, 370, 430, 500, 600, 680)],
+        [3, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95],
+        [t + C for t in (36, 60, 95, 150, 205, 260, 315, 370, 430, 500, 600, 680)],
         sg=0.86, light_ends={"propane": 0.5, "n_butane": 1.0, "n_pentane": 1.5},
         heavy_end=dr.HeavyEnd(), sulfur_wt=1.8, nitrogen_wppm=1500.0,
         ccr_wt=6.0, nickel_vanadium_wppm=60.0, asphaltenes_wt=3.0)

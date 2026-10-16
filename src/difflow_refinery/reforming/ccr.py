@@ -268,8 +268,8 @@ class CCRParams(ParamsMixin):
             circulation (:meth:`CCRReformer.design_circulation`, 5.25 wt%
             spent coke [AFPM16]) of ``lean_naphtha()`` in
             :func:`ccr_reformer_params`. On the reformer's ILLUSTRATIVE coke
-            law that is ~11 kg/h, an ~80-day catalyst turnover: far slower
-            than a plant's, because the coke make is low. Not a plant number.
+            law that is ~24 kg/h, a ~36-day catalyst turnover: slower than a
+            plant's, because the coke make is low. Not a plant number.
         alpha: Deactivation constant of ``a = exp(-alpha C)`` (kg cat/kg
             coke). ILLUSTRATIVE.
         regenerator: :class:`RegeneratorParams`.
@@ -277,7 +277,7 @@ class CCRParams(ParamsMixin):
         max_iter: Outer (coke-activity) passes allowed.
     """
 
-    circulation: float = 0.0030221
+    circulation: float = 0.0067661
     alpha: float = 10.0
     regenerator: RegeneratorParams = field(default_factory=RegeneratorParams)
     tol: float = 1e-9
