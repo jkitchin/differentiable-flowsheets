@@ -53,7 +53,8 @@ def test_fractionator_shares_telescope_to_one():
     np.testing.assert_allclose(np.asarray(s.sum(axis=1)), 1.0, rtol=0, atol=1e-15)
 
 
-def test_diesel_flash_and_bed_smoke():
+@pytest.fixture(scope="module")
+def diesel_unit():
     a = dr.Assay(TBP_PCT, jnp.asarray([t + 273.15 for t in TBP_A]), sg=0.86,
                  light_ends={"propane": 0.5, "n_butane": 1.0, "n_pentane": 1.5},
                  heavy_end=dr.HeavyEnd(), sulfur_wt=1.8, nitrogen_wppm=1500.0)
@@ -61,7 +62,11 @@ def test_diesel_flash_and_bed_smoke():
         warnings.simplefilter("ignore")
         char = dr.characterize(a, composition=True)
     feed = straight_run_cut(char, rate=50.0, cuts=select_cuts(char, 230 + 273.15, 370 + 273.15))
-    unit = Hydrotreater(char, feed, HydrotreaterParams())
+    return feed, Hydrotreater(char, feed, HydrotreaterParams())
+
+
+def test_diesel_flash_and_bed_smoke(diesel_unit):
+    feed, unit = diesel_unit
     th = unit.theta(feed)
     comps, kin, lay = unit._comps(th), unit._kin_params(th["kin"]), unit.layout
     gas = Flows(jnp.zeros(lay.n_gas).at[lay.gas_index("hydrogen")].set(700.0),
@@ -70,3 +75,18 @@ def test_diesel_flash_and_bed_smoke():
     assert float(r.residual) < 1e-10 and 0.0 < float(r.beta) < 1.0
     b = integrate_bed(unit.kinetics, kin, lay, comps, th["oil"] + gas, 613.15, 50e5, 67000.0)
     assert np.isfinite(float(b.T_out)) and float(b.T_out) > 613.15   # exothermic
+
+
+def test_compressor_with_an_empty_loop(diesel_unit):
+    # purge = 1 leaves no recycle gas; the tear Newton's derivative through the
+    # compressor was then a non-finite linear solve.
+    from difflow_refinery.hydroprocessing.recycle import compress
+    feed, unit = diesel_unit
+    lay, comps = unit.layout, unit._comps(unit.theta(feed))
+
+    def f(s):
+        gas = Flows(s * jnp.ones(lay.n_gas), jnp.zeros(lay.n_cut), jnp.zeros((lay.n_cut, lay.n_attr)))
+        return jnp.stack(compress(gas, lay, comps, 323.15, 45e5, 50e5, 0.75))
+
+    assert float(f(0.0)[1]) == 0.0
+    assert np.all(np.isfinite(np.asarray(jax.jacfwd(f)(0.0))))

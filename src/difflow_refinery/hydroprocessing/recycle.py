@@ -126,6 +126,11 @@ def compress(gas: Flows, layout: Layout, comps: Components, T_in, P_in, P_out, e
     T_in = jnp.where(ok, T_in, 300.0)
     lnr = jnp.where(ok, lnr, 0.1)
     cp = jnp.where(ok, cp, comps.cp_ig[:comps.n_gas])
+    # The outlet T is intensive: solve on mole fractions, so an empty loop (purge = 1)
+    # is not a zero residual with a zero Jacobian; its power is then zero.
+    n_tot = jnp.sum(z)
+    empty = n_tot <= 0.0
+    z = jnp.where(empty, 1.0, z / jnp.where(empty, 1.0, n_tot))
 
     def r_s(T, args):
         z, cp, T_in, lnr = args
@@ -145,7 +150,8 @@ def compress(gas: Flows, layout: Layout, comps: Components, T_in, P_in, P_out, e
 
     T2 = optx.root_find(r_h, solver, jax.lax.stop_gradient(Ts), args=(z, cp, H2), max_steps=50,
                         throw=False).value
-    return jnp.where(ok, T2, jnp.nan), jnp.where(ok, H2 - H1, jnp.nan)
+    W = jnp.where(empty, 0.0, n_tot * (H2 - H1))
+    return jnp.where(ok, T2, jnp.nan), jnp.where(ok, W, jnp.nan)
 
 
 def makeup_for_ratio(recycle: Flows, layout: Layout, makeup_y: Array, h2_target) -> tuple[Flows, Array]:
