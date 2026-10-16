@@ -614,12 +614,14 @@ class Hydrotreater:
         l_w = jnp.asarray([LIGHT_ENDS[nm][4] for nm in lights], dtype=float).reshape(-1)
         zl = jnp.zeros(len(lights))
         cat = lambda a, b: jnp.concatenate([a, b])
+        h_grid = cat(100.0 * jnp.asarray([GAS_H_FRACTION(nm) for nm in lights], dtype=float).reshape(-1), h_wt)
         pchar = _ProductGrid(
             Tb=cat(l_Tb, c["Tb"]), SG=cat(l_sg, sg_cut),
             MW=cat(l_mw, mw_cut), Tc=cat(l_tc, c["Tc"]), Pc=cat(l_pc, c["Pc"]), omega=cat(l_w, c["omega"]),
             qualities={"S_ppm": cat(zl, s_ppm), "N_ppm": cat(zl, n_ppm), "aromatics_vol": cat(zl, arom),
                        "olefins_vol": cat(zl, olef), "naphthenes_vol": cat(zl, naphth),
-                       "paraffins_vol": cat(100.0 * (1.0 - 0.0 * zl), 100.0 - arom - olef - naphth)})
+                       "paraffins_vol": cat(100.0 * (1.0 - 0.0 * zl), 100.0 - arom - olef - naphth),
+                       "H_wt": h_grid})
 
         def light_flows(f: Flows):
             return jnp.stack([f.gas[lay.gas_index(nm)] for nm in lights]) if lights else jnp.zeros(0)
@@ -640,8 +642,7 @@ class Hydrotreater:
             for k in AROMATIC_CLASSES:
                 out[f"{prefix}.{k}_aromatics_vol"] = jnp.sum(phi * cat(zl, aro[k]))
             out[f"{prefix}.olefins_vol"] = jnp.sum(phi * pchar.qualities["olefins_vol"])
-            out[f"{prefix}.H_wt"] = jnp.sum(w * cat(100.0 * jnp.asarray(
-                [GAS_H_FRACTION(nm) for nm in lights], dtype=float).reshape(-1), h_wt))
+            out[f"{prefix}.H_wt"] = jnp.sum(w * h_grid)
             tb = {}
             for pct in (5, 10, 50, 90, 95):
                 tb[pct] = tbp_temperature(pct / 100.0, pchar.Tb, phi, 5.0)

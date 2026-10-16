@@ -110,6 +110,7 @@ class BlendCharacterization(ParamsMixin):
         "aromatics_vol": "volume", "olefins_vol": "volume",
         "naphthenes_vol": "volume", "paraffins_vol": "volume",
         "benzene_vol": "volume",
+        "H_wt": "mass",
     }
 
     def __post_init__(self):
