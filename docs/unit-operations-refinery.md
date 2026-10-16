@@ -4217,7 +4217,7 @@ jax.grad(lambda h: su.solve_sru(dict(acid_gas, F_hydrogen_sulfide=h), claus, tgt
 | Hydrogenation | adiabatic equilibrium restricted to SO2/S hydrogenation, COS/CS2 hydrolysis, shift | — |
 | Quench | water to saturation | IAPWS-IF97 |
 | Absorber | Kent-Eisenberg MDEA, Murphree trays | see the amine section |
-| Regenerator | NOT solved: the solvent is returned to its lean loading; acid gas leaves the reflux drum saturated | — |
+| Regenerator | NOT solved: the solvent is returned to its lean loading; acid gas leaves the reflux drum saturated; the water the solvent loses (to the saturated off-gas and the recycle) is reported as `makeup_water` | — |
 | Recycle | substitution, then one implicit Newton step | — |
 
 **Validation** (`tests/refinery/test_sulfur.py`; the Gamson-Elkins curve and
@@ -4265,7 +4265,11 @@ Limitations:
   transcriptions disagree, and the original could not be read.
 - The Gamson-Elkins comparison is against features of the curve (minimum,
   limits), not against digitised points.
-- The regenerator is not solved inside the SRU.
+- The regenerator is not solved inside the SRU. Its makeup water
+  (`tgtu["makeup_water"]`) is a feed of the SRU's H and O balance, and the
+  inerts dissolved in the rich solvent (`absorber.dissolved`, some H2 and N2)
+  leave with it; with both, the SRU closes every element to 1e-9 mol/s
+  (tested).
 - H2S and CO2 dissolved in the quench water are neglected.
 - Sulfur mist entrainment is not modelled.
 
