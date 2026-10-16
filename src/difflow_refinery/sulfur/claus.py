@@ -117,9 +117,11 @@ class ConverterParams:
         T_in: Bed inlet temperature after reheat (K).
         hydrolysis: ``(X_COS, X_CS2)`` fractional hydrolysis of COS and CS2
             to H2S over the bed (titania or alumina in bed 1; ~0 downstream).
-        approach_dT: Approach to Claus equilibrium (K): equilibrium is taken
-            at ``T + approach_dT``; positive (hotter) falls short, as the
-            reaction is exothermic.
+        approach_dT: Approach to Claus equilibrium (K): the Claus reaction's
+            equilibrium is taken at ``T + approach_dT``, the allotropes' at
+            ``T``. The reaction is written to S2, which is endothermic
+            (about +96 kJ per 4 H2S at 500 K), so a NEGATIVE value falls
+            short of equilibrium and a positive one overshoots it.
         pressure_drop: Bed pressure drop (Pa).
     """
 
