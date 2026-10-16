@@ -56,6 +56,11 @@ Invariants (do not weaken them):
   Irreversible heats are 298 K values; the hydrocracker/residue per-H2
   saturation heats are `AROMATIC_DH298` (298 K, deliberate). The
   Korsten-Hoffmann profile cross-check is NOT done.
+- The aromatics steps' REVERSE rates act only on the hydro-aromatic sub-counts
+  (`HYDRO_ATTRIBUTES`, zero in a feed, made by the forward steps), never on the
+  whole lower class: on the whole class, a gas oil's naphthalenes became
+  phenanthrenes at low pH2 and the bed made hydrogen. An attribute that is zero
+  at a bed inlet is scaled on the cut flows in `integrate_bed` (else 1e-300).
 
 Docs: `docs/unit-operations-refinery.md` (Hydroprocessing building blocks; The
 hydrotreater). Tests: `tests/refinery/test_hydrotreating.py`.

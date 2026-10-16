@@ -40,7 +40,7 @@ from jax import Array
 from difflow_refinery.composition import HC_TYPES, NITROGEN_CLASSES, SULFUR_CLASSES
 from difflow_refinery.hydroprocessing.layout import ATOMIC_MASS, DEFAULT_GASES, Flows, Layout
 from difflow_refinery.hydrotreating.kinetics import (
-    AROMATIC_CLASSES, CRACK_GAS_SPLIT, HDT_ATTRIBUTE_ELEMENTS, HDT_ATTRIBUTES)
+    AROMATIC_CLASSES, CRACK_GAS_SPLIT, HDT_ATTRIBUTE_ELEMENTS, HDT_ATTRIBUTES, HYDRO_ATTRIBUTES)
 
 #: Illustrative aromatic-ring split by boiling point: ``(T_K, shares)``, each
 #: row the fraction of a cut's aromatic molecules that are mono-, di- and
@@ -112,6 +112,8 @@ def hdt_feed(char, stream: Mapping, layout: Layout, aromatic_table=DEFAULT_AROMA
         cols[f"A_{c}"] = arom * sp[:, k]
     cols["olefins"] = F * types[:, HC_TYPES.index("olefins")]
     cols["naphthenes"] = F * types[:, HC_TYPES.index("naphthenes")]
+    for a in HYDRO_ATTRIBUTES:                          # no hydro-aromatics in a feed (see kinetics)
+        cols[a] = jnp.zeros_like(F)
     attr = jnp.stack([cols[a] for a in layout.attributes], axis=-1)
     gas = jnp.stack([jnp.asarray(stream.get(f"F_{g}", 0.0), dtype=float) for g in layout.gases])
     return Flows(gas=gas, cut=F, attr=attr)

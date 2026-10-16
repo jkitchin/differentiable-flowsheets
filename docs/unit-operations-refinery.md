@@ -2308,9 +2308,9 @@ Per cut, on the cut's own attribute concentrations (`c`, mol/m³ of fugacity-equ
 |---|---|---|---|
 | HDS, class j: S_j + nu_j H2 -> H2S | `f k_j c_Sj h / (1 + K_H2S c_H2S + K_N c_Nbasic)^2` | 2.0, 4.0, 3.0, 2.6, 3.95 | -104.8, -261.2, -157.1, -83.4, -172.8 |
 | HDN, basic / non-basic | `f k_j c_Nj h / (1 + K_H2S c_H2S)` | 4.0, 5.0 | -238.5, -263.3 |
-| poly + 2 H2 <-> di | `f k h (c_A3 - c_A2 / (K3(T) (pH2/1 bar)^2))` | 2 | dH(T): -114.8 at 25 °C, -124.8 at 350 °C |
-| di + 2 H2 <-> mono | `f k h (c_A2 - c_A1 / (K2(T) (pH2/1 bar)^2))` | 2 | dH(T): -124.0, -132.1 |
-| mono + 3 H2 <-> naphthene | `f k h (c_A1 - c_Nn / (K1(T) (pH2/1 bar)^3))` | 3 | dH(T): -206.1, -219.9 |
+| poly + 2 H2 <-> di | `f k h (c_A3 - c_A2h / (K3(T) (pH2/1 bar)^2))` | 2 | dH(T): -114.8 at 25 °C, -124.8 at 350 °C |
+| di + 2 H2 <-> mono | `f k h (c_A2 - c_A1h / (K2(T) (pH2/1 bar)^2))` | 2 | dH(T): -124.0, -132.1 |
+| mono + 3 H2 <-> naphthene | `f k h (c_A1 - c_Nnh / (K1(T) (pH2/1 bar)^3))` | 3 | dH(T): -206.1, -219.9 |
 | olefin + H2 -> paraffin | `f k c_O h` | 1 | -125.3 |
 | cracking leak: molecule + H2 -> lighter molecule + C1--C4 | `f k c_cut` | 1 | -42.55 |
 
@@ -2318,6 +2318,7 @@ Sulfur classes in the order sulfides, thiophenes, benzothiophenes, dibenzothioph
 
 - **HDS** is the Langmuir-Hinshelwood-Hougen-Watson rate with a squared H2S-inhibition denominator, the form of Korsten & Hoffmann (1996) and, with a richer denominator, of Froment, Depauw & Vanrysselberghe (1994) and Vanrysselberghe & Froment (1996). It is first order in each class. A sum of first-order classes with different constants is what gives a lumped total-sulfur rate its apparent order above one. Basic nitrogen adsorbs on the same sites and sits in the denominator. `hds_form="power"` gives the nth-order fallback `f k c_ref,S (c_Sj/c_ref,S)^n h`, with no inhibition.
 - **Aromatics** saturate reversibly, first order, with equilibrium constants `ln K(T) = -dG(T)/RT` from model-compound thermochemistry, with the heat capacities integrated from 298.15 K to the bed temperature: `aromatic_ln_K(T)`, the shared table's `IdealGasSet.ln_K` (#338). The standard state is the ideal gas at 1 bar, which is why the rate law divides by `(pH2/1 bar)^n`. The heat each step releases is `aromatic_heat(T)`, the same integration, so the energy balance and the equilibrium's van 't Hoff slope (`d ln K/dT = dH(T)/RT²`, tested to 1e-12) agree. Both are pure JAX in `T`. Saturation is exothermic and loses moles of gas, so equilibrium recedes as temperature rises and aromatics pass through a minimum. Until #338 `K` used the 298 K `dH` and `dS` as constants; that made the benzene step's `K` 3.1x, 3.8x and 5.1x too large at 300, 350 and 420 °C (2.6x and 2.2x for the poly and di steps at 350 °C).
+- **Only hydro-aromatics dehydrogenate.** The reverse of each step acts on `c_A2h`, `c_A1h` and `c_Nnh`, the attributes `A_di_hydro`, `A_mono_hydro` and `naphthenes_hydro` (`HYDRO_ATTRIBUTES`): the molecules of the lower class that have a partly saturated ring of the higher one, which are the ones the forward step made in the bed. Each is counted inside its class as well. Saturating a class takes its hydro sub-count with it in proportion, and the reverse of the di step gives an ordinary di-aromatic. The rest of a lower class has no ring to re-aromatize into the higher one: a naphthalene or biphenyl, which is most of a gas oil's "di-aromatics", cannot become a phenanthrene, nor an alkylbenzene a naphthalene, and a sulfided CoMo or NiMo catalyst has no acid-metal function to make a cyclopentyl naphthene aromatic (that is reforming). A feed carries no hydro-aromatics (`hdt_feed` sets them to zero), so tetralins already in a feed are taken as unable to dehydrogenate; that under-states the end-of-run aromatics of a feed rich in them. Until this was added the reverse rates acted on the whole lower class. At low H2 pressure and high temperature that turned the feed's di-aromatics into poly-aromatics: Elfghi & Amin's straight-run gas oil (pilot unit, 100 Nm³/m³) at 370 °C and 20 bar *made* hydrogen, −4.5 Nm³/m³ chemical, while its poly-aromatics quadrupled. It now consumes +5.1 Nm³/m³ (10.7 at 50 bar, 7.9 before).
 - **H2 stoichiometry** per class is that of a model compound (below). The hydrogen not leaving as H2S or NH3 goes onto the cut (`H += 2 nu - 2` per S, `2 nu - 3` per N). A desulfurized molecule keeps its carbon skeleton; the cut's molecule count does not change. Element balances are exact.
 - **The cracking leak** moves a molecule of cut `i` to the cut whose carbon number per molecule is nearest to `i`'s less the gas fragment's (fixed at construction from the composition), splitting off one C1--C4 molecule in the proportions `CRACK_GAS_SPLIT` (10/15/35/15/25 % C1/C2/C3/iC4/nC4, illustrative), with one H2.
 - **Deactivation** is the `activity` multiplier a(t). It is a differentiable parameter, so `difflow.reconciliation.tracking` can track it from plant data as the drifting parameter that loop is built for (not wired up or tested here).
@@ -2483,7 +2484,7 @@ On example 40's naphtha (single bed, stripper feed at 150 °C; the stripper's de
 | 320 °C, 20 bar, 4 h⁻¹, 100 Nm³/m³ | 0.068 | 2.0 | 1.6 | 2.0 |
 | 320 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³, **diesel** constants | 87 | 23 | 3.0 | 4.1 |
 
-(Feed 1072 wppm S. Figures far below 1 wppm only say "removed": the illustrative first-order classes have no refractory tail. The table was computed before #338 made the aromatics equilibria Cp-integrated and was not recomputed; in example 40's naphtha unit, the 320 °C row's conditions, the change moved the chemical hydrogen from 1.8 to 1.7 Nm³/m³ and the bed rise from 2.3 to 2.1 K, and left S and N where they were.) So a reformer feed (below about 0.5 wppm S and N) is reached at 30 bar and LHSV 4 from about 310 °C for sulfur and 320 °C for nitrogen. The charge heater takes 23.6 MW absorbed (27.8 MW fired at 0.85) at 320 °C with no feed/effluent exchanger, and the wild naphtha carries 0.011 kg/s of dissolved gas. The reformer carries the feed's sulfur (#330; `NaphthaFeed.from_hydrotreater` passes the treated product's sulfur, #327) but not its nitrogen, so the nitrogen figures are not seen downstream. Example 40's earlier conditions (60 bar, LHSV 0.7, 400 Nm³/m³), which were what the diesel constants needed under the old phase model, now run away on the diesel constants (the aromatics saturate, the integration does not finish, `converged=False`); on the naphtha set they converge.
+(Feed 1072 wppm S. Figures far below 1 wppm only say "removed": the illustrative first-order classes have no refractory tail. The table was computed before #338 made the aromatics equilibria Cp-integrated and was not recomputed; in example 40's naphtha unit, the 320 °C row's conditions, the change moved the chemical hydrogen from 1.8 to 1.7 Nm³/m³ and the bed rise from 2.3 to 2.1 K, and left S and N where they were. Restricting the aromatics dehydrogenation to hydro-aromatics later moved it little: on a 60--180 °C straight-run naphtha of the test crude at the 320 °C row's conditions, the chemical hydrogen went from 2.22 to 2.38 Nm³/m³ and the bed rise from 2.8 to 3.0 K, with the product aromatics unchanged at 20.2 vol%.) So a reformer feed (below about 0.5 wppm S and N) is reached at 30 bar and LHSV 4 from about 310 °C for sulfur and 320 °C for nitrogen. The charge heater takes 23.6 MW absorbed (27.8 MW fired at 0.85) at 320 °C with no feed/effluent exchanger, and the wild naphtha carries 0.011 kg/s of dissolved gas. The reformer carries the feed's sulfur (#330; `NaphthaFeed.from_hydrotreater` passes the treated product's sulfur, #327) but not its nitrogen, so the nitrogen figures are not seen downstream. Example 40's earlier conditions (60 bar, LHSV 0.7, 400 Nm³/m³), which were what the diesel constants needed under the old phase model, now run away on the diesel constants (the aromatics saturate, the integration does not finish, `converged=False`); on the naphtha set they converge.
 
 **Where it fails.** At 320 °C, 50 bar, LHSV 0.5 and 150 Nm³/m³ the bed-inlet PR flash does not converge (the mixture is near its critical region; Newton diverges). The unit returns `converged=False` with `flash.residual` about 1e-3 and warns; it used to raise an equinox NaN-in-linear-solve error.
 
@@ -2567,21 +2568,23 @@ The test crude of the composition section (SG 0.86, 1.8 wt% S, 1500 wppm N, with
 
 | | |
 |---|---|
-| WABT | 350.9 °C; bed rises 12.7 and 6.9 K |
-| product | 258 wppm S, 232 wppm N, SG 0.850, 14.3 vol% aromatics (11.1 mono, 2.3 di, 0.9 poly), cetane index 58.3 |
-| yields (mass) | product 98.72 %, wild naphtha 0.39 %, gas (C1--C4, H2S, NH3) 1.21 % |
+| WABT | 352.1 °C; bed rises 13.8 and 7.7 K |
+| product | 218 wppm S, 226 wppm N, SG 0.850, 14.1 vol% aromatics (11.5 mono, 2.3 di, 0.3 poly), cetane index 58.5 |
+| yields (mass) | product 98.75 %, wild naphtha 0.39 %, gas (C1--C4, H2S, NH3) 1.21 % |
 | charge heater | 47.4 MW absorbed, 55.8 MW fired (from a 25 °C feed, no feed/effluent exchanger) |
-| hydrogen | chemical 30.5 Nm³/m³ (181 scf/bbl), makeup 47.9 Nm³/m³; recycle purity 95.3 % |
-| loop | recycle compressor 154 kW; purge 36 mol/s |
+| hydrogen | chemical 33.1 Nm³/m³ (196 scf/bbl), makeup 50.3 Nm³/m³; recycle purity 95.0 % |
+| loop | recycle compressor 153 kW; purge 36 mol/s |
 | closure | mass, C, H, S and N to 1e-15 relative; tear residual 9e-15; stripper 2e-12 |
 
-Before #338 (equilibrium constants 2--5x too large, see [Thermochemical data](#refinery-thermochemistry)) the same case gave WABT 351.4 °C, 241 wppm S, 14.2 vol% aromatics and 32.4 Nm³/m³ of chemical hydrogen. At a 380 °C bed-1 inlet the difference is larger: 12.1 vol% aromatics (10.4 before), of which 3.0 vol% poly-aromatics (0.9) as the poly step's equilibrium reverses, 31.5 Nm³/m³ of hydrogen (44.5) and a 393.1 °C outlet (400.4).
+Before the dehydrogenation was restricted to hydro-aromatics (see [Reactions and rate laws](#refinery-hydrotreater-kinetics)) the same case gave WABT 350.9 °C, 258 wppm S, 14.3 vol% aromatics of which 0.9 poly, and 30.5 Nm³/m³ of chemical hydrogen: even at 50 bar the poly step's reverse rate was turning the feed's di-aromatics (naphthalenes, which cannot become phenanthrenes) into poly-aromatics. At a 380 °C bed-1 inlet the difference is larger: 9.9 vol% aromatics (12.1 before), of which 0.4 vol% poly-aromatics (3.0), 47.9 Nm³/m³ of hydrogen (31.5) and a 403.6 °C outlet (393.1).
+
+Before #338 (equilibrium constants 2--5x too large, see [Thermochemical data](#refinery-thermochemistry)) the case gave WABT 351.4 °C, 241 wppm S, 14.2 vol% aromatics and 32.4 Nm³/m³ of chemical hydrogen; at the 380 °C inlet, 10.4 vol% aromatics, 0.9 vol% poly, 44.5 Nm³/m³ and a 400.4 °C outlet.
 
 Compiling the unit takes about 70 s (more on a loaded machine); a solve then takes about 1.7 s, of which the recycle tear is five Newton steps. A reverse-mode gradient of all outputs costs one more compile and 30--140 s.
 
 **Gradients** (measured when the model was written): product S, chemical H2 consumption and liquid yield with respect to the bed inlet temperature, the pressure, the H2/oil ratio and the 50 % TBP point of the assay, AD against central differences. With plain central differences (steps 0.5 K, 0.5 bar, 3 Nm³/m³) they agree to 1e-5 -- 9e-4, and the larger figures are the differences' own O(h²) truncation; against Richardson-extrapolated differences they agreed to 1e-5.
 
-**Trends** (measured when the model was written): product sulfur falls with inlet temperature and with pressure (H2 partial pressure); chemical H2 consumption rises with temperature; on a bed at 30 bar, total aromatics pass through a minimum between 300 and 480 °C as the saturation equilibrium recedes. On the test diesel's bed the minimum is at 360 °C; it was at 390 °C before #338, when the equilibrium constants were 2--5x too large.
+**Trends** (measured when the model was written): product sulfur falls with inlet temperature and with pressure (H2 partial pressure); chemical H2 consumption rises with temperature; on a bed at 30 bar, total aromatics pass through a minimum as the saturation equilibrium recedes. On the test diesel in one 30 bar bed the minimum is 13.2 vol% at a 400 °C inlet (WABT 415 °C), and the chemical hydrogen stays between 31 and 37 Nm³/m³ from there to a 460 °C inlet; at 480 °C the bed runs away and the solve returns `converged=False`. Before the dehydrogenation was restricted to hydro-aromatics the minimum was at a 360 °C inlet, and above a 400 °C inlet the bed *made* hydrogen (-6 to -67 Nm³/m³) and cooled, which is what kept it from running away. Before #338 the minimum was at 390 °C.
 
 The numbers come from illustrative rate constants: read them as the shape of the answer, not a prediction for any catalyst.
 
@@ -3048,24 +3051,26 @@ Feeds: the LVGO + HVGO of a `VacuumColumn` on the idealized atmospheric residue 
 | | light VGO, once-through | light VGO, 60 % UCO recycle | heavy VGO, once-through |
 |---|---|---|---|
 | fresh feed | 45.1 kg/s; 2.91 wt% S, 2214 wppm N | same | 48.5 kg/s; 4.10 wt% S, 2948 wppm N |
-| to the cracker | 971 wppm S, 43.3 wppm N | 858 wppm S, 40.3 wppm N | 418 wppm S, 17.2 wppm N |
-| WABT pretreat / cracking | 394.3 / 395.5 °C | 394.1 / 391.2 °C | 415.6 / 383.3 °C |
-| bed rises, cracking | 19.6, 22.0, 22.5, 23.5, 26.6 K | 13.6, 15.8, 16.6, 17.4, 19.2 K | 29.9, 30.3, 27.5, 25.6, 25.8 K |
-| conversion (370 °C+), per pass / overall | 70.0 / 70.0 % | 47.2 / 69.1 % | 55.6 / 55.6 % |
-| off-gas, LPG (wt%) | 1.08, 1.24 | 1.22, 1.07 | 1.39, 1.70 |
-| light, heavy naphtha (wt%) | 2.57, 10.54 | 2.21, 9.27 | 1.35, 7.46 |
-| kerosene, diesel (wt%) | 24.96, 31.55 | 23.15, 34.16 | 18.95, 26.40 |
-| UCO bleed (wt%) | 28.31 | 29.21 | 42.35 |
-| naphtha / middle distillate | 0.232 | 0.200 | 0.194 |
-| chemical H2 | 278 Nm³/m³ (1650 scf/bbl, 2.70 wt%) | 264 Nm³/m³ (1567 scf/bbl) | 347 Nm³/m³ (2062 scf/bbl) |
-| kerosene SG; diesel SG, cetane index | 0.790; 0.840, 65.5 | 0.790; 0.842, 65.3 | 0.829; 0.882, 47.3 |
-| UCO BMCI | 33.1 | 34.1 | 50.3 |
-| closure (worst of mass, C, H, S, N) | 4e-15 | 9e-13 | 6e-15 |
+| to the cracker | 934 wppm S, 42.1 wppm N | 822 wppm S, 39.1 wppm N | 418 wppm S, 17.2 wppm N |
+| WABT pretreat / cracking | 394.8 / 395.7 °C | 394.7 / 391.5 °C | 415.6 / 383.3 °C |
+| bed rises, cracking | 20.0, 22.4, 22.9, 23.9, 26.9 K | 14.0, 16.3, 17.1, 17.8, 19.6 K | 29.9, 30.3, 27.5, 25.6, 25.8 K |
+| conversion (370 °C+), per pass / overall | 71.2 / 71.2 % | 48.6 / 70.3 % | 55.6 / 55.6 % |
+| off-gas, LPG (wt%) | 1.09, 1.28 | 1.23, 1.10 | 1.39, 1.70 |
+| light, heavy naphtha (wt%) | 2.64, 10.80 | 2.28, 9.54 | 1.35, 7.46 |
+| kerosene, diesel (wt%) | 25.45, 31.78 | 23.67, 34.45 | 18.95, 26.40 |
+| UCO bleed (wt%) | 27.24 | 28.06 | 42.35 |
+| naphtha / middle distillate | 0.235 | 0.203 | 0.194 |
+| chemical H2 | 282 Nm³/m³ (1674 scf/bbl, 2.73 wt%) | 268 Nm³/m³ (1591 scf/bbl) | 347 Nm³/m³ (2062 scf/bbl) |
+| kerosene SG; diesel SG, cetane index | 0.789; 0.840, 65.5 | 0.790; 0.842, 65.3 | 0.829; 0.882, 47.3 |
+| UCO BMCI | 33.0 | 34.0 | 50.3 |
+| closure (worst of mass, C, H, S, N) | 6e-15 | 1e-13 | 6e-15 |
 | tears | gas 2e-13 | gas 6e-12; UCO 1.7e-10 relative, 13 Anderson passes | gas 3e-13 |
 
 Recomputed for #338, which made the pretreat bed's aromatics equilibria Cp-integrated (the cracking bed's `SATURATION_HEAT_PER_H2` is still a 298 K value). On the heavy VGO the pretreat bed saturates less, releases less heat (it rises 78 K against 81) and runs 1.2 K cooler, so the cracker feed keeps more sulfur and nitrogen (418 against 315 wppm S, 17.2 against 14.5 wppm N; organic nitrogen inhibits cracking in the kinetics) and more aromatics: its conversion fell from 58.2 to 55.6 % and its chemical H2 from 359 to 347 Nm³/m³. The light VGO moved by 0.3 % conversion or less.
 
-Read these as the shape of the answer: every cracking constant is illustrative. A few things they show, all of which follow from the model rather than being tuned in: the recycle at the same catalyst and temperature *lowers* the per-pass conversion (a recycle reactor is less efficient than plug flow) and the overall conversion slightly, and buys selectivity -- 2.6 wt% more diesel, less naphtha per middle distillate, less H2; the heavy, aromatic VGO consumes more hydrogen, gives denser, lower-cetane products (its products inherit its lower Watson K through `Kw_feed + dKw`) and a higher-BMCI UCO; its pretreat bed rises 78 K, which a real unit would quench harder (the pretreat quench is a spec).
+The two light-VGO columns were recomputed again when the pretreat bed's aromatics dehydrogenation was restricted to hydro-aromatics (see [the hydrotreater's rate laws](#refinery-hydrotreater-kinetics)). The pretreat bed saturates more and runs 0.5 K hotter, the cracker feed has less sulfur and nitrogen (934 against 971 wppm S once-through), and conversion rises by 1.1--1.4 points (70.0 to 71.2 % once-through, 69.1 to 70.3 % overall with the recycle) with 4 Nm³/m³ more hydrogen. The heavy-VGO column and the tear residuals were not recomputed; expect a shift of the same sign.
+
+Read these as the shape of the answer: every cracking constant is illustrative. A few things they show, all of which follow from the model rather than being tuned in: the recycle at the same catalyst and temperature *lowers* the per-pass conversion (a recycle reactor is less efficient than plug flow) and the overall conversion slightly, and buys selectivity -- 2.7 wt% more diesel, less naphtha per middle distillate, less H2; the heavy, aromatic VGO consumes more hydrogen, gives denser, lower-cetane products (its products inherit its lower Watson K through `Kw_feed + dKw`) and a higher-BMCI UCO; its pretreat bed rises 78 K, which a real unit would quench harder (the pretreat quench is a spec).
 
 Measured 2026-10-16 on an Apple-silicon laptop (CPU), 50 kg/s straight-run VGO: compiling a once-through unit and its first solve take about 50 s and a further solve about 2.5 s (the gas tear: substitution passes, then Newton); with the UCO recycle (`uco_recycle=0.5`) the compile is about 2 min and a solve about 12 s. A reverse-mode gradient adds one compile: `jax.grad` of the once-through per-pass conversion with respect to `T_crack` takes about 80 s and 6 GB. The recycle-ratio gradient was last measured at about 30 min and 11 GB (its adjoint runs 60 vector-Jacobian products of the loop per cotangent) and has not been re-timed. Neither gradient is in the per-commit suite.
 
@@ -3220,13 +3225,13 @@ These are the test crude of `examples/35`--`40` (1.8 wt% S, 1500 wppm N, 5 wt% C
 
 | | feed (atm. residue) | desulfurized residue | fuel oil (residue + RDS distillate) |
 |---|---|---|---|
-| S | 3.27 wt% | 0.303 wt% | 0.31 wt% (spec 0.50) |
-| Ni+V | 86 wppm | 16.7 wppm | |
-| CCR | 10.8 wt% | 5.3 wt% | (spec 18) |
+| S | 3.27 wt% | 0.291 wt% | 0.29 wt% (spec 0.50) |
+| Ni+V | 86 wppm | 16.2 wppm | |
+| CCR | 10.8 wt% | 5.2 wt% | (spec 18) |
 | SG | 0.953 | 0.928 | (spec 0.991) |
 | viscosity at 50 C (estimated) | 225 cSt | 105 cSt | (spec 380) |
 
-WABT is 394.8 C over a total bed rise of 71 K. HDS is 90.8 %, HDM 81.2 %, CCR reduction 51.8 % and 538 C+ conversion 13.1 %. The distillate yield is 1.8 % (at 0.49 wt% S: the fragments inherit their parent's sulfur, so it wants a distillate hydrotreater before the diesel pool). Chemical H2 is 121 Nm³/m³ (1.14 wt%). All balances close to 1e-15. (Before #338 made the hydrotreating aromatics equilibria and heats Cp-integrated: 0.306 wt% S, WABT 394.7 C, HDS 90.7 %, 1.15 wt% H2; the aromatics steps' heats at bed temperature are larger, so the beds run 0.1-0.2 K hotter.)
+WABT is 395.4 C over a total bed rise of 72 K. HDS is 91.2 %, HDM 81.8 %, CCR reduction 52.3 % and 538 C+ conversion 13.4 %. The distillate yield is 1.8 % (at 0.48 wt% S: the fragments inherit their parent's sulfur, so it wants a distillate hydrotreater before the diesel pool). Chemical H2 is 123 Nm³/m³ (1.16 wt%). All balances close to 1e-15. (Before the aromatics dehydrogenation was restricted to hydro-aromatics, see [the hydrotreater's rate laws](#refinery-hydrotreater-kinetics): 0.303 wt% S, WABT 394.8 C, HDS 90.8 %, HDM 81.2 %, 121 Nm³/m³. The viscosity, the gradient below and the whole-refinery figures of the next section were computed before that change and have not been recomputed. Before #338 made the hydrotreating aromatics equilibria and heats Cp-integrated: 0.306 wt% S, WABT 394.7 C, HDS 90.7 %, 1.15 wt% H2; the aromatics steps' heats at bed temperature are larger, so the beds run 0.1-0.2 K hotter.)
 
 Over the route, the residue's sulfur equals the fuel oil's plus the H2S to 1e-10, and residue plus treat gas equals fuel oil plus gas.
 

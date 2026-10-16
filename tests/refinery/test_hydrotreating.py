@@ -110,3 +110,22 @@ def test_compressor_with_an_empty_loop(diesel_unit):
 
     assert float(f(0.0)[1]) == 0.0
     assert np.all(np.isfinite(np.asarray(jax.jacfwd(f)(0.0))))
+
+
+def test_low_pressure_bed_consumes_hydrogen(diesel_unit):
+    # Regression: at 370 C and 20 bar the reverse aromatics steps used to act
+    # on the whole lower class and turned the feed's di-aromatics into
+    # poly-aromatics (a low-sulfur gas oil then made hydrogen). Only the
+    # hydro-aromatics made in the bed dehydrogenate now (HYDRO_ATTRIBUTES).
+    feed, unit = diesel_unit
+    th = unit.theta(feed)
+    comps, kin, lay = unit._comps(th), unit._kin_params(th["kin"]), unit.layout
+    h2 = lay.gas_index("hydrogen")
+    gas = Flows(jnp.zeros(lay.n_gas).at[h2].set(300.0), jnp.zeros(lay.n_cut), jnp.zeros((lay.n_cut, lay.n_attr)))
+    b = integrate_bed(unit.kinetics, kin, lay, comps, th["oil"] + gas, 643.15, 20e5, 67000.0)
+    assert float(b.outlet.gas[h2]) < float(b.inlet.gas[h2])
+    ai = {a: i for i, a in enumerate(lay.attributes)}
+    poly = lambda f: float(jnp.sum(f.attr[:, ai["A_poly"]]))
+    assert poly(b.outlet) < poly(b.inlet)               # was 3.4 -> 13.1 mol/s
+    for sub, cls in (("A_di_hydro", "A_di"), ("A_mono_hydro", "A_mono"), ("naphthenes_hydro", "naphthenes")):
+        assert np.all(np.asarray(b.outlet.attr[:, ai[sub]]) <= np.asarray(b.outlet.attr[:, ai[cls]]) + 1e-12)

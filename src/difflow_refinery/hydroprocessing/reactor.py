@@ -394,7 +394,11 @@ def integrate_bed(kinetics: KineticModel, params, layout: Layout, comps: Compone
         m = jnp.max(jnp.abs(v)) if v.size else jnp.asarray(1.0)
         return jnp.maximum(jnp.abs(v), 1e-10 * m + 1e-300)
 
-    a_floor = jnp.maximum(jnp.abs(a), 1e-10 * jnp.max(jnp.abs(a), axis=0, keepdims=True) + 1e-300)
+    # an attribute absent at the inlet but made in the bed (the hydrotreater's hydro-aromatic
+    # counts start at zero) is floored on the cut flows too, or its scale is 1e-300 and the
+    # step controller never accepts a step that makes any of it
+    a_floor = jnp.maximum(jnp.abs(a), 1e-10 * jnp.maximum(jnp.max(jnp.abs(a), axis=0, keepdims=True),
+                                                         jnp.max(jnp.abs(c)) if c.size else 0.0) + 1e-300)
     scale = jax.lax.stop_gradient(jnp.concatenate([floor(g), floor(c), a_floor.reshape(-1),
                                                    jnp.asarray([100.0])]))
     n = inlet.ravel().size
