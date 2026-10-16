@@ -3567,7 +3567,7 @@ The equilibrium T of the report's reformer outlet gas lies between its stated 90
 
 Two quantities are deliberately not compared:
 
-- **Supplementary fuel.** The report does not give the combustion-air preheat temperature, and the fuel moves with it: 449 kmol/h with cold air, 314 kmol/h with air at 300 °C, against the report's 240.
+- **Supplementary fuel.** The report does not give the combustion-air preheat temperature, and the fuel moves with it: 322 kmol/h with cold air, 220 kmol/h with air at 300 °C, against the report's 240.
 - **Efficiency.** The report exports steam, which this model does not credit.
 
 ### SMR hydrogen plant: references
