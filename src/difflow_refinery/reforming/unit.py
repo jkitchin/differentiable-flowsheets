@@ -98,6 +98,11 @@ class ReformerParams(ParamsMixin):
         sulfur_conversion: Share of the feed's sulfur hydrogenolysed to H2S
             over the reactor train; the rest stays in the reformate.
             ILLUSTRATIVE.
+        activity: Per-reactor catalyst activity multiplying
+            ``kinetics.activity`` in that bed (first reactor first), or
+            ``None`` (default) for the same activity everywhere -- the
+            semi-regen case. The CCR (:mod:`.ccr`) sets it from the coke the
+            moving catalyst carries into and out of each bed.
     """
 
     inlet_T: tuple = (773.15, 773.15, 773.15)
@@ -118,10 +123,13 @@ class ReformerParams(ParamsMixin):
     bed_max_steps: int = DEFAULT_MAX_STEPS
     feed_sulfur_wppm: float | None = None
     sulfur_conversion: float = 0.95
+    activity: tuple | None = None
 
     def __post_init__(self):
         if len(self.inlet_T) != len(self.catalyst_split):
             raise ValueError("inlet_T and catalyst_split need one entry per reactor")
+        if self.activity is not None and len(self.activity) != len(self.inlet_T):
+            raise ValueError("activity needs one entry per reactor")
         if len(self.inlet_T) < 1:
             raise ValueError("at least one reactor")
         _check_solver(self.bed_solver, self.bed_max_steps)
@@ -370,12 +378,21 @@ OUTPUT_UNITS: dict[str, str] = {
     "reformate.S_wppm": "wppm", "net_gas.H2S_ppmv": "ppmv", "recycle.H2S_ppmv": "ppmv",
     "fuel_gas.H2S_mol_s": "mol/s", "net_gas.H2S_mol_s": "mol/s",
     "rx.dT": "K", "rx.T_out_C": "C", "heater.duty_MW": "MW", "heater.fired_MW": "MW",
+    # CCR (:mod:`.ccr`)
+    "h2.export_mol_s": "mol/s", "ccr.spent_coke_wt": "wt%", "ccr.coke_burn_kg_h": "kg/h",
+    "ccr.burn_capacity_used": "-", "ccr.T_peak_C": "C", "ccr.burn_T_margin_K": "K",
+    "ccr.reduction_H2_mol_s": "mol/s", "ccr.chloride_kg_h": "kg/h", "ccr.oxy_calc_duty_MW": "MW",
+    "ccr.circulation_kg_h": "kg/h",
 }
 
 
 def output_units(name: str) -> str:
     if name in OUTPUT_UNITS:
         return OUTPUT_UNITS[name]
+    if name.startswith("ccr.activity_rx"):
+        return "-"
+    if name.startswith("ccr.coke_rx"):
+        return "wt%"
     head, tail = name.split(".", 1)
     return OUTPUT_UNITS[head.rstrip("0123456789") + "." + tail]
 
@@ -419,7 +436,10 @@ class CatalyticReformer:
             inlets = ["naphtha", "recycle"] if k == 0 else [f"rx{k}_out"]
             ops[f"heater{k + 1}"] = h
             fs.add_unit(Unit(f"heater{k + 1}", h, inlets, [f"rx{k + 1}_in"]))
-            r = ReformingReactor(ReformingReactorParams(catalyst_mass=Ws[k], kinetics=p.kinetics,
+            kin = p.kinetics
+            if p.activity is not None:
+                kin = replace(kin, activity=jnp.asarray(kin.activity, dtype=float) * p.activity[k])
+            r = ReformingReactor(ReformingReactorParams(catalyst_mass=Ws[k], kinetics=kin,
                                                         P=P_rx, rtol=p.rtol,
                                                         solver_name=p.bed_solver,
                                                         max_steps=p.bed_max_steps),

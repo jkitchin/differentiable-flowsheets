@@ -158,6 +158,12 @@ AD_MODES: dict[str, ADMode] = {m.name: m for m in (
            switch="none for the whole unit: CatalyticReformer(adjoint='reverse') makes a stand-alone "
                   "reactor reverse-capable, but the recycle's implicit derivative still needs JVPs",
            evidence="tests/refinery/test_reforming.py (jax.jacfwd of one bed)"),
+    ADMode("CCR reformer", "reforming.ccr.CCRReformer", ("fwd",),
+           "the catalytic reformer per bed, inside an outer Python coke-activity loop on primal values "
+           "(stop_gradient) closed by one implicit Newton step (I - dPhi/dC)^-1 with dPhi/dC by jax.jacfwd; "
+           "eager only, never jit",
+           evidence="tests/reference/ccr_gradient_check.py (jax.jacfwd vs central differences; "
+                    "outside the suite, ~400 s)"),
     ADMode("FCC", "fcc.FCCUnit", ("fwd", "rev"),
            "riser by constant-step Tsit5 with diffrax.DirectAdjoint (both modes), riser-regenerator "
            "heat balance by optimistix Newton with implicit adjoint",
@@ -186,6 +192,12 @@ AD_MODES: dict[str, ADMode] = {m.name: m for m in (
            "header balances, swing clips and the PSA purity target in pure JAX (the clips are kinks); "
            "close_hydrotreater_loop is a concrete Python iteration that returns a linear purity response",
            evidence="tests/refinery/test_hydrogen.py"),
+    ADMode("SMR hydrogen plant", "hydrogen.smr.smr_plant / hydrogen.smr.reformer_tube", ("fwd", "rev"),
+           "reformer tube on diffrax Tsit5 (ReformerTubeParams.adjoint: RecursiveCheckpointAdjoint or "
+           "ForwardMode); outlet-T duty by secant on stop-gradient inputs + one implicit step; "
+           "prereformer/shift GibbsReactor; furnace fuel affine (closed form)",
+           evidence="tests/reference/gradient_checks.py (jax.jacfwd and jax.grad vs central "
+                    "differences; reverse vs forward through the plant)"),
 )}
 
 

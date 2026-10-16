@@ -1,0 +1,298 @@
+{
+ "provenance": {
+  "generated": "2026-10-15T13:15:20+00:00",
+  "script": "tests/reference/gibbs_generate.py",
+  "command": "PYTHONPATH=src:. python tests/reference/gibbs_generate.py",
+  "idaes": "2.10.0",
+  "pyomo": "6.10.0",
+  "ipopt": "Ipopt 3.13.2 (aarch64-apple-darwin22.5.0), ASL(20190605)",
+  "python": "3.12.11",
+  "difflow_commit": "b0bdb9d7dde8b38ab1d2e6248e37bf3e84cd7cbe",
+  "model": "IDAES GibbsReactor on a modular ideal-gas package (Ideal EOS, RPP4) given JANAF-fitted Hf, S and Cp (tests/test_gibbs_reactor.py::janaf_thermo): an independent implementation of the same thermochemistry"
+ },
+ "components": {
+  "CH4": {
+   "Hf": -74873.0,
+   "S": 186.251,
+   "cp": [
+    17.282102580724466,
+    0.0597567397111798,
+    2.2327702562790983e-06,
+    -7.60820353305138e-09
+   ],
+   "elements": {
+    "C": 1,
+    "H": 4
+   },
+   "MW": 16.043
+  },
+  "H2O": {
+   "Hf": -241826.0,
+   "S": 188.834,
+   "cp": [
+    32.35472510824791,
+    0.0005465323659843549,
+    1.2723001353303295e-05,
+    -4.367660339874683e-09
+   ],
+   "elements": {
+    "H": 2,
+    "O": 1
+   },
+   "MW": 18.015
+  },
+  "CO": {
+   "Hf": -110527.0,
+   "S": 197.653,
+   "cp": [
+    28.737302525038597,
+    -0.0017824127234272993,
+    1.0452437115894491e-05,
+    -4.285119909651234e-09
+   ],
+   "elements": {
+    "C": 1,
+    "O": 1
+   },
+   "MW": 28.01
+  },
+  "CO2": {
+   "Hf": -393522.0,
+   "S": 213.795,
+   "cp": [
+    21.65271576602894,
+    0.06357496566235052,
+    -4.057128795411909e-05,
+    9.700266618228129e-09
+   ],
+   "elements": {
+    "C": 1,
+    "O": 2
+   },
+   "MW": 44.01
+  },
+  "H2": {
+   "Hf": 0.0,
+   "S": 130.68,
+   "cp": [
+    28.832030912964495,
+    0.00015185891367580038,
+    8.131132271518297e-07,
+    4.361265862368445e-10
+   ],
+   "elements": {
+    "H": 2
+   },
+   "MW": 2.016
+  }
+ },
+ "trace": 0.0001,
+ "results": {
+  "isothermal": [
+   {
+    "feed": {
+     "CH4": 1.0,
+     "H2O": 3.0,
+     "CO": 0.0001,
+     "CO2": 0.0001,
+     "H2": 0.0001
+    },
+    "T": 900.0,
+    "P": 100000.0,
+    "T_out": 900.0,
+    "flows": {
+     "CH4": 0.14989461793805697,
+     "H2O": 1.6749020393548606,
+     "CO": 0.3752128033686906,
+     "CO2": 0.4750925786382245,
+     "H2": 3.025408724769025
+    },
+    "heat_duty": 173752.73096307312,
+    "solve": {
+     "status": "optimal",
+     "init": "initialize() converged",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   },
+   {
+    "feed": {
+     "CH4": 1.0,
+     "H2O": 3.0,
+     "CO": 0.0001,
+     "CO2": 0.0001,
+     "H2": 0.0001
+    },
+    "T": 1000.0,
+    "P": 100000.0,
+    "T_out": 1000.0,
+    "flows": {
+     "CH4": 0.014896123099682253,
+     "H2O": 1.6140598990820312,
+     "CO": 0.584367652857314,
+     "CO2": 0.4009362240303276,
+     "H2": 3.3562478547186045
+    },
+    "heat_duty": 208393.7090895703,
+    "solve": {
+     "status": "optimal",
+     "init": "initialize() converged",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   },
+   {
+    "feed": {
+     "CH4": 1.0,
+     "H2O": 3.0,
+     "CO": 0.0001,
+     "CO2": 0.0001,
+     "H2": 0.0001
+    },
+    "T": 1200.0,
+    "P": 100000.0,
+    "T_out": 1200.0,
+    "flows": {
+     "CH4": 0.00016967364209222237,
+     "H2O": 1.7243502916572986,
+     "CO": 0.7241109443491165,
+     "CO2": 0.27591938199679256,
+     "H2": 3.275410361058517
+    },
+    "heat_duty": 218076.13242100007,
+    "solve": {
+     "status": "optimal",
+     "init": "initialize() converged",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   },
+   {
+    "feed": {
+     "CH4": 1.0,
+     "H2O": 3.0,
+     "CO": 0.0001,
+     "CO2": 0.0001,
+     "H2": 0.0001
+    },
+    "T": 1000.0,
+    "P": 2000000.0,
+    "T_out": 1000.0,
+    "flows": {
+     "CH4": 0.4559074845495074,
+     "H2O": 2.1255761585680473,
+     "CO": 0.2138630291867694,
+     "CO2": 0.3304304061225918,
+     "H2": 1.9627088723329376
+    },
+    "heat_duty": 111311.02573976187,
+    "solve": {
+     "status": "optimal",
+     "init": "initialize() failed (InitializationError); solved from its last point",
+     "message": "Ipopt 3.13.2\\x3a Solved To Acceptable Level."
+    }
+   },
+   {
+    "feed": {
+     "CH4": 1.0,
+     "H2O": 3.0,
+     "CO": 0.0001,
+     "CO2": 0.0001,
+     "H2": 0.0001
+    },
+    "T": 1100.0,
+    "P": 2000000.0,
+    "T_out": 1100.0,
+    "flows": {
+     "CH4": 0.20678340745463863,
+     "H2O": 1.884628254078753,
+     "CO": 0.471161439283282,
+     "CO2": 0.32225515331898275,
+     "H2": 2.7019049310119696
+    },
+    "heat_duty": 168860.7565789308,
+    "solve": {
+     "status": "optimal",
+     "init": "initialize() converged",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   },
+   {
+    "feed": {
+     "CH4": 1.0,
+     "H2O": 3.0,
+     "CO": 0.0001,
+     "CO2": 0.0001,
+     "H2": 0.0001
+    },
+    "T": 1200.0,
+    "P": 2000000.0,
+    "T_out": 1200.0,
+    "flows": {
+     "CH4": 0.05422710774143173,
+     "H2O": 1.7777305294216423,
+     "CO": 0.669376314122065,
+     "CO2": 0.2765965782281463,
+     "H2": 3.1139152550954936
+    },
+    "heat_duty": 205773.52635383143,
+    "solve": {
+     "status": "optimal",
+     "init": "initialize() converged",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   }
+  ],
+  "shift": [
+   {
+    "feed": {
+     "CH4": 0.0001,
+     "H2O": 1.5,
+     "CO": 1.0,
+     "CO2": 0.0001,
+     "H2": 0.2
+    },
+    "T": 600.0,
+    "P": 3000000.0,
+    "T_out": 600.0,
+    "flows": {
+     "CH4": 0.2966134435775824,
+     "H2O": 1.0933372563152128,
+     "CO": 0.00031036911062688093,
+     "CO2": 0.7032761872870801,
+     "H2": 0.013635856529621956
+    },
+    "heat_duty": -91970.94336690666,
+    "solve": {
+     "status": "optimal",
+     "init": "initialize() failed (InitializationError); solved from its last point",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   }
+  ],
+  "adiabatic": [
+   {
+    "feed": {
+     "CH4": 1.0,
+     "H2O": 3.0,
+     "CO": 0.0001,
+     "CO2": 0.0001,
+     "H2": 0.0001
+    },
+    "T": 1100.0,
+    "P": 2000000.0,
+    "T_out": 854.8771728023008,
+    "flows": {
+     "CH4": 0.7523008199476374,
+     "H2O": 2.532799023413766,
+     "CO": 0.028297383518491214,
+     "CO2": 0.21960179653387127,
+     "H2": 0.9626993366909582
+    },
+    "heat_duty": 0.0,
+    "solve": {
+     "status": "optimal",
+     "init": "initialize() converged",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   }
+  ]
+ }
+}

@@ -154,6 +154,7 @@ from difflow.units.flash import (
     ComponentSplitter,
     ComponentSplitterParams,
 )
+from difflow.units.gibbs import GibbsReactor, GibbsReactorParams, GibbsThermo
 from difflow.units.stoichiometric import (
     StoichiometricReactor,
     StoichiometricReactorParams,
@@ -680,6 +681,9 @@ __all__ = [
     "ComponentSplitter",
     "ComponentSplitterParams",
     "StoichiometricReactor",
+    "GibbsReactor",
+    "GibbsReactorParams",
+    "GibbsThermo",
     "StoichiometricReactorParams",
     # Unit operations - LLE
     "MultistageCascade",

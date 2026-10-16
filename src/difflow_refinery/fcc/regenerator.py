@@ -26,25 +26,19 @@ thermochemistry table, :mod:`difflow_refinery.thermochemistry`). Coke's enthalpy
 formation is taken as zero (graphite, H2, S, N2 elements), so its heat of
 combustion follows from its H content -- the convention the issue asks for.
 The regenerated catalyst leaves clean (no carbon on regenerated catalyst).
+
+The stoichiometry, air and flue-gas enthalpy live in the shared
+:mod:`difflow_refinery.combustion` (#470), which the CCR regenerator reuses;
+this module keeps the FCC's coke split and heat balance.
 """
 
 from __future__ import annotations
 
-import jax.numpy as jnp
 from jax import Array
 
+from difflow_refinery import combustion as cb
+from difflow_refinery.combustion import ARTHUR_A, ARTHUR_E_CAL, R_CAL, arthur_co_co2  # noqa: F401
 from difflow_refinery.fcc import species as sp
-
-#: Arthur (1951) CO/CO2 constants as quoted (unverified against the paper):
-#: pre-exponential 10^3.4 and activation 12400 cal/mol.
-ARTHUR_A = 10.0 ** 3.4
-ARTHUR_E_CAL = 12400.0
-R_CAL = 1.987204  # cal/mol/K
-
-
-def arthur_co_co2(T: Array) -> Array:
-    """CO/CO2 molar ratio of carbon combustion, Arthur (1951) form (unverified constants)."""
-    return ARTHUR_A * jnp.exp(-ARTHUR_E_CAL / (R_CAL * T))
 
 
 def coke_elements(p: dict, feed, coke_mass: Array) -> dict[str, Array]:
@@ -58,35 +52,13 @@ def coke_elements(p: dict, feed, coke_mass: Array) -> dict[str, Array]:
 
 def combustion(p: dict, el: dict, T_rg: Array, co_mode: str, air_mode: str) -> dict:
     """Flue gas and air (mol/s) for burning coke of elements ``el`` (kg/s)."""
-    nC = el["C"] * 1000.0 / sp.ATOMIC_WEIGHT["C"]
-    nH = el["H"] * 1000.0 / sp.ATOMIC_WEIGHT["H"]
-    nS = el["S"] * 1000.0 / sp.ATOMIC_WEIGHT["S"]
-    nN = el["N"] * 1000.0 / sp.ATOMIC_WEIGHT["N"]
     if co_mode == "arthur":
         r = p["arthur_factor"] * arthur_co_co2(T_rg)
     else:
         r = p["co_co2"]
-    n_co2 = nC / (1.0 + r)
-    n_co = nC - n_co2
-    n_h2o = nH / 2.0
-    n_so2 = nS
-    n_n2_coke = nN / 2.0
-    o2_req = n_co2 + 0.5 * n_co + 0.5 * n_h2o + n_so2
-    k = sp.AIR_N2 / sp.AIR_O2
     if air_mode == "flue_o2":
-        y = p["flue_o2"]
-        other = n_co2 + n_co + n_h2o + n_so2 + n_n2_coke
-        o2_ex = y * (other + k * o2_req) / (1.0 - y * (1.0 + k))
-        o2_air = o2_req + o2_ex
-    else:
-        mw_air = sp.AIR_O2 * sp.MW["oxygen"] + sp.AIR_N2 * sp.MW["nitrogen"]
-        o2_air = p["air_rate"] * 1000.0 / mw_air * sp.AIR_O2
-        o2_ex = o2_air - o2_req
-    n2_air = k * o2_air
-    air = {"oxygen": o2_air, "nitrogen": n2_air}
-    flue = {"nitrogen": n2_air + n_n2_coke, "oxygen": o2_ex, "carbon_dioxide": n_co2,
-            "carbon_monoxide": n_co, "water": n_h2o, "sulfur_dioxide": n_so2}
-    return {"air": air, "flue": flue, "co_co2": r, "o2_required": o2_req}
+        return cb.burn(el, r, flue_o2=p["flue_o2"])
+    return cb.burn(el, r, air_rate=p["air_rate"])
 
 
 def heat_residual(p: dict, feed, CTO: Array, T_rg: Array, ROT: Array, coke_mass: Array,
