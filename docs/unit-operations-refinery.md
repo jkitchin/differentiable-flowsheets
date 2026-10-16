@@ -4146,6 +4146,24 @@ hand):
   - The water viscosity matches IAPWS 2008 to within 0.2%.
 - The constant heats of absorption fall inside the KE model's own van 't Hoff
   heat over 313–383 K.
+- The MDEA equilibrium, fitted at 10–40 °C, was checked against data held
+  out of the fit at regenerator temperatures: Jou, Mather & Otto (1982),
+  25–120 °C, 12–49 wt%, partial pressures up to 1 MPa
+  (`tests/reference/amine_ke_fit.py` prints the table).
+  - CO2: 11–13% AAPD at 100–120 °C and 14–19% at 70 °C. At 25–40 °C the
+    error is 53–67%.
+  - H2S at 100–120 °C: 20% AAPD at 23 wt% and 100% at 49 wt%. Most of the
+    error is at loadings below 0.03, where the model gives up to three times
+    the measured pressure. A stripped lean solvent sits in that range, so
+    predicted lean H2S loadings at a given reboiler duty are optimistic.
+  - At 25–70 °C the published sources disagree with each other by up to a
+    factor of three. Jou's H2S pressures at 25 °C and 50 wt% are a third to
+    two fifths of Huttenhuis et al.'s (2007), which are in the fit. Refits
+    that added Jou's data, a concentration term, a temperature term or a
+    per-gas Henry's-law factor did not lower the held-out errors overall,
+    so the constants are unchanged. A fitted temperature term came out near
+    zero, which supports the measured protonation heat that sets the
+    temperature dependence.
 - The regenerator reproduces J.M. Campbell's MDEA case: 50 wt%, 214 kPa, 10
   stages, 1.1 lb of steam per gallon.
   - Reboiler: 126.9 °C (case: about 126 °C).

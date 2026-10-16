@@ -207,11 +207,39 @@ class TestGradients:
         check_grads(f, (jnp.array([320.0, 5e3, 2e3]),), order=1, modes=["fwd", "rev"],
                     atol=1e-5, rtol=1e-5)
 
+    def test_pressures_at_regenerator_conditions(self):
+        # 50 wt% MDEA near a stripper bottom: 393 K, lean loadings (in logs,
+        # so the finite-difference step is relative to a small loading)
+        def f(x):
+            pc, ps = ag.ke_partial_pressures("MDEA", x[0], 0.489, jnp.exp(x[1]), jnp.exp(x[2]))
+            return jnp.log(pc) + 2.0 * jnp.log(ps)
+        check_grads(f, (jnp.array([393.15, np.log(0.003), np.log(0.002)]),), order=1,
+                    modes=["fwd", "rev"], atol=1e-5, rtol=1e-5)
+
     def test_jit(self):
         f = jax.jit(lambda T: ag.ke_partial_pressures("MDEA", T, 0.5, 0.2, 0.1)[1])
         np.testing.assert_allclose(
             float(f(330.0)), float(ag.ke_partial_pressures("MDEA", 330.0, 0.5, 0.2, 0.1)[1]),
             rtol=1e-12)
+
+
+@pytest.mark.parametrize("gas", ["H2S", "CO2"])
+def test_converges_over_the_jou_range(gas):
+    """Speciation and its inverse converge at every held-out Jou (1982) point:
+    25-120 C, 12-49 wt% MDEA, loadings 4e-4 to 3.2, up to 6.6 MPa."""
+    rows = np.array(D.JOU_H2S_MDEA if gas == "H2S" else D.JOU_CO2_MDEA)
+    T, w, a, p = (jnp.asarray(rows[:, i]) for i in range(4))
+
+    def fwd(T, w, a):
+        aC, aS = (a, 0.0) if gas == "CO2" else (0.0, a)
+        return ag.ke_speciate("MDEA", T, ag.amine_molality(w, "MDEA"), aC, aS)["converged"]
+
+    def inv(T, w, p):
+        pc, ps = (1e3 * p, 0.0) if gas == "CO2" else (0.0, 1e3 * p)
+        return ag.ke_loading("MDEA", T, w, pc, ps)["converged"]
+
+    assert bool(jnp.all(jax.vmap(fwd)(T, w, a)))
+    assert bool(jnp.all(jax.vmap(inv)(T, w, p)))
 
 
 @pytest.mark.parametrize("amine", ["MDEA", "DEA"])

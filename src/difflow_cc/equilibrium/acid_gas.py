@@ -37,6 +37,21 @@ carbamate constant is fitted as ``a + b/T``. The fits are in
 ``tests/reference/amine_ke_fit.py`` and are tested against data that
 were held out of them (``tests/cc/test_acid_gas_vle.py``).
 
+The MDEA constants were fitted at 10-40 C. Against Jou, Mather & Otto
+(1982), held out (25-120 C, 12-49 wt%, p <= 1 MPa; AAPD in p, printed by
+``tests/reference/amine_ke_fit.py``), the error FALLS with temperature: CO2
+is 11-13 % at 100-120 C and 14-19 % at 70 C, against 53-67 % at 25-40 C;
+H2S at 100-120 C is 20 % (23 wt%) to 100 % (49 wt%), mostly from loadings
+below 0.03, where the model is up to three times too high. The
+temperature dependence is the measured heat of protonation, and it carries:
+a fitted ``d3 (1/T - 1/313 K)`` term came out near zero. What does not
+carry is the absolute level at 25-70 C, where the sources disagree with
+each other: at 25 C and about 50 wt% Jou's H2S pressures are a third to
+two fifths of Huttenhuis et al.'s (2007) at the same loading. Refits that added Jou's
+data, a ``d2 ln m`` term, a temperature term or a per-gas Henry's-law
+factor ``exp(h w)`` traded one source against the other and did not lower
+the held-out errors overall, so the constants were left as fitted.
+
 Sources of the constants (``ln K = C1 + C2/T + C3 ln T + C4 T``, T in K):
 
 * a-d: Edwards, Maurer, Newman & Prausnitz (1978), AIChE J. 24:966, on the
