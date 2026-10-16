@@ -535,7 +535,11 @@ It can also run short of equilibrium:
 The thermodynamics are pluggable. `GibbsThermo` takes Hf, S° and a Cp cubic.
 The refinery's `IdealGasSet` also works, as does any object with `names`,
 `gibbs(T)`, `enthalpy(T)` and `ELEMENTS`. A species that contains an element
-the feed lacks comes out at exactly zero.
+the feed lacks comes out at exactly zero. So does one whose element is fed
+only as a trace, below `TRACE_ELEMENT` (1e-10) of the fed atoms: that
+element's balance row, scaled by its own abundance, otherwise threw Newton
+off (a Claus furnace fed 1e-9 mol/s of CO2 diverged). The trace's atoms are
+dropped, an element-balance error of at most 1e-10 of the feed.
 
 #### Governing Equations
 
