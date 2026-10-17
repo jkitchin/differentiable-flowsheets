@@ -356,5 +356,21 @@ class TestPluginUnits:
         assert rebuilt == original
 
 
+class TestEquationOfState:
+    def test_an_eos_from_the_database_is_written_as_lookups(self):
+        from difflow import SRK, get_critical_props
+        from difflow.units.flash import EOSFlash, EOSFlashParams
+
+        gases = ["methane", "propane"]
+        eos = SRK({s: get_critical_props(s) for s in gases},
+                  k_ij={("methane", "propane"): 0.02})
+        fs = Flowsheet(species_order=gases)
+        fs.add_unit(Unit("fl", EOSFlash(EOSFlashParams(species_order=gases), eos),
+                         ["a"], ["l", "v"]))
+        source = codegen.to_python(fs)
+        assert "get_critical_props(s) for s in" in source
+        assert run_generated(source).units[0].operation.eos == eos
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

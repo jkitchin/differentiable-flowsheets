@@ -8,6 +8,12 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`serialize`/`codegen` write `PengRobinson` and `SRK`.** An equation of state is written as the critical
+  properties and `k_ij` that build it (`$eos`; a `{(i, j): value}` dict as `[i, j, value]` triples), wherever it
+  appears: `EOSFlash`'s required `eos` (such a flowsheet could not be saved at all), `Flash(..., eos=...)`
+  (which warned and reloaded as an ideal flash), or a `Params` field such as `CSTRParams.eos`. `codegen` writes
+  it as `get_critical_props` lookups when the properties match the database. A subclass is refused rather than
+  rebuilt as its base.
 - **Example notebook `examples/64_serialization.ipynb`.** Saving and reloading a recycle flowsheet with
   `difflow.serialize` (exact answer and gradient after reload), what the file holds, `refs=` and `extras=`,
   format versions, and export through `difflow.codegen`.

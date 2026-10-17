@@ -72,6 +72,9 @@ ARRAY_TAG = "$array"
 DATACLASS_TAG = "$dataclass"
 NAMEDTUPLE_TAG = "$namedtuple"
 THERMO_TAG = "$thermo"
+#: a cubic equation of state, written as what builds it: the critical
+#: properties of each species and the binary interaction parameters
+EOS_TAG = "$eos"
 CALLABLE_TAG = "$callable"
 #: JSON has no literal for the non-finite floats, and Python's ``json``
 #: writes them as the bare tokens ``Infinity`` / ``NaN``, which are not
@@ -224,6 +227,8 @@ def _encode_value(value: Any, where: str) -> Any:
     ref = _ref_for(value)
     if ref is not None:
         return ref
+    if _is_eos(value):
+        return _encode_eos(value, where)
     if callable(value):
         spec = getattr(value, "__difflow_spec__", None)
         if spec is not None:
@@ -295,6 +300,8 @@ def _decode_value(value: Any) -> Any:
             return cls(**fields)
         if THERMO_TAG in value:
             return _decode_thermo(value)
+        if EOS_TAG in value:
+            return _decode_eos(value)
         if CALLABLE_TAG in value:
             return _decode_callable(value[CALLABLE_TAG])
         return {k: _decode_value(v) for k, v in value.items()}
@@ -357,6 +364,61 @@ def _encode_thermo(obj: Any, where: str) -> dict:
         "and pass it back on load with "
         "load(path, extras={'<unit>': {'thermo': my_thermo}})."
     )
+
+
+def _eos_classes() -> dict[str, type]:
+    """The equations of state this format writes, by name."""
+    from difflow.eos import SRK, PengRobinson
+
+    return {"PengRobinson": PengRobinson, "SRK": SRK}
+
+
+def _is_eos(value: Any) -> bool:
+    """Exactly a PengRobinson or SRK: a subclass would come back as its base."""
+    return _eos_classes().get(type(value).__name__) is type(value)
+
+
+def _encode_eos(eos: Any, where: str) -> dict:
+    """Write an EOS as the arguments that build it.
+
+    Everything else it holds (``a_c``, ``b``, ``kappa``) is computed from
+    these in its constructor, so they are all a reload needs. ``k_ij`` is
+    kept in the form it was given: a ``{(i, j): value}`` dict, which JSON
+    cannot key by a tuple, is written as ``[i, j, value]`` triples.
+    """
+    k_ij = eos._kij_input
+    if isinstance(k_ij, dict):
+        encoded_kij = {"pairs": [
+            [str(i), str(j), _encode_value(v, f"{where}.k_ij[{(i, j)!r}]")]
+            for (i, j), v in k_ij.items()
+        ]}
+    else:
+        encoded_kij = _encode_value(k_ij, f"{where}.k_ij")
+    return {
+        EOS_TAG: type(eos).__name__,
+        "species": {
+            name: _encode_value(props, f"{where}.species[{name!r}]")
+            for name, props in eos.species.items()
+        },
+        "k_ij": encoded_kij,
+    }
+
+
+def _decode_eos(data: dict):
+    """Rebuild an EOS written by :func:`_encode_eos`."""
+    cls = _eos_classes().get(data[EOS_TAG])
+    if cls is None:
+        raise SerializationError(
+            f"cannot rebuild an equation of state of kind {data[EOS_TAG]!r}; "
+            f"this difflow reads {', '.join(_eos_classes())}."
+        )
+    k_ij = data.get("k_ij")
+    if isinstance(k_ij, dict) and "pairs" in k_ij:
+        k_ij = {(i, j): _decode_value(v) for i, j, v in k_ij["pairs"]}
+    else:
+        k_ij = _decode_value(k_ij)
+    species = {k: _decode_value(v) for k, v in data["species"].items()}
+    return cls(species, k_ij=k_ij)
 
 
 def _decode_callable(spec: dict):
@@ -578,8 +640,9 @@ def _encode_extras(operation: Any, unit_name: str) -> dict:
             _decode_value(encoded)
         except SerializationError as exc:
             # Optional arguments were never written before, and refusing
-            # the whole file now would break saving a Flash built with an
-            # EOS object. Say so instead of dropping it silently.
+            # the whole file now would break saving a unit built with a
+            # thermo of a kind this format cannot write. Say so instead of
+            # dropping it silently.
             import warnings
 
             warnings.warn(
