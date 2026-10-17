@@ -1045,6 +1045,7 @@ Jupyter notebooks are in the `examples/` directory:
 | `06_uncertainty_propagation.ipynb` | Uncertainty propagation and sensitivity analysis |
 | `07_heat_exchangers.ipynb` | Heat exchanger design, rating, and optimization |
 | `47_evaporators.ipynb` | Single/multiple-effect evaporators, MVR, optimal number of effects |
+| `64_serialization.ipynb` | Save/load flowsheets as JSON, `refs=`/`extras=`, export as Python |
 | `10_dynamic_modeling.ipynb` | Dynamic simulation, DAE systems, diffrax backend |
 
 ```bash

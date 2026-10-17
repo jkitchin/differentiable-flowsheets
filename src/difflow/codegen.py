@@ -38,8 +38,10 @@ from difflow.serialize import (
     REF_TAG,
     SerializationError,
     _ref_for,
+    SerializationWarning,
     _with_refs,
     constructor_extras,
+    optional_extras,
 )
 
 #: rendered when a value is a JAX array
@@ -301,6 +303,34 @@ def to_python(
                 args.append(variable)
             else:
                 args.append(_render(value, f"{where}.{extra}", imports))
+
+        # Optional arguments set away from their default, as keywords: a
+        # `Mixer(species, thermo)` emitted as `Mixer(species)` runs, and
+        # solves to a different answer (see serialize.optional_extras).
+        for extra, value in optional_extras(operation).items():
+            if extra in constructor_extras(cls):
+                continue
+            ref = _ref_for(value)
+            try:
+                if ref is not None:
+                    rendered = ref[REF_TAG]
+                elif type(value).__name__.endswith(("Thermo", "thermo")):
+                    rendered = f"{extra}_{unit.name}"
+                    preamble.append(
+                        f"{rendered} = {_render_thermo(value, where, imports)}"
+                    )
+                else:
+                    rendered = _render(value, f"{where}.{extra}", imports)
+            except SerializationError as exc:
+                import warnings
+
+                warnings.warn(
+                    f"{exc} It is left out of the script, so the unit is "
+                    f"built with {extra}'s default.",
+                    SerializationWarning, stacklevel=3,
+                )
+                continue
+            args.append(f"{extra}={rendered}")
 
         # `Unit.params` are passed to the operation on every call (a
         # Splitter's `split_frac`). Leaving them out gave a script that

@@ -8,6 +8,9 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Example notebook `examples/64_serialization.ipynb`.** Saving and reloading a recycle flowsheet with
+  `difflow.serialize` (exact answer and gradient after reload), what the file holds, `refs=` and `extras=`,
+  format versions, and export through `difflow.codegen`.
 - **Core membrane separations (unit-ops book Ch. 22).** New `difflow.units.membranes`: `GasPermeator` (any
   number of species; complete mixing, cross flow, cocurrent or countercurrent; given area or stage cut;
   implicit-function gradients), `ReverseOsmosis` (plug-flow RO with solution-diffusion fluxes, film-theory
@@ -992,6 +995,12 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Fixed
+
+- **`serialize`/`codegen` dropped optional constructor arguments.** Only required ones were written, so
+  `Mixer(species, thermo)` reloaded as `Mixer(species)` and mixed temperatures without an enthalpy balance:
+  the documented isomerisation recycle reloaded 1.8e-3 K off in its reactor feed. An optional argument set
+  away from its default is now written (`serialize.optional_extras`); one the format cannot hold raises
+  `SerializationWarning` instead of vanishing.
 
 - Reverse-mode gradients through a single-phase cubic-EOS flash were NaN (since the issue #444
   Newton polish): at the trivial K = 1 point the polish Jacobian is singular, and a zero

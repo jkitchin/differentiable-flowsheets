@@ -172,6 +172,10 @@ class SerializationError(ValueError):
     """
 
 
+class SerializationWarning(UserWarning):
+    """Something a unit was built with could not be written to the file."""
+
+
 # ---------------------------------------------------------------------
 # Values
 # ---------------------------------------------------------------------
@@ -437,10 +441,9 @@ def constructor_extras(cls: type) -> list[str]:
     ``GasPipe(beta)`` --- report every required argument, since all of
     them have to be written for the unit to be rebuilt.
 
-    Only *required* arguments are reported, so an optional constructor
-    object left at its default --- ``Mixer``'s ``thermo``, ``Flash``'s
-    ``eos`` --- is not carried by either format. Pass it back on load
-    with ``extras=`` when it matters.
+    Only *required* arguments are reported here. An optional one that
+    was set away from its default --- ``Mixer``'s ``thermo``, ``CSTR``'s
+    ``mode`` --- is found by :func:`optional_extras` and written too.
     """
     import inspect
 
@@ -492,6 +495,69 @@ def numeric_extras(cls: type) -> list[str]:
             if is_number_annotation(sig.parameters[a].annotation)]
 
 
+def _is_default(value: Any, default: Any) -> bool:
+    """Whether ``value`` is what an optional argument defaults to.
+
+    Identity first, then equality for the plain values a default can be
+    (``"liquid"``, ``0.0``, a tuple of names). Anything else --- an
+    array, a thermo --- set to a non-default object is not the default.
+    """
+    if value is default:
+        return True
+    if isinstance(default, (bool, int, float, str, tuple)):
+        try:
+            return bool(value == default)
+        except Exception:
+            return False
+    return False
+
+
+def optional_extras(operation: Any) -> dict:
+    """Optional constructor arguments ``operation`` was built away from.
+
+    The counterpart of :func:`constructor_extras` for arguments with a
+    default. Left out, ``Mixer(species, thermo)`` reloads as
+    ``Mixer(species)``: it then mixes temperatures without an enthalpy
+    balance, and the reloaded flowsheet solves to a different answer
+    that still looks plausible. An argument still at its default is not
+    reported, so a flowsheet that never set one writes the same bytes it
+    always did.
+
+    Returns:
+        ``{argument: value}``, read off the instance by attribute of the
+        same name.
+    """
+    import inspect
+
+    cls = type(operation)
+    try:
+        sig = inspect.signature(cls.__init__)
+    except (TypeError, ValueError):
+        return {}
+    out = {}
+    for name, p in sig.parameters.items():
+        if (name == "self" or p.default is inspect.Parameter.empty
+                or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD)):
+            continue
+        if not hasattr(operation, name):
+            continue
+        value = getattr(operation, name)
+        if value is None or _is_default(value, p.default):
+            continue
+        out[name] = value
+    return out
+
+
+def _encode_constructor_value(value: Any, where: str) -> Any:
+    """Write one constructor argument: a ref, a thermo, or plain data."""
+    ref = _ref_for(value)
+    if ref is not None:
+        return ref
+    if type(value).__name__.endswith(("Thermo", "thermo")):
+        return _encode_thermo(value, where)
+    return _encode_value(value, where)
+
+
 def _encode_extras(operation: Any, unit_name: str) -> dict:
     """Write the non-Params constructor arguments of one operation."""
     out = {}
@@ -500,13 +566,30 @@ def _encode_extras(operation: Any, unit_name: str) -> dict:
         if value is None:
             continue
         where = f"unit {unit_name!r} constructor argument {arg!r}"
-        ref = _ref_for(value)
-        if ref is not None:
-            out[arg] = ref
-        elif type(value).__name__.endswith(("Thermo", "thermo")):
-            out[arg] = _encode_thermo(value, where)
-        else:
-            out[arg] = _encode_value(value, where)
+        out[arg] = _encode_constructor_value(value, where)
+    for arg, value in optional_extras(operation).items():
+        if arg in out:
+            continue
+        where = f"unit {unit_name!r} constructor argument {arg!r}"
+        try:
+            encoded = _encode_constructor_value(value, where)
+            # A dataclass or named tuple only comes back if its type is
+            # exported; find out now, not when someone opens the file.
+            _decode_value(encoded)
+        except SerializationError as exc:
+            # Optional arguments were never written before, and refusing
+            # the whole file now would break saving a Flash built with an
+            # EOS object. Say so instead of dropping it silently.
+            import warnings
+
+            warnings.warn(
+                f"{exc} It is not written, so the unit reloads with "
+                f"{arg}'s default unless you pass it back with "
+                f"extras={{{unit_name!r}: {{{arg!r}: ...}}}}.",
+                SerializationWarning, stacklevel=4,
+            )
+            continue
+        out[arg] = encoded
     return out
 
 

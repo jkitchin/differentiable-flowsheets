@@ -437,3 +437,53 @@ class TestUnpackedParams:
         back = serialize.from_json(serialize.to_json(fs))
         assert back.units[0].operation.membrane_area == 4.0
 
+
+
+class TestOptionalConstructorArguments:
+    """An optional constructor argument set away from its default is written.
+
+    Only required ones used to be, so ``Mixer(species, thermo)`` reloaded
+    as ``Mixer(species)``: it mixed temperatures without an enthalpy
+    balance, and the documented isomerisation recycle reloaded to a
+    reactor-feed temperature 1.8e-3 K off the original.
+    """
+
+    def _mixer_flowsheet(self, mixer):
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_feed("a", make_stream({"water": 1.0, "ethanol": 0.0},
+                                     T=300.0, P=101325.0))
+        fs.add_feed("b", make_stream({"water": 0.0, "ethanol": 1.0},
+                                     T=360.0, P=101325.0))
+        fs.add_unit(Unit("mix", mixer, ["a", "b"], ["out"]))
+        return fs
+
+    def test_mixer_thermo_survives_and_solves_identically(self, thermo):
+        from difflow import Mixer
+
+        fs = self._mixer_flowsheet(Mixer(SPECIES, thermo))
+        back = serialize.from_json(serialize.to_json(fs))
+        assert back.units[0].operation.thermo is not None
+        assert float(fs.solve()["out"]["T"]) == float(back.solve()["out"]["T"])
+
+    def test_an_argument_at_its_default_is_not_written(self):
+        from difflow import Mixer
+
+        spec = serialize.to_dict(self._mixer_flowsheet(Mixer(SPECIES)))
+        assert set(spec["units"][0]["constructor"]) == {"species_order"}
+
+    def test_an_unwritable_one_warns_rather_than_refuses(self):
+        from difflow import Mixer
+
+        class ExoticThermo:
+            pass
+
+        fs = self._mixer_flowsheet(Mixer(SPECIES, ExoticThermo()))
+        with pytest.warns(serialize.SerializationWarning, match="thermo"):
+            text = serialize.to_json(fs)
+        assert serialize.from_json(text).units[0].operation.thermo is None
+
+    def test_codegen_emits_it_as_a_keyword(self, thermo):
+        from difflow import Mixer, codegen
+
+        source = codegen.to_python(self._mixer_flowsheet(Mixer(SPECIES, thermo)))
+        assert "thermo=thermo_mix" in source

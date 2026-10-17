@@ -764,7 +764,7 @@ serialize.from_json(serialize.to_json(gas_fs))   # ratio comes back as 1.3
 
 An argument that is *not* data — `Mixer(species_order)`, a `thermo` — still travels under `constructor`, and the two channels compose: `CompressorBoost(ratio, direction)` carries `ratio` by the first road and `direction` by the second.
 
-Only *required* constructor arguments are carried. An optional one left at its default is not written, so a unit that was built with a non-default optional argument comes back with the default; pass it on load with `extras=` when it matters.
+An *optional* constructor argument is written when it was set away from its default — `Mixer(species, thermo)`, `CSTR(params, thermo, mode="adiabatic")` — and left out when it was not, so a flowsheet that never set one writes the same bytes it always did. Dropping it would be quietly wrong: `Mixer(species)` mixes temperatures without an enthalpy balance, so the reloaded flowsheet would solve to a different answer. An optional argument the format cannot hold (an EOS object, a hand-written `bpr_fn`) raises `SerializationWarning` rather than refusing the whole file, and the unit reloads with the default unless you pass it back with `extras=`.
 
 ---
 
