@@ -487,3 +487,84 @@ class TestOptionalConstructorArguments:
 
         source = codegen.to_python(self._mixer_flowsheet(Mixer(SPECIES, thermo)))
         assert "thermo=thermo_mix" in source
+
+    def test_a_ref_is_written_for_an_optional_argument(self, thermo):
+        from difflow import Mixer
+
+        fs = self._mixer_flowsheet(Mixer(SPECIES, thermo))
+        text = serialize.to_json(fs, refs={"thermo": thermo})
+        assert '"$ref": "thermo"' in text
+        back = serialize.from_json(text, refs={"thermo": thermo})
+        assert back.units[0].operation.thermo is thermo
+
+    def test_a_hand_written_bpr_fn_warns_rather_than_vanishing(self):
+        """The evaporators kept it only inside a private helper, unseen."""
+        from difflow.units.evaporator import Evaporator, EvaporatorParams
+
+        op = Evaporator(EvaporatorParams(solute_species=["ethanol"],
+                                         solute_MW=[46.0], A=10.0),
+                        bpr_fn=lambda x, Tw, P: 0.0)
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_unit(Unit("evap", op, ["a"], ["b"]))
+        with pytest.warns(serialize.SerializationWarning, match="bpr_fn"):
+            serialize.to_json(fs)
+
+    def test_membrane_stage_params_survive(self):
+        """MultistageMembrane kept per-stage params only as private stages."""
+        from difflow_cc import MembraneParams, MultistageMembrane
+
+        stages = [MembraneParams(membrane_type="Matrimid"),
+                  MembraneParams(membrane_type="Matrimid", area=2.0)]
+        op = MultistageMembrane(stages[0], n_stages=2, stage_params=stages)
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_unit(Unit("mem", op, ["a"], ["b"]))
+        back = serialize.from_json(serialize.to_json(fs)).units[0].operation
+        assert back.stage_params == stages
+
+    def test_every_optional_argument_is_readable_by_name(self):
+        """The convention optional_extras relies on, for every operation.
+
+        An optional constructor argument the instance keeps only under
+        another name is invisible to the writer, so it is dropped on save
+        without a word: the evaporators' ``bpr_fn`` and the membrane's
+        ``stage_params`` were. It must be an attribute of the same name,
+        a dataclass field, or a field of the unit's ``Params``.
+        """
+        import inspect
+        import re
+
+        from difflow.catalog import _default_registry, _params_class
+        from difflow.plugins import load_plugins
+        from difflow.serialize import _takes_params_first
+
+        load_plugins()
+        unreadable = {}
+        for name, info in _default_registry().list_operations().items():
+            cls = info.cls
+            try:
+                sig = inspect.signature(cls.__init__)
+            except (TypeError, ValueError):
+                continue
+            optional = [
+                a for a, p in sig.parameters.items()
+                if a != "self" and p.default is not inspect.Parameter.empty
+                and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+            ]
+            if not optional:
+                continue
+            source = "".join(
+                inspect.getsource(k) for k in cls.__mro__
+                if k.__module__.split(".")[0].startswith("difflow")
+            )
+            known = set(re.findall(r"self\.(\w+)\s*(?::[^=\n]+)?=", source))
+            known |= set(re.findall(r"def (\w+)\(self\)", source))
+            if not _takes_params_first(sig):
+                # builds its own Params, which is written: `X(dp_pa=dp_pa)`
+                known |= set(re.findall(r"\b(\w+)=\1\b", source))
+            for owner in (cls, _params_class(cls)):
+                if owner is not None and dataclasses.is_dataclass(owner):
+                    known |= {f.name for f in dataclasses.fields(owner)}
+            missing = [a for a in optional if a not in known]
+            if missing:
+                unreadable[name] = missing
+        assert not unreadable, unreadable

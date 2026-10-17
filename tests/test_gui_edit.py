@@ -114,6 +114,20 @@ class TestPatchUnit:
         answer = session.patch_unit("reactor", {"position": {"x": "left"}})
         assert answer["ok"] is False and "position" in answer["error"]
 
+    def test_a_parameter_edit_keeps_optional_constructor_arguments(self, thermo):
+        """Editing V rebuilt an adiabatic CSTR isothermal and without thermo."""
+        import jax.numpy as jnp
+
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_unit(Unit("reactor", CSTR(CSTRParams(
+            V=1.0, molar_density=1000.0, dH_rxn=jnp.array([-1.0e4]),
+            **kinetics().params_kwargs()
+        ), thermo, mode="adiabatic"), ["a"], ["b"]))
+        session = FlowsheetSession(fs)
+        assert session.patch_unit("reactor", {"params": {"V": 3.0}})["ok"]
+        reactor = edit.unit(session.flowsheet, "reactor").operation
+        assert reactor.mode == "adiabatic" and reactor.thermo is thermo
+
 class TestAddAndRemove:
     def test_a_unit_arrives_unwired(self, session):
         answer = session.add_unit("Mixer", position={"x": 5, "y": 6})

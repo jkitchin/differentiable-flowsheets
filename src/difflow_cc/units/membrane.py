@@ -544,6 +544,9 @@ class MultistageMembrane:
         self.params = params
         self.n_stages = n_stages
         self.configuration = configuration
+        # as passed (None when every stage shares `params`), so
+        # difflow.serialize writes it only when it was given
+        self.stage_params = stage_params
         if stage_params is None:
             stage_params = [params] * n_stages
         elif len(stage_params) != n_stages:

@@ -1000,7 +1000,11 @@ All notable changes to difflow are recorded here. The format follows
   `Mixer(species, thermo)` reloaded as `Mixer(species)` and mixed temperatures without an enthalpy balance:
   the documented isomerisation recycle reloaded 1.8e-3 K off in its reactor feed. An optional argument set
   away from its default is now written (`serialize.optional_extras`); one the format cannot hold raises
-  `SerializationWarning` instead of vanishing.
+  `SerializationWarning` instead of vanishing. The editor's parameter edit (`gui.edit.rebuild`) had the same
+  gap: changing `V` on an adiabatic `CSTR` rebuilt it isothermal and without its thermo. `Evaporator`,
+  `MultiEffectEvaporator`, `MechanicalVaporRecompression` (`bpr_fn`, `enthalpy_fn`) and `MultistageMembrane`
+  (`stage_params`) now keep those arguments under their own names, so they are written or warned about
+  rather than dropped unseen.
 
 - Reverse-mode gradients through a single-phase cubic-EOS flash were NaN (since the issue #444
   Newton polish): at the trivial K = 1 point the polish Jacobian is singular, and a zero
