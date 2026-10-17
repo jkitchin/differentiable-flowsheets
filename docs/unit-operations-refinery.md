@@ -2476,15 +2476,15 @@ On example 40's naphtha (single bed, stripper feed at 150 °C; the stripper's de
 
 | Bed inlet, P, LHSV, H2/oil | product S (wppm) | product N (wppm) | chemical H2 (Nm³/m³) | bed dT (K) |
 |---|---|---|---|---|
-| 300 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³ | 0.87 | 4.6 | 1.7 | 2.1 |
-| 310 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³ | 0.033 | 1.7 | 1.7 | 2.2 |
-| 320 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³ | < 0.001 | 0.34 | 1.8 | 2.3 |
-| 340 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³ | < 0.001 | < 0.001 | 2.1 | 2.8 |
-| 320 °C, 30 bar, 6 h⁻¹, 100 Nm³/m³ | 0.015 | 1.2 | 1.7 | 2.2 |
-| 320 °C, 20 bar, 4 h⁻¹, 100 Nm³/m³ | 0.068 | 2.0 | 1.6 | 2.0 |
-| 320 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³, **diesel** constants | 87 | 23 | 3.0 | 4.1 |
+| 300 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³ | 0.86 | 4.6 | 1.7 | 2.2 |
+| 310 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³ | 0.032 | 1.7 | 1.7 | 2.2 |
+| 320 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³ | < 0.001 | 0.34 | 1.9 | 2.4 |
+| 340 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³ | < 0.001 | < 0.001 | 3.7 | 5.1 |
+| 320 °C, 30 bar, 6 h⁻¹, 100 Nm³/m³ | 0.015 | 1.1 | 1.8 | 2.3 |
+| 320 °C, 20 bar, 4 h⁻¹, 100 Nm³/m³ | 0.067 | 2.0 | 1.7 | 2.1 |
+| 320 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³, **diesel** constants | 82 | 23 | 3.9 | 5.5 |
 
-(Feed 1072 wppm S. Figures far below 1 wppm only say "removed": the illustrative first-order classes have no refractory tail. The table was computed before #338 made the aromatics equilibria Cp-integrated and was not recomputed; in example 40's naphtha unit, the 320 °C row's conditions, the change moved the chemical hydrogen from 1.8 to 1.7 Nm³/m³ and the bed rise from 2.3 to 2.1 K, and left S and N where they were. Restricting the aromatics dehydrogenation to hydro-aromatics later moved it little: on a 60--180 °C straight-run naphtha of the test crude at the 320 °C row's conditions, the chemical hydrogen went from 2.22 to 2.38 Nm³/m³ and the bed rise from 2.8 to 3.0 K, with the product aromatics unchanged at 20.2 vol%.) So a reformer feed (below about 0.5 wppm S and N) is reached at 30 bar and LHSV 4 from about 310 °C for sulfur and 320 °C for nitrogen. The charge heater takes 23.6 MW absorbed (27.8 MW fired at 0.85) at 320 °C with no feed/effluent exchanger, and the wild naphtha carries 0.011 kg/s of dissolved gas. The reformer carries the feed's sulfur (#330; `NaphthaFeed.from_hydrotreater` passes the treated product's sulfur, #327) but not its nitrogen, so the nitrogen figures are not seen downstream. Example 40's earlier conditions (60 bar, LHSV 0.7, 400 Nm³/m³), which were what the diesel constants needed under the old phase model, now run away on the diesel constants (the aromatics saturate, the integration does not finish, `converged=False`); on the naphtha set they converge.
+(Feed 1072 wppm S. Figures far below 1 wppm only say "removed": the illustrative first-order classes have no refractory tail. Recomputed after the aromatics dehydrogenation was restricted to hydro-aromatics (see [the hydrotreater's rate laws](#refinery-hydrotreater-kinetics)). Sulfur and nitrogen moved by a few percent at most. The hydrogen did not: at 340 °C the bed now saturates more, since the reverse steps no longer act on the feed's own aromatics, taking 3.7 Nm³/m³ and rising 5.1 K (2.1 and 2.8 before), and the diesel-constant row takes 3.9 Nm³/m³ (3.0 before).) So a reformer feed (below about 0.5 wppm S and N) is reached at 30 bar and LHSV 4 from about 310 °C for sulfur and 320 °C for nitrogen. The charge heater takes 23.6 MW absorbed (27.8 MW fired at 0.85) at 320 °C with no feed/effluent exchanger, and the wild naphtha carries 0.011 kg/s of dissolved gas. The reformer carries the feed's sulfur (#330; `NaphthaFeed.from_hydrotreater` passes the treated product's sulfur, #327) but not its nitrogen, so the nitrogen figures are not seen downstream. Example 40's earlier conditions (60 bar, LHSV 0.7, 400 Nm³/m³), which were what the diesel constants needed under the old phase model, now run away on the diesel constants (the aromatics saturate, the integration does not finish, `converged=False`); on the naphtha set they converge.
 
 **Where it fails.** At 320 °C, 50 bar, LHSV 0.5 and 150 Nm³/m³ the bed-inlet PR flash does not converge (the mixture is near its critical region; Newton diverges). The unit returns `converged=False` with `flash.residual` about 1e-3 and warns; it used to raise an equinox NaN-in-linear-solve error.
 
@@ -3228,15 +3228,15 @@ These are the test crude of `examples/35`--`40` (1.8 wt% S, 1500 wppm N, 5 wt% C
 | Ni+V | 86 wppm | 16.2 wppm | |
 | CCR | 10.8 wt% | 5.2 wt% | (spec 18) |
 | SG | 0.953 | 0.928 | (spec 0.991) |
-| viscosity at 50 C (estimated) | 225 cSt | 105 cSt | (spec 380) |
+| viscosity at 50 C (estimated) | 225 cSt | 103 cSt | (spec 380) |
 
-WABT is 395.4 C over a total bed rise of 72 K. HDS is 91.2 %, HDM 81.8 %, CCR reduction 52.3 % and 538 C+ conversion 13.4 %. The distillate yield is 1.8 % (at 0.48 wt% S: the fragments inherit their parent's sulfur, so it wants a distillate hydrotreater before the diesel pool). Chemical H2 is 123 Nm³/m³ (1.16 wt%). All balances close to 1e-15. (Before the aromatics dehydrogenation was restricted to hydro-aromatics, see [the hydrotreater's rate laws](#refinery-hydrotreater-kinetics): 0.303 wt% S, WABT 394.8 C, HDS 90.8 %, HDM 81.2 %, 121 Nm³/m³. The viscosity, the gradient below and the whole-refinery figures of the next section were computed before that change and have not been recomputed. Before #338 made the hydrotreating aromatics equilibria and heats Cp-integrated: 0.306 wt% S, WABT 394.7 C, HDS 90.7 %, 1.15 wt% H2; the aromatics steps' heats at bed temperature are larger, so the beds run 0.1-0.2 K hotter.)
+WABT is 395.4 C over a total bed rise of 72 K. HDS is 91.2 %, HDM 81.8 %, CCR reduction 52.3 % and 538 C+ conversion 13.4 %. The distillate yield is 1.8 % (at 0.48 wt% S: the fragments inherit their parent's sulfur, so it wants a distillate hydrotreater before the diesel pool). Chemical H2 is 123 Nm³/m³ (1.16 wt%). All balances close to 1e-15. (Before the aromatics dehydrogenation was restricted to hydro-aromatics, see [the hydrotreater's rate laws](#refinery-hydrotreater-kinetics): 0.303 wt% S, WABT 394.8 C, HDS 90.8 %, HDM 81.2 %, 121 Nm³/m³. The viscosity, the gradient below and the whole-refinery figures of the next section have been recomputed since. Before #338 made the hydrotreating aromatics equilibria and heats Cp-integrated: 0.306 wt% S, WABT 394.7 C, HDS 90.7 %, 1.15 wt% H2; the aromatics steps' heats at bed temperature are larger, so the beds run 0.1-0.2 K hotter.)
 
 Over the route, the residue's sulfur equals the fuel oil's plus the H2S to 1e-10, and residue plus treat gas equals fuel oil plus gas.
 
-The gradient of fuel-oil sulfur with respect to the bed-1 inlet temperature is −591.7 ppm/K, by reverse mode through the beds, the quench mixing, the product grid and the pool. A central difference at h = 0.5 K gives −591.4 (−602 before #338).
+The gradient of fuel-oil sulfur with respect to the bed-1 inlet temperature is −592.8 ppm/K, by reverse mode through the beds, the quench mixing, the product grid and the pool. A central difference at h = 0.5 K gives −592.4 (−591.7 before the aromatics dehydrogenation was restricted to hydro-aromatics, −602 before #338).
 
-On the CDU residue of `examples/40` (3.06 wt% S, no Ni+V given), the fuel oil comes out at 0.31 wt% S and 69 cSt, with every spec met.
+On the CDU residue of `examples/40` (3.06 wt% S, 40 wppm Ni+V in the assay), the fuel oil comes out at 0.30 wt% S and 68 cSt, with every spec met.
 
 (refinery-residue-ex40)=
 ### In the whole-refinery example
@@ -3252,7 +3252,7 @@ fuel_oil = fuel_oil_blend([rds_res.blend_component("residue"), rds_res.blend_com
                           [rds_res.volume("residue"), rds_res.volume("distillate")])
 ```
 
-The assay there is given 40 wppm Ni+V, so HDM has something to remove. On its 44 500 bbl/d of residue (3.06 wt% S), the desulfurized residue is at 0.332 wt% S, with HDS at 90.0 % and HDM at 79.8 %. The distillate is 12.6 %, at 1750 wppm S, and goes to the fuel oil. The fuel oil makes every VLSFO spec: 0.31 wt% S, 69 cSt at 50 C (estimated), SG 0.920 and 4.8 wt% CCR. The unit is the refinery's largest hydrogen consumer. On the example's hydrogen header it draws its chemical consumption, `rds_res.outputs["h2.chemical"]` (399 of 540 mol/s). That is a lower bound, since the once-through treat gas has no purge or solution losses. Its `outputs["h2s.make"]` carries 79 % of the crude's sulfur in the sulfur table.
+The assay there is given 40 wppm Ni+V, so HDM has something to remove. On its 44 500 bbl/d of residue (3.06 wt% S), the desulfurized residue is at 0.321 wt% S, with HDS at 90.3 % and HDM at 80.3 %. The distillate is 12.6 %, at 1700 wppm S, and goes to the fuel oil. The fuel oil makes every VLSFO spec: 0.30 wt% S, 68 cSt at 50 C (estimated), SG 0.920 and 4.8 wt% CCR. The unit is the refinery's largest hydrogen consumer. On the example's hydrogen header it draws its chemical consumption, `rds_res.outputs["h2.chemical"]` (404 of 553 mol/s). That is a lower bound, since the once-through treat gas has no purge or solution losses. Its `outputs["h2s.make"]` carries 79 % of the crude's sulfur in the sulfur table.
 
 (refinery-residue-references)=
 ### References
@@ -3657,7 +3657,7 @@ These were measured on this 4-core, 15 GB machine while other jobs were running 
 |---|---|---|---|
 | Naphtha hydrotreater alone, d(product S)/d(bed inlet T), `jax.jacrev`, default beds | 227 s | 2.4 s | |
 | The same, `jax.jacfwd`, `ReactorOptions(adjoint="forward")` | 132 s | 1.0 s | |
-| NHT → fractionator → reformer → gasoline pool, 2 inputs × 5 outputs, `method="fwd"`, stages `jit=True` | 487 s (236 s inside example 40, after `jax.clear_caches()`, on its 2026-10 re-run) | 34 s (3 s) | 7.1 GB (the whole process, prototype) |
+| NHT → fractionator → reformer → gasoline pool, 2 inputs × 5 outputs, `method="fwd"`, stages `jit=True` | 487 s (202 s inside example 40, after `jax.clear_caches()`, on its 2026-10 re-run) | 34 s (3 s) | 7.1 GB (the whole process, prototype) |
 | The same, stages not jitted, `vectorize=False` | 671 s | 511 s | 8.6 GB |
 | The same, stages not jitted, `vectorize=True` (plain `jax.jacfwd`) | killed by the out-of-memory killer at 5.6 GB resident, with another 10 GB in use on the machine | | |
 
@@ -3668,7 +3668,7 @@ Two findings come from those rows.
 - **Jit the stages.** The reformer's solve is a `Flowsheet` with a Python-level recycle. Under a transform it switches to its traced path, which is built afresh on every call. Without `jit`, every JVP and every repeated Jacobian traces and compiles the reformer again: in the fourth row, two tangents cost two compiles, and so does the second call. With `Stage(..., jit=True)` the stage is one jitted function. Its derivative is compiled once (most of the 487 s is the reformer's JVP), and a repeated Jacobian costs only its 34 s run.
 - **Memory, not time, is what limits a chain on a machine like this.** Every compiled solve stays resident. Example 40 calls `jax.clear_caches()` before it differentiates, after its central differences, and that keeps the derivative's compile inside the machine.
 
-In example 40 (section 10) the ten entries of that Jacobian agree with central differences at h = 0.25 K to 0.1 % or better. The exception is d(gasoline S)/d(T_NHT), at 0.5 %, which is the truncation error of a sulfur that falls exponentially with temperature. Four central-difference evaluations of the already compiled units took 28 s, against 236 s for the first AD Jacobian (the example's latest run; the earlier one, on a busier machine, took 38 s and 435 s). For a single gradient on this machine, finite differences are cheaper. AD pays off in exactness, and for a planner that relinearizes a compiled chain, which costs 3 s per Jacobian after the first (29 s on the earlier run).
+In example 40 (section 10) the ten entries of that Jacobian agree with central differences at h = 0.25 K to 0.1 % or better. The exception is d(gasoline S)/d(T_NHT), at 0.5 %, which is the truncation error of a sulfur that falls exponentially with temperature. Four central-difference evaluations of the already compiled units took 25 s, against 202 s for the first AD Jacobian (the example's latest run; earlier runs, on a busier machine, took 28--38 s and 236--435 s). For a single gradient on this machine, finite differences are cheaper. AD pays off in exactness, and for a planner that relinearizes a compiled chain, which costs 3 s per Jacobian after the first (29 s on the earlier run).
 
 ### Gotchas
 
