@@ -741,7 +741,7 @@ That is deliberate. A file that silently lost a reactor's rate law would reload 
 
 ### Thermodynamics
 
-About half the core units need a `thermo` or `eos` object in the constructor, not just a `Params`. `IdealThermo` is written and rebuilt automatically. Anything else is refused on write, and can be supplied on load instead:
+About half the core units need a `thermo` or `eos` object in the constructor, not just a `Params`. `IdealThermo` is written and rebuilt automatically, and so are the cubic equations of state `PengRobinson` and `SRK` — wherever they appear: `EOSFlash`'s required `eos`, `Flash(..., eos=...)`, or a `Params` field such as `CSTRParams.eos`. An EOS is written as what builds it, the `CriticalProperties` of each species and its `k_ij` in the form it was given (a `{(i, j): value}` dict travels as `[i, j, value]` triples, since JSON keys cannot be tuples). A subclass of either is not written as its base, since that would drop whatever it adds. Any other thermo is refused on write, and can be supplied on load instead:
 
 ```python
 my_thermo = thermo   # any property package, e.g. a CubicThermo
@@ -764,7 +764,7 @@ serialize.from_json(serialize.to_json(gas_fs))   # ratio comes back as 1.3
 
 An argument that is *not* data — `Mixer(species_order)`, a `thermo` — still travels under `constructor`, and the two channels compose: `CompressorBoost(ratio, direction)` carries `ratio` by the first road and `direction` by the second.
 
-An *optional* constructor argument is written when it was set away from its default — `Mixer(species, thermo)`, `CSTR(params, thermo, mode="adiabatic")` — and left out when it was not. It is read off the unit by the attribute of the same name, so a unit that normalises a default it was given (`TFF` stores `rejection=None` as `{}`) writes that normalised value; it reloads to the same unit. Dropping it would be quietly wrong: `Mixer(species)` mixes temperatures without an enthalpy balance, so the reloaded flowsheet would solve to a different answer. An optional argument the format cannot hold (an EOS object, a hand-written `bpr_fn`) raises `SerializationWarning` rather than refusing the whole file, and the unit reloads with the default unless you pass it back with `extras=`. The editor keeps these arguments, too, when you change a parameter of the unit.
+An *optional* constructor argument is written when it was set away from its default — `Mixer(species, thermo)`, `CSTR(params, thermo, mode="adiabatic")` — and left out when it was not. It is read off the unit by the attribute of the same name, so a unit that normalises a default it was given (`TFF` stores `rejection=None` as `{}`) writes that normalised value; it reloads to the same unit. Dropping it would be quietly wrong: `Mixer(species)` mixes temperatures without an enthalpy balance, so the reloaded flowsheet would solve to a different answer. An optional argument the format cannot hold (a thermo other than `IdealThermo`, a hand-written `bpr_fn`) raises `SerializationWarning` rather than refusing the whole file, and the unit reloads with the default unless you pass it back with `extras=`. The editor keeps these arguments, too, when you change a parameter of the unit.
 
 ---
 

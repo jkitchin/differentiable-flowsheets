@@ -39,6 +39,7 @@ from difflow.serialize import (
     SerializationError,
     SerializationWarning,
     _ref_for,
+    _is_eos,
     _takes_params_first,
     _with_refs,
     constructor_extras,
@@ -73,6 +74,8 @@ def _render(value: Any, where: str, imports: set[str]) -> str:
     ref = _ref_for(value)
     if ref is not None:
         return ref[REF_TAG]
+    if _is_eos(value):
+        return _render_eos(value, where, imports)
     if callable(value):
         spec = getattr(value, "__difflow_spec__", None)
         if spec is None:
@@ -168,6 +171,42 @@ def _render_thermo(obj: Any, where: str, imports: set[str]) -> str:
         for n, data in obj.species.items()
     )
     return "IdealThermo({" + inner + "})"
+
+
+def _render_eos(eos: Any, where: str, imports: set[str]) -> str:
+    """Render a PengRobinson/SRK, from the database when it came from there.
+
+    Same preference as :func:`_render_thermo`: critical properties that
+    match the database read far better as ``get_critical_props(s)`` than
+    as inlined constants.
+    """
+    from difflow import get_critical_props
+
+    _note(imports, type(eos))
+    names = list(eos.species)
+
+    def from_database(name: str) -> bool:
+        try:
+            return get_critical_props(name) == eos.species[name]
+        except KeyError:
+            return False
+
+    if all(from_database(n) for n in names):
+        imports.add("get_critical_props")
+        species = f"{{s: get_critical_props(s) for s in {names!r}}}"
+    else:
+        species = _render(dict(eos.species), f"{where}.species", imports)
+    k_ij = eos._kij_input
+    if k_ij is None:
+        return f"{type(eos).__name__}({species})"
+    if isinstance(k_ij, dict):
+        rendered = "{" + ", ".join(
+            f"{(str(i), str(j))!r}: {_render(v, f'{where}.k_ij', imports)}"
+            for (i, j), v in k_ij.items()
+        ) + "}"
+    else:
+        rendered = _render(k_ij, f"{where}.k_ij", imports)
+    return f"{type(eos).__name__}({species}, k_ij={rendered})"
 
 
 def _render_stream(stream: dict, imports: set[str]) -> str:

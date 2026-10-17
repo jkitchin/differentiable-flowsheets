@@ -568,3 +568,82 @@ class TestOptionalConstructorArguments:
             if missing:
                 unreadable[name] = missing
         assert not unreadable, unreadable
+
+
+class TestEquationOfState:
+    """PengRobinson/SRK are written as the arguments that build them.
+
+    Before, ``EOSFlash`` (whose ``eos`` is required) could not be saved at
+    all, and ``Flash(eos=...)`` warned and reloaded as an ideal flash.
+    """
+
+    GASES = ["methane", "propane"]
+
+    def _eos_flash(self, eos):
+        from difflow.units.flash import EOSFlash, EOSFlashParams
+
+        fs = Flowsheet(species_order=self.GASES)
+        fs.add_feed("f", make_stream({"methane": 1.0, "propane": 1.0},
+                                     T=250.0, P=2.0e6))
+        fs.add_unit(Unit("fl", EOSFlash(EOSFlashParams(species_order=self.GASES),
+                                        eos), ["f"], ["l", "v"]))
+        return fs
+
+    def _props(self):
+        from difflow import get_critical_props
+
+        return {s: get_critical_props(s) for s in self.GASES}
+
+    def test_an_eos_flash_reloads_and_solves_identically(self):
+        from difflow import PengRobinson
+
+        fs = self._eos_flash(PengRobinson(self._props()))
+        back = serialize.from_json(serialize.to_json(fs))
+        original, restored = fs.solve(), back.solve()
+        for stream in original:
+            for key, value in original[stream].items():
+                if not isinstance(value, str):
+                    assert float(value) == float(restored[stream][key])
+
+    def test_srk_with_a_kij_dict_comes_back_equal(self):
+        """Tuple keys have no JSON form; they travel as [i, j, value]."""
+        from difflow import SRK
+
+        eos = SRK(self._props(), k_ij={("methane", "propane"): 0.02})
+        back = serialize.from_json(serialize.to_json(self._eos_flash(eos)))
+        rebuilt = back.units[0].operation.eos
+        assert type(rebuilt) is SRK and rebuilt == eos
+
+    def test_an_optional_eos_no_longer_warns(self, thermo):
+        import warnings
+
+        from difflow import PengRobinson
+
+        props = self._props()
+        fs = Flowsheet(species_order=self.GASES)
+        fs.add_unit(Unit("fl", Flash(FlashParams(species_order=self.GASES),
+                                     IdealThermo({s: get_species_data(s)
+                                                  for s in self.GASES}),
+                                     eos=PengRobinson(props)), ["a"], ["l", "v"]))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", serialize.SerializationWarning)
+            back = serialize.from_json(serialize.to_json(fs))
+        assert type(back.units[0].operation.eos) is PengRobinson
+
+    def test_a_subclass_is_not_written_as_its_base(self):
+        """Rebuilding it as PengRobinson would quietly drop what it adds."""
+        from difflow import PengRobinson
+
+        class Tuned(PengRobinson):
+            pass
+
+        with pytest.raises(SerializationError, match="Tuned"):
+            serialize.to_json(self._eos_flash(Tuned(self._props())))
+
+    def test_an_unknown_kind_is_refused_by_name(self):
+        from difflow import PengRobinson
+
+        spec = serialize.to_dict(self._eos_flash(PengRobinson(self._props())))
+        spec["units"][0]["constructor"]["eos"]["$eos"] = "VanDerWaals"
+        with pytest.raises(SerializationError, match="VanDerWaals"):
+            serialize.from_dict(spec)
