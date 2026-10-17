@@ -764,7 +764,7 @@ serialize.from_json(serialize.to_json(gas_fs))   # ratio comes back as 1.3
 
 An argument that is *not* data — `Mixer(species_order)`, a `thermo` — still travels under `constructor`, and the two channels compose: `CompressorBoost(ratio, direction)` carries `ratio` by the first road and `direction` by the second.
 
-An *optional* constructor argument is written when it was set away from its default — `Mixer(species, thermo)`, `CSTR(params, thermo, mode="adiabatic")` — and left out when it was not, so a flowsheet that never set one writes the same bytes it always did. Dropping it would be quietly wrong: `Mixer(species)` mixes temperatures without an enthalpy balance, so the reloaded flowsheet would solve to a different answer. An optional argument the format cannot hold (an EOS object, a hand-written `bpr_fn`) raises `SerializationWarning` rather than refusing the whole file, and the unit reloads with the default unless you pass it back with `extras=`.
+An *optional* constructor argument is written when it was set away from its default — `Mixer(species, thermo)`, `CSTR(params, thermo, mode="adiabatic")` — and left out when it was not. It is read off the unit by the attribute of the same name, so a unit that normalises a default it was given (`TFF` stores `rejection=None` as `{}`) writes that normalised value; it reloads to the same unit. Dropping it would be quietly wrong: `Mixer(species)` mixes temperatures without an enthalpy balance, so the reloaded flowsheet would solve to a different answer. An optional argument the format cannot hold (an EOS object, a hand-written `bpr_fn`) raises `SerializationWarning` rather than refusing the whole file, and the unit reloads with the default unless you pass it back with `extras=`. The editor keeps these arguments, too, when you change a parameter of the unit.
 
 ---
 
@@ -801,7 +801,7 @@ fs.add_unit(Unit('reactor', CSTR(CSTRParams(**kinetics_reactor.params_kwargs(), 
 
 A data-built rate law is **hoisted** into its own statement and splatted back rather than inlined, which keeps the reactor to one readable line and avoids repeating the arrays the factory derives anyway. Thermo is hoisted the same way, and written as a `get_species_data` expression when every species is in the database.
 
-Running the generated script rebuilds a flowsheet that solves to bit-identical results.
+Running the generated script rebuilds a flowsheet that solves to bit-identical results. A plugin unit is imported from its plugin (`from difflow_gas import GasPipe`), matched by class rather than by name, since some names are shared with core (the gas `Compressor` is not `difflow.Compressor`). Every example flowsheet bundled with the editor round-trips through its generated script.
 
 `codegen` refuses exactly what `serialize` refuses, for the same reason: an unregistered operation, and a callable that does not record how it was built. A generated script that quietly dropped a rate law would still run, and would be a different model.
 

@@ -996,11 +996,22 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- **`codegen` scripts for plugin flowsheets did not run.** Every name was imported from `difflow`, so a script
+  with a plugin unit failed on its first line (37 of the 60 units the editor can place, and all nine bundled
+  examples). Names are now imported from the package that exports them, matched by class (the gas `Compressor`
+  is not `difflow.Compressor`). Units that build their own `Params` (`GasPipe(beta)`) get keyword arguments
+  rather than a wrapped `Params`; a `Params` is written as the instance's own class, not one found by name
+  (`AmineAbsorber` was given `StripperParams`); and a scalar `inf` renders as `float('inf')`.
+
 - **`serialize`/`codegen` dropped optional constructor arguments.** Only required ones were written, so
   `Mixer(species, thermo)` reloaded as `Mixer(species)` and mixed temperatures without an enthalpy balance:
   the documented isomerisation recycle reloaded 1.8e-3 K off in its reactor feed. An optional argument set
   away from its default is now written (`serialize.optional_extras`); one the format cannot hold raises
-  `SerializationWarning` instead of vanishing.
+  `SerializationWarning` instead of vanishing. The editor's parameter edit (`gui.edit.rebuild`) had the same
+  gap: changing `V` on an adiabatic `CSTR` rebuilt it isothermal and without its thermo. `Evaporator`,
+  `MultiEffectEvaporator`, `MechanicalVaporRecompression` (`bpr_fn`, `enthalpy_fn`) and `MultistageMembrane`
+  (`stage_params`) now keep those arguments under their own names, so they are written or warned about
+  rather than dropped unseen.
 
 - Reverse-mode gradients through a single-phase cubic-EOS flash were NaN (since the issue #444
   Newton polish): at the trivial K = 1 point the polish Jacobian is singular, and a zero

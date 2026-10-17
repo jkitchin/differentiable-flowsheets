@@ -37,8 +37,9 @@ import jax.numpy as jnp
 from difflow.serialize import (
     REF_TAG,
     SerializationError,
-    _ref_for,
     SerializationWarning,
+    _ref_for,
+    _takes_params_first,
     _with_refs,
     constructor_extras,
     optional_extras,
@@ -60,7 +61,9 @@ class CodegenError(SerializationError):
 
 def _render(value: Any, where: str, imports: set[str]) -> str:
     """Render one value as a Python expression."""
-    if value is None or isinstance(value, (bool, int, float, str)):
+    if isinstance(value, float):
+        return _render_nested(value)            # inf/nan are not names
+    if value is None or isinstance(value, (bool, int, str)):
         return repr(value)
     # An object the code context defines is written as the *name* it is
     # bound to there, because the code context is emitted above as the
@@ -88,7 +91,7 @@ def _render(value: Any, where: str, imports: set[str]) -> str:
         call = f"{spec['factory']}({args})"
         return f"{call}.{spec['attr']}" if spec.get("attr") else call
     if hasattr(value, "_fields"):                       # a NamedTuple
-        imports.add(type(value).__name__)
+        _note(imports, type(value))
         inner = ", ".join(
             f"{name}={_render(getattr(value, name), f'{where}.{name}', imports)}"
             for name in value._fields
@@ -98,7 +101,7 @@ def _render(value: Any, where: str, imports: set[str]) -> str:
         imports.add("jnp")
         return f"{ARRAY_CALL}({_render_nested(jnp.asarray(value).tolist())})"
     if dataclasses.is_dataclass(value):
-        imports.add(type(value).__name__)
+        _note(imports, type(value))
         inner = ", ".join(
             f"{f.name}={_render(getattr(value, f.name), f'{where}.{f.name}', imports)}"
             for f in dataclasses.fields(value)
@@ -219,10 +222,9 @@ def to_python(
             holds a callable that does not record how it was built.
     """
     from difflow import __version__
-    from difflow.catalog import _params_class
     from difflow.serialize import _registry_name
 
-    imports: set[str] = {"Flowsheet", "Unit"}
+    imports: set[str] = _Imports({"Flowsheet", "Unit"})
     body: list[str] = []
 
     # The code context goes first: everything below may refer to it by
@@ -259,14 +261,31 @@ def to_python(
             _registry_name(cls, registry)
         except SerializationError as exc:
             raise CodegenError(str(exc)) from exc
-        imports.add(cls.__name__)
+        _note(imports, cls)
 
         where = f"unit {unit.name!r}"
         args = []
+        # keyword arguments already emitted, so none is given twice
+        emitted: set[str] = set()
         params = getattr(operation, "params", None)
-        if params is not None and dataclasses.is_dataclass(params):
-            params_cls = _params_class(cls) or type(params)
-            imports.add(params_cls.__name__)
+        sig = _signature(cls)
+        if (params is not None and dataclasses.is_dataclass(params)
+                and sig is not None and not _takes_params_first(sig)):
+            # `GasPipe(beta)`, `ControlValveDrop(dp_pa)`: the unit builds its
+            # own Params from plain arguments, so its fields go back in as
+            # keywords --- what serialize._build_operation does on load.
+            # Wrapping them in a Params put a dataclass where a float
+            # belongs, and the name lookup could even find another class
+            # (core `PipeParams` for the gas plugin's `GasPipe`).
+            for f in dataclasses.fields(params):
+                value = _render(getattr(params, f.name), f"{where}.{f.name}", imports)
+                args.append(f"{f.name}={value}")
+                emitted.add(f.name)
+        elif params is not None and dataclasses.is_dataclass(params):
+            # the instance's own class: a lookup by name can find another
+            # (gas `AmineAbsorber`'s params resolved to `StripperParams`)
+            params_cls = type(params)
+            _note(imports, params_cls)
 
             # A rate law built from data is hoisted to its own statement
             # and splatted back in. Inlining it would bury the reactor in
@@ -290,25 +309,26 @@ def to_python(
 
         for extra in constructor_extras(cls):
             value = getattr(operation, extra, None)
-            if value is None:
+            if value is None or extra in emitted:
                 continue
             ref = _ref_for(value)
             if ref is not None:
-                args.append(ref[REF_TAG])
+                rendered = ref[REF_TAG]
             elif type(value).__name__.endswith(("Thermo", "thermo")):
-                variable = f"thermo_{unit.name}"
+                rendered = f"thermo_{unit.name}"
                 preamble.append(
-                    f"{variable} = {_render_thermo(value, where, imports)}"
+                    f"{rendered} = {_render_thermo(value, where, imports)}"
                 )
-                args.append(variable)
             else:
-                args.append(_render(value, f"{where}.{extra}", imports))
+                rendered = _render(value, f"{where}.{extra}", imports)
+            # positional after a keyword is a SyntaxError
+            args.append(f"{extra}={rendered}" if emitted else rendered)
 
         # Optional arguments set away from their default, as keywords: a
         # `Mixer(species, thermo)` emitted as `Mixer(species)` runs, and
         # solves to a different answer (see serialize.optional_extras).
         for extra, value in optional_extras(operation).items():
-            if extra in constructor_extras(cls):
+            if extra in constructor_extras(cls) or extra in emitted:
                 continue
             ref = _ref_for(value)
             try:
@@ -363,7 +383,8 @@ def to_python(
     if "jnp" in imports:
         lines.append("import jax.numpy as jnp")
         lines.append("")
-    lines.append(_import_block(difflow_names))
+    for package, names in _packages_for(difflow_names, imports.objects).items():
+        lines.append(_import_block(names, package=package))
     lines.append("")
     if preamble:
         lines.extend(preamble)
@@ -415,13 +436,83 @@ def _hoist_built_params(params, unit_name: str, where: str, imports: set[str]):
     return supplied, [statement]
 
 
-def _import_block(names: list[str], width: int = 79) -> str:
+def _signature(cls: type):
+    """``cls.__init__``'s signature, or None where there is none to read."""
+    import inspect
+
+    try:
+        return inspect.signature(cls.__init__)
+    except (TypeError, ValueError):
+        return None
+
+
+class _Imports(set):
+    """The names a script imports, and the class behind each one noted."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.objects: dict[str, type] = {}
+
+
+def _note(imports: set[str], cls: type) -> None:
+    """Import ``cls`` by name, remembering which class the name means."""
+    imports.add(cls.__name__)
+    objects = getattr(imports, "objects", None)
+    if objects is None:
+        return
+    if objects.setdefault(cls.__name__, cls) is not cls:
+        raise CodegenError(
+            f"the flowsheet uses two different classes named "
+            f"{cls.__name__!r} ({objects[cls.__name__].__module__} and "
+            f"{cls.__module__}), which one script cannot import side by side."
+        )
+
+
+def _packages_for(names: list[str], objects: dict | None = None
+                  ) -> dict[str, list[str]]:
+    """Group names by the package that exports them, difflow first.
+
+    A plugin unit is exported by its plugin, not by ``difflow``, so a
+    script that imported every name from ``difflow`` failed on its first
+    line for ``GasPipe`` or ``TFF``. A class in ``objects`` is matched by
+    identity, since names collide: the gas plugin's ``Compressor`` is not
+    ``difflow.Compressor``. Any other name (a factory such as
+    ``mass_action_kinetics``) is looked up the way :mod:`difflow.serialize`
+    rebuilds a type on load.
+    """
+    import importlib
+
+    from difflow.serialize import _PACKAGES
+
+    objects = objects or {}
+    grouped: dict[str, list[str]] = {}
+    for name in names:
+        for package in _PACKAGES:
+            try:
+                module = importlib.import_module(package)
+            except ImportError:
+                continue
+            found = getattr(module, name, None)
+            if found is not None and (name not in objects
+                                      or found is objects[name]):
+                grouped.setdefault(package, []).append(name)
+                break
+        else:
+            raise CodegenError(
+                f"no package exports {name!r}, so the generated script "
+                "could not import it. Export it from difflow or its plugin."
+            )
+    return {p: grouped[p] for p in _PACKAGES if p in grouped}
+
+
+def _import_block(names: list[str], width: int = 79,
+                  package: str = "difflow") -> str:
     """One import line if it fits, otherwise a parenthesised block."""
-    single = f"from difflow import {', '.join(names)}"
+    single = f"from {package} import {', '.join(names)}"
     if len(single) <= width:
         return single
     inner = "\n".join(f"    {n}," for n in names)
-    return f"from difflow import (\n{inner}\n)"
+    return f"from {package} import (\n{inner}\n)"
 
 
 def save_script(flowsheet, path: str | Path, **kwargs) -> Path:

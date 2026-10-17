@@ -518,6 +518,9 @@ class Evaporator:
                 concentration chart (NaOH is the classic case).
         """
         self.params = params
+        # kept under their own names so difflow.serialize can find them
+        self.bpr_fn = bpr_fn
+        self.enthalpy_fn = enthalpy_fn
         self._sol = _Solution(params, bpr_fn, enthalpy_fn)
         p = params
         if (p.A is None) == (p.x_product is None):
@@ -754,6 +757,9 @@ class MultiEffectEvaporator:
             enthalpy_fn: Optional ``enthalpy_fn(T, x) -> J/kg`` solution enthalpy.
         """
         self.params = params
+        # kept under their own names so difflow.serialize can find them
+        self.bpr_fn = bpr_fn
+        self.enthalpy_fn = enthalpy_fn
         self._sol = _Solution(params, bpr_fn, enthalpy_fn)
         p = params
         if p.feed not in ("forward", "backward", "parallel"):
@@ -1140,6 +1146,9 @@ class MechanicalVaporRecompression:
             enthalpy_fn: Optional solution enthalpy callable ``(T, x) -> J/kg``.
         """
         self.params = params
+        # kept under their own names so difflow.serialize can find them
+        self.bpr_fn = bpr_fn
+        self.enthalpy_fn = enthalpy_fn
         self._sol = _Solution(params, bpr_fn, enthalpy_fn)
 
     def __call__(self, feed: Stream) -> tuple[Stream, Stream, dict[str, Array]]:

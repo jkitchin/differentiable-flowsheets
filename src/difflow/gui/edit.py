@@ -28,6 +28,7 @@ from difflow.serialize import (
     _encode_value,
     constructor_extras,
     is_number_annotation,
+    optional_extras,
 )
 
 
@@ -143,12 +144,19 @@ def live_extras(operation) -> dict:
     edit by identity rather than by round-tripping through JSON, which
     is both faster and the only thing that works for the kinds
     :mod:`difflow.serialize` cannot write.
+
+    Optional arguments set away from their default come along too
+    (:func:`~difflow.serialize.optional_extras`): without them, editing
+    ``V`` on an adiabatic ``CSTR`` rebuilt it isothermal and without
+    its thermo.
     """
     out = {}
     for arg in constructor_extras(type(operation)):
         value = getattr(operation, arg, None)
         if value is not None:
             out[arg] = value
+    for arg, value in optional_extras(operation).items():
+        out.setdefault(arg, value)
     return out
 
 
