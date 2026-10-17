@@ -139,7 +139,7 @@ def equilibrium_constants(T):
 
 
 def xu_froment_rates(p, T, K=None):
-    """Intrinsic rates (mol/(kg_cat s)) of the three reactions.
+    r"""Intrinsic rates (mol/(kg_cat s)) of the three reactions.
 
     Args:
         p: Partial pressures (bar) over :data:`SYNGAS`.
