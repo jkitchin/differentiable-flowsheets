@@ -801,7 +801,7 @@ fs.add_unit(Unit('reactor', CSTR(CSTRParams(**kinetics_reactor.params_kwargs(), 
 
 A data-built rate law is **hoisted** into its own statement and splatted back rather than inlined, which keeps the reactor to one readable line and avoids repeating the arrays the factory derives anyway. Thermo is hoisted the same way, and written as a `get_species_data` expression when every species is in the database.
 
-Running the generated script rebuilds a flowsheet that solves to bit-identical results.
+Running the generated script rebuilds a flowsheet that solves to bit-identical results. A plugin unit is imported from its plugin (`from difflow_gas import GasPipe`), matched by class rather than by name, since some names are shared with core (the gas `Compressor` is not `difflow.Compressor`). Every example flowsheet bundled with the editor round-trips through its generated script.
 
 `codegen` refuses exactly what `serialize` refuses, for the same reason: an unregistered operation, and a callable that does not record how it was built. A generated script that quietly dropped a rate law would still run, and would be a different model.
 

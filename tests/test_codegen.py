@@ -5,6 +5,8 @@ generated source that runs but computes something else would be worse
 than no generator at all.
 """
 
+import json
+
 import jax
 import jax.numpy as jnp
 import pytest
@@ -25,6 +27,7 @@ from difflow import (
     get_species_data,
     make_stream,
     mass_action_kinetics,
+    serialize,
 )
 from difflow.codegen import CodegenError
 
@@ -283,6 +286,74 @@ class TestFiles:
         assert path.exists()
         rebuilt = run_generated(path.read_text())
         assert [u.name for u in rebuilt.units] == ["reactor", "flash"]
+
+
+# =============================================================================
+# Plugin units
+# =============================================================================
+
+
+class TestPluginUnits:
+    """Scripts for plugin flowsheets used to fail on their first lines."""
+
+    def test_a_plugin_unit_is_imported_from_its_plugin(self):
+        """`from difflow import GasPipe` failed: it lives in difflow_gas."""
+        from difflow_gas import GasPipe
+
+        fs = Flowsheet(species_order=["CH4"])
+        fs.add_unit(Unit("pipe", GasPipe(beta=7.0), ["a"], ["b"]))
+        source = codegen.to_python(fs)
+        assert "from difflow_gas import GasPipe" in source
+        assert float(run_generated(source).units[0].operation.params.beta) == 7.0
+
+    def test_a_name_shared_with_core_resolves_to_the_plugin_class(self):
+        """The gas `Compressor` is not `difflow.Compressor`; by name alone
+        the script built the core one and it rejected `ratio`."""
+        from difflow_gas import Compressor
+
+        fs = Flowsheet(species_order=["CH4"])
+        fs.add_unit(Unit("comp", Compressor(ratio=1.3), ["a"], ["b"]))
+        op = run_generated(codegen.to_python(fs)).units[0].operation
+        assert type(op) is Compressor and float(op.params.ratio) == 1.3
+
+    def test_params_are_written_as_the_instance_class(self):
+        """A lookup by name gave `AmineAbsorber` the `StripperParams`."""
+        from difflow.plugins import load_plugins
+
+        load_plugins()
+        from difflow_cc import AbsorberParams, AmineAbsorber
+
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_unit(Unit("abs", AmineAbsorber(AbsorberParams(solvent="MEA")), ["a"], ["b"]))
+        op = run_generated(codegen.to_python(fs)).units[0].operation
+        assert type(op.params) is AbsorberParams
+
+    def test_a_scalar_infinity_is_rendered_as_an_expression(self):
+        from difflow.codegen import _render
+
+        assert _render(float("inf"), "x", set()) == "float('inf')"
+
+    @pytest.mark.parametrize("key", [
+        e["key"] for e in __import__("difflow.gui", fromlist=["examples"])
+        .examples.listing()
+    ])
+    def test_every_bundled_example_rebuilds_from_its_script(self, key):
+        """The editor's examples span every plugin; on main all nine
+        generated scripts failed to run."""
+        from difflow.gui import FlowsheetSession
+
+        session = FlowsheetSession()
+        session.open_example(key)
+        refs = dict(session.bindings)
+        namespace = dict(refs)
+        exec(compile(codegen.to_python(session.flowsheet, refs=refs),
+                     "<generated>", "exec"), namespace)
+        own = {k: namespace[k] for k in refs if k in namespace}
+        original = json.loads(serialize.to_json(session.flowsheet, refs=refs))
+        rebuilt = json.loads(serialize.to_json(namespace["fs"], refs=own))
+        original.pop("view", None)
+        rebuilt.pop("view", None)
+        assert rebuilt == original
 
 
 if __name__ == "__main__":
