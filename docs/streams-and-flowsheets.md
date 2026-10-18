@@ -781,7 +781,7 @@ fs = serialize.load("plant.json")               # SerializationError: ... pass t
 fs = serialize.load("plant.json", trust=True)   # imports mylab and rebuilds
 ```
 
-Modules of difflow and its plugins are always allowed. Code defined in a script or a notebook (`__main__`) has no import path that would find it again in another session, so it is refused on write; move it into a module, or use `refs=`.
+Modules of difflow and its plugins are always allowed. Code defined in a script or a notebook (`__main__`) has no import path that would find it again in another session, so it is refused on write; move it into a module, or use `refs=`. The editor asks the same question before opening such a file, listing the modules (`serialize.untrusted_modules(document)` lists them for any document).
 
 ### Thermodynamics
 
@@ -956,6 +956,7 @@ difflow gui plant.json                    # ...on a flowsheet
 difflow gui plant.py                      # ...on one a script builds
 difflow gui --port 9000 --no-browser
 difflow gui --stay                        # ...and keep serving after the tab closes
+difflow gui --trust plant.json            # ...running its code without asking first
 ```
 
 The editor is what a bare `difflow` does, because it is the one thing here that has nothing to print and everything to show. `python -m difflow.gui` is the same command for an environment where the console script is not on `PATH`.
@@ -982,7 +983,7 @@ Two views in the **View** menu draw the solve onto the wires themselves. **Wire 
 
 ### Opening a script
 
-Most flowsheets here were written as Python, because the package was a library long before it was an editor. `difflow gui plant.py` opens one: the script is **run**, and the first `Flowsheet` it leaves at module level is what appears on the canvas. Running it is the only way to read it — a rate law is a function and a parameter is whatever arithmetic produced it, so there is nothing to parse — and the same act is what `difflow report plant.py` and `difflow plan-export plant.py` have always done. It carries the same trust: the file is executed, so open your own scripts with it and not a stranger's.
+Most flowsheets here were written as Python, because the package was a library long before it was an editor. `difflow gui plant.py` opens one: the script is **run**, and the first `Flowsheet` it leaves at module level is what appears on the canvas. Running it is the only way to read it — a rate law is a function and a parameter is whatever arithmetic produced it, so there is nothing to parse — and the same act is what `difflow report plant.py` and `difflow plan-export plant.py` have always done. It carries the same trust: the file is executed, so the editor asks before running it (see [Opening a file that runs code](#opening-a-file-that-runs-code)) — open your own scripts with it and not a stranger's.
 
 The script runs under `__name__ == "__difflow__"`, not `"__main__"`. A script's `if __name__ == "__main__"` block is the part that solves, sweeps or plots, and opening a flowsheet in an editor should not cost an hour of optimization first. Put the flowsheet at module level, which is where it already is.
 
@@ -1192,7 +1193,13 @@ The scan is by **identity**, and it runs after the primitive branch: two `IdealT
 
 `codegen.to_python` emits the snippet as the script's preamble, ahead of everything that uses it, so what is exported is what ran. A snippet that fails to compile or raises is refused with the line number and *not stored* — the flowsheet keeps the last one that worked, so a half-typed line cannot unbuild the units already depending on it.
 
-That the editor runs the Python a file carries is worth stating plainly: **opening a flowsheet in the GUI executes its code context**, exactly as running a script would. Treat a flowsheet JSON from someone else the way you would treat their `.py` file.
+### Opening a file that runs code
+
+A flowsheet can carry code: its code context, a `.py` script that builds it, and modules of yours that it names by import path. Running any of it is the same trust as running a script, so **the editor asks first**. A file that would run code opens nothing until you say so: the page shows the code it would run and the modules it would import, and asks *Trust it and open?* Declining leaves the editor with no file — not an empty canvas over your file's name, which **Save** would then write over it.
+
+What is not asked about: a file with no code in it, a bundled example, a file saved in this editor session, and the code context you type into the editor yourself. `difflow gui --trust` answers yes for every file; use it on your own machine for your own files.
+
+From Python, `FlowsheetSession(path=..., trust=True)` and `session.open_file(path, trust=True)` do the same. Without it, `open_file` answers `{"ok": False, "needs_trust": {"path", "kind", "code", "modules"}}`, and a session started on such a file holds it in `session.blocked`. The agent workbench opens with trust exactly when it may run code at all: a `Workbench(allow_exec=False)` refuses a flowsheet JSON with a code context, as it already refused a `.py` file.
 
 ### For tests and embedding
 

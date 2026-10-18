@@ -673,6 +673,39 @@ def _resolve_function(path: str):
     return found
 
 
+def untrusted_modules(data: Any) -> list[str]:
+    """Modules outside difflow that reading ``data`` would import.
+
+    What ``trust=True`` would let a read do, found without doing it: the
+    module of every function or class the document names by import path,
+    minus difflow's own. An editor shows this list before asking whether
+    to trust a file; an empty one means the file imports nothing new.
+    """
+    found: set[str] = set()
+
+    def note(path: Any) -> None:
+        if isinstance(path, str) and ":" in path:
+            module = path.partition(":")[0]
+            if module and not _difflow_module(module):
+                found.add(module)
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key in (DATACLASS_TAG, NAMEDTUPLE_TAG, "operation",
+                        "flowsheet_class", "params_class", "class"):
+                note(node.get(key))
+            if isinstance(node.get(CALLABLE_TAG), dict):
+                note(node[CALLABLE_TAG].get("function"))
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(data)
+    return sorted(found)
+
+
 def _type_tag(cls: type, where: str) -> str:
     """How a dataclass or NamedTuple's class is named in the file.
 

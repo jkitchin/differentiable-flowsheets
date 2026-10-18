@@ -30,14 +30,14 @@ class TestTheEditorIsTheDefault:
         assert cli.main([]) == 0
         assert recorded_gui == [{"path": None, "port": DEFAULT_PORT,
                                  "open_browser": True, "token": None,
-                                 "stay": False}]
+                                 "stay": False, "trust": False}]
 
     def test_gui_takes_its_own_arguments(self, recorded_gui):
         assert cli.main(["gui", "plant.json", "--port", "9000",
                          "--no-browser"]) == 0
         assert recorded_gui == [{"path": "plant.json", "port": 9000,
                                  "open_browser": False, "token": None,
-                                 "stay": False}]
+                                 "stay": False, "trust": False}]
 
     def test_stay_is_passed_through(self, recorded_gui):
         # Without it the editor stops when its last page closes, which
