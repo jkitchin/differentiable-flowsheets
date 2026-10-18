@@ -8,6 +8,12 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Gaspype species data in `GibbsReactor` (#492).** New `difflow.gaspype_import`: `GaspypeThermo(species)`
+  adapts [gaspype](https://www.gaspype.org/)'s ~1000 NASA-9 gas-phase species to `GibbsReactor`'s thermo
+  interface, and `list_available_species` searches its database. Gaspype's own JAX equilibrium cannot be
+  differentiated under `jax.jit` (a `while_loop`), but through the adapter the reactor's implicit gradients
+  compile. Optional extra `difflow[gaspype]`; also in `dev`, so the tests run in CI. Example notebook
+  `examples/65_gaspype_thermo.ipynb`.
 - **`serialize` covers every difflow model.** `save`/`load` now also take a `DynamicFlowsheet` (units as their
   class and constructor call, time-dependent feeds), a `PowerNetwork` and a `RadialFeederFlowsheet`; a
   `Flowsheet` subclass (`GasNetworkFlowsheet`) keeps its class. New: `CubicThermo`, `ActivityThermo` and

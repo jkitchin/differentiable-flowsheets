@@ -74,6 +74,9 @@ dev = [
     "pytest-xdist>=3.8",
     "pytest-split>=0.8",
     "jupyter-book<2.0",
+    # tests/test_gaspype_import.py: pure Python on NumPy, so it is cheap to
+    # carry and its adapter is tested against the real database.
+    "gaspype>=1.1",
 ]
 examples = [
     "matplotlib>=3.5.0",
@@ -89,6 +92,10 @@ visualization = [
 pyglenn = [
     # NASA Glenn (CEA) thermodynamic database access for difflow.pyglenn_import
     "pyglenn",
+]
+gaspype = [
+    # Gaspype's NASA-9 gas-phase database for difflow.gaspype_import
+    "gaspype>=1.1",
 ]
 dwsim = [
     # DWSIM thermodynamics via pythonnet for difflow.dwsim_import (also needs a
