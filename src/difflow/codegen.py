@@ -35,18 +35,23 @@ from typing import Any
 import jax.numpy as jnp
 
 from difflow.serialize import (
+    INSTANCE_TAG,
     REF_TAG,
     SerializationError,
     SerializationWarning,
-    _ref_for,
+    _constructor_args,
     _flowsheet_class_path,
+    _import_path,
+    _is_code,
     _is_eos,
     _library_function,
+    _ref_for,
     _takes_params_first,
     _thermo_classes,
     _with_refs,
     constructor_extras,
     optional_extras,
+    to_value,
 )
 
 #: rendered when a value is a JAX array
@@ -81,10 +86,11 @@ def _render(value: Any, where: str, imports: set[str]) -> str:
         return _render_eos(value, where, imports)
     if type(value) in _thermo_classes().values():
         return _render_thermo(value, where, imports)
-    if callable(value) and _library_function(value) is not None:
-        _note(imports, value)                       # monod_kinetics
+    if _is_code(value) and (_library_function(value) is not None or (
+            isinstance(value, type) and _import_path(value) is not None)):
+        _note(imports, value)                       # monod_kinetics, a class
         return value.__name__
-    if callable(value):
+    if _is_code(value):
         spec = getattr(value, "__difflow_spec__", None)
         if spec is None:
             raise CodegenError(
@@ -129,6 +135,19 @@ def _render(value: Any, where: str, imports: set[str]) -> str:
             for k, v in value.items()
         )
         return "{" + inner + "}"
+    # an object rebuilt from its constructor call, exactly when serialize
+    # would write it as one: recorded, or verified from its attributes
+    try:
+        encoded = to_value(value)
+    except SerializationError:
+        encoded = None
+    if isinstance(encoded, dict) and INSTANCE_TAG in encoded:
+        _note(imports, type(value))
+        args = ", ".join(
+            f"{k}={_render(v, f'{where}.{k}', imports)}"
+            for k, v in _constructor_args(value, where).items()
+        )
+        return f"{type(value).__name__}({args})"
     raise CodegenError(
         f"{where} holds {type(value).__name__}, which has no source form."
     )

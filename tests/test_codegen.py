@@ -393,5 +393,21 @@ class TestRenderingFidelity:
         assert rebuilt.units[0].operation.thermo.species["water"].MW == 99.0
 
 
+class TestObjectsFromTheirArguments:
+    def test_a_callable_object_is_rendered_as_its_constructor_call(self):
+        """EquilibriumCurve has a __call__; treated as code it was dropped,
+        and the script then failed to build BatchDistillation."""
+        from difflow.catalog import _default_registry, _params_class
+        from difflow.staged import constant_alpha
+
+        cls = _default_registry().list_operations()["BatchDistillation"].cls
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_unit(Unit("still", cls(_params_class(cls)(species_order=SPECIES),
+                                      curve=constant_alpha(2.5)), ["a"], ["d", "b"]))
+        source = codegen.to_python(fs)
+        assert "EquilibriumCurve(kind='alpha'" in source
+        assert run_generated(source).units[0].operation.curve.kind == "alpha"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
