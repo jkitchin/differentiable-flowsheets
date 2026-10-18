@@ -8,6 +8,16 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`serialize` covers every difflow model.** `save`/`load` now also take a `DynamicFlowsheet` (units as their
+  class and constructor call, time-dependent feeds), a `PowerNetwork` and a `RadialFeederFlowsheet`; a
+  `Flowsheet` subclass (`GasNetworkFlowsheet`) keeps its class. New: `CubicThermo`, `ActivityThermo` and
+  dataclass thermos (`IdealGasThermo`, `GibbsThermo`); functions and classes by import path, difflow's
+  (`kinetic_fn=monod_kinetics`, which left every bioreactor flowsheet unsaveable) and yours, the latter loaded
+  only with `trust=True`; any object whose class keeps its constructor arguments by name (checked by
+  rebuilding it on write) or records its call (`difflow.init_args.record_init_args`); saved results
+  (`save(..., results=streams)`, `fs.saved_results`, `serialize.warm_start`); and single objects
+  (`save_object`/`load_object`, `dumps_object`/`loads_object`, `to_value`/`from_value`). Format version 3,
+  written only when a file needs it: a plain flowsheet is still version 2.
 - **`serialize`/`codegen` write `PengRobinson` and `SRK`.** An equation of state is written as the critical
   properties and `k_ij` that build it (`$eos`; a `{(i, j): value}` dict as `[i, j, value]` triples), wherever it
   appears: `EOSFlash`'s required `eos` (such a flowsheet could not be saved at all), `Flash(..., eos=...)`
@@ -718,6 +728,10 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Changed
 
+- **`serialize`: a `Flowsheet` subclass is no longer written as a plain `Flowsheet`.** It reloaded as the base
+  class and lost any solve it overrides. It is now written by its class (loading one from outside difflow needs
+  `trust=True`), and refused when defined in a script or notebook, where no import path finds it again.
+
 - **The test suite checks the code, not the physics.** ~7300 tests (~106k lines) became 1700 (~23k): per unit a
   smoke test, a finite-gradient test, one test per validation path and the simplest form of each fixed crash/NaN
   regression, plus the API contracts. Comparisons to literature and reference data, rederived answers, trend and
@@ -1001,6 +1015,14 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Fixed
+
+- **A reloaded `IdealThermo` never equalled the original.** JSON turned `SpeciesData`'s tuples into lists, so
+  every object keyed on its construction inputs (the JAX caches included) took the reload for a new one. Fields
+  declared as tuples are restored on read. Also: an `$eos` written by the previous release was read by version-2
+  readers as a plain dict (files using it are now version 3); a dataclass written by bare name could rebuild as
+  another package's class of the same name (core vs gas `PipeParams`) and is now written by path; `codegen`
+  wrote edited `SpeciesData` with database names as plain database lookups, and NumPy floats as `np.float64(...)`;
+  a traced value now fails with a message saying so instead of JAX's `UnexpectedTracerError`.
 
 - **`codegen` scripts for plugin flowsheets did not run.** Every name was imported from `difflow`, so a script
   with a plugin unit failed on its first line (37 of the 60 units the editor can place, and all nine bundled

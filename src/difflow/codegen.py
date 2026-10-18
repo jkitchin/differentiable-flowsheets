@@ -35,15 +35,23 @@ from typing import Any
 import jax.numpy as jnp
 
 from difflow.serialize import (
+    INSTANCE_TAG,
     REF_TAG,
     SerializationError,
     SerializationWarning,
-    _ref_for,
+    _constructor_args,
+    _flowsheet_class_path,
+    _import_path,
+    _is_code,
     _is_eos,
+    _library_function,
+    _ref_for,
     _takes_params_first,
+    _thermo_classes,
     _with_refs,
     constructor_extras,
     optional_extras,
+    to_value,
 )
 
 #: rendered when a value is a JAX array
@@ -76,7 +84,13 @@ def _render(value: Any, where: str, imports: set[str]) -> str:
         return ref[REF_TAG]
     if _is_eos(value):
         return _render_eos(value, where, imports)
-    if callable(value):
+    if type(value) in _thermo_classes().values():
+        return _render_thermo(value, where, imports)
+    if _is_code(value) and (_library_function(value) is not None or (
+            isinstance(value, type) and _import_path(value) is not None)):
+        _note(imports, value)                       # monod_kinetics, a class
+        return value.__name__
+    if _is_code(value):
         spec = getattr(value, "__difflow_spec__", None)
         if spec is None:
             raise CodegenError(
@@ -121,6 +135,19 @@ def _render(value: Any, where: str, imports: set[str]) -> str:
             for k, v in value.items()
         )
         return "{" + inner + "}"
+    # an object rebuilt from its constructor call, exactly when serialize
+    # would write it as one: recorded, or verified from its attributes
+    try:
+        encoded = to_value(value)
+    except SerializationError:
+        encoded = None
+    if isinstance(encoded, dict) and INSTANCE_TAG in encoded:
+        _note(imports, type(value))
+        args = ", ".join(
+            f"{k}={_render(v, f'{where}.{k}', imports)}"
+            for k, v in _constructor_args(value, where).items()
+        )
+        return f"{type(value).__name__}({args})"
     raise CodegenError(
         f"{where} holds {type(value).__name__}, which has no source form."
     )
@@ -141,6 +168,8 @@ def _render_nested(value: Any) -> str:
             return "float('inf')"
         if value == float("-inf"):
             return "-float('inf')"
+        # a numpy float is a float, and NumPy 2 reprs it as np.float64(...)
+        return repr(float(value))
     return repr(value)
 
 
@@ -151,17 +180,34 @@ def _render_thermo(obj: Any, where: str, imports: set[str]) -> str:
     that built it than as a wall of inlined constants, so that form is
     used whenever every species is in the database.
     """
-    from difflow import list_species
+    from difflow import get_species_data, list_species
 
     kind = type(obj).__name__
-    if kind != "IdealThermo":
+    if _thermo_classes().get(kind) is not type(obj):
+        if dataclasses.is_dataclass(obj):           # IdealGasThermo, ...
+            return _render(obj, where, imports)
         raise CodegenError(
-            f"{where} holds a {kind}, which cannot be written as source. "
-            "Only IdealThermo is supported so far."
+            f"{where} holds a {kind}, which cannot be written as source; "
+            f"it writes {', '.join(_thermo_classes())} and dataclass thermos."
         )
+    if kind in ("CubicThermo", "ActivityThermo"):
+        # an IdealThermo plus the one object that corrects it
+        other = "eos" if kind == "CubicThermo" else "activity_model"
+        _note(imports, type(obj))
+        ideal = _render_thermo(obj.ideal, f"{where}.ideal", imports)
+        rest = _render(getattr(obj, other), f"{where}.{other}", imports)
+        return f"{kind}({ideal}, {rest})"
     imports.add("IdealThermo")
     names = list(obj.species)
-    if all(n in list_species() for n in names):
+
+    def from_database(name: str) -> bool:
+        # the name alone is not enough: the data may have been edited
+        try:
+            return get_species_data(name) == obj.species[name]
+        except (KeyError, ValueError):
+            return False
+
+    if all(n in list_species() and from_database(n) for n in names):
         imports.add("get_species_data")
         return (
             f"IdealThermo({{s: get_species_data(s) for s in {names!r}}})"
@@ -263,7 +309,23 @@ def to_python(
     from difflow import __version__
     from difflow.serialize import _registry_name
 
-    imports: set[str] = _Imports({"Flowsheet", "Unit"})
+    imports: set[str] = _Imports({"Unit"})
+    # a GasNetworkFlowsheet stays one; serialize refuses a subclass from
+    # outside difflow, and so does this, for the same reason
+    from difflow.flowsheet import Flowsheet
+
+    if not isinstance(flowsheet, Flowsheet):
+        raise CodegenError(
+            f"codegen writes steady-state flowsheets; a "
+            f"{type(flowsheet).__name__} is saved with difflow.serialize.save "
+            "instead."
+        )
+    if type(flowsheet) is not Flowsheet:
+        try:
+            _flowsheet_class_path(type(flowsheet))
+        except SerializationError as exc:
+            raise CodegenError(str(exc)) from exc
+    _note(imports, type(flowsheet))
     body: list[str] = []
 
     # The code context goes first: everything below may refer to it by
@@ -280,7 +342,8 @@ def to_python(
         ]
 
     body.append(
-        f"fs = Flowsheet(species_order={list(flowsheet.species_order)!r}, "
+        f"fs = {type(flowsheet).__name__}"
+        f"(species_order={list(flowsheet.species_order)!r}, "
         f"default_flow={flowsheet.default_flow!r}, "
         f"default_T={None if flowsheet.infer_tear_T else flowsheet.default_T!r}, "
         f"default_P={None if flowsheet.infer_tear_P else flowsheet.default_P!r})"
@@ -537,11 +600,18 @@ def _packages_for(names: list[str], objects: dict | None = None
                 grouped.setdefault(package, []).append(name)
                 break
         else:
-            raise CodegenError(
-                f"no package exports {name!r}, so the generated script "
-                "could not import it. Export it from difflow or its plugin."
-            )
-    return {p: grouped[p] for p in _PACKAGES if p in grouped}
+            # not exported at a package's top level: imported from the
+            # module that defines it --- a difflow submodule, or your own
+            module = getattr(objects.get(name), "__module__", "")
+            if not module or module == "__main__":
+                raise CodegenError(
+                    f"no package exports {name!r}, so the generated script "
+                    "could not import it. Export it from difflow or its plugin."
+                )
+            grouped.setdefault(module, []).append(name)
+    ordered = [p for p in _PACKAGES if p in grouped]
+    ordered += sorted(m for m in grouped if m not in _PACKAGES)
+    return {m: grouped[m] for m in ordered}
 
 
 def _import_block(names: list[str], width: int = 79,

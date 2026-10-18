@@ -29,7 +29,7 @@ What is reused rather than reinvented (#202)
   writes the *train* --- one level above a flowsheet, so a topology can
   be enumerated and diffed without instantiating anything --- but the
   stream and parameter encoders, the ``SerializationError`` and the
-  ``FORMAT_VERSION`` are difflow's, not a second set of rules that would
+  format versions are difflow's, not a second set of rules that would
   drift from them. The emitted ``Flowsheet`` is not yet writable by
   ``difflow.serialize.to_dict`` itself, because its unit operations are
   module adapters rather than registered classes; see :meth:`to_dict`.
@@ -821,8 +821,8 @@ class SeparationTrain:
 
         The parts that overlap are delegated rather than duplicated:
         streams and parameter values go through
-        :mod:`difflow.serialize`'s own encoders, and the file carries its
-        :data:`difflow.serialize.FORMAT_VERSION`.
+        :mod:`difflow.serialize`'s own encoders, and the file carries the
+        version :func:`difflow.serialize.version_for` gives it.
 
         Note that the ``Flowsheet`` from :meth:`to_flowsheet` is not
         itself writable by :func:`difflow.serialize.to_dict` today: its
@@ -835,10 +835,9 @@ class SeparationTrain:
         Returns:
             JSON-ready dict.
         """
-        from difflow.serialize import FORMAT_VERSION, _encode_stream
+        from difflow.serialize import _encode_stream, version_for
 
-        return {
-            "format_version": FORMAT_VERSION,
+        data = {
             "name": self.name,
             "T": self.T,
             "modules": [m.to_dict() for m in self.modules.values()],
@@ -852,6 +851,7 @@ class SeparationTrain:
                 for f in self.feeds
             ],
         }
+        return {"format_version": version_for(data), **data}
 
     @classmethod
     def from_dict(cls, data: dict) -> "SeparationTrain":
@@ -868,16 +868,16 @@ class SeparationTrain:
                 format version.
         """
         from difflow.serialize import (
-            FORMAT_VERSION,
+            SUPPORTED_VERSIONS,
             SerializationError,
             _decode_stream,
         )
 
         version = data.get("format_version")
-        if version is not None and version != FORMAT_VERSION:
+        if version is not None and version not in SUPPORTED_VERSIONS:
             raise SerializationError(
                 f"format version {version!r} is not supported; this "
-                f"difflow reads version {FORMAT_VERSION}."
+                f"difflow reads {', '.join(map(str, SUPPORTED_VERSIONS))}."
             )
         train = cls(data.get("name", "train"), data.get("T", 298.15))
         for spec in data.get("modules", []):

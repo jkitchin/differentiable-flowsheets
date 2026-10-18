@@ -150,7 +150,7 @@ class TestRoutes:
         status, doc = client.get_json("/api/flowsheet")
         assert status == 200
         assert [u["name"] for u in doc["flowsheet"]["units"]] == ["reactor", "flash"]
-        assert doc["flowsheet"]["format_version"] == serialize.FORMAT_VERSION
+        assert doc["flowsheet"]["format_version"] == serialize.version_for(doc["flowsheet"])
 
     def test_the_served_document_carries_canvas_positions(self, client):
         """A canvas needs coordinates and a flowsheet carries none."""

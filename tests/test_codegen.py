@@ -206,14 +206,14 @@ class TestRefusals:
         with pytest.raises(CodegenError, match="does not record how it was built"):
             codegen.to_python(fs)
 
-    def test_an_unregistered_operation_is_refused(self):
+    def test_an_unregistered_unimportable_operation_is_refused(self):
         class HomeMadeUnit:
             def __init__(self):
                 self.params = None
 
         fs = Flowsheet(species_order=SPECIES)
         fs.add_unit(Unit("mystery", HomeMadeUnit(), ["feed"], ["out"]))
-        with pytest.raises(CodegenError, match="not in the operation registry"):
+        with pytest.raises(CodegenError, match="neither in the operation registry nor importable"):
             codegen.to_python(fs)
 
     def test_an_unsupported_thermo_is_refused(self, flowsheet):
@@ -370,6 +370,43 @@ class TestEquationOfState:
         source = codegen.to_python(fs)
         assert "get_critical_props(s) for s in" in source
         assert run_generated(source).units[0].operation.eos == eos
+
+
+class TestRenderingFidelity:
+    def test_a_numpy_float_renders_as_a_plain_float(self):
+        """NumPy 2 reprs it as np.float64(...), a name the script lacks."""
+        import numpy as np
+
+        from difflow.codegen import _render_nested
+
+        assert _render_nested(np.float64(15.0)) == "15.0"
+
+    def test_edited_database_data_is_not_written_as_a_lookup(self):
+        """Database names with edited data were emitted as plain lookups,
+        and the script built the unedited model."""
+        edited = {s: get_species_data(s) for s in SPECIES}
+        edited["water"] = edited["water"]._replace(MW=99.0)
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_unit(Unit("flash", Flash(FlashParams(species_order=SPECIES),
+                                        IdealThermo(edited)), ["a"], ["l", "v"]))
+        rebuilt = run_generated(codegen.to_python(fs))
+        assert rebuilt.units[0].operation.thermo.species["water"].MW == 99.0
+
+
+class TestObjectsFromTheirArguments:
+    def test_a_callable_object_is_rendered_as_its_constructor_call(self):
+        """EquilibriumCurve has a __call__; treated as code it was dropped,
+        and the script then failed to build BatchDistillation."""
+        from difflow.catalog import _default_registry, _params_class
+        from difflow.staged import constant_alpha
+
+        cls = _default_registry().list_operations()["BatchDistillation"].cls
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_unit(Unit("still", cls(_params_class(cls)(species_order=SPECIES),
+                                      curve=constant_alpha(2.5)), ["a"], ["d", "b"]))
+        source = codegen.to_python(fs)
+        assert "EquilibriumCurve(kind='alpha'" in source
+        assert run_generated(source).units[0].operation.curve.kind == "alpha"
 
 
 if __name__ == "__main__":

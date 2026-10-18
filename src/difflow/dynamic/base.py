@@ -19,6 +19,7 @@ import jax.numpy as jnp
 from jax import Array
 
 from difflow.streams import Stream, get_flows, make_stream
+from difflow.init_args import record_init_args
 from difflow.dynamic.state import StateSpec, StateVector, StateVar
 from difflow.numerics import safe_divide
 
@@ -136,6 +137,13 @@ class DynamicUnitBase(ABC):
     - _derivatives(): Compute dx/dt
     - _outputs(): Map states to outlet streams
     """
+
+    def __init_subclass__(cls, **kwargs):
+        # Remember each unit's constructor call, so difflow.serialize can
+        # rebuild it as built: DynamicCSTR(volume=...) keeps volume only
+        # as params["V"], where no reader would look for it.
+        super().__init_subclass__(**kwargs)
+        record_init_args(cls)
 
     def __init__(
         self,
