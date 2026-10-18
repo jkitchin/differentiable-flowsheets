@@ -48,3 +48,16 @@ def test_single_phase_reverse_mode_is_not_nan():
         V, x, _ = flash_TP_eos(eos, z, T, 150e5)
         return eos.enthalpy_departure(T, 150e5, x, "liquid") + V
     assert jnp.isfinite(jax.grad(h)(323.0))
+
+
+def test_chained_flash_second_derivative_finite():
+    """#497: a flash fed by another flash's liquid, differentiated twice."""
+    sp = ["methane", "propane", "n_hexane"]
+    eos = PengRobinson({s: get_critical_props(s) for s in sp})
+    z = jnp.array([0.5, 0.2, 0.3])
+
+    def liquid(P1):
+        V1, x1, _ = flash_TP_eos(eos, z, 310.0, P1 * 1e5)
+        V2, _, _ = flash_TP_eos(eos, x1, 310.0, 101325.0)
+        return (1 - V1) * (1 - V2)
+    assert jnp.isfinite(jax.jit(jax.hessian(liquid))(8.0))

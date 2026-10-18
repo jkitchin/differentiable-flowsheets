@@ -48,3 +48,18 @@ def test_range_warning_concrete_only():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         jax.grad(lambda T: gas_viscosity("methane", T))(hi + 80.0)
+
+
+def test_natural_gas_components():
+    # #495: ethane/propane/butanes/H2S have fits and critical constants, so a
+    # natural-gas mixture at pressure runs (it used to raise KeyError).
+    from difflow.gas_properties import dense_gas_viscosity, gas_mixture_transport
+    for name in ("C2H6", "propane", "n-butane", "isobutane", "H2S"):
+        assert np.isfinite(float(gas_prandtl(name, 300.0)))
+    names = ["methane", "ethane", "propane"]
+    assert np.isfinite(float(dense_gas_viscosity(names, 288.15, 50e5, y=[0.90, 0.06, 0.04])))
+    out = gas_mixture_transport(names + ["n_butane", "isobutane", "hydrogen_sulfide"],
+                                [0.85, 0.06, 0.04, 0.02, 0.02, 0.01], 288.15, 50e5)
+    assert all(np.isfinite(float(v)) for v in out.values())
+    g = jax.grad(lambda T: dense_gas_viscosity(names, T, 50e5, y=[0.90, 0.06, 0.04]))(288.15)
+    assert np.isfinite(float(g))

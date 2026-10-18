@@ -17,6 +17,9 @@ thermal conductivity (W/m/K) and isobaric heat capacity (J/kg/K) at
 Data:
 - tests/reference/nist_gases_1atm/<gas>.csv: NIST Chemistry WebBook SRD 69
   isobars at 1 atm (vapour phase only).
+- tests/reference/coolprop_gases_1atm/<gas>.csv: ethane, propane, n-butane,
+  isobutane and H2S, the same 1 atm isobars from CoolProp's reference
+  models (written by scripts/make_coolprop_gas_tables.py, which names them).
 - tests/reference/air_engineering_toolbox.csv: dry air mu and k. Air cp is
   the mass-weighted NIST cp of N2/O2/Ar at mole fractions 0.7812/0.2096/
   0.0092 (ideal mixing; good to ~0.1 % at 1 atm).
@@ -33,15 +36,18 @@ ROOT = Path(__file__).resolve().parents[1]
 REF = ROOT / "tests" / "reference"
 GASES = ["nitrogen", "oxygen", "argon", "carbon_dioxide", "carbon_monoxide",
          "methane", "hydrogen", "helium", "water"]
+COOLPROP_GASES = ["ethane", "propane", "n_butane", "isobutane", "hydrogen_sulfide"]
 MW = {"nitrogen": 28.0134, "oxygen": 31.9988, "argon": 39.948,
       "carbon_dioxide": 44.0095, "carbon_monoxide": 28.0101,
       "methane": 16.0428, "hydrogen": 2.01588, "helium": 4.002602,
-      "water": 18.015268}
+      "water": 18.015268, "ethane": 30.06904, "propane": 44.09562,
+      "n_butane": 58.1222, "isobutane": 58.1222, "hydrogen_sulfide": 34.08088}
 AIR = {"nitrogen": 0.7812, "oxygen": 0.2096, "argon": 0.0092}
 
 
 def load_nist(gas):
-    d = np.loadtxt(REF / "nist_gases_1atm" / f"{gas}.csv", delimiter=",",
+    folder = "coolprop_gases_1atm" if gas in COOLPROP_GASES else "nist_gases_1atm"
+    d = np.loadtxt(REF / folder / f"{gas}.csv", delimiter=",",
                    comments="#", skiprows=2)
     return d[:, 0], d[:, 1] * 1e3, d[:, 2], d[:, 3]    # T, cp J/kg/K, mu, k
 
@@ -73,7 +79,7 @@ def air_cp(T):
 
 def main():
     table = {}
-    for g in GASES:
+    for g in GASES + COOLPROP_GASES:
         T, cp, mu, k = load_nist(g)
         entry = {"MW": MW[g]}
         for name, y in (("mu", mu), ("k", k), ("cp", cp)):

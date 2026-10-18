@@ -1607,19 +1607,27 @@ def flash_TP_eos(
     energy.
     """
     z = z / jnp.sum(z)
-    two_phase, feed_is_vapor = _phase_stability(eos, z, T, P, k_ij)
+    # Everything up to the polish only locates the root (the phase decision is
+    # boolean and the polish attaches the derivatives), so it runs on stopped
+    # inputs. Left live, a chained flash (z = the previous flash's x)
+    # differentiated the stability test, the 50-step substitution and the
+    # Newton finish, only to discard the result: jax.hessian of a three-flash
+    # train compiled for minutes in GB of memory (issue #497).
+    zs, Ts, Ps = (lax.stop_gradient(v) for v in (z, T, P))
+    ks = None if k_ij is None else lax.stop_gradient(k_ij)
+    two_phase, feed_is_vapor = _phase_stability(eos, zs, Ts, Ps, ks)
 
     # Initialize K from Wilson
-    K = eos.K_values_wilson(T, P)
+    K = eos.K_values_wilson(Ts, Ps)
 
     def step(state, _):
         K_prev = state
 
         # Solve Rachford-Rice
-        V = _solve_rachford_rice(z, K_prev)
+        V = _solve_rachford_rice(zs, K_prev)
 
         # Get compositions (inlined)
-        x = z / (1 + V * (K_prev - 1))
+        x = zs / (1 + V * (K_prev - 1))
         y = K_prev * x
 
         # Ensure positive and normalized
@@ -1629,7 +1637,7 @@ def flash_TP_eos(
         y = y / jnp.sum(y)
 
         # Update K from fugacity coefficients
-        K_new = eos.K_values(T, P, x, y, k_ij)
+        K_new = eos.K_values(Ts, Ps, x, y, ks)
 
         # Damped update for stability
         K_new = 0.3 * K_new + 0.7 * K_prev
@@ -1640,15 +1648,12 @@ def flash_TP_eos(
     # come from the Newton polish below, not from unrolling the iteration
     # (whose derivative of a derivative converges more slowly than the value
     # and gave wrong-signed Hessians, issue #444).
-    K_ss, _ = lax.scan(step, lax.stop_gradient(K), None, length=max_iter)
-    K_ss = lax.stop_gradient(K_ss)
-    V_ss = lax.stop_gradient(_solve_rachford_rice(z, K_ss))
+    K_ss, _ = lax.scan(step, K, None, length=max_iter)
+    V_ss = _solve_rachford_rice(zs, K_ss)
     # Near the critical region damped substitution converges very slowly:
     # 50 steps left V at 0.44 where it is 0.27 (0.8 CH4 / 0.2 C3H8, 250 K,
     # 0.99 of the bubble pressure). Newton finishes the job (issue #444).
-    K_ss, V_ss, split_ok, dG = _newton_flash(
-        eos, z, lax.stop_gradient(T), lax.stop_gradient(P),
-        None if k_ij is None else lax.stop_gradient(k_ij), K_ss, V_ss)
+    K_ss, V_ss, split_ok, dG = _newton_flash(eos, zs, Ts, Ps, ks, K_ss, V_ss)
     K_final, V_tp = _polish_flash(eos, z, T, P, k_ij, K_ss, V_ss)
     # The substitution-based stability test can miss an instability near
     # the critical point (there it called the same feed single-phase from

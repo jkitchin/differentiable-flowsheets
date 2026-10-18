@@ -15,6 +15,16 @@ committed tables:
   1 atm isobars (``tests/reference/nist_gases_1atm/``). Max deviations:
   viscosity 0.16 %, conductivity 0.5 % (methane), heat capacity 0.06 %
   (0.14 % for steam).
+- ethane, propane, n_butane, isobutane and hydrogen_sulfide (the usual
+  natural-gas and refinery-gas components): the same 1 atm isobars from
+  CoolProp's reference models (``tests/reference/coolprop_gases_1atm/``,
+  written by ``scripts/make_coolprop_gas_tables.py``; the models are in
+  ``_SOURCE`` in this module). Max fit deviations 0.1-0.2 %. H2S has no reference
+  conductivity model; its conductivity is Chung et al.'s estimate from the
+  viscosity and ideal-gas heat capacity, good to about 5-8 % (Chung's
+  deviation from the reference conductivity of the four hydrocarbons).
+  The data start just above the 1 atm boiling point (n-butane 280 K,
+  isobutane 270 K, propane 240 K).
 - air: Engineering ToolBox tables for dry air at 1 atm (viscosity and
   conductivity, 223-1273 K, ``tests/reference/air_engineering_toolbox.csv``)
   and the mass-weighted NIST heat capacity of N2/O2/Ar (78.12/20.96/0.92
@@ -143,6 +153,36 @@ _GAS_FITS = {
         'k': ([-3.961935559770142, 1.1028682290861678, 0.3550359984413602, -0.12916342338620654], 380.0, 1000.0),
         'cp': ([7.889762102147433, -2.0124630591635997, 4.994968644336032, -5.8954771013580745, 3.5419048887464197, -0.839561288214227], 380.0, 1000.0),
     },
+    'ethane': {
+        'MW': 30.06904,
+        'mu': ([-11.57395957363117, 0.931831938136318, -0.08372284326760666, -0.017900366867597616], 190.0, 670.0),
+        'k': ([-3.8518831623409517, 1.801567492487525, 0.17409881585434187, -0.27760591572163007], 190.0, 670.0),
+        'cp': ([7.475562738974145, 0.6644815953317217, 0.35466334096336, -0.34631740476218087, -0.06872553951226439, 0.12515904452264007], 190.0, 670.0),
+    },
+    'propane': {
+        'MW': 44.09562,
+        'mu': ([-11.712025893444883, 0.9859334602945334, -0.057559714882576135, -0.03892611436173747], 240.0, 650.0),
+        'k': ([-3.989447366519364, 1.7917397623476905, -0.007125618958991081, 0.03563085070319434], 240.0, 650.0),
+        'cp': ([7.433937580263898, 0.7422025845159607, 0.33885859344481395, -0.5208070455685923, 0.13299868158623396, 0.0512633376765571], 240.0, 650.0),
+    },
+    'n_butane': {
+        'MW': 58.1222,
+        'mu': ([-11.80710518322088, 1.0118652439791227, -0.09527583032058747, 0.03669348240494257], 280.0, 570.0),
+        'k': ([-4.089514298345154, 1.7823425034084226, 0.14601586276008122, -0.04479386625242805], 280.0, 570.0),
+        'cp': ([7.4609713467130305, 0.6640695788385359, 0.5175797709787319, -0.8796674751091665, 0.5038853942229917, -0.09600914267670596], 280.0, 570.0),
+    },
+    'isobutane': {
+        'MW': 58.1222,
+        'mu': ([-11.794894662998145, 0.9786503341161578, -0.08658609494457284, 0.023196874791170993], 270.0, 570.0),
+        'k': ([-4.0699268044868475, 1.8498284768002864, -0.10574997923670207, 0.08507940961941553], 270.0, 570.0),
+        'cp': ([7.438521246746171, 0.7568235858219416, 0.3919326520804333, -0.7272723767225213, 0.3311401092053694, -0.009213025125749815], 270.0, 570.0),
+    },
+    'hydrogen_sulfide': {
+        'MW': 34.08088,
+        'mu': ([-11.31690162240523, 1.0539994933014352, -0.08655242823381651, -0.030584439772528314], 220.0, 760.0),
+        'k': ([-4.137370125153786, 1.2650104050212132, 0.0020117210542372047, -0.03625457435226848], 220.0, 760.0),
+        'cp': ([6.921957034210231, 0.052790908932146136, 0.2375308184935152, -0.14624141035464833, 0.12033242867697445, -0.04759175173654213], 220.0, 760.0),
+    },
     'air': {
         'MW': 28.9585,
         'mu': ([-10.89971381176633, 0.7711284375857248, -0.100999503095488, 0.016381499844402677], 223.0, 1273.0),
@@ -155,10 +195,19 @@ _ALIASES = {
     "n2": "nitrogen", "o2": "oxygen", "ar": "argon", "co2": "carbon_dioxide",
     "co": "carbon_monoxide", "ch4": "methane", "h2": "hydrogen", "he": "helium",
     "h2o": "water", "steam": "water", "water_vapor": "water", "water_vapour": "water",
+    "c2h6": "ethane", "c3h8": "propane", "n-butane": "n_butane", "butane": "n_butane",
+    "nc4h10": "n_butane", "i-butane": "isobutane", "i_butane": "isobutane",
+    "ic4h10": "isobutane", "h2s": "hydrogen_sulfide",
 }
 
 _SOURCE = {
     "air": "Engineering ToolBox dry-air tables (mu, k); NIST WebBook N2/O2/Ar mixture (cp)",
+    "ethane": "CoolProp: Friend et al. 1991 (mu, k); Buecker & Wagner 2006 EOS (cp)",
+    "propane": "CoolProp: Vogel et al. 1998 (mu), Marsh et al. 2002 (k); Lemmon et al. 2009 EOS (cp)",
+    "n_butane": "CoolProp: Vogel et al. 1999 (mu), Perkins et al. 2002 (k); Buecker & Wagner 2006 EOS (cp)",
+    "isobutane": "CoolProp: Vogel et al. 2000 (mu), Perkins et al. 2002 (k); Buecker & Wagner 2006 EOS (cp)",
+    "hydrogen_sulfide": ("CoolProp: Quinones-Cisneros et al. 2012 (mu); Chung et al. 1988 estimate (k, "
+                         "about 5-8 %); Lemmon & Span 2006 EOS (cp)"),
 }
 
 # White, Viscous Fluid Flow, 3e (McGraw-Hill 2006), Tables 1-2 (viscosity)
@@ -407,6 +456,13 @@ GAS_CRITICAL = {
     "hydrogen": {"Tc": 33.19, "Pc": 13.13, "Vc": 64.14, "Zc": 0.305, "omega": -0.216},
     "helium": {"Tc": 5.19, "Pc": 2.27, "Vc": 57.30, "Zc": 0.302, "omega": -0.390},
     "water": {"Tc": 647.14, "Pc": 220.64, "Vc": 55.95, "Zc": 0.229, "omega": 0.344},
+    # Critical point and acentric factor of the reference EOS behind the
+    # CoolProp tables (scripts/make_coolprop_gas_tables.py); Zc = Pc Vc / R Tc.
+    "ethane": {"Tc": 305.32, "Pc": 48.72, "Vc": 145.84, "Zc": 0.280, "omega": 0.099},
+    "propane": {"Tc": 369.89, "Pc": 42.51, "Vc": 200.00, "Zc": 0.276, "omega": 0.152},
+    "n_butane": {"Tc": 425.13, "Pc": 37.96, "Vc": 254.92, "Zc": 0.274, "omega": 0.201},
+    "isobutane": {"Tc": 407.81, "Pc": 36.29, "Vc": 257.75, "Zc": 0.276, "omega": 0.184},
+    "hydrogen_sulfide": {"Tc": 373.10, "Pc": 89.99, "Vc": 98.15, "Zc": 0.285, "omega": 0.100},
 }
 _AIR_Y = {"nitrogen": 0.7812, "oxygen": 0.2096, "argon": 0.0092}
 GAS_CRITICAL["air"] = {
