@@ -81,6 +81,7 @@ import optimistix as optx
 from jax import Array
 
 from difflow.flowsheet import Flowsheet, Unit
+from difflow.init_args import record_init_args
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream
 
@@ -181,6 +182,9 @@ def feeder_tree(network: PowerNetwork, root: str | None = None) -> FeederTree:
     return FeederTree(root=root, order=order, parent=parent, children=children)
 
 
+# records (network, root), so difflow.serialize can rebuild it: the root
+# is not kept, only the tree derived from it
+@record_init_args
 class RadialFeederFlowsheet:
     """Sequential-modular power flow for a radial network.
 

@@ -703,7 +703,7 @@ protein_a = registry.get('ProteinAChromatography')
 
 ## Saving and Loading Flowsheets
 
-A flowsheet is otherwise only expressible as Python: the code that builds it *is* the model. `difflow.serialize` gives it a file format, so a flowsheet can be saved, diffed, sent to a service, or read by something that never imported the module that built it.
+A flowsheet is otherwise only expressible as Python: the code that builds it *is* the model. `difflow.serialize` gives it a file format, so a model can be saved, diffed, sent to a service, or read by something that never imported the module that built it.
 
 ```python
 from difflow import serialize
@@ -712,9 +712,26 @@ serialize.save(fs, "plant.json")
 fs2 = serialize.load("plant.json")
 ```
 
-The round trip preserves the answer, not just the shape — a reloaded flowsheet solves to bit-identical results. `to_json`/`from_json` and `to_dict`/`from_dict` are available if you want the text or the data rather than a file.
+The round trip preserves the answer, not just the shape — a reloaded flowsheet solves to bit-identical results, and its gradients are the same. `to_json`/`from_json` and `to_dict`/`from_dict` are available if you want the text or the data rather than a file.
 
-The format records `format_version` (checked on read against `SUPPORTED_VERSIONS`) and the difflow version that wrote it (for provenance only). difflow writes version 2 and reads 1 and 2, so a file written before the editor existed keeps opening.
+`save`/`load` take any difflow model, not only a steady-state `Flowsheet`:
+
+| Model | What is written |
+|---|---|
+| `Flowsheet`, and a subclass such as `GasNetworkFlowsheet` | feeds, units, wiring, recycles; the subclass is kept, since it may solve differently |
+| `DynamicFlowsheet` | each unit as its class and constructor call, feeds (a constant stream or a function of time), wiring and connections |
+| `PowerNetwork`, `RadialFeederFlowsheet` | buses, branches, generators and loads in insertion order; a feeder as its constructor call |
+
+For a single object — a `Params`, a thermo, an equation of state, a `ReactionSet` — use `dumps_object`/`loads_object` or `save_object`/`load_object`, and `to_value`/`from_value` for the JSON-ready data:
+
+```python
+serialize.save_object(thermo, "thermo.json")
+thermo = serialize.load_object("thermo.json")
+```
+
+### Format versions
+
+Every file records `format_version` (checked on read against `SUPPORTED_VERSIONS`) and the difflow version that wrote it (for provenance only). difflow reads versions 1, 2 and 3, and writes the **lowest version that can hold the file**: a flowsheet using nothing newer than version 2 is still written as 2, so a release that reads only 2 keeps opening it. Version 3 is used only by files an older reader would *misread* rather than refuse — an equation of state, a `CubicThermo` or `ActivityThermo`, a function or class named by import path, a flowsheet subclass, a dynamic flowsheet or another model kind — and an older release refuses it by name.
 
 Version 2 added an optional top-level `view` block, which round-trips through `Flowsheet.view` and is read by nothing numeric:
 
@@ -726,25 +743,59 @@ fs.view = {"nodes": {"reactor": {"x": 260.0, "y": 40.0},
 
 It is where the editor keeps canvas positions, its code-context snippet and its planning selection, so a flowsheet laid out by hand opens the way it was left. Node keys follow the same vocabulary as `_apply_params`: a unit is its bare name, a feed is `feed:<stream>`. Nothing validates the contents, and `_apply_params` copies the block through, so a swept or optimized flowsheet keeps its layout.
 
-### What it can and cannot write
+### What it writes
 
-Round-tripping goes through the [operation registry](#operation-catalog): a unit is written as the name it is registered under and rebuilt by looking that name up. An **unregistered** operation is refused, because nothing would know how to rebuild it.
+Round-tripping goes through the [operation registry](#operation-catalog): a unit is written as the name it is registered under and rebuilt by looking that name up. A unit class that is not registered is written by its import path (`"mylab.units:Scale"`) — see [Your own code](#your-own-code) below.
 
-Parameters are written when they are *data* — numbers, strings, arrays, lists, dicts, nested `Params` dataclasses, and NamedTuples such as `SpeciesData`. A parameter holding a **callable** is refused rather than dropped:
+Values are written as *data*:
+
+- numbers, strings, arrays (including `inf`/`nan`, which plain JSON cannot hold), lists, dicts;
+- dataclasses such as `Params`, and NamedTuples such as `SpeciesData` — a field declared as a tuple comes back a tuple, so a reloaded object compares equal to the one written;
+- thermo and equations of state (below);
+- a function: one built from data by a factory such as `mass_action_kinetics` is written as that call; a module-level function, difflow's (`kinetic_fn=monod_kinetics`) or yours, is written by its import path;
+- any other object whose class either keeps every constructor argument under an attribute of the same name (`EquilibriumCurve`, `IdealGasSet`), or records its constructor call with `difflow.init_args.record_init_args` (the dynamic units, `RadialFeederFlowsheet`). An object rebuilt from its attributes is rebuilt once on write and must give back the same data, so a class whose attributes do not say how it was built is refused rather than written wrong.
+
+A **lambda or closure** has no data form and no import path, and is refused rather than dropped:
 
 ```
-SerializationError: unit 'reactor' field 'rate_fn' holds a callable ('rate_fn'),
-which cannot be written to a file. Build it from data instead ...
+SerializationError: unit 'reactor' field 'rate_fn' holds a callable ('<lambda>'),
+which cannot be written to a file: a lambda, a closure or a function defined in a
+script or notebook has no import path to be found again by. ...
 ```
 
-That is deliberate. A file that silently lost a reactor's rate law would reload into a different model that still looked plausible.
+That is deliberate. A file that silently lost a reactor's rate law would reload into a different model that still looked plausible. Pass such an object by name instead, with `refs=` on both save and load:
+
+```python
+serialize.save(fs, "plant.json", refs={"rate": rate})
+fs2 = serialize.load("plant.json", refs={"rate": rate})
+```
+
+A value traced by `jax.grad`, `jit` or `vmap` has no number yet, and is refused with a message saying so.
+
+### Your own code
+
+A function or class defined at the top level of a module of yours — a rate law, a `Params` dataclass, a unit class, a `Flowsheet` subclass — is written by its import path. Loading it imports that module, which runs its code, so a file is only allowed to do that when you say so:
+
+```python
+fs = serialize.load("plant.json")               # SerializationError: ... pass trust=True
+fs = serialize.load("plant.json", trust=True)   # imports mylab and rebuilds
+```
+
+Modules of difflow and its plugins are always allowed. Code defined in a script or a notebook (`__main__`) has no import path that would find it again in another session, so it is refused on write; move it into a module, or use `refs=`.
 
 ### Thermodynamics
 
-About half the core units need a `thermo` or `eos` object in the constructor, not just a `Params`. `IdealThermo` is written and rebuilt automatically, and so are the cubic equations of state `PengRobinson` and `SRK` — wherever they appear: `EOSFlash`'s required `eos`, `Flash(..., eos=...)`, or a `Params` field such as `CSTRParams.eos`. An EOS is written as what builds it, the `CriticalProperties` of each species and its `k_ij` in the form it was given (a `{(i, j): value}` dict travels as `[i, j, value]` triples, since JSON keys cannot be tuples). A subclass of either is not written as its base, since that would drop whatever it adds. Any other thermo is refused on write, and can be supplied on load instead:
+About half the core units need a `thermo` or `eos` object in the constructor, not just a `Params`. Written and rebuilt automatically, wherever they appear (a constructor argument or a `Params` field):
+
+- `IdealThermo`, as its species data;
+- `CubicThermo(ideal, eos)` and `ActivityThermo(ideal, activity_model)`, as the `IdealThermo` and the object that corrects it;
+- `PengRobinson` and `SRK`, as the `CriticalProperties` of each species and `k_ij` in the form it was given (a `{(i, j): value}` dict travels as `[i, j, value]` triples, since JSON keys cannot be tuples);
+- any thermo that is a dataclass (`IdealGasThermo`, `GibbsThermo`).
+
+A subclass of one of these is not written as its base, since that would drop whatever it adds. Any thermo the format cannot write can be supplied on load instead:
 
 ```python
-my_thermo = thermo   # any property package, e.g. a CubicThermo
+my_thermo = thermo   # any property package
 fs2 = serialize.load("plant.json", extras={"flash": {"thermo": my_thermo}})
 ```
 
@@ -764,7 +815,23 @@ serialize.from_json(serialize.to_json(gas_fs))   # ratio comes back as 1.3
 
 An argument that is *not* data — `Mixer(species_order)`, a `thermo` — still travels under `constructor`, and the two channels compose: `CompressorBoost(ratio, direction)` carries `ratio` by the first road and `direction` by the second.
 
-An *optional* constructor argument is written when it was set away from its default — `Mixer(species, thermo)`, `CSTR(params, thermo, mode="adiabatic")` — and left out when it was not. It is read off the unit by the attribute of the same name, so a unit that normalises a default it was given (`TFF` stores `rejection=None` as `{}`) writes that normalised value; it reloads to the same unit. Dropping it would be quietly wrong: `Mixer(species)` mixes temperatures without an enthalpy balance, so the reloaded flowsheet would solve to a different answer. An optional argument the format cannot hold (a thermo other than `IdealThermo`, a hand-written `bpr_fn`) raises `SerializationWarning` rather than refusing the whole file, and the unit reloads with the default unless you pass it back with `extras=`. The editor keeps these arguments, too, when you change a parameter of the unit.
+An *optional* constructor argument is written when it was set away from its default — `Mixer(species, thermo)`, `CSTR(params, thermo, mode="adiabatic")` — and left out when it was not. It is read off the unit by the attribute of the same name, so a unit that normalises a default it was given (`TFF` stores `rejection=None` as `{}`) writes that normalised value; it reloads to the same unit. Dropping it would be quietly wrong: `Mixer(species)` mixes temperatures without an enthalpy balance, so the reloaded flowsheet would solve to a different answer. An optional argument the format cannot hold (a lambda, an unsupported thermo) raises `SerializationWarning` rather than refusing the whole file, and the unit reloads with the default unless you pass it back with `extras=`. The editor keeps these arguments, too, when you change a parameter of the unit.
+
+### Saved results
+
+A solve's streams can be kept with the model, to inspect without solving again and to start the next solve where this one finished:
+
+```python
+streams = fs.solve()
+serialize.save(fs, "plant.json", results=streams)
+
+fs = serialize.load("plant.json")
+fs.saved_results["product"]          # the saved stream
+fs.saved_solve_info["converged"]     # what the solve reported
+streams = fs.solve(tear_initial=serialize.warm_start(fs))
+```
+
+`warm_start` returns the saved value of every tear stream, ready for `tear_initial`. Nothing is warm-started unless you ask: a solve never silently starts from a file's numbers. An older reader ignores the `results` block, so saving results does not raise the format version.
 
 ---
 
@@ -799,11 +866,11 @@ fs.add_feed('feed', make_stream({'A': 1.0}, T=350.0, P=101325.0))
 fs.add_unit(Unit('reactor', CSTR(CSTRParams(**kinetics_reactor.params_kwargs(), V=1.0, ...)), ['feed'], ['out']))
 ```
 
-A data-built rate law is **hoisted** into its own statement and splatted back rather than inlined, which keeps the reactor to one readable line and avoids repeating the arrays the factory derives anyway. Thermo is hoisted the same way, and written as a `get_species_data` expression when every species is in the database.
+A data-built rate law is **hoisted** into its own statement and splatted back rather than inlined, which keeps the reactor to one readable line and avoids repeating the arrays the factory derives anyway. Thermo is hoisted the same way, and written as a `get_species_data` expression when every species is in the database *and* its data is the database's (an edited `SpeciesData` is written out in full); an equation of state likewise as `get_critical_props`.
 
-Running the generated script rebuilds a flowsheet that solves to bit-identical results. A plugin unit is imported from its plugin (`from difflow_gas import GasPipe`), matched by class rather than by name, since some names are shared with core (the gas `Compressor` is not `difflow.Compressor`). Every example flowsheet bundled with the editor round-trips through its generated script.
+Running the generated script rebuilds a flowsheet that solves to bit-identical results. A plugin unit is imported from its plugin (`from difflow_gas import GasPipe`), and your own functions and classes from your module, matched by class rather than by name, since some names are shared with core (the gas `Compressor` is not `difflow.Compressor`). Every example flowsheet bundled with the editor round-trips through its generated script.
 
-`codegen` refuses exactly what `serialize` refuses, for the same reason: an unregistered operation, and a callable that does not record how it was built. A generated script that quietly dropped a rate law would still run, and would be a different model.
+`codegen` writes steady-state flowsheets, and refuses exactly what `serialize` refuses, for the same reason: a callable with no data form and no import path. A generated script that quietly dropped a rate law would still run, and would be a different model. A `DynamicFlowsheet` or power network is saved with `serialize.save`.
 
 ---
 

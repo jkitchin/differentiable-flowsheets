@@ -169,14 +169,15 @@ class TestRefusals:
         with pytest.raises(SerializationError, match="callable"):
             serialize.to_json(fs)
 
-    def test_an_unregistered_operation_is_refused(self):
+    def test_an_unregistered_unimportable_operation_is_refused(self):
+        """Local to a function: neither registered nor importable by name."""
         class HomeMadeUnit:
             def __init__(self):
                 self.params = None
 
         fs = Flowsheet(species_order=SPECIES)
         fs.add_unit(Unit("mystery", HomeMadeUnit(), ["feed"], ["out"]))
-        with pytest.raises(SerializationError, match="not in the operation registry"):
+        with pytest.raises(SerializationError, match="neither in the operation registry nor importable"):
             serialize.to_json(fs)
 
     def test_a_future_format_version_is_refused(self, flowsheet):
