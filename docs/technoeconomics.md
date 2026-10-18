@@ -151,6 +151,21 @@ An area optimizer working below about 22 m² will move toward the minimum, and
 | `EVAPORATOR_COSTS` | `agitated_film` | log_quadratic | 5.0, 0.149, -0.0134 | 0.5–5 m² | 2001 | Turton et al. 5e Table A.1: evaporator, agitated film (scraped wall) |
 | `EVAPORATOR_COSTS` | `short_tube` | log_quadratic | 5.2366, -0.6572, 0.35 | 10–100 m² | 2001 | Turton et al. 5e Table A.1: evaporator, short tube |
 | `EVAPORATOR_COSTS` | `long_tube` | log_quadratic | 4.642, 0.3698, 0.0025 | 100–10000 m² | 2001 | Turton et al. 5e Table A.1: evaporator, long tube |
+| `SEPARATOR_COSTS` | `filter_press` | log_quadratic | 4.2756, 0.352, 0.0714 | 0.5–80 m² | 2001 | Turton et al. 5e Table A.1: plate and frame filter |
+| `SEPARATOR_COSTS` | `filter_leaf` | log_quadratic | 3.8187, 0.6235, 0.0176 | 0.6–235 m² | 2001 | Turton et al. 5e Table A.1: leaf filter |
+| `SEPARATOR_COSTS` | `filter_cartridge` | log_quadratic | 3.2107, 0.7597, 0.0027 | 15–200 m² | 2001 | Turton et al. 5e Table A.1: cartridge filter |
+| `SEPARATOR_COSTS` | `filter_gravity` | log_quadratic | 4.2756, 0.352, 0.0714 | 0.5–80 m² | 2001 | Turton et al. 5e Table A.1: gravity filter |
+| `SEPARATOR_COSTS` | `filter_pan` | log_quadratic | 4.8123, 0.2858, 0.042 | 0.9–300 m² | 2001 | Turton et al. 5e Table A.1: pan filter |
+| `SEPARATOR_COSTS` | `filter_table` | log_quadratic | 5.1055, 0.4999, 0.0001 | 0.9–115 m² | 2001 | Turton et al. 5e Table A.1: table filter |
+| `SEPARATOR_COSTS` | `filter_tube` | log_quadratic | 5.1055, 0.4999, 0.0001 | 0.9–115 m² | 2001 | Turton et al. 5e Table A.1: tube filter |
+| `DRYER_COSTS` | `rotary_direct` | log_quadratic | 3.5645, 1.1118, -0.0777 | 5–100 m² | 2001 | Turton et al. 5e Table A.1: rotary dryer, gas fired (direct heat) |
+| `DRYER_COSTS` | `drum` | log_quadratic | 4.5472, 0.2731, 0.134 | 0.5–50 m² | 2001 | Turton et al. 5e Table A.1: drum dryer |
+| `DRYER_COSTS` | `tray` | log_quadratic | 3.6951, 0.5442, -0.1248 | 1.8–20 m² | 2001 | Turton et al. 5e Table A.1: tray dryer |
+| `DRYER_COSTS` | `spray` | power_law | 410000, 2200, 0.7 | 400–4000 kg/h (water evaporated) | 2010 | Towler & Sinnott 2e Table 7.2: spray dryer, evaporation rate |
+| `CRYSTALLIZER_COSTS` | `forced_circulation` | power_law | 0, 41793.7, 0.56 | 9.07185–907.185 t/day (crystals) | 2013 | Seider et al. 4e Table 16.32: forced-circulation continuous evaporative crystallizer |
+| `CRYSTALLIZER_COSTS` | `draft_tube_baffled` | power_law | 0, 34004, 0.63 | 9.07185–226.796 t/day (crystals) | 2013 | Seider et al. 4e Table 16.32: draft-tube-baffled continuous evaporative crystallizer |
+| `CRYSTALLIZER_COSTS` | `batch` | log_quadratic | 4.5097, 0.1731, 0.1344 | 1.5–30 m³ | 2001 | Turton et al. 5e Table A.1: batch crystallizer |
+| `COOLING_TOWER_COSTS` | `field_assembled` | power_law | 170000, 1500, 0.9 | 100–10000 L/s (circulating water) | 2010 | Towler & Sinnott 2e Table 7.2: cooling tower and pumps, field assembly |
 
 Outside the valid size range a correlation is an extrapolation.
 `validate_cost_params(params, size)` flags that case. It also flags a local
@@ -205,6 +220,50 @@ from difflow.economics.capital import pump_cost, compressor_cost
 pump = pump_cost(power=10.0, pump_type='centrifugal_single')
 comp = compressor_cost(power=500.0, compressor_type='centrifugal')
 ```
+
+**Dryers, crystallizers, filter presses and cooling towers** (issue #451):
+
+```python
+from difflow.economics import (cooling_tower_cost, crystallizer_cost,
+                               dryer_cost, separator_cost)
+
+dryer = dryer_cost(20.0, dryer_type='drum')                    # m² of drum area
+spray = dryer_cost(1000.0, dryer_type='spray')                 # kg/h water evaporated
+fc = crystallizer_cost(100.0, crystallizer_type='forced_circulation')  # t crystals/day
+batch = crystallizer_cost(10.0, crystallizer_type='batch')     # m³
+press = separator_cost(20.0, separator_type='filter_press')    # m² filter area
+tower = cooling_tower_cost(1000.0)                             # L/s circulating water
+```
+
+- `dryer_cost(size, dryer_type="rotary_direct", target_year)`: `rotary_direct`
+  (gas fired, direct heat, 5–100 m²), `drum` (0.5–50 m²) and `tray`
+  (1.8–20 m²) are Turton et al. 5e Table A.1 (2001, CEPCI 397); `spray` is
+  Towler & Sinnott 2e Table 7.2 (January 2010), $C = 410{,}000 + 2{,}200\,S^{0.7}$
+  with $S$ the water evaporation rate, 400–4000 kg/h.
+- `crystallizer_cost(size, crystallizer_type="forced_circulation", target_year)`:
+  `forced_circulation` and `draft_tube_baffled` (continuous evaporative) are
+  Seider et al. 4e Table 16.32 (2013, CE 567), $C = 39{,}575\,S^{0.56}$
+  (10–1000) and $C = 31{,}980\,S^{0.63}$ (10–250) with $S$ in short tons of
+  crystals per day; difflow takes $S$ in metric t/day and converts the
+  coefficient. `batch` is Turton Table A.1, volume 1.5–30 m³.
+- `separator_cost(area, "filter_press")`: Turton Table A.1 plate-and-frame
+  filter, 0.5–80 m² of filter area. The same table gives `filter_leaf`,
+  `filter_cartridge`, `filter_gravity`, `filter_pan`, `filter_table` and
+  `filter_tube`. Turton prints the same constants for plate-and-frame and
+  gravity filters, for disc/drum and pan filters, and for table and tube
+  filters.
+- `cooling_tower_cost(water_flow, tower_type="field_assembled", target_year)`:
+  Towler & Sinnott 2e Table 7.2 "cooling tower & pumps", field assembly
+  (January 2010), $C = 170{,}000 + 1{,}500\,S^{0.9}$ with $S$ the
+  circulating-water flow, 100–10,000 L/s. The cost includes the pumps.
+
+All of these were read from secondary transcriptions of the textbook tables:
+the openpytea 3.2.0 correlation database (`openpytea/data/cost_correlations.csv`,
+<https://pypi.org/project/openpytea/>) and, for the Turton rows and the Seider
+crystallizer exponents and ranges, ecoana 0.0.1 (<https://pypi.org/project/ecoana/>).
+The Towler spray-dryer and cooling-tower rows have only the openpytea
+transcription. Each function raises `ValueError` for an unknown type and
+`CostRangeWarning` for a concrete size outside the valid range.
 
 ### Installation Factors
 

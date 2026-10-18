@@ -74,3 +74,44 @@ def test_params_validation():
         CoolingTowerParams(mode="sizing")
     with pytest.raises(ValueError):
         CoolingTowerParams(quadrature="simpson")
+
+
+def test_fan_outputs_absent_by_default():
+    info = tower()(water(), T_wb=T_WB)[2]
+    assert "fan_power" not in info and "fill_pressure_drop" not in info
+
+
+@pytest.mark.parametrize("kw", [
+    dict(fill_pressure_drop=150.0),
+    dict(fill_pressure_drop=150.0, other_pressure_drop=40.0, fan_location="forced"),
+    dict(fill_loss_coefficient=20.0, frontal_area=100.0, other_pressure_drop=50.0),
+    dict(mode="rating", T_out=None, KaV_L=1.4, fill_loss_coefficient=20.0, frontal_area=100.0),
+])
+def test_fan_outputs_smoke(kw):
+    info = tower(**kw)(water(), T_wb=T_WB)[2]
+    for k in ("fill_pressure_drop", "total_pressure_drop", "air_volumetric_flow", "fan_power"):
+        assert np.isfinite(float(info[k])) and float(info[k]) > 0.0
+
+
+def test_fan_power_grad_is_finite():
+    def fan(lg):
+        return tower(L_over_G=lg, fill_loss_coefficient=20.0, frontal_area=100.0)(water(), T_wb=T_WB)[2]["fan_power"]
+    assert np.isfinite(float(jax.grad(fan)(1.2)))
+    g = jax.grad(lambda dp: tower(fill_pressure_drop=dp)(water(), T_wb=T_WB)[2]["fan_power"])(150.0)
+    assert np.isfinite(float(g))
+
+
+@pytest.mark.parametrize("kw, match", [
+    (dict(fill_pressure_drop=100.0, fill_loss_coefficient=10.0, frontal_area=50.0), "not both"),
+    (dict(fill_loss_coefficient=10.0), "frontal_area"),
+    (dict(fill_pressure_drop=-1.0), "fill_pressure_drop"),
+    (dict(fill_loss_coefficient=-1.0, frontal_area=50.0), "fill_loss_coefficient"),
+    (dict(other_pressure_drop=-1.0), "other_pressure_drop"),
+    (dict(frontal_area=0.0), "frontal_area"),
+    (dict(fan_efficiency=0.0), "fan_efficiency"),
+    (dict(fan_efficiency=1.5), "fan_efficiency"),
+    (dict(fan_location="axial"), "fan_location"),
+])
+def test_fan_params_validation(kw, match):
+    with pytest.raises(ValueError, match=match):
+        CoolingTowerParams(**kw)

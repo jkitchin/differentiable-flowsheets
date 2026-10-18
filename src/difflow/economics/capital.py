@@ -288,6 +288,138 @@ SEPARATOR_COSTS = {
         base_year=2001, form="log_quadratic",
         source=TURTON + ': tower shell (column internals not included)',
     ),
+    # Filters, Turton et al. 5e Table A.1 (2001 basis, CEPCI 397), size = filter
+    # area in m². Read from two secondary transcriptions that agree to every
+    # digit: openpytea 3.2.0 ``openpytea/data/cost_correlations.csv``
+    # (https://pypi.org/project/openpytea/) and ecoana 0.0.1
+    # ``ecoana/MoLib_EQP_Turton.py`` (https://pypi.org/project/ecoana/). Turton
+    # prints identical constants for plate-and-frame and gravity filters, for
+    # disc/drum and pan filters, and for table and tube filters.
+    "filter_press": CostParams(
+        a=4.2756, b=0.3520, n=0.0714, S_min=0.5, S_max=80.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': plate and frame filter',
+    ),
+    "filter_leaf": CostParams(
+        a=3.8187, b=0.6235, n=0.0176, S_min=0.6, S_max=235.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': leaf filter',
+    ),
+    "filter_cartridge": CostParams(
+        a=3.2107, b=0.7597, n=0.0027, S_min=15.0, S_max=200.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': cartridge filter',
+    ),
+    "filter_gravity": CostParams(
+        a=4.2756, b=0.3520, n=0.0714, S_min=0.5, S_max=80.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': gravity filter',
+    ),
+    "filter_pan": CostParams(
+        a=4.8123, b=0.2858, n=0.0420, S_min=0.9, S_max=300.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': pan filter',
+    ),
+    "filter_table": CostParams(
+        a=5.1055, b=0.4999, n=0.0001, S_min=0.9, S_max=115.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': table filter',
+    ),
+    "filter_tube": CostParams(
+        a=5.1055, b=0.4999, n=0.0001, S_min=0.9, S_max=115.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': tube filter',
+    ),
+}
+
+
+# Dryers (issue #451). Size basis differs by type; see S_units.
+# - rotary_direct, drum, tray: Turton et al. 5e Table A.1 (2001 basis, CEPCI
+#   397), area in m². Read from the openpytea 3.2.0 and ecoana 0.0.1
+#   transcriptions named above, which agree to every digit.
+# - spray: Towler & Sinnott 2e Table 7.2 (January 2010 US Gulf Coast basis),
+#   C = a + b S^n with S = evaporation rate in kg/h. Read from the
+#   openpytea 3.2.0 transcription only (row ``spray_dryer_towler_2010``); no
+#   second reproduction of this row was found.
+DRYER_COSTS = {
+    "rotary_direct": CostParams(
+        a=3.5645, b=1.1118, n=-0.0777, S_min=5.0, S_max=100.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': rotary dryer, gas fired (direct heat)',
+    ),
+    "drum": CostParams(
+        a=4.5472, b=0.2731, n=0.1340, S_min=0.5, S_max=50.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': drum dryer',
+    ),
+    "tray": CostParams(
+        a=3.6951, b=0.5442, n=-0.1248, S_min=1.8, S_max=20.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': tray dryer',
+    ),
+    "spray": CostParams(
+        a=410000.0, b=2200.0, n=0.7, S_min=400.0, S_max=4000.0,
+        S_units="kg/h (water evaporated)", base_year=2010,
+        source=TOWLER + ': spray dryer, evaporation rate',
+    ),
+}
+
+
+# Crystallizers (issue #451).
+# - batch: Turton et al. 5e Table A.1 (2001 basis, CEPCI 397), volume in m³;
+#   openpytea 3.2.0 and ecoana 0.0.1 transcriptions agree.
+# - forced_circulation, draft_tube_baffled: Seider, Lewin, Seader, Widagdo,
+#   Gani and Ng, *Product and Process Design Principles*, 4th ed. (2016),
+#   Table 16.32 (CE index 567, 2013), continuous evaporative crystallizers,
+#   C = b S^n with S in (short) tons of crystals per day: FC b = 39,575,
+#   n = 0.56, 10-1000 ton/day; DTB b = 31,980, n = 0.63, 10-250 ton/day. Read
+#   from the openpytea 3.2.0 transcription; ecoana's transcription of the 3rd
+#   edition has the same exponents and ranges (b = 27,500 and 22,200, both
+#   1.44x lower, i.e. one uniform re-escalation between editions). Stored here
+#   with S in metric tonnes of crystals per day: b_SI = b (1/0.90718474)^n and
+#   the range scaled by 0.90718474 t per short ton.
+_SHORT_TON_T = 0.90718474
+SEIDER_TABLE = "Seider et al. 4e Table 16.32"
+
+
+def _seider_crystallizer(b_per_short_ton, n, s_lo_ton, s_hi_ton, label):
+    return CostParams(
+        a=0.0, b=b_per_short_ton * (1.0 / _SHORT_TON_T) ** n, n=n,
+        S_min=s_lo_ton * _SHORT_TON_T, S_max=s_hi_ton * _SHORT_TON_T,
+        S_units="t/day (crystals)", base_year=2013,
+        source=SEIDER_TABLE + ": " + label,
+    )
+
+
+CRYSTALLIZER_COSTS = {
+    "forced_circulation": _seider_crystallizer(
+        39575.0, 0.56, 10.0, 1000.0,
+        "forced-circulation continuous evaporative crystallizer"),
+    "draft_tube_baffled": _seider_crystallizer(
+        31980.0, 0.63, 10.0, 250.0,
+        "draft-tube-baffled continuous evaporative crystallizer"),
+    "batch": CostParams(
+        a=4.5097, b=0.1731, n=0.1344, S_min=1.5, S_max=30.0, S_units="m³",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': batch crystallizer',
+    ),
+}
+
+
+# Cooling towers (issue #451). Towler & Sinnott 2e Table 7.2 (January 2010
+# US Gulf Coast basis), "cooling tower & pumps", field assembly,
+# C = a + b S^n with S = circulating water flow in L/s, 100-10,000 L/s. The
+# cost includes the circulating pumps. Read from the openpytea 3.2.0
+# transcription only (row ``cooling_tower_n_pumps_towler_2010``; openpytea
+# links this table to the 3rd-ed. DOI 10.1016/B978-0-12-821179-3.00007-8 but
+# states the 2010 cost year). Neither transcription of Turton Table A.1 has a
+# cooling-tower row, and no second reproduction of this row was found.
+COOLING_TOWER_COSTS = {
+    "field_assembled": CostParams(
+        a=170000.0, b=1500.0, n=0.9, S_min=100.0, S_max=10000.0,
+        S_units="L/s (circulating water)", base_year=2010,
+        source=TOWLER + ': cooling tower and pumps, field assembly',
+    ),
 }
 
 
@@ -608,7 +740,8 @@ def separator_cost(
     Args:
         size: Size parameter: m³ for a mixer-settler or extraction column,
             bowl diameter in m for a disk centrifuge, filter area in m² for a
-            rotary filter (see ``S_units`` on each entry)
+            rotary filter, a plate-and-frame filter press (``filter_press``)
+            and the other ``filter_*`` entries (see ``S_units`` on each entry)
         separator_type: Type of separator (see SEPARATOR_COSTS)
         target_year: Cost basis year
 
@@ -619,6 +752,123 @@ def separator_cost(
         raise ValueError(f"Unknown separator type: {separator_type}. "
                         f"Available: {list(SEPARATOR_COSTS.keys())}")
     return equipment_cost(size, SEPARATOR_COSTS[separator_type], target_year)
+
+
+def dryer_cost(
+    size: Array,
+    dryer_type: str = "rotary_direct",
+    target_year: int = DEFAULT_CURRENT_YEAR,
+) -> Array:
+    """Calculate dryer purchased equipment cost.
+
+    Sources (see :data:`DRYER_COSTS`): ``rotary_direct`` (gas-fired, direct
+    heat), ``drum`` and ``tray`` are Turton et al., *Analysis, Synthesis, and
+    Design of Chemical Processes*, 5th ed. (2018), Table A.1, 2001 basis
+    (CEPCI 397), size = area in m² (rotary 5-100, drum 0.5-50, tray
+    1.8-20 m²). ``spray`` is Towler & Sinnott, *Chemical Engineering Design*,
+    2nd ed. (2012), Table 7.2, January 2010 basis, size = water evaporation
+    rate in kg/h (400-4000 kg/h). All constants were read from secondary
+    transcriptions: openpytea 3.2.0 ``data/cost_correlations.csv``
+    (https://pypi.org/project/openpytea/), with the Turton rows cross-checked
+    against ecoana 0.0.1 (https://pypi.org/project/ecoana/).
+
+    Args:
+        size: Dryer area (m²), or evaporation rate (kg/h) for ``spray``
+        dryer_type: Type of dryer (see DRYER_COSTS)
+        target_year: Cost basis year
+
+    Returns:
+        Purchased equipment cost ($)
+
+    Warns:
+        CostRangeWarning: a concrete ``size`` outside the entry's range.
+
+    Example:
+        >>> c = dryer_cost(20.0, "drum", target_year=2001)
+        >>> bool(c > 0)
+        True
+    """
+    if dryer_type not in DRYER_COSTS:
+        raise ValueError(f"Unknown dryer type: {dryer_type}. "
+                        f"Available: {list(DRYER_COSTS.keys())}")
+    return equipment_cost(size, DRYER_COSTS[dryer_type], target_year)
+
+
+def crystallizer_cost(
+    size: Array,
+    crystallizer_type: str = "forced_circulation",
+    target_year: int = DEFAULT_CURRENT_YEAR,
+) -> Array:
+    """Calculate crystallizer purchased equipment cost.
+
+    Sources (see :data:`CRYSTALLIZER_COSTS`): ``forced_circulation`` and
+    ``draft_tube_baffled`` (continuous evaporative) are Seider et al.,
+    *Product and Process Design Principles*, 4th ed. (2016), Table 16.32,
+    2013 basis (CE index 567), ``C = b S^n`` on crystal production rate,
+    converted here from short tons/day to metric t/day (FC 9.07-907 t/day,
+    DTB 9.07-227 t/day). ``batch`` is Turton et al. 5th ed. Table A.1, 2001
+    basis (CEPCI 397), size = volume in m³ (1.5-30 m³). Constants were read
+    from openpytea 3.2.0 ``data/cost_correlations.csv``
+    (https://pypi.org/project/openpytea/), cross-checked against ecoana 0.0.1
+    (https://pypi.org/project/ecoana/).
+
+    Args:
+        size: Crystal production rate (t/day) for the continuous types, or
+            crystallizer volume (m³) for ``batch``
+        crystallizer_type: Type of crystallizer (see CRYSTALLIZER_COSTS)
+        target_year: Cost basis year
+
+    Returns:
+        Purchased equipment cost ($)
+
+    Warns:
+        CostRangeWarning: a concrete ``size`` outside the entry's range.
+
+    Example:
+        >>> c = crystallizer_cost(100.0, "forced_circulation", target_year=2013)
+        >>> bool(c > 0)
+        True
+    """
+    if crystallizer_type not in CRYSTALLIZER_COSTS:
+        raise ValueError(f"Unknown crystallizer type: {crystallizer_type}. "
+                        f"Available: {list(CRYSTALLIZER_COSTS.keys())}")
+    return equipment_cost(size, CRYSTALLIZER_COSTS[crystallizer_type], target_year)
+
+
+def cooling_tower_cost(
+    water_flow: Array,
+    tower_type: str = "field_assembled",
+    target_year: int = DEFAULT_CURRENT_YEAR,
+) -> Array:
+    """Calculate cooling-tower purchased equipment cost (tower plus pumps).
+
+    Source: Towler & Sinnott, *Chemical Engineering Design*, 2nd ed. (2012),
+    Table 7.2, "cooling tower & pumps", field assembly, January 2010 US Gulf
+    Coast basis, ``C = 170,000 + 1,500 S^0.9`` with ``S`` the circulating
+    water flow in L/s, valid 100-10,000 L/s. Read from the openpytea 3.2.0
+    transcription (``data/cost_correlations.csv``,
+    https://pypi.org/project/openpytea/); no second reproduction was found.
+
+    Args:
+        water_flow: Circulating cooling-water flow (L/s; about kg/s)
+        tower_type: Type of cooling tower (see COOLING_TOWER_COSTS)
+        target_year: Cost basis year
+
+    Returns:
+        Purchased equipment cost ($)
+
+    Warns:
+        CostRangeWarning: a concrete ``water_flow`` outside 100-10,000 L/s.
+
+    Example:
+        >>> c = cooling_tower_cost(1000.0, target_year=2010)
+        >>> bool(c > 0)
+        True
+    """
+    if tower_type not in COOLING_TOWER_COSTS:
+        raise ValueError(f"Unknown cooling tower type: {tower_type}. "
+                        f"Available: {list(COOLING_TOWER_COSTS.keys())}")
+    return equipment_cost(water_flow, COOLING_TOWER_COSTS[tower_type], target_year)
 
 
 # =============================================================================

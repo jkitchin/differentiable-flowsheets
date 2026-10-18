@@ -55,6 +55,42 @@ The Lewis factor is 1; the air leaving is saturated at the exit enthalpy; the
 water flow is constant in the enthalpy balance (the evaporated water, about 1-2 %
 of ``L``, is neglected in ``h_a`` and added back in the loss bookkeeping). The
 Poppe method and the e-NTU model remove the last two and are not included.
+
+Air-side pressure drop and fan power
+------------------------------------
+The fan moves the air against the total air-side pressure drop, the fill plus
+the inlet louvres, rain zone, sprays, drift eliminator and stack::
+
+    dp_total = dp_fill + dp_other,        W_fan = V_dot dp_total / eta_fan
+
+where ``V_dot`` (m^3/s) is the volumetric air flow at the fan, ``G v`` with
+``v`` the humid volume (m^3/kg dry air) of the air the fan handles: the
+leaving air for an induced-draft fan (``fan_location="induced"``, the
+default), the entering air for a forced-draft one. ``W_fan`` is the air power
+``V_dot dp_total`` divided by the efficiency (shaft power for a fan
+efficiency, electrical power for an overall fan-motor-drive efficiency).
+
+The fill pressure drop is an input: either directly (``fill_pressure_drop``,
+Pa) or as a loss coefficient ``K_fill`` in velocity heads of the frontal air
+flow (``fill_loss_coefficient`` with ``frontal_area``)::
+
+    dp_fill = K_fill G_m^2 / (2 rho_in),   G_m = G (1 + W_in) / A_fr,   rho_in = (1 + W_in) / v_in
+
+which is only the definition of a loss coefficient: ``dp_fill`` scales as the
+square of the air rate, so the ``L/G`` trade-off (less air, a bigger fill)
+reaches the fan. ``K_fill`` comes from fill test data. No published fill
+correlation is built in. The intended one is the Kloppers & Kroger
+splash/trickle/film fill loss-coefficient correlation (Kloppers, J.C., Kroger,
+D.G., "Loss coefficient correlation for wet-cooling tower fills", Appl. Therm.
+Eng. 23(17), 2201-2211, 2003, doi:10.1016/S1359-4311(03)00201-1; also Kroger,
+*Air-Cooled Heat Exchangers and Cooling Towers*, PennWell, 2004), but its
+equation and constants could not be read when this was written (neither the
+paper nor the book was reachable), and this module takes no constant from
+memory. The default ``fan_efficiency = 0.65`` is the design assumption of the
+difflow book (Ch. 18, sec18-design), not a vendor or literature value; set it
+from the fan curve. Without ``fill_pressure_drop``, ``fill_loss_coefficient``
+or ``other_pressure_drop`` the unit reports no pressure drop or fan power, as
+before.
 """
 
 from __future__ import annotations
@@ -76,6 +112,7 @@ from difflow.psychrometrics import (
     air_stream_from_state,
     dry_air_flow,
     humid_enthalpy,
+    humid_volume,
     saturation_enthalpy,
     saturation_humidity_ratio,
     state,
@@ -180,6 +217,33 @@ def saturation_temperature_from_enthalpy(h: Array | float, P: Array | float = P_
     return _solve_monotone(lambda T: saturation_enthalpy(T, P) - h, 200.0, 370.0)
 
 
+def _fan(p, G, W_in, v_in, v_out) -> dict:
+    """Air-side pressure drop and fan power; empty when no pressure drop (or area) is given."""
+    out = {}
+    if p.frontal_area is not None:
+        A = _f(p.frontal_area)
+        out["air_face_velocity"] = G * v_in / A
+        out["air_mass_velocity"] = G * (1.0 + W_in) / A
+    if p.fill_pressure_drop is None and p.fill_loss_coefficient is None and p.other_pressure_drop is None:
+        return out
+    if p.fill_pressure_drop is not None:
+        dp_fill = _f(p.fill_pressure_drop)
+    elif p.fill_loss_coefficient is not None:
+        rho_in = (1.0 + W_in) / v_in
+        dp_fill = _f(p.fill_loss_coefficient) * out["air_mass_velocity"] ** 2 / (2.0 * rho_in)
+    else:
+        dp_fill = _f(0.0)
+    dp_total = dp_fill + _f(0.0 if p.other_pressure_drop is None else p.other_pressure_drop)
+    V_dot = G * (v_out if p.fan_location == "induced" else v_in)
+    out.update({
+        "fill_pressure_drop": dp_fill,
+        "total_pressure_drop": dp_total,
+        "air_volumetric_flow": V_dot,
+        "fan_power": V_dot * dp_total / _f(p.fan_efficiency),
+    })
+    return out
+
+
 # =============================================================================
 # The unit
 # =============================================================================
@@ -219,6 +283,24 @@ class CoolingTowerParams(ParamsMixin):
             inlet flow, i.e. the stream is the basin pump suction after make-up
             and blowdown; ``False``: the cold water leaving the fill, short by
             the evaporation and drift.
+        fill_pressure_drop: Air-side pressure drop through the fill (Pa), given
+            directly (from fill test data or a vendor curve). ``None``
+            (default): computed from ``fill_loss_coefficient``, or absent.
+        fill_loss_coefficient: Fill loss coefficient ``K_fill`` (-, velocity
+            heads of the frontal air flow at the inlet density):
+            ``dp_fill = K_fill G_m^2 / (2 rho_in)``, ``G_m = G (1 + W_in) / A_fr``.
+            Needs ``frontal_area``; exclusive with ``fill_pressure_drop``.
+        frontal_area: Fill plan (frontal) area ``A_fr`` (m^2), for the loss
+            coefficient and the reported face velocity and mass velocity.
+        other_pressure_drop: The rest of the air-side pressure drop (Pa): inlet
+            louvres, rain zone, sprays, drift eliminator, stack. ``None``
+            (default) counts as 0 when a fill pressure drop is given.
+        fan_efficiency: Fan efficiency (-), ``0 < eta <= 1``; the fan power is
+            ``V_dot dp_total / eta``. The default 0.65 is the difflow book's
+            Ch. 18 design assumption, not a sourced value.
+        fan_location: ``"induced"`` (default; the fan at the top handles the
+            leaving air) or ``"forced"`` (the fan at the inlet handles the
+            entering air); sets the volumetric flow ``V_dot = G v``.
     """
 
     mode: Literal["design", "rating"] = "design"
@@ -236,12 +318,37 @@ class CoolingTowerParams(ParamsMixin):
     cycles_of_concentration: float = 4.0
     cp_water: float = 4186.0
     makeup_in_outlet: bool = True
+    fill_pressure_drop: float | None = None
+    fill_loss_coefficient: float | None = None
+    frontal_area: float | None = None
+    other_pressure_drop: float | None = None
+    fan_efficiency: float = 0.65
+    fan_location: Literal["induced", "forced"] = "induced"
 
     def __post_init__(self):
         if self.mode not in ("design", "rating"):
             raise ValueError("mode must be 'design' or 'rating'")
         if self.quadrature not in ("cti", "gauss"):
             raise ValueError("quadrature must be 'cti' or 'gauss'")
+        if self.fan_location not in ("induced", "forced"):
+            raise ValueError("fan_location must be 'induced' or 'forced'")
+        if self.fill_pressure_drop is not None and self.fill_loss_coefficient is not None:
+            raise ValueError("give fill_pressure_drop or fill_loss_coefficient, not both")
+        if self.fill_loss_coefficient is not None and self.frontal_area is None:
+            raise ValueError("fill_loss_coefficient needs frontal_area")
+        # value checks on concrete numbers only (a value traced under jax.grad is not checked)
+        for name in ("fill_pressure_drop", "fill_loss_coefficient", "other_pressure_drop"):
+            x = getattr(self, name)
+            if _concrete_number(x) and float(x) < 0.0:
+                raise ValueError(f"{name} must be >= 0")
+        if _concrete_number(self.frontal_area) and float(self.frontal_area) <= 0.0:
+            raise ValueError("frontal_area must be > 0")
+        if _concrete_number(self.fan_efficiency) and not 0.0 < float(self.fan_efficiency) <= 1.0:
+            raise ValueError("fan_efficiency must be in (0, 1]")
+
+
+def _concrete_number(x) -> bool:
+    return isinstance(x, (int, float, np.floating, np.integer)) and not isinstance(x, bool)
 
 
 class CoolingTower:
@@ -260,12 +367,15 @@ class CoolingTower:
         r"h_a(T) = h_{a,in} + \frac{L}{G}\,c_{pw}\,(T - T_{out})",
         r"\frac{K a V}{L} \approx c_{pw}\,(T_{in} - T_{out})\,\frac14\sum_{i=1}^{4}\frac{1}{(h_s - h_a)_i},\quad x_i = 0.1,\,0.4,\,0.6,\,0.9\ \text{(CTI)}",
         r"E = G\,(W_{out} - W_{in}),\quad h_s(T_{air,out}) = h_{a,out},\qquad M = E + D + B = E\,\frac{C}{C-1}",
+        r"\Delta p_{fill} = K_{fill}\,\frac{G_m^2}{2\rho_{in}},\qquad \dot W_{fan} = \frac{G\,v\,(\Delta p_{fill} + \Delta p_{other})}{\eta_{fan}}",
     ]
     assumptions = [
         "Merkel: Lewis factor of 1, so sensible and latent transfer combine into one enthalpy driving force.",
         "The air leaves saturated; the evaporated water is neglected in the air enthalpy balance (Poppe's correction is not applied).",
         "Constant water specific heat and constant L/G through the fill; ideal-gas humid air (ASHRAE constants, no enhancement factor).",
-        "Counterflow fill; no fan, fill or spray pressure drop, no recirculation of exhaust air.",
+        "Counterflow fill; no recirculation of exhaust air. The air-side pressure drop is an input "
+        "(fill_pressure_drop, or a loss coefficient K_fill in velocity heads of the frontal flow, plus "
+        "other_pressure_drop); fan power = V_dot dp_total / eta_fan.",
         "Without an air stream the inlet air is taken to be saturated at the wet bulb.",
     ]
     references = [
@@ -278,12 +388,16 @@ class CoolingTower:
     parameter_symbols = {
         "L_over_G": "L/G", "KaV_L": "KaV/L", "Ka": "Ka", "V": "V", "T_out": r"T_{out}",
         "approach": r"\Delta T_{app}", "drift_fraction": "D/L", "cycles_of_concentration": "C",
-        "cp_water": r"c_{pw}",
+        "cp_water": r"c_{pw}", "fill_pressure_drop": r"\Delta p_{fill}",
+        "fill_loss_coefficient": r"K_{fill}", "frontal_area": r"A_{fr}",
+        "other_pressure_drop": r"\Delta p_{other}", "fan_efficiency": r"\eta_{fan}",
     }
     parameter_units = {
         "L_over_G": "kg/kg", "KaV_L": "-", "Ka": "kg/(m^3 s)", "V": "m^3", "fill_characteristic": "-",
         "T_out": "K", "approach": "K", "P": "Pa", "n_quad": "-", "drift_fraction": "-",
-        "cycles_of_concentration": "-", "cp_water": "J/(kg K)",
+        "cycles_of_concentration": "-", "cp_water": "J/(kg K)", "fill_pressure_drop": "Pa",
+        "fill_loss_coefficient": "-", "frontal_area": "m^2", "other_pressure_drop": "Pa",
+        "fan_efficiency": "-",
     }
     numerical_method = (
         "CTI four-point (or Gauss-Legendre) quadrature of the Merkel integral; rating by bisection on the "
@@ -315,7 +429,12 @@ class CoolingTower:
                 ``Q`` (W), ``L`` and ``G`` (kg/s), ``evaporation``, ``drift``,
                 ``blowdown``, ``makeup`` (kg/s), ``evaporation_fraction``,
                 ``air_out`` (state of the leaving air), ``V`` (m^3, when ``Ka``
-                is given).
+                is given). With a pressure drop given (``fill_pressure_drop``,
+                ``fill_loss_coefficient`` or ``other_pressure_drop``) also
+                ``fill_pressure_drop``, ``total_pressure_drop`` (Pa),
+                ``air_volumetric_flow`` (m^3/s at the fan) and ``fan_power``
+                (W); with ``frontal_area`` also ``air_face_velocity`` (m/s,
+                inlet air) and ``air_mass_velocity`` (kg/(m^2 s), moist air).
         """
         p = self.params
         rating = p.mode == "rating"
@@ -331,6 +450,7 @@ class CoolingTower:
             T_wb_v = st_in["T_wb"]
             h_ain = st_in["h"]
             W_in = st_in["W"]
+            v_in = st_in["v"]
         else:
             if T_wb is None:
                 raise ValueError("CoolingTower needs air_in or T_wb")
@@ -342,6 +462,7 @@ class CoolingTower:
             G = L / LG
             h_ain = saturation_enthalpy(T_wb_v, P)
             W_in = saturation_humidity_ratio(T_wb_v, P)
+            v_in = humid_volume(T_wb_v, W_in, P)
 
         extras = {}
 
@@ -407,6 +528,7 @@ class CoolingTower:
 
         if not rating and p.Ka is not None:
             extras["V"] = M_val * L / _f(p.Ka)
+        extras.update(_fan(p, G, W_in, v_in, st_out["v"]))
         approach = T_out - T_wb_v
         info = {
             "KaV_L": M_val,

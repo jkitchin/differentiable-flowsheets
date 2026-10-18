@@ -83,8 +83,24 @@ of crystallization evaporate the solvent. ``cp`` is a constant solution heat cap
 ``h_fg`` comes from :func:`difflow.water.water_latent_heat` and ``dH_c`` is the heat of
 crystallization released (J per kg of crystal, user data, default 0).
 
-Not modeled: size-dependent growth, fines destruction or classified product
-removal, agglomeration and breakage, polymorph kinetics, batch cooling profiles.
+Temperature: optionally ``k_g`` and ``k_b`` follow Arrhenius,
+``k(T) = k(T_ref) exp(-E/R (1/T - 1/T_ref))`` (:func:`arrhenius_factor`;
+``kinetics_Ea=[E_g, E_b]`` with ``kinetics_T_ref``); off by default (pure power
+laws in ``dC``, so ``dL_50/dT`` at fixed ``tau`` comes only through the
+solubility). No activation energy is built in.
+
+Fines destruction and classified product removal (optional; the R-z model of
+Randolph & Larson 1988, ch. 6): crystals below the fines cut ``L_F`` leave at
+``R`` times the product removal rate (the excess to a fines dissolver whose
+solute returns to the liquor) and those above ``L_P`` at ``z`` times it, so
+``G dn/dL = -h(L) n / tau`` with ``h = R, 1, z`` and the density is piecewise
+exponential with slopes ``-R/(G tau)``, ``-1/(G tau)``, ``-z/(G tau)``,
+continuous at the cuts (:func:`rz_distribution`, :func:`rz_moments`). The
+moments, the third-moment closure and ``L_50`` then use the piecewise density
+(the product's, weighted by the product removal ``h_p``).
+
+Not modeled: size-dependent growth, agglomeration and breakage, polymorph
+kinetics, batch cooling profiles, the duty of a fines dissolver.
 The reactive version is the REE precipitators (``difflow_ree``).
 
 Data caveat: **no solubility data, kinetic constant or hydrate transition
@@ -93,7 +109,8 @@ synthetic (labelled illustrative) or an explicitly flagged unverified recollecti
 
 References
 ----------
-- Randolph & Larson, Theory of Particulate Processes, 2nd ed. (1988) (MSMPR).
+- Randolph & Larson, Theory of Particulate Processes, 2nd ed. (1988) (MSMPR; ch. 6, the R-z
+  model of fines destruction and classified product removal).
 - Mullin, Crystallization, 4th ed. (2001).
 - Geankoplis, Transport Processes and Separation Process Principles, Sec. 12.11.
 - McCabe, Smith & Harriott, Unit Operations of Chemical Engineering, Ch. 27.
@@ -108,7 +125,7 @@ from typing import Literal
 
 import jax
 import jax.numpy as jnp
-from jax import Array
+from jax import Array, lax
 from jax.scipy.special import gammaln
 
 from difflow.params_mixin import ParamsMixin
@@ -474,19 +491,193 @@ def _pos_pow(x, p):
     return jnp.where(pos, safe ** p, 0.0)
 
 
-def growth_rate(delta_C, k_g, g) -> Array:
-    """Growth rate ``G = k_g dC^g`` (m/s); zero for ``dC <= 0``."""
-    return _f(k_g) * _pos_pow(_f(delta_C), _f(g))
+def growth_rate(delta_C, k_g, g, T=None, E_g=None, T_ref=None) -> Array:
+    """Growth rate ``G = k_g dC^g`` (m/s); zero for ``dC <= 0``.
+
+    With ``E_g`` (J/mol), ``T`` and ``T_ref`` (K), ``k_g`` is the value at ``T_ref``
+    and is scaled by :func:`arrhenius_factor`.
+    """
+    k = _f(k_g) if E_g is None else _f(k_g) * arrhenius_factor(T, E_g, T_ref)
+    return k * _pos_pow(_f(delta_C), _f(g))
 
 
-def nucleation_rate(delta_C, M_T, k_b, b, j) -> Array:
-    """Secondary nucleation ``B0 = k_b M_T^j dC^b`` (1/m^3/s); zero for ``dC <= 0``."""
-    return _f(k_b) * _pos_pow(_f(M_T), _f(j)) * _pos_pow(_f(delta_C), _f(b))
+def nucleation_rate(delta_C, M_T, k_b, b, j, T=None, E_b=None, T_ref=None) -> Array:
+    """Secondary nucleation ``B0 = k_b M_T^j dC^b`` (1/m^3/s); zero for ``dC <= 0``.
+
+    With ``E_b`` (J/mol), ``T`` and ``T_ref`` (K), ``k_b`` is the value at ``T_ref``
+    and is scaled by :func:`arrhenius_factor`.
+    """
+    k = _f(k_b) if E_b is None else _f(k_b) * arrhenius_factor(T, E_b, T_ref)
+    return k * _pos_pow(_f(M_T), _f(j)) * _pos_pow(_f(delta_C), _f(b))
+
+
+# =============================================================================
+# Temperature-dependent kinetics and the R-z (fines destruction / classified
+# product removal) population balance
+# =============================================================================
+
+R_GAS = 8.314462618  # J/(mol K)
+
+
+def arrhenius_factor(T, E, T_ref) -> Array:
+    """Arrhenius ratio ``k(T)/k(T_ref) = exp(-E/R (1/T - 1/T_ref))`` (``E`` in J/mol, ``T`` in K).
+
+    Multiplies the growth constant ``k_g`` and the nucleation constant ``k_b`` of
+    :func:`growth_rate` and :func:`nucleation_rate` when the crystallizer is given
+    ``kinetics_Ea``. No activation energy is built in: it is crystal-system data
+    (fitted, like ``k_g`` and ``k_b``, at more than one temperature).
+
+    Example:
+        >>> float(arrhenius_factor(300.0, 0.0, 310.0))
+        1.0
+    """
+    return jnp.exp(-_f(E) / R_GAS * (1.0 / _f(T) - 1.0 / _f(T_ref)))
+
+
+def _rz_segments(R, x_F, z, x_P):
+    """The three exponential pieces of the dimensionless R-z density ``n/n0`` in ``x = L/(G tau)``.
+
+    Each piece is ``(lo, log n(lo)/n0, slope s, product weight w)``: ``n = n(lo) exp(-s (x - lo))``
+    on ``[lo, next lo)``. ``w`` is the product-removal weight ``h_p`` (1 below ``x_P``, ``z``
+    above): the product stream carries ``h_p n``, the fines stream ``(R - 1) n`` below ``x_F``.
+    """
+    R, x_F, z, x_P = _f(R), _f(x_F), _f(z), _f(x_P)
+    ln_F = -R * x_F
+    ln_P = ln_F - (x_P - x_F)
+    one = jnp.ones_like(R)
+    return [(jnp.zeros_like(x_F), jnp.zeros_like(R), R, one),
+            (x_F, ln_F, one, one),
+            (x_P, ln_P, z, z)]
+
+
+def _upper_poly(k, x, s):
+    """``U_k(x, s) = sum_i k!/i! x^i / s^(k+1-i)``, so ``int_x^inf L^k e^{-s(L-x)} dL = U_k(x, s)``."""
+    out = math.factorial(k) / s ** (k + 1)
+    for i in range(1, k + 1):
+        out = out + math.factorial(k) / math.factorial(i) * x ** i / s ** (k + 1 - i)
+    return out
+
+
+def _rz_integral(k, segs, weighted, x_max=None):
+    """``int_0^x_max x^k w n/n0 dx`` over the pieces (``x_max=None``: to infinity)."""
+    total = 0.0
+    for i, (lo, ln0, s, w) in enumerate(segs):
+        hi = segs[i + 1][0] if i + 1 < len(segs) else None
+        if x_max is not None:
+            hi = x_max if hi is None else jnp.minimum(hi, x_max)
+            hi = jnp.maximum(hi, lo)
+        # int_lo^hi x^k e^{-s(x-lo)} dx = U(lo) - e^{-s(hi-lo)} U(hi), in logs (no 0 * inf)
+        term = jnp.exp(ln0 + jnp.log(_upper_poly(k, lo, s)))
+        if hi is not None:
+            term = term - jnp.exp(ln0 - s * (hi - lo) + jnp.log(_upper_poly(k, hi, s)))
+        total = total + (w if weighted else 1.0) * term
+    return total
+
+
+def _rz_dimensionless(R, L_F, z, L_P, Gtau):
+    """``(R, x_F, z, x_P)`` with the switches resolved (no fines: ``R = 1``; no classification:
+    ``z = 1``, ``x_P = x_F``)."""
+    Gtau = _f(Gtau)
+    R = 1.0 if R is None else R
+    x_F = 0.0 * Gtau if L_F is None else _f(L_F) / Gtau
+    if z is None:
+        z, x_P = 1.0, x_F
+    else:
+        x_P = _f(L_P) / Gtau
+    return R, x_F, z, x_P
+
+
+def rz_distribution(L, n0, G, tau, fines_ratio=None, fines_cut_size=None,
+                    product_classification=None, product_cut_size=None) -> Array:
+    """Steady population density (1/m/m^3) of an R-z crystallizer (fines destruction, classified product).
+
+    The crystallizer is an MSMPR with size-dependent removal ``h(L)/tau`` (``tau =
+    V/Q_P`` from the product flow): ``h = R`` below the fines cut ``L_F`` (product
+    plus the fines stream, which is dissolved and returned), ``h = 1`` between and
+    ``h = z`` above the product cut ``L_P`` (classified product removal). The steady
+    balance ``G dn/dL = -h(L) n / tau`` with ``n(0) = n0`` integrates to a piecewise
+    exponential, continuous at the cut sizes (Randolph & Larson 1988, ch. 6)::
+
+        n = n0 exp(-R L/(G tau))                                   L <  L_F
+        n = n0 exp(-(R-1) L_F/(G tau)) exp(-L/(G tau))             L_F <= L < L_P
+        n = n0 exp(-(R-1) L_F/(G tau) + (z-1) L_P/(G tau)) exp(-z L/(G tau))   L >= L_P
+
+    With ``fines_ratio=None`` (``R = 1``) and ``product_classification=None`` (``z = 1``)
+    this is :func:`msmpr_distribution`.
+
+    Args:
+        L: Sizes (m).
+        n0: Nuclei population density (1/m/m^3).
+        G: Growth rate (m/s).
+        tau: Residence time of the product (s).
+        fines_ratio: ``R`` (>= 1), the removal rate below ``L_F`` relative to the product's.
+        fines_cut_size: ``L_F`` (m).
+        product_classification: ``z`` (>= 1), the removal rate above ``L_P`` relative to MSMPR.
+        product_cut_size: ``L_P`` (m), at least ``L_F``.
+    """
+    Gtau = _f(G) * _f(tau)
+    R, x_F, z, x_P = _rz_dimensionless(fines_ratio, fines_cut_size, product_classification,
+                                       product_cut_size, Gtau)
+    x = _f(L) / Gtau
+    segs = _rz_segments(R, x_F, z, x_P)
+    ln_n = jnp.where(x < segs[1][0], -segs[0][2] * x,
+                     jnp.where(x < segs[2][0], segs[1][1] - (x - segs[1][0]),
+                               segs[2][1] - segs[2][2] * (x - segs[2][0])))
+    return _f(n0) * jnp.exp(ln_n)
+
+
+def rz_moments(n0, G, tau, k=(0, 1, 2, 3), fines_ratio=None, fines_cut_size=None,
+               product_classification=None, product_cut_size=None, basis="vessel") -> Array:
+    """Moments ``m_k = int L^k n dL`` of :func:`rz_distribution`, one per entry of ``k``.
+
+    ``basis="vessel"`` integrates the suspension in the crystallizer; ``basis="product"``
+    weights it by the product removal ``h_p`` (1 below ``L_P``, ``z`` above), so
+    ``rho_c k_v m_3`` is the crystal mass per m^3 of product flow. Each piece is
+    integrated in closed form. Without fines or classification it equals
+    :func:`msmpr_moments` (both bases).
+    """
+    if basis not in ("vessel", "product"):
+        raise ValueError("basis must be 'vessel' or 'product'")
+    Gtau = _f(G) * _f(tau)
+    R, x_F, z, x_P = _rz_dimensionless(fines_ratio, fines_cut_size, product_classification,
+                                       product_cut_size, Gtau)
+    segs = _rz_segments(R, x_F, z, x_P)
+    return jnp.stack([_f(n0) * Gtau ** (kk + 1) * _rz_integral(int(kk), segs, basis == "product")
+                      for kk in k])
+
+
+def _rz_sizes(R, x_F, z, x_P):
+    """Dimensionless mass mode, mass median and mass CV of the R-z PRODUCT (``x^3 h_p n``)."""
+    segs = _rz_segments(R, x_F, z, x_P)
+    I3 = _rz_integral(3, segs, True)
+    I4 = _rz_integral(4, segs, True)
+    I5 = _rz_integral(5, segs, True)
+    mean = I4 / I3
+    cv = jnp.sqrt(jnp.maximum(I5 / I3 - mean ** 2, 0.0)) / mean
+    # mode: the maximum of x^3 w n on each piece is at 3/s, clipped to the piece
+    cands, logs = [], []
+    for i, (lo, ln0, s, w) in enumerate(segs):
+        hi = segs[i + 1][0] if i + 1 < len(segs) else None
+        xc = jnp.maximum(3.0 / s, lo) if hi is None else jnp.clip(3.0 / s, lo, jnp.maximum(hi, lo))
+        cands.append(xc)
+        logs.append(3.0 * jnp.log(jnp.maximum(lax.stop_gradient(xc), _TINY)) + jnp.log(w)
+                    + ln0 - s * (lax.stop_gradient(xc) - lo))
+    x_D = jnp.stack(cands)[jnp.argmax(jnp.stack(logs))]
+    # median: root in ln x of the cumulative mass fraction minus one half
+    hi_x = 100.0 + x_F + x_P
+
+    def resid(u):
+        return _rz_integral(3, segs, True, jnp.exp(u)) / I3 - 0.5
+
+    x_50 = jnp.exp(_solve_monotone(resid, math.log(1e-6), jnp.log(hi_x)))
+    return x_D, x_50, cv
 
 
 def msmpr_steady_state(feed_solute, feed_water, T_out, sol: Solubility, kinetics, tau, *,
                        crystal_density, shape_factor=math.pi / 6.0, liquor_density=1000.0,
-                       water_evaporated=0.0, soft: float = 1e-6) -> dict:
+                       water_evaporated=0.0, soft: float = 1e-6, activation_energies=None,
+                       T_ref=None, fines_ratio=None, fines_cut_size=None,
+                       product_classification=None, product_cut_size=None) -> dict:
     """Steady MSMPR closed by power-law kinetics: solve the supersaturation ``dC``.
 
     Unknown ``dC = c - c_sat`` (kg/kg) between 0 and the feed's ``dC_max``. The
@@ -506,13 +697,36 @@ def msmpr_steady_state(feed_solute, feed_water, T_out, sol: Solubility, kinetics
         liquor_density: Mother-liquor density (kg/m^3).
         water_evaporated: Solvent evaporated (kg/s).
         soft: Soft-clip width of the yield balance.
+        activation_energies: ``(E_g, E_b)`` (J/mol): ``k_g`` and ``k_b`` are the values
+            at ``T_ref`` and are scaled by :func:`arrhenius_factor` at ``T_out``.
+            ``None`` (default): temperature-independent constants.
+        T_ref: Reference temperature (K) of ``k_g`` and ``k_b``; needed with
+            ``activation_energies``.
+        fines_ratio: ``R`` of the R-z model (:func:`rz_distribution`), fines destruction
+            below ``fines_cut_size``; ``None`` (default) is no fines removal.
+        fines_cut_size: ``L_F`` (m).
+        product_classification: ``z`` of the R-z model, classified product removal
+            above ``product_cut_size``; ``None`` (default) is none.
+        product_cut_size: ``L_P`` (m).
+
+    With fines destruction or classification the third-moment closure uses the
+    PRODUCT moment (the balance's ``M_T = C/Q_L`` is the crystal mass per m^3 of
+    product), nucleation uses the VESSEL suspension density ``rho_c k_v m_3``, and
+    ``L_D``, ``L_50`` and ``cv`` describe the product's mass distribution, from
+    the piecewise density: the residual becomes
+    ``(1 - j) ln M_P - j ln(I_v/I_p) - ln I_p - (b + 3 g) ln dC - const`` with
+    ``I_v``, ``I_p`` the dimensionless third moments (both 6 for the MSMPR).
 
     Returns:
         dict with ``delta_C``, ``G``, ``B0``, ``n0``, ``M_T`` (kg/m^3), the
         balance (``crystals`` etc., see :func:`crystal_balance`), ``L_D``,
         ``L_50``, ``cv``, ``moments`` (m0..m3), ``active`` (feed is
         supersaturated) and ``closure`` (relative mismatch of the third-moment
-        magma density and the balance's, a convergence check).
+        magma density and the balance's, a convergence check). With fines
+        destruction or classification also ``M_product`` (crystal kg per m^3 of
+        product; ``M_T`` is then the vessel suspension density),
+        ``product_moments`` (m0..m3 weighted by the product removal) and
+        ``fines_dissolved`` (kg/s of crystal dissolved in the fines loop).
     """
     try:  # check the raw value: jnp.asarray of a constant is a tracer under jit
         too_big = float(kinetics[4]) > 1.0
@@ -521,6 +735,18 @@ def msmpr_steady_state(feed_solute, feed_water, T_out, sol: Solubility, kinetics
     k_g, g, k_b, b, j = (_f(v) for v in kinetics)
     if too_big:
         raise ValueError("msmpr_steady_state needs j <= 1 (a single steady state)")
+    if activation_energies is not None:
+        if T_ref is None:
+            raise ValueError("activation_energies need T_ref")
+        if len(activation_energies) != 2:
+            raise ValueError("activation_energies is (E_g, E_b)")
+        k_g = k_g * arrhenius_factor(T_out, activation_energies[0], T_ref)
+        k_b = k_b * arrhenius_factor(T_out, activation_energies[1], T_ref)
+    rz = fines_ratio is not None or product_classification is not None
+    if fines_ratio is not None and fines_cut_size is None:
+        raise ValueError("fines_ratio needs fines_cut_size")
+    if product_classification is not None and product_cut_size is None:
+        raise ValueError("product_classification needs product_cut_size")
     S0, W0, E = _f(feed_solute), _f(feed_water), _f(water_evaporated)
     tau, rho_c, k_v, rho_L = _f(tau), _f(crystal_density), _f(shape_factor), _f(liquor_density)
     W = W0 - E
@@ -544,15 +770,55 @@ def msmpr_steady_state(feed_solute, feed_water, T_out, sol: Solubility, kinetics
         dC, _, M_T = parts(x)
         return (1.0 - j) * jnp.log(M_T) - (b + 3.0 * g) * jnp.log(dC) - const
 
+    if rz:
+        const = const - jnp.log(6.0)  # the MSMPR's 3! is the R-z's I_p (and I_v)
+        rz_args = (fines_ratio, fines_cut_size, product_classification, product_cut_size)
+
+        def shape(Gt):
+            segs = _rz_segments(*_rz_dimensionless(*rz_args, Gt))
+            return _rz_integral(3, segs, False), _rz_integral(3, segs, True)
+
+        def resid(x):  # noqa: F811 -- the R-z residual replaces the MSMPR one
+            dC, _, M_P = parts(x)
+            I_v, I_p = shape(growth_rate(dC, k_g, g) * tau)
+            return ((1.0 - j) * jnp.log(M_P) - j * jnp.log(I_v / I_p) - jnp.log(I_p)
+                    - (b + 3.0 * g) * jnp.log(dC) - const)
+
     x = _solve_monotone(resid, -60.0, -1e-9)
     dC, C, M_T = parts(x)
     dC = jnp.where(active, dC, 0.0)
     G = growth_rate(dC, k_g, g)
-    B0 = nucleation_rate(dC, M_T, k_b, b, j)
     Gs = jnp.where(active, G, 1.0)
+    if rz:
+        M_P = M_T
+        I_v, I_p = shape(Gs * tau)
+        M_T = M_P * I_v / I_p  # vessel suspension density, which drives nucleation
+    B0 = nucleation_rate(dC, M_T, k_b, b, j)
     n0 = jnp.where(active, B0 / Gs, 0.0)
     bal = crystal_balance(S0, W0, T_out, sol, E, soft, c_out=cs + dC)
     bal["crystals"] = jnp.where(active, bal["crystals"], 0.0 * bal["crystals"])
+    if rz:
+        mom = rz_moments(n0, Gs, tau, (0, 1, 2, 3), *rz_args)
+        pmom = rz_moments(n0, Gs, tau, (0, 1, 2, 3), *rz_args, basis="product")
+        M_P_kin = rho_c * k_v * pmom[3]
+        closure = jnp.where(active, (M_P_kin - M_P) / jnp.maximum(M_P, _TINY), 0.0)
+        x_D, x_50, cv = _rz_sizes(*_rz_dimensionless(*rz_args, Gs * tau))
+        Gt = G * tau
+        # the fines stream removes (R - 1) n below L_F at the product flow Q_P = C / M_P
+        Rf = 1.0 if fines_ratio is None else _f(fines_ratio)
+        segs = _rz_segments(*_rz_dimensionless(*rz_args, Gs * tau))
+        x_F = segs[1][0]
+        fines_m3 = n0 * (Gs * tau) ** 4 * _rz_integral(3, segs, False, x_F)
+        fines = jnp.where(active, (Rf - 1.0) * rho_c * k_v * fines_m3 * C / jnp.maximum(M_P, _TINY),
+                          0.0)
+        out = dict(bal)
+        out.update({
+            "delta_C": dC, "G": G, "B0": B0, "n0": n0, "M_T": jnp.where(active, M_T, 0.0),
+            "M_product": jnp.where(active, M_P, 0.0),
+            "L_D": x_D * Gt, "L_50": x_50 * Gt, "cv": cv, "moments": mom, "product_moments": pmom,
+            "fines_dissolved": fines, "active": active, "closure": closure, "tau": tau,
+        })
+        return out
     mom = msmpr_moments(n0, Gs, tau)
     M_T_kin = rho_c * k_v * mom[3]
     closure = jnp.where(active, (M_T_kin - M_T) / jnp.maximum(M_T, _TINY), 0.0)
@@ -614,6 +880,19 @@ class CrystallizerParams(ParamsMixin):
         soft: Soft-clip width of the yield, as a fraction of the feed solute.
         duty: Heat added (W) in ``"adiabatic"`` mode (0 = a truly adiabatic flash;
             negative removes heat through a jacket or cooler as well).
+        kinetics_Ea: ``None`` (temperature-independent kinetics) or ``[E_g, E_b]``
+            (J/mol), activation energies of growth and nucleation: ``k_g`` and ``k_b``
+            in ``kinetics`` are then the values at ``kinetics_T_ref`` and are scaled by
+            ``exp(-E/R (1/T - 1/T_ref))`` at the operating ``T``. No value is built in.
+        kinetics_T_ref: Reference temperature (K) of ``k_g`` and ``k_b``, needed with ``kinetics_Ea``.
+        fines_ratio: ``None`` (no fines destruction) or ``R >= 1`` of the Randolph-Larson
+            R-z model: crystals below ``fines_cut_size`` leave at ``R`` times the product
+            removal rate, the excess ``R - 1`` to a fines loop that dissolves them.
+        fines_cut_size: Fines cut size ``L_F`` (m), needed with ``fines_ratio``.
+        product_classification: ``None`` (unclassified product) or ``z >= 1``: crystals
+            above ``product_cut_size`` are withdrawn at ``z`` times the MSMPR rate.
+        product_cut_size: Product classification size ``L_P`` (m), needed with
+            ``product_classification``; at least ``fines_cut_size``.
     """
 
     solute: str
@@ -647,6 +926,12 @@ class CrystallizerParams(ParamsMixin):
     heat_of_crystallization: float = 0.0
     soft: float = 1e-6
     duty: float = 0.0
+    kinetics_Ea: list | None = None
+    kinetics_T_ref: float | None = None
+    fines_ratio: float | None = None
+    fines_cut_size: float | None = None
+    product_classification: float | None = None
+    product_cut_size: float | None = None
 
     def __post_init__(self):
         if self.mode not in ("cooling", "evaporative", "cooling_evaporative", "adiabatic"):
@@ -677,6 +962,35 @@ class CrystallizerParams(ParamsMixin):
         if (self.upper_solubility_coeffs is not None or self.upper_solubility_T is not None) \
                 and self.transition_T is None:
             raise ValueError("an upper solubility form needs transition_T")
+        rz_or_T = (self.kinetics_Ea, self.fines_ratio, self.product_classification)
+        if self.kinetics is None and any(v is not None for v in rz_or_T):
+            raise ValueError("kinetics_Ea, fines_ratio and product_classification need kinetics")
+        if self.kinetics_Ea is not None:
+            if len(self.kinetics_Ea) != 2:
+                raise ValueError("kinetics_Ea is [E_g, E_b] (J/mol)")
+            if self.kinetics_T_ref is None:
+                raise ValueError("kinetics_Ea needs kinetics_T_ref")
+        if self.fines_ratio is not None and self.fines_cut_size is None:
+            raise ValueError("fines_ratio needs fines_cut_size")
+        if self.product_classification is not None and self.product_cut_size is None:
+            raise ValueError("product_classification needs product_cut_size")
+        checks = [(self.fines_ratio, lambda v: v < 1.0, "fines_ratio must be >= 1"),
+                  (self.fines_cut_size, lambda v: v <= 0.0, "fines_cut_size must be > 0"),
+                  (self.product_classification, lambda v: v < 1.0, "product_classification must be >= 1"),
+                  (self.product_cut_size, lambda v: v <= 0.0, "product_cut_size must be > 0")]
+        if self.fines_cut_size is not None and self.product_cut_size is not None:
+            checks.append((self.product_cut_size - self.fines_cut_size, lambda v: v < 0.0,
+                           "product_cut_size must be at least fines_cut_size"))
+        for v, bad, msg in checks:
+            if v is None:
+                continue
+            try:  # concrete only (traced values are not checked)
+                is_bad = bad(float(v))
+            except (jax.errors.TracerArrayConversionError, jax.errors.ConcretizationTypeError,
+                    TypeError):
+                is_bad = False
+            if is_bad:
+                raise ValueError(msg)
 
 
 def _adiabatic_evaporation(S0, W0, T_in, T, sol: Solubility, p: CrystallizerParams) -> Array:
@@ -721,7 +1035,10 @@ class Crystallizer:
     ``supersaturation`` (ratio), ``delta_C``, ``water_evaporated`` (kg/s), the
     duty ``Q`` (W; also ``Q_sensible``, ``Q_evaporation``,
     ``Q_crystallization``) and, in kinetic mode, ``G``, ``B0``, ``n0``,
-    ``moments``, ``L_D``, ``L_50``, ``cv``, ``M_T`` and ``tau``.
+    ``moments``, ``L_D``, ``L_50``, ``cv``, ``M_T`` and ``tau``. With fines
+    destruction or classified product removal (the R-z model) also ``M_product``,
+    ``product_moments`` and ``fines_dissolved``; ``M_T`` is then the vessel
+    suspension density and ``L_D``, ``L_50``, ``cv`` describe the product.
     """
 
     symbol = "Crystallizer"
@@ -731,12 +1048,15 @@ class Crystallizer:
         r"n(L) = n_0 e^{-L/(G\tau)},\qquad m_k = k!\,n_0\,(G\tau)^{k+1}",
         r"L_D = 3 G \tau,\qquad M_T = 6\rho_c k_v n_0 (G\tau)^4",
         r"G = k_g\,\Delta C^{g},\qquad B_0 = k_b\,M_T^{\,j}\,\Delta C^{b}",
+        r"k(T) = k_{ref}\,e^{-E/R\,(1/T - 1/T_{ref})}",
+        r"G\,\frac{dn}{dL} = -\frac{h(L)\,n}{\tau},\quad h = R\ (L<L_F),\ 1,\ z\ (L \ge L_P)",
     ]
     assumptions = [
         "Equilibrium mode: the mother liquor leaves saturated at the outlet temperature; the crystal is a stoichiometric hydrate (or anhydrous).",
         "The crystal stream carries the solute plus its bound water as F_<solute> and F_<solvent>; evaporated solvent leaves as vapor (reported in info, not a stream).",
         "Undersaturated feeds give zero yield through a soft clip; the switch between two solid forms is a logistic blend in T.",
-        "Kinetic mode: steady MSMPR, size-independent growth, power-law growth and secondary nucleation, no fines destruction or classification, no agglomeration or breakage.",
+        "Kinetic mode: steady MSMPR, size-independent growth, power-law growth and secondary nucleation (optionally Arrhenius in T), no agglomeration or breakage.",
+        "Fines destruction / classified product removal (optional): the Randolph-Larson R-z model, step removal functions at L_F and L_P; dissolved fines return to the liquor (the dissolver duty is not modeled).",
         "Liquor volume flow from a constant liquor density; solution heat capacity constant; heat of crystallization is user data.",
         "No solubility, kinetic or heat data is built in; the user supplies the curves.",
     ]
@@ -750,6 +1070,8 @@ class Crystallizer:
         "T": "T", "water_evaporated": "E", "hydrate_waters": r"\nu", "residence_time": r"\tau",
         "crystal_density": r"\rho_c", "shape_factor": "k_v", "cp_solution": "c_p",
         "heat_of_crystallization": r"\Delta H_c", "transition_T": r"T_{tr}",
+        "kinetics_T_ref": r"T_{ref}", "fines_ratio": "R", "fines_cut_size": "L_F",
+        "product_classification": "z", "product_cut_size": "L_P",
     }
     parameter_units = {
         "solute_MW": "g/mol", "solvent_MW": "g/mol", "T": "K", "water_evaporated": "kg/s",
@@ -759,6 +1081,8 @@ class Crystallizer:
         "residence_time": "s", "volume": "m^3", "crystal_density": "kg/m^3", "shape_factor": "-",
         "liquor_density": "kg/m^3", "cp_solution": "J/(kg K)",
         "heat_of_crystallization": "J/kg", "soft": "-", "duty": "W",
+        "kinetics_Ea": "J/mol", "kinetics_T_ref": "K", "fines_ratio": "-", "fines_cut_size": "m",
+        "product_classification": "-", "product_cut_size": "m",
     }
     numerical_method = (
         "Closed-form two-balance yield with a softplus clip; adiabatic (vacuum) evaporation in closed "
@@ -831,10 +1155,15 @@ class Crystallizer:
                 tau = _f(p.volume) / Q_product
             ss = msmpr_steady_state(S0, W0, T, sol, p.kinetics, tau, crystal_density=p.crystal_density,
                                     shape_factor=p.shape_factor, liquor_density=p.liquor_density,
-                                    water_evaporated=E, soft=p.soft)
+                                    water_evaporated=E, soft=p.soft,
+                                    activation_energies=p.kinetics_Ea, T_ref=p.kinetics_T_ref,
+                                    fines_ratio=p.fines_ratio, fines_cut_size=p.fines_cut_size,
+                                    product_classification=p.product_classification,
+                                    product_cut_size=p.product_cut_size)
             bal = ss
             extra = {k: ss[k] for k in ("G", "B0", "n0", "moments", "L_D", "L_50", "cv", "M_T",
-                                         "tau", "closure")}
+                                         "tau", "closure", "M_product", "product_moments",
+                                         "fines_dissolved") if k in ss}
             extra["delta_C"] = ss["delta_C"]
 
         nu = sol.hydration(T)

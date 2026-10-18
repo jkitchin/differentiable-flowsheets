@@ -491,6 +491,8 @@ from difflow import stochastic
 
 # External solver bridges: pounce / discopt (#203)
 from difflow import solvers
+# Differentiable scalar root finder (Newton + bracket, implicit-function-theorem gradients)
+from difflow.solvers.scalar import solve_scalar
 
 # Declarative kinetics
 from difflow.kinetics import (
@@ -981,6 +983,8 @@ __all__ = [
     "stochastic",
     # External solver bridges
     "solvers",
+    # Differentiable scalar root finder
+    "solve_scalar",
     # Declarative kinetics
     "mass_action_kinetics",
     "ReactionSet",

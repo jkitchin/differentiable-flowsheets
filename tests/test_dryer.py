@@ -98,3 +98,54 @@ def test_batch_dryer():
     dry, _, info = Dryer(params)(make_wet(0.01, 0.35, 295.0), make_air(70.0, 0.01, 0.5))
     assert jnp.isfinite(info["drying_time"]) and float(info["drying_time"]) > 0
     assert float(solids_moisture(dry)) == pytest.approx(0.10, rel=1e-8)
+
+
+TAB_X = jnp.array([0.06, 0.10, 0.15, 0.20])
+TAB_REL = jnp.array([0.2, 0.5, 0.8, 1.0])
+
+
+def test_rate_basis_relative():
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        t = drying_time(X1, X2, XC, XE, RC, LSA, "integral", rate_curve=(TAB_X, TAB_REL), rate_basis="relative")
+        R = drying_rate_curve(0.12, XC, XE, RC, "integral", rate_curve=(TAB_X, TAB_REL), rate_basis="relative")
+        drying_periods(X1, X2, XC, XE, RC, LSA, "integral", rate_curve=(TAB_X, RC * TAB_REL))
+    assert jnp.isfinite(t) and jnp.isfinite(R)
+    g = jax.grad(lambda rc: drying_time(X1, X2, XC, XE, rc, LSA, "integral", rate_curve=(TAB_X, TAB_REL),
+                                        rate_basis="relative"))(RC)
+    assert jnp.isfinite(g)
+    with pytest.raises(ValueError):
+        drying_time(X1, X2, XC, XE, RC, LSA, "integral", rate_curve=(TAB_X, TAB_REL), rate_basis="percent")
+
+
+def test_rate_basis_mismatch_warns():
+    from difflow.units.dryer import RateTableWarning
+
+    with pytest.warns(RateTableWarning):
+        drying_periods(X1, X2, XC, XE, RC, LSA, "integral", rate_curve=(TAB_X, TAB_REL))
+    with pytest.warns(RateTableWarning):
+        drying_rate_curve(0.12, XC, XE, RC, "integral", rate_curve=(TAB_X, RC * TAB_REL), rate_basis="relative")
+    with pytest.warns(RateTableWarning):
+        DryerParams_abs = DryerParams(mode="batch", X_c=XC, X_eq=XE, product_moisture=X2, R_c=RC, load=12.5,
+                                      area=0.5, falling="integral", rate_curve=[list(TAB_X), list(RC * TAB_REL)])
+        Dryer(DryerParams_abs)(make_wet(0.01, X1, 295.0), make_air(70.0, 0.01, 0.5))
+    # under jit the table is traced: no check, no error
+    f = jax.jit(lambda rt: drying_time(X1, X2, XC, XE, RC, LSA, "integral", rate_curve=(TAB_X, rt)))
+    assert jnp.isfinite(f(TAB_REL))
+
+
+def test_dryer_heater_inlet():
+    params = DryerParams(mode="batch", X_c=0.20, X_eq=0.05, product_moisture=0.10,
+                         air_mass_velocity=1.0, load=12.5, area=0.5, T_heater_in=320.0)
+    _, _, info = Dryer(params)(make_wet(0.01, 0.35, 295.0), make_air(70.0, 0.01, 0.5))
+    assert all(jnp.isfinite(info[k]) for k in ("heater_duty", "Q_air", "energy_per_kg", "thermal_efficiency"))
+
+    def epk(T_h):
+        return Dryer(params.update(T_heater_in=T_h))(make_wet(0.01, 0.35, 295.0), make_air(70.0, 0.01, 0.5))[2][
+            "energy_per_kg"]
+
+    assert jnp.isfinite(jax.grad(epk)(320.0))
+    with pytest.raises(ValueError):
+        DryerParams(mode="batch", T_heater_in=-5.0)

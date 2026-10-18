@@ -8,6 +8,30 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Unit-ops book Part VI gaps (issue 451).**
+  *Costs.* `difflow.economics.dryer_cost` (rotary direct, drum and tray from Turton et al. Table A.1; spray from
+  Towler & Sinnott Table 7.2), `crystallizer_cost` (forced-circulation and draft-tube-baffled from Seider et al.
+  Table 16.32, in t/day; batch from Turton), `cooling_tower_cost` (Towler & Sinnott cooling tower and pumps, L/s),
+  and `separator_cost(area, "filter_press")` plus leaf, cartridge, gravity, pan, table and tube filters (Turton).
+  New tables `DRYER_COSTS`, `CRYSTALLIZER_COSTS`, `COOLING_TOWER_COSTS`. The constants were read from the
+  openpytea 3.2.0 and ecoana 0.0.1 transcriptions of those tables (cited in the code), not the printed books.
+  *Cooling tower.* `CoolingTower` fan power: `fill_pressure_drop`, or `fill_loss_coefficient` + `frontal_area`,
+  plus `other_pressure_drop`, `fan_efficiency` (default 0.65) and `fan_location` add
+  `info["fill_pressure_drop"]`, `["total_pressure_drop"]`, `["air_volumetric_flow"]` and `["fan_power"]` (W). No
+  published fill correlation is built in yet; outputs are unchanged when the new parameters are not given.
+  *Drying.* `DryerParams.T_heater_in` sets the heater-inlet air for the energy basis (the mixed air with
+  recirculation), and `info["heater_duty"]`.
+  *Crystallization.* Optional Arrhenius kinetics (`kinetics_Ea=[E_g, E_b]`, `kinetics_T_ref`;
+  `arrhenius_factor`), so dL50/dT is no longer zero at fixed residence time. Optional Randolph-Larson R-z fines
+  destruction and classified product removal (`fines_ratio`, `fines_cut_size`, `product_classification`,
+  `product_cut_size`; `rz_distribution`, `rz_moments`): a piecewise-exponential population density, with the
+  moments, closure and L_50 taken from it, and new info keys `M_product`, `product_moments`, `fines_dissolved`.
+  *Mechanical.* `DiscStackParams(d_bins=, mass_fractions=)`, as for `Settler`/`Cyclone` (per-bin
+  `grade_efficiency`, `overall_efficiency`).
+  *Solvers.* `difflow.solve_scalar`: a differentiable scalar root finder (Newton with an optional
+  bisection-safeguarded bracket) that works under `jit`, differentiates by the implicit function theorem with
+  respect to `args` and closed-over values, and returns a converged flag with `return_info=True`.
+  All new options default off.
 - **Gaspype species data in `GibbsReactor` (#492).** New `difflow.gaspype_import`: `GaspypeThermo(species)`
   adapts [gaspype](https://www.gaspype.org/)'s ~1000 NASA-9 gas-phase species to `GibbsReactor`'s thermo
   interface, and `list_available_species` searches its database. Gaspype's own JAX equilibrium cannot be
@@ -1031,6 +1055,10 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- **Drying-rate tables in R/R_c units were silently misread (#451).** `drying_rate_curve`, `drying_periods` and
+  `drying_time` take `rate_basis="absolute"|"relative"` and raise `RateTableWarning` when a table's scale
+  contradicts its basis. A relative (R/R_c) table passed to them gave a falling time about 1/R_c times too short
+  (7 s instead of 4.06 h).
 - **A reloaded `IdealThermo` never equalled the original.** JSON turned `SpeciesData`'s tuples into lists, so
   every object keyed on its construction inputs (the JAX caches included) took the reload for a new one. Fields
   declared as tuples are restored on read. Also: an `$eos` written by the previous release was read by version-2

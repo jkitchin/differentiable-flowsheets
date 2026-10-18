@@ -7,6 +7,7 @@ This document covers numerical solvers, uncertainty propagation, and utility fun
 1. [Numerical Solvers](#numerical-solvers)
    - [Fixed-Point Iteration](#fixed-point-iteration)
    - [Newton-Raphson Solver](#newton-raphson-solver)
+   - [Scalar Root Finding (`solve_scalar`)](#scalar-root-finding)
    - [Rachford-Rice Solver](#rachford-rice-solver)
    - [ODE Integration](#ode-integration)
    - [Equation-Oriented Solver](eo-solver.md) — simultaneous solution of all unit equations
@@ -174,6 +175,63 @@ solution = optx.root_find(
 )
 T_bubble = solution.value
 ```
+
+### Scalar Root Finding
+
+**Location**: `difflow/solvers/scalar.py`, exported as `difflow.solve_scalar`.
+
+```python
+solve_scalar(f, x0=None, args=(), *, bracket=None, tol=1e-12, max_iter=100, return_info=False)
+```
+
+Finds $x^*$ with $f(x^*, \text{args}) = 0$ for a scalar $f$ written in JAX
+operations: a design temperature, a recirculation humidity, an exit
+temperature that closes a balance.
+
+- **Newton**, with $f'$ from `jax.grad`. With `bracket=(lo, hi)` (a sign change
+  of $f$ over it is required) the solve is safeguarded: the bracket is kept
+  around the sign change, and a Newton step that leaves it or is not finite is
+  replaced by bisection, so a bracketed solve cannot diverge. `x0` may be
+  `None` with a bracket (its midpoint is used); a guess outside it is clipped in.
+- **Stops** when the step is below `tol` relative to $\max(1, |x|)$ (or $f = 0$),
+  or after `max_iter` steps. `return_info=True` returns `(x, info)` with
+  `converged` (the step and the next Newton step at the root below `tol`, finite
+  root and residual, sign change over the bracket), `iterations` and
+  `residual`. `info` carries no gradient.
+- **Gradients by the implicit function theorem**, not by unrolling: the
+  iterations run on stop-gradient values in a `lax.while_loop`, and a
+  `custom_jvp` attaches $dx^*/dp = -(\partial f/\partial p)/(\partial f/\partial x)$
+  at the root for every array in `args` and every traced value `f` closes over
+  (hoisted with `jax.closure_convert`). `jit`, `grad`, `jacobian`, `hessian`
+  and `vmap` all work.
+- **Validation** (concrete inputs): a bracket that is not a pair, has
+  `lo >= hi` or has no sign change, neither `x0` nor `bracket`, `max_iter < 1`
+  or `tol <= 0` raise `ValueError`. Under `jit` a bad bracket cannot raise:
+  check `info["converged"]`.
+
+```python
+import jax
+import jax.numpy as jnp
+from difflow import solve_scalar
+
+def root(a):                                   # x^2 = a
+    return solve_scalar(lambda x, a: x**2 - a, 1.0, (a,))
+
+root(2.0)                                      # 1.41421356...
+jax.grad(root)(2.0)                            # 1/(2 sqrt 2) = 0.35355..., by the IFT
+jax.jit(root)(9.0)                             # 3.0
+
+# bracketed (Newton + bisection), closing over a traced parameter
+def T_dew(W):                                  # a toy: the T where a saturation curve meets W
+    return solve_scalar(lambda T: 1e-3 * jnp.exp(0.06 * (T - 273.15)) - W, bracket=(250.0, 400.0))
+
+x, info = solve_scalar(lambda x: jnp.cos(x) - x, bracket=(0.0, 1.0), return_info=True)
+bool(info["converged"]), jax.grad(T_dew)(0.01)
+```
+
+Inside the units, `difflow.staged._solve_monotone` (a fixed-iteration bisection
+of a monotone function on a bracket, same implicit gradient) remains the internal
+helper; `solve_scalar` is the public, general one.
 
 ### Rachford-Rice Solver
 

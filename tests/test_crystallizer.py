@@ -197,3 +197,93 @@ def test_evaporator_to_crystallizer_flowsheet():
     out = fs.solve()
     assert float(out["crystals"]["F_Na2SO4"] + out["liquor"]["F_Na2SO4"]) == pytest.approx(
         float(feed["F_Na2SO4"]), rel=1e-12)
+
+
+# --- temperature-dependent kinetics and the R-z model (fines destruction, classification) ---
+
+KIN_P = dict(kinetics=list(KIN), residence_time=900.0, crystal_density=RHO_C, liquor_density=RHO_L)
+RZ = dict(fines_ratio=5.0, fines_cut_size=50e-6, product_classification=3.0, product_cut_size=150e-6)
+
+
+def _info(**kw):
+    return Crystallizer(params(**{**KIN_P, **kw}))(feed_stream())[2]
+
+
+def test_arrhenius_kinetics_smoke_and_grad_in_T():
+    kw = dict(kinetics_Ea=[50e3, 30e3], kinetics_T_ref=K0 + 5.0)
+    info = _info(**kw)
+    assert all(np.isfinite(float(info[k])) for k in ("G", "B0", "L_50", "closure"))
+    g = jax.grad(lambda T: Crystallizer(params(**{**KIN_P, **kw, "T": T}))(feed_stream())[2]["L_50"])(K0 + 5.0)
+    assert np.isfinite(float(g)) and float(g) != 0.0
+
+
+def test_default_off_matches_explicit_none_and_zero_activation_energy():
+    ref = _info()
+    for kw in (dict(kinetics_Ea=None, fines_ratio=None, product_classification=None),
+               dict(kinetics_Ea=[0.0, 0.0], kinetics_T_ref=300.0)):
+        info = _info(**kw)
+        for k in ("L_50", "L_D", "G", "B0", "M_T", "crystal_mass"):
+            assert float(info[k]) == pytest.approx(float(ref[k]), rel=1e-12)
+    assert "fines_dissolved" not in ref and "M_product" not in ref
+
+
+def test_rz_unit_smoke_keys_and_grads():
+    info = _info(**RZ)
+    for k in ("L_50", "L_D", "cv", "M_T", "M_product", "fines_dissolved", "closure"):
+        assert np.isfinite(float(info[k]))
+    assert np.all(np.isfinite(np.asarray(info["moments"])))
+    assert np.all(np.isfinite(np.asarray(info["product_moments"])))
+
+    def L50(R, LF):
+        return _info(**{**RZ, "fines_ratio": R, "fines_cut_size": LF})["L_50"]
+    g = jax.grad(L50, argnums=(0, 1))(5.0, 50e-6)
+    assert all(np.isfinite(float(x)) for x in g)
+    gT = jax.grad(lambda T: Crystallizer(params(**{**KIN_P, **RZ, "T": T, "kinetics_Ea": [5e4, 5e4],
+                                                   "kinetics_T_ref": K0 + 5.0}))(feed_stream())[2]["L_50"])(K0 + 5.0)
+    assert np.isfinite(float(gT))
+
+
+def test_rz_without_removal_reduces_to_msmpr():
+    """R = 1 (and no classification) goes through the piecewise code and must give the MSMPR."""
+    ref, info = _info(), _info(fines_ratio=1.0, fines_cut_size=50e-6)
+    for k in ("L_50", "L_D", "cv", "M_T", "delta_C"):
+        assert float(info[k]) == pytest.approx(float(ref[k]), rel=1e-9)
+    from difflow.units.crystallizer import rz_distribution, rz_moments
+    L = np.linspace(0.0, 5e-4, 7)
+    assert np.allclose(rz_distribution(L, N0, G, TAU), msmpr_distribution(L, N0, G, TAU), rtol=1e-12)
+    assert np.allclose(rz_moments(N0, G, TAU), msmpr_moments(N0, G, TAU), rtol=1e-12)
+
+
+def test_rz_library_validation():
+    from difflow.units.crystallizer import rz_moments
+    with pytest.raises(ValueError):
+        rz_moments(N0, G, TAU, basis="bogus")
+    with pytest.raises(ValueError):
+        msmpr_steady_state(0.60, 1.0, K0 + 5.0, SOL0, KIN, 900.0, crystal_density=RHO_C,
+                           activation_energies=(5e4, 5e4))
+    with pytest.raises(ValueError):
+        msmpr_steady_state(0.60, 1.0, K0 + 5.0, SOL0, KIN, 900.0, crystal_density=RHO_C,
+                           activation_energies=(5e4,), T_ref=300.0)
+    with pytest.raises(ValueError):
+        msmpr_steady_state(0.60, 1.0, K0 + 5.0, SOL0, KIN, 900.0, crystal_density=RHO_C, fines_ratio=3.0)
+    with pytest.raises(ValueError):
+        msmpr_steady_state(0.60, 1.0, K0 + 5.0, SOL0, KIN, 900.0, crystal_density=RHO_C,
+                           product_classification=3.0)
+
+
+@pytest.mark.parametrize("kw", [
+    dict(kinetics_Ea=[5e4, 5e4], kinetics_T_ref=300.0),               # no kinetics
+    dict(**KIN_P, kinetics_Ea=[5e4], kinetics_T_ref=300.0),
+    dict(**KIN_P, kinetics_Ea=[5e4, 5e4]),
+    dict(fines_ratio=3.0, fines_cut_size=5e-5),                       # no kinetics
+    dict(**KIN_P, fines_ratio=3.0),
+    dict(**KIN_P, product_classification=3.0),
+    dict(**KIN_P, fines_ratio=0.5, fines_cut_size=5e-5),
+    dict(**KIN_P, fines_ratio=3.0, fines_cut_size=0.0),
+    dict(**KIN_P, product_classification=0.5, product_cut_size=1e-4),
+    dict(**KIN_P, product_classification=3.0, product_cut_size=-1e-4),
+    dict(**KIN_P, fines_ratio=3.0, fines_cut_size=2e-4, product_classification=3.0, product_cut_size=1e-4),
+])
+def test_rz_and_arrhenius_parameter_validation(kw):
+    with pytest.raises(ValueError):
+        params(**kw)

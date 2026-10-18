@@ -82,6 +82,12 @@ class DiscStackParams(ParamsMixin):
         efficiency: Separation efficiency (0-1)
         species_order: List of species names
         cell_species: Name of cell species
+        d_bins: Particle size bins (m), or ``None`` (default) for the single size
+            ``d_particle`` of the call. With bins, ``d_particle`` is ignored and the
+            cell recovery is the mass-weighted grade efficiency, as in ``Settler``
+            and ``Cyclone``.
+        mass_fractions: Mass fraction of the cells in each size bin (normalized to 1),
+            needed with ``d_bins``.
     """
     n_discs: int | Array
     r_outer: float | Array
@@ -95,6 +101,17 @@ class DiscStackParams(ParamsMixin):
     lysis_threshold_g: float | Array | None = None
     lysis_coefficient: float | Array = 0.0
     lysate_species: str = "lysate"
+    d_bins: list | None = None
+    mass_fractions: list | None = None
+
+    def __post_init__(self):
+        if (self.d_bins is None) != (self.mass_fractions is None):
+            raise ValueError("give d_bins and mass_fractions together")
+        if self.d_bins is not None:
+            if len(self.d_bins) == 0:
+                raise ValueError("d_bins must not be empty")
+            if len(self.d_bins) != len(self.mass_fractions):
+                raise ValueError("d_bins and mass_fractions must have the same length")
 
 
 # =============================================================================
@@ -180,7 +197,6 @@ class Centrifuge:
                 - 'Q_critical': Flow at which these particles are captured at 50%, ``2 v_s Sigma`` (m³/s)
         """
         p = self.params
-        inlet_flows = get_flows(inlet)
 
         # Stokes settling velocity
         v_s = stokes_velocity(d_particle, rho_particle, rho_fluid, viscosity)
@@ -201,7 +217,29 @@ class Centrifuge:
             Q, sigma_eff, rho_particle, rho_fluid, viscosity
         )
 
-        # Split flows
+        concentrate, clarified, lysis_fraction, lysate_mass = self._split(
+            inlet, actual_sep, concentrate_fraction, rcf)
+
+        info = {
+            "separation_efficiency": actual_sep,
+            "stokes_velocity": v_s,
+            "critical_diameter": d_crit,
+            "cell_recovery": actual_sep,
+            "Q_critical": Q_crit,
+            "concentration_factor": actual_sep / concentrate_fraction,
+            "lysis_fraction": lysis_fraction,
+            "lysate_released": lysate_mass,
+        }
+
+        return concentrate, clarified, info
+
+    def _split(self, inlet: Stream, cell_recovery, concentrate_fraction, rcf):
+        """Split the feed with the cell capture ``cell_recovery`` (and the lysis model).
+
+        Returns ``(concentrate, clarified, lysis_fraction, lysate_mass)``.
+        """
+        p = self.params
+        inlet_flows = get_flows(inlet)
         cell_species = p.cell_species
         cell_flow_in = inlet_flows.get(cell_species, jnp.array(0.0))
 
@@ -219,7 +257,6 @@ class Centrifuge:
         lysate_mass = cell_flow_in * lysis_fraction
 
         # Intact cells going to concentrate
-        cell_recovery = actual_sep
         cells_to_concentrate = intact_cells_in * cell_recovery
 
         # Other species split by volume fraction (assumed no separation)
@@ -248,31 +285,28 @@ class Centrifuge:
 
         concentrate = make_stream(concentrate_flows, inlet["T"], inlet["P"])
         clarified = make_stream(clarified_flows, inlet["T"], inlet["P"])
-
-        info = {
-            "separation_efficiency": actual_sep,
-            "stokes_velocity": v_s,
-            "critical_diameter": d_crit,
-            "cell_recovery": cell_recovery,
-            "Q_critical": Q_crit,
-            "concentration_factor": cell_recovery / concentrate_fraction,
-            "lysis_fraction": lysis_fraction,
-            "lysate_released": lysate_mass,
-        }
-
-        return concentrate, clarified, info
+        return concentrate, clarified, lysis_fraction, lysate_mass
 
 
 class DiscStackCentrifuge:
     """Disc-stack centrifuge with geometry-based Sigma calculation.
 
     Common in bioprocessing for continuous cell separation.
+
+    One particle size per call (``d_particle``) by default. With ``d_bins`` and
+    ``mass_fractions`` in the params, each bin is captured with the grade
+    efficiency ``eta_i = min(1, v_s(d_i) e Sigma / Q)`` and the cell recovery is
+    ``sum_i w_i eta_i`` (``w`` normalized); ``info`` then also has
+    ``grade_efficiency`` (per bin) and ``overall_efficiency`` (equal to
+    ``cell_recovery`` and ``separation_efficiency``), and ``stokes_velocity`` and
+    ``Q_critical`` are per bin.
     """
 
     symbol = "Disc-Stack Centrifuge"
     equations = [
         r"\Sigma = \frac{2\pi\,n\,\omega^2}{3\,g\tan\theta}\,(r_o^3 - r_i^3)",
         r"Q/\Sigma = 2\,v_s",
+        r"\eta_i = \min(1, v_s(d_i)\,e\,\Sigma/Q),\qquad \eta = \textstyle\sum_i w_i\,\eta_i",
     ]
     assumptions = [
         "Ideal disc-stack geometry; no short-circuiting.",
@@ -292,6 +326,8 @@ class DiscStackCentrifuge:
         "efficiency": "-",
         "lysis_threshold_g": "RCF",
         "lysis_coefficient": "1/RCF",
+        "d_bins": "m",
+        "mass_fractions": "-",
     }
     numerical_method = "Sigma-factor from disc-stack geometry fed to Stokes settling model."
 
@@ -344,11 +380,38 @@ class DiscStackCentrifuge:
         See Centrifuge.__call__ for details. The relative centrifugal force
         defaults to the value computed from the disc-stack geometry
         (``g_force(r_outer, rpm)``) so the g-force-dependent lysis model (#103)
-        works without a separately supplied ``rcf``.
+        works without a separately supplied ``rcf``. With ``params.d_bins`` the
+        capture is the mass-weighted grade efficiency over the bins and
+        ``d_particle`` is ignored (see the class docstring).
         """
+        p = self.params
+        rcf = self.rcf if rcf is None else rcf
+        if p.d_bins is not None:
+            w = jnp.asarray(p.mass_fractions, dtype=float)
+            w = w / jnp.sum(w)
+            v_s = stokes_velocity(jnp.asarray(p.d_bins, dtype=float), rho_particle, rho_fluid, viscosity)
+            sigma_eff = p.efficiency * self.sigma
+            eta_bins = jnp.clip(v_s * sigma_eff / Q, 0.0, 1.0)
+            recovery = jnp.sum(w * eta_bins)
+            concentrate, clarified, lysis_fraction, lysate_mass = self._centrifuge._split(
+                inlet, recovery, concentrate_fraction, rcf)
+            info = {
+                "separation_efficiency": recovery,
+                "stokes_velocity": v_s,
+                "critical_diameter": critical_particle_diameter(Q, sigma_eff, rho_particle, rho_fluid,
+                                                                viscosity),
+                "cell_recovery": recovery,
+                "Q_critical": 2 * v_s * sigma_eff,
+                "concentration_factor": recovery / concentrate_fraction,
+                "lysis_fraction": lysis_fraction,
+                "lysate_released": lysate_mass,
+                "grade_efficiency": eta_bins,
+                "overall_efficiency": recovery,
+            }
+            return concentrate, clarified, info
         return self._centrifuge(
             inlet, Q, d_particle, rho_particle, rho_fluid, viscosity,
-            concentrate_fraction, rcf=self.rcf if rcf is None else rcf,
+            concentrate_fraction, rcf=rcf,
         )
 
 

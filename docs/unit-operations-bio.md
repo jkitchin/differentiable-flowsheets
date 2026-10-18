@@ -476,6 +476,33 @@ class DiscStackParams:
     r_outer: float         # Outer disc radius (m)
     cone_angle: float      # Disc cone angle (radians)
     rpm: float             # Rotational speed (rev/min)
+    d_bins: list = None          # particle size bins (m); None: one size, d_particle of the call
+    mass_fractions: list = None  # mass fraction of the cells in each bin (normalized)
+```
+
+#### Size Distribution
+
+By default a call takes one particle size (`d_particle`). With `d_bins` and `mass_fractions`
+(the same option as `Settler` and `Cyclone`) each bin is captured with the grade efficiency
+$\eta_i = \min(1, v_s(d_i)\,e\,\Sigma/Q)$ and the cell recovery is the mass-weighted
+$\eta = \sum_i w_i \eta_i$; `d_particle` is then ignored. `info` adds `grade_efficiency` (per
+bin) and `overall_efficiency` (equal to `cell_recovery` and `separation_efficiency`), and
+`stokes_velocity` and `Q_critical` become per bin.
+
+```python
+import jax
+from difflow_bio.units.centrifuge import DiscStackCentrifuge, DiscStackParams
+
+broth = {"F_cells": 0.083, "F_water": 2.78, "T": 303.15, "P": 101325.0}   # kg/s, 10 m3/h
+
+def recovery(rpm):
+    p = DiscStackParams(n_discs=60, r_outer=0.12, r_inner=0.05, half_angle=0.698, rpm=rpm,
+                        efficiency=0.55, d_bins=[2e-6, 3e-6, 4e-6, 5e-6, 6e-6],
+                        mass_fractions=[0.05, 0.15, 0.3, 0.3, 0.2])
+    return DiscStackCentrifuge(p)(broth, Q=10.0 / 3600, rho_particle=1090.0, rho_fluid=1020.0,
+                                  viscosity=1.5e-3)[2]["overall_efficiency"]
+
+print(f"recovery {float(recovery(6000.0)):.3f}, dR/d(rpm) = {float(jax.grad(recovery)(6000.0)):.2e}")
 ```
 
 #### Sigma Factor Calculation
