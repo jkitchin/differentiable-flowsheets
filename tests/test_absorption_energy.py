@@ -73,6 +73,17 @@ def test_live_steam_stripper_smoke():
         assert float(g.get(f"F_{s}", 0.0) + l.get(f"F_{s}", 0.0)) == pytest.approx(tot, rel=1e-8)
 
 
+def test_live_steam_stripper_jit_grad():
+    # #496: the steam balance is an implicit fixed point, so jit(grad) traces one column.
+    st = _steam_stripper(steam_species="steam", T=373.15)
+    steam, _ = _sour_water()
+
+    def f(L):
+        return st(steam, make_stream({"H2O": L, "NH3": 1.0}, 323.15, P0))[2]["steam_condensed"]
+
+    assert np.isfinite(float(jax.jit(jax.grad(f))(100.0)))
+
+
 def test_live_steam_validation():
     steam, water = _sour_water()
     with pytest.raises(ValueError, match="not in gas_in"):

@@ -145,7 +145,7 @@ _FLOOR = 1e-12
 _N_PICARD = 14
 _N_PICARD_STAGES = 40
 _N_SWEEPS_ENERGY = 80
-_N_STEAM_PASSES = 12
+_N_STEAM_PASSES = 50
 
 
 # ---------------------------------------------------------------------------
@@ -757,9 +757,12 @@ class _GasLiquidColumn:
         ``n lambda = cp_L L_in (T_s - T_L,in) + cp_G V_in (T_s - T_G,in) + Q_des``
 
         where ``Q_des = -Q_absorption`` is the heat of desorption. ``Q_des``
-        depends on what is stripped, so the balance and the column are passed
-        a fixed number of times (the coupling is weak).
+        depends on what is stripped, so ``n`` is the fixed point of balance and
+        column, found by substitution (the coupling is weak) and differentiated
+        implicitly, so a traced call holds one column, not one per pass.
         """
+        import optimistix as optx
+
         p = self.params
         if self._role != "stripper":
             raise ValueError("steam_species (live steam) is for a Stripper")
@@ -777,20 +780,28 @@ class _GasLiquidColumn:
         lam = jnp.asarray(p.steam_latent_heat, float)
         Q_pre = p.cp_liquid * L_in * (T_s - T_L)
         Q_gas = p.cp_gas * V_in * (T_s - T_G)            # <= 0 for superheated steam
-        Q_des = jnp.asarray(0.0)
-        for _ in range(_N_STEAM_PASSES):
-            n_raw = (Q_pre + Q_gas + Q_des) / lam
-            n = jnp.clip(n_raw, 0.0, 0.999 * steam_in)
+
+        n_max = 0.999 * steam_in
+
+        def column_at(n):
             g2 = {**gf, s: steam_in - n}
             l2 = {**lf, s: jnp.asarray(lf.get(s, 0.0), float) + n}
-            gas_out, liquid_out, info = self._column(make_stream(g2, gas_in["T"], gas_in["P"]),
-                                                     make_stream(l2, liquid_in["T"], liquid_in["P"]))
-            Q_des = -info["Q_absorption"]
-            n_raw = (Q_pre + Q_gas + Q_des) / lam
-            n_new = jnp.clip(n_raw, 0.0, 0.999 * steam_in)
-            # a concrete run stops once the condensate is settled; a traced one runs every pass
-            if not _is_tracer(n_new) and float(jnp.abs(n_new - n)) <= 1e-9 * float(n_new) + 1e-14:
-                break
+            return self._column(make_stream(g2, gas_in["T"], gas_in["P"]),
+                                make_stream(l2, liquid_in["T"], liquid_in["P"]))
+
+        def condensed(n, _):
+            Q_des = -column_at(n)[2]["Q_absorption"]
+            return jnp.clip((Q_pre + Q_gas + Q_des) / lam, 0.0, n_max)
+
+        # One column in a while loop, differentiated implicitly: unrolled passes
+        # put a whole column per pass into a traced graph (#496).
+        n0 = jnp.clip((Q_pre + Q_gas) / lam, 0.0, n_max)
+        sol = optx.fixed_point(condensed, optx.FixedPointIteration(rtol=1e-10, atol=1e-14),
+                               n0, max_steps=_N_STEAM_PASSES, throw=False)
+        n = sol.value
+        gas_out, liquid_out, info = column_at(n)
+        Q_des = -info["Q_absorption"]
+        n_raw = (Q_pre + Q_gas + Q_des) / lam
         info = dict(info)
         info.update(
             steam_condensed=n,
