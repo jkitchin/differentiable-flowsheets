@@ -8,6 +8,14 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **The editor asks before a file runs code.** Opening a flowsheet ran its code context (and a `.py` script, and
+  now modules named by import path) with no question asked. A file that would run code now opens nothing until
+  trusted: the page shows the code and the modules and asks *Trust it and open?*; declining leaves no file open,
+  so Save cannot write an empty canvas over it. `difflow gui --trust` skips the question; bundled examples, files
+  saved in the session and code typed into the editor are never asked about. Python: `FlowsheetSession(...,
+  trust=True)`, `open_file(path, trust=True)`, `needs_trust`/`blocked`, and `serialize.untrusted_modules`. Undo and
+  redo now rebuild with the trust their model was opened with (they failed on a model naming a module of yours),
+  and `Workbench(allow_exec=False)` refuses a JSON with a code context, as it did a `.py` file.
 - **`serialize` covers every difflow model.** `save`/`load` now also take a `DynamicFlowsheet` (units as their
   class and constructor call, time-dependent feeds), a `PowerNetwork` and a `RadialFeederFlowsheet`; a
   `Flowsheet` subclass (`GasNetworkFlowsheet`) keeps its class. New: `CubicThermo`, `ActivityThermo` and

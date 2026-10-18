@@ -23,12 +23,18 @@ through :func:`difflow.serialize.ref_namespace`. The same snippet is
 emitted as the preamble of :func:`difflow.codegen.to_python`, so the
 exported script is what actually ran here.
 
-That means **opening a flowsheet in the editor runs the Python it
-carries**, exactly as running the exported script would. It is the same
-trust as opening a notebook. The server refuses requests that do not
-come from the page it served (see :mod:`difflow.gui.server`), because
-an ``exec`` reachable from any web page would be something else
-entirely.
+So a flowsheet can carry code: its code context, a ``.py`` script that
+builds it, and functions and classes of yours that it names by import
+path (:mod:`difflow.serialize`). Running any of that is the same trust
+as running the exported script, and **a file is only allowed to after
+you say so**. Opening one that would run code opens nothing and reports
+what it would run (``needs_trust``); the editor shows it and asks.
+``open_file(path, trust=True)`` --- the editor's *Trust and open* --- or
+starting with ``difflow gui --trust`` answers yes. A file you saved in
+this session, a bundled example, and code you type into the editor
+yourself need no asking. The server also refuses requests that do not
+come from the page it served (see :mod:`difflow.gui.server`), because an
+``exec`` reachable from any web page would be something else entirely.
 """
 
 from __future__ import annotations
@@ -279,8 +285,21 @@ class FlowsheetSession:
     :mod:`difflow.catalog`.
     """
 
-    def __init__(self, flowsheet=None, path: str | Path | None = None):
+    def __init__(self, flowsheet=None, path: str | Path | None = None,
+                 trust: bool = False):
         path = Path(path) if path else None
+        #: run the code of any file without asking (``difflow gui --trust``)
+        self.trust = bool(trust)
+        #: files trusted in this session: answered yes to, or saved here
+        self._trusted: set[Path] = set()
+        #: the file asked about at startup, waiting for a yes: what
+        #: :meth:`_trust_needed` reported. Nothing of it is loaded, and
+        #: `path` stays empty, so Save cannot write an empty canvas over it.
+        self.blocked: dict | None = None
+        blocked = (self._trust_needed(path) if flowsheet is None and path
+                   and path.exists() else None)
+        if blocked:
+            self.blocked, path = blocked, None
         #: the script this was opened from, if it was opened from one.
         #: A script is a way in and not a way back out (see
         #: :mod:`difflow.scripts`), so it is kept apart from `path`,
@@ -367,7 +386,55 @@ class FlowsheetSession:
 
         data = json.loads(path.read_text())
         self._evaluate((data.get("view") or {}).get("code_context") or "")
-        self.flowsheet = serialize.from_dict(data, refs=self.bindings)
+        # trusted: _trust_needed has already said this file may run code
+        self.flowsheet = serialize.from_dict(data, refs=self.bindings, trust=True)
+
+    def _trust_needed(self, target: Path | None, document: dict | None = None
+                      ) -> dict | None:
+        """What a file or document would run, if it is not yet trusted.
+
+        ``None`` when it runs nothing, or is trusted already: the whole
+        session was (``trust=True``), or this very file was answered yes
+        to or saved here. Otherwise ``{"path", "kind", "code", "modules"}``
+        --- the script or code context it would run, and the modules
+        outside difflow it would import --- which is what the editor shows
+        before asking.
+        """
+        import json
+
+        from difflow import serialize
+
+        if self.trust:
+            return None
+        resolved = Path(target).expanduser().resolve() if target else None
+        if resolved is not None and resolved in self._trusted:
+            return None
+        if resolved is not None and scripts.is_script(resolved):
+            return {"path": str(resolved), "kind": "script",
+                    "code": resolved.read_text(), "modules": []}
+        if document is None:
+            try:
+                document = json.loads(resolved.read_text())
+            except (OSError, ValueError, AttributeError):
+                return None          # the loader reports what is wrong
+        if not isinstance(document, dict):
+            return None
+        code = (document.get("view") or {}).get("code_context") or ""
+        modules = serialize.untrusted_modules(document)
+        if not code.strip() and not modules:
+            return None
+        return {"path": str(resolved or ""), "kind": "json",
+                "code": code, "modules": modules}
+
+    @staticmethod
+    def _trust_refusal(info: dict) -> dict:
+        """The answer for a file that would run code and is not trusted."""
+        what = ("is a script, and opening it runs it"
+                if info["kind"] == "script" else "carries code that runs on opening")
+        name = Path(info["path"]).name if info["path"] else "this flowsheet"
+        return {"ok": False, "needs_trust": info,
+                "error": f"{name} {what}. Open it only if you trust it: "
+                         "Trust and open, or open_file(path, trust=True)."}
 
     def _source(self) -> str:
         """The code context the flowsheet carries."""
@@ -719,6 +786,7 @@ class FlowsheetSession:
             return {"flowsheet": None, "path": str(self.path or ""),
                     "source": str(self.source or ""), "dirty": False}
         document = serialize.to_dict(self.flowsheet, refs=self.bindings)
+        blocked = {"blocked": self.blocked} if self.blocked else {}
         document.setdefault("view", {})
         # Auto-layout underneath, stored positions on top. Not "one or the
         # other": the moment the user drags one node the flowsheet has a
@@ -748,6 +816,9 @@ class FlowsheetSession:
             # already reloads it, and an empty flowsheet's species are the
             # first thing the editor has to ask for.
             **self.species(),
+            # The file given at startup that is waiting to be trusted: the
+            # editor asks about it as soon as the page loads.
+            **blocked,
         }
 
     def docs(self, operation: str) -> dict:
@@ -862,17 +933,21 @@ class FlowsheetSession:
     # -- writes -------------------------------------------------------
 
     @_undoable
-    def replace(self, document: dict) -> dict:
+    def replace(self, document: dict, trust: bool = False) -> dict:
         """Adopt a flowsheet sent from the browser.
 
         The document's own code context wins, since the document is the
         whole model: loading a file through this route must behave the
-        same as opening it on the command line.
+        same as opening it on the command line --- including being asked
+        about first when it would run code (see :meth:`open_file`).
         """
         from difflow import serialize
 
         if not isinstance(document, dict):
             return {"ok": False, "error": "a flowsheet must be a JSON object"}
+        info = None if trust else self._trust_needed(None, document)
+        if info:
+            return self._trust_refusal(info)
         # Built in full before anything is replaced. Evaluating the
         # document's code context straight into the session used to swap
         # the bindings first, so a document that then failed to build left
@@ -881,7 +956,7 @@ class FlowsheetSession:
             context = (document.get("view") or {}).get("code_context") or ""
             bindings, error = (evaluate_context(context)
                                if context.strip() else ({}, None))
-            flowsheet = serialize.from_dict(document, refs=bindings)
+            flowsheet = serialize.from_dict(document, refs=bindings, trust=True)
             _check_reserved_names(flowsheet)
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
@@ -906,7 +981,7 @@ class FlowsheetSession:
             document = examples.document(key)
         except KeyError:
             return {"ok": False, "error": f"no example named {key!r}"}
-        answer = self.replace(document)
+        answer = self.replace(document, trust=True)       # bundled with difflow
         if not answer.get("ok"):
             # The old flowsheet is still the one open: its file, its undo
             # history and its unsaved changes all stay with it.
@@ -1593,14 +1668,19 @@ class FlowsheetSession:
             return {"ok": False, "error": str(exc)}
         if path is not None:
             self.path, self.source = target, None
+        # what this session wrote is its own model: reopening it asks nothing
+        self._trusted.add(Path(target).resolve())
         self._saved = self._state()
         return {"ok": True, "path": str(target)}
 
-    def open_file(self, path) -> dict:
+    def open_file(self, path, trust: bool = False) -> dict:
         """Replace the flowsheet with one read from disk, as on startup.
 
         Built in full before anything is replaced, so a file that will
-        not load leaves the current flowsheet exactly where it was.
+        not load leaves the current flowsheet exactly where it was. A
+        file that would run code is not opened unless trusted: the answer
+        is ``{"ok": False, "needs_trust": ...}`` naming the code, and
+        ``trust=True`` --- the editor's *Trust and open* --- opens it.
         """
         import json
 
@@ -1611,6 +1691,10 @@ class FlowsheetSession:
         target = Path(path.strip()).expanduser().resolve()
         if not target.is_file():
             return {"ok": False, "error": f"there is no file {str(target)!r}"}
+        if not trust:
+            info = self._trust_needed(target)
+            if info:
+                return self._trust_refusal(info)
         script = scripts.is_script(target)
         try:
             if script:
@@ -1624,7 +1708,7 @@ class FlowsheetSession:
                 context = (data.get("view") or {}).get("code_context") or ""
                 bindings, error = (evaluate_context(context)
                                    if context.strip() else ({}, None))
-                flowsheet = serialize.from_dict(data, refs=bindings)
+                flowsheet = serialize.from_dict(data, refs=bindings, trust=True)
             _check_reserved_names(flowsheet)
         except Exception as exc:
             return {"ok": False,
@@ -1634,6 +1718,8 @@ class FlowsheetSession:
             self._adopt(flowsheet, bindings, error)
             self.source = target if script else None
             self.path = scripts.save_target(target) if script else target
+            self._trusted.add(target)
+            self.blocked = None
             self._saved = self._state()
             self._forget_history()
         return {"ok": True, "path": str(self.path),
@@ -1680,7 +1766,8 @@ class FlowsheetSession:
                 else:
                     bindings, error = (evaluate_context(context)
                                        if context.strip() else ({}, None))
-                flowsheet = serialize.from_dict(data, refs=bindings)
+                # the session's own earlier state: it passed the gate then
+                flowsheet = serialize.from_dict(data, refs=bindings, trust=True)
             except Exception as exc:
                 return {"ok": False,
                         "error": f"could not {verb}: {type(exc).__name__}: {exc}"}

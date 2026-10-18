@@ -286,7 +286,11 @@ class Workbench:
             return err
         if str(path).endswith(".py") and not self.allow_exec:
             return self._no_exec()
-        return self._timed(session, lambda: s.open_file(path), timeout)
+        # A file's code context and the modules it names run like a
+        # script's code: allowed exactly when exec is. Without it, such a
+        # file is refused with what it would have run.
+        return self._timed(session, lambda: s.open_file(path, trust=self.allow_exec),
+                           timeout)
 
     def save(self, path: str | None = None, overwrite: bool = False,
              session: str = "main") -> dict:

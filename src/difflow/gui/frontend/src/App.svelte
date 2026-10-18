@@ -22,6 +22,7 @@
   import { keepAlive } from './lib/model/lifetime.js'
   import { flowLabels, flowTints } from './lib/model/results.js'
   import { validColorBy } from './lib/model/solution.js'
+  import { trustQuestion } from './lib/model/trust.js'
 
   let doc = $state(null)
   let path = $state('')
@@ -46,6 +47,8 @@
   // ports to wire --- and this is the note beside them, exactly as the
   // server sends it: the name, and what would finish it.
   let pending = $state([])
+  // The file named at startup that would run code, held until asked about.
+  let blocked = $state(null)
   let catalog = $state({})
   let error = $state('')
   let note = $state('')
@@ -211,6 +214,7 @@
     species = payload.species ?? []
     speciesEditable = payload.editable !== false
     pending = payload.pending ?? []
+    blocked = payload.blocked ?? null
     // The selection is a snapshot of a node; after a reload it may name a
     // unit that no longer exists, or one whose ports have changed. A
     // pending node counts as still there -- it is the one selection the
@@ -264,7 +268,8 @@
     loadContext(),
     loadPickers(),
     get('/api/catalog').then((c) => (catalog = c)),
-  ]).catch((e) => (error = String(e)))
+  ]).then(() => blocked && askToTrust(blocked))
+    .catch((e) => (error = String(e)))
 
   /**
    * Telling the server this tab is open, so that closing it stops it.
@@ -642,7 +647,24 @@
       'Open a flowsheet (.json) or a difflow script (.py), by path:', '')
     if (!where || !discard('Open another file')) return
     return edit(async () => {
-      const answer = await post('/api/open', { path: where })
+      let answer = await post('/api/open', { path: where })
+      // A file that would run code is not opened until it is trusted:
+      // the server says what it would run, and that is what is asked.
+      if (answer.needs_trust && window.confirm(trustQuestion(answer.needs_trust))) {
+        answer = await post('/api/open', { path: where, trust: true })
+      }
+      return answer.ok ? adopted(answer) : answer
+    })
+  }
+
+  /** The file named at startup, held because it would run code. */
+  function askToTrust(info) {
+    if (!window.confirm(trustQuestion(info))) {
+      note = `${shortPath(info.path)} was not opened: it runs code, and was not trusted`
+      return
+    }
+    return edit(async () => {
+      const answer = await post('/api/open', { path: info.path, trust: true })
       return answer.ok ? adopted(answer) : answer
     })
   }
