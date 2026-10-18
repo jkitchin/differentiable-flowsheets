@@ -817,7 +817,8 @@ class TestCodeContext:
         client.session.path = tmp_path / "plant.json"
         assert client.post("/api/save")[1]["ok"]
 
-        reopened = FlowsheetSession(path=tmp_path / "plant.json")
+        # a new session asks before running the file's code; trusted, it opens
+        reopened = FlowsheetSession(path=tmp_path / "plant.json", trust=True)
         assert reopened.code_context()["source"] == THERMO_CONTEXT
         assert added in [u.name for u in reopened.flowsheet.units], (
             "a $ref that cannot be resolved on load makes the file unopenable"

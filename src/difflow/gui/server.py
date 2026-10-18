@@ -581,7 +581,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return session.save(payload.get("path"),
                                     overwrite=bool(payload.get("overwrite")))
             if path == "/api/open":
-                return session.open_file(payload.get("path"))
+                # trust: the page's "Trust and open", after it showed the
+                # code the file would run (the session's `needs_trust`)
+                return session.open_file(payload.get("path"),
+                                         trust=payload.get("trust") is True)
             if path == "/api/new":
                 return session.new()
             if path == "/api/undo":
@@ -742,6 +745,7 @@ def serve(
     open_browser: bool = True,
     token: str | None = None,
     stay: bool = False,
+    trust: bool = False,
 ) -> None:
     """Run the editor until the page goes away, or until interrupted.
 
@@ -764,8 +768,10 @@ def serve(
             driven from a script or a notebook rather than from the
             page, where there may be no tab open at all and the Quit
             button is not the thing that ends it.
+        trust: run the code of any file opened without asking (``--trust``);
+            see :mod:`difflow.gui.session`.
     """
-    session = FlowsheetSession(flowsheet, path)
+    session = FlowsheetSession(flowsheet, path, trust=trust)
     server = make_server(session, port, token)
     url = f"http://{HOST}:{port}/"
     how = "ctrl-c to stop" if stay else "Quit, or close the tab, or ctrl-c"
@@ -996,6 +1002,12 @@ def main(argv: list[str] | None = None, prog: str = "difflow gui") -> int:
              "editor stops with the tab and gives the port back",
     )
     parser.add_argument(
+        "--trust", action="store_true",
+        help="run the code of any file opened without asking first (its "
+             "code context, a .py script, modules it names); otherwise the "
+             "editor shows what a file would run and asks",
+    )
+    parser.add_argument(
         "--token",
         help="fixed CSRF token, for `npm run dev` against this server; "
              "otherwise one is minted per run and put into the page",
@@ -1004,7 +1016,7 @@ def main(argv: list[str] | None = None, prog: str = "difflow gui") -> int:
 
     try:
         serve(path=args.path, port=args.port, open_browser=not args.no_browser,
-              token=args.token, stay=args.stay)
+              token=args.token, stay=args.stay, trust=args.trust)
     except scripts.ScriptError as exc:
         # The user's own file, not a bug here. A traceback through
         # runpy and three frames of this package buries the one line
