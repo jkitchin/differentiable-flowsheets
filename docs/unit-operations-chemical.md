@@ -2241,8 +2241,9 @@ $$
 with `lambda = steam_latent_heat` (default 40 660 J/mol, water at 100 C;
 change it for another pressure) and `cp_gas` (set about 34 J/(mol K) for
 steam; superheat reduces the condensate). Because `Q_des` depends on what is
-stripped, the balance and the column are passed alternately until the
-condensate settles (a fixed number of passes when traced). `info` adds
+stripped, `n` is the fixed point of the balance and the column, found by
+substitution and differentiated implicitly, so a traced or jitted call holds
+one column rather than one per pass. `info` adds
 `steam_condensed` (mol/s, also in the liquid outlet under the steam name),
 `steam_duty` (W, `n lambda`), `Q_preheat`, `Q_desorption`, `Q_gas_sensible`
 and `steam_fraction_condensed`; `feasible` is False when the preheat needs
