@@ -7,7 +7,15 @@ import pytest
 
 pytest.importorskip("gaspype")
 
-from difflow import GibbsReactor, GibbsReactorParams, make_stream
+from difflow import (
+    Flowsheet,
+    GibbsReactor,
+    GibbsReactorParams,
+    Unit,
+    codegen,
+    make_stream,
+    serialize,
+)
 from difflow.gaspype_import import GaspypeThermo, list_available_species
 
 jax.config.update("jax_enable_x64", True)
@@ -75,3 +83,39 @@ def test_padded_intervals_keep_each_species_own_data():
     th = GaspypeThermo(["CH4", "CO2"])
     assert th._coeffs.shape[1] == 3
     assert np.all(th._coeffs[0, 2] == th._coeffs[0, 1])
+
+
+def test_exported_flat_and_as_namespace():
+    import difflow
+
+    assert difflow.GaspypeThermo is GaspypeThermo
+    assert difflow.gaspype_import.list_available_species is list_available_species
+
+
+def _reformer_flowsheet(method="nasa9"):
+    fs = Flowsheet(species_order=SMR)
+    fs.add_feed("feed", make_stream({"CH4": 1.0, "H2O": 3.0, "H2": 0.0, "CO": 0.0,
+                                     "CO2": 0.0}, T=900.0, P=1e5))
+    th = GaspypeThermo(SMR, method=method)
+    fs.add_unit(Unit("ref", GibbsReactor(GibbsReactorParams(thermo=th, T_out=1000.0)),
+                     ["feed"], ["out"]))
+    return fs
+
+
+@pytest.mark.parametrize("method", ["nasa9", "table"])
+def test_serialize_round_trip(method):
+    fs = _reformer_flowsheet(method)
+    back = serialize.from_json(serialize.to_json(fs))
+    th = back.units[0].operation.params.thermo
+    assert isinstance(th, GaspypeThermo)
+    assert th.names == tuple(SMR) and th.method == method
+    assert float(back.solve()["out"]["F_H2"]) == float(fs.solve()["out"]["F_H2"])
+
+
+def test_codegen_script_rebuilds_the_flowsheet():
+    fs = _reformer_flowsheet()
+    source = codegen.to_python(fs)
+    assert "GaspypeThermo(" in source
+    ns = {}
+    exec(compile(source, "<codegen>", "exec"), ns)
+    assert float(ns["fs"].solve()["out"]["F_H2"]) == float(fs.solve()["out"]["F_H2"])

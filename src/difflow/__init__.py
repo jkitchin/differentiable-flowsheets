@@ -106,11 +106,16 @@ from difflow.cantera_import import (
 # the Cantera names. Usage: difflow.pyglenn_import.import_species_data([...]),
 # difflow.dwsim_import.import_critical_props([...]). Both underlying tools are
 # optional dependencies, imported lazily inside the adapters' functions.
+# Gaspype is the same, but its thermo class has no Cantera twin, so
+# GaspypeThermo is also exported flat, next to GibbsThermo; gaspype itself
+# is imported only when one is built.
 from difflow import fluids
 from difflow import heat_transfer
 from difflow import gas_properties
 from difflow import pyglenn_import
 from difflow import dwsim_import
+from difflow import gaspype_import
+from difflow.gaspype_import import GaspypeThermo
 from difflow.params_mixin import ParamsMixin
 from difflow.numerics import (
     safe_divide,
@@ -653,6 +658,8 @@ __all__ = [
     "pyglenn_import",
     # DWSIM Import (namespace: difflow.dwsim_import)
     "dwsim_import",
+    # Gaspype Import (namespace: difflow.gaspype_import; GaspypeThermo flat)
+    "gaspype_import",
     # Unit operations - CSTR
     "CSTR",
     "CSTRParams",
@@ -684,6 +691,7 @@ __all__ = [
     "GibbsReactor",
     "GibbsReactorParams",
     "GibbsThermo",
+    "GaspypeThermo",
     "StoichiometricReactorParams",
     # Unit operations - LLE
     "MultistageCascade",

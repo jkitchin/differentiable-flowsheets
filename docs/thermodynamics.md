@@ -1308,6 +1308,11 @@ and the adapter where difflow needs a gradient. The example notebook
 | `"nasa9"` (default) | The NASA-9 polynomials in `jax.numpy`, from gaspype's database | Smooth within each interval; G steps ~0.01–0.1 J/mol where intervals meet (usually 1000 K); extrapolates outside the data range; reads gaspype's private database reader (checked on gaspype 1.1) |
 | `"table"` | Gaspype's public `fluid_system` (JAX backend) | Public API only; a 1 K linear table between `t_min` and `t_max`, so T derivatives are piecewise constant |
 
+`GaspypeThermo` is also exported as `difflow.GaspypeThermo`; gaspype itself
+is imported only when one is built, so `import difflow` does not need it. It is a
+dataclass, so `difflow.serialize` saves a flowsheet that uses it as the species
+list and `method`, and `difflow.codegen` writes it as a `GaspypeThermo(...)` call.
+
 The adapter is ideal-gas only. A gaspype `fluid` holds no liquids, and gaspype
 has no VLE or critical properties.
 

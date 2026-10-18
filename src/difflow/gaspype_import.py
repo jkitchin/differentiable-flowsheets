@@ -39,10 +39,13 @@ Two ways to evaluate the data (``method``)
   only gaspype's public API, but ``dH/dT`` and ``dG/dT`` are piecewise
   constant, so derivatives with respect to T jump at every whole kelvin.
 
+``GaspypeThermo`` is also exported as ``difflow.GaspypeThermo``. It is a
+dataclass of its constructor arguments, so ``difflow.serialize`` and
+``difflow.codegen`` write it as the species list and ``method``.
+
 Usage::
 
-    from difflow import GibbsReactor, GibbsReactorParams, make_stream
-    from difflow.gaspype_import import GaspypeThermo
+    from difflow import GaspypeThermo, GibbsReactor, GibbsReactorParams, make_stream
 
     th = GaspypeThermo(["CH4", "H2O", "H2", "CO", "CO2"])
     out, info = GibbsReactor(GibbsReactorParams(thermo=th, T_out=1000.0))(
