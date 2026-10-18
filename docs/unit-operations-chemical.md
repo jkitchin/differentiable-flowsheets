@@ -3263,7 +3263,9 @@ the stationarity condition, and its gradients against finite differences.
 ### Gas Transport Properties
 
 `difflow.gas_properties` covers low-pressure (ideal-gas) transport and heat
-capacity for air, N2, O2, CO2, CO, CH4, H2, Ar, He and H2O (steam). It is a
+capacity for air, N2, O2, CO2, CO, CH4, H2, Ar, He, H2O (steam), and the
+natural-gas and refinery-gas components ethane, propane, n-butane, isobutane
+and H2S. It is a
 pure-JAX library, not a palette operation, and is differentiable in T.
 
 | Function | Returns |
@@ -3286,7 +3288,12 @@ Each property is a fit $\ln y=\sum a_i[\ln(T/300)]^i$: cubic for μ and k,
 quintic for $c_p$. The fits are made by `scripts/fit_gas_transport.py` to the
 NIST Chemistry WebBook fluid tables at 1 atm (`tests/reference/nist_gases_1atm/`).
 They match every NIST point to 0.2% (μ), 0.55% (k) and 0.15% ($c_p$) over each
-gas's stored range. Air μ and k come from the Engineering ToolBox air tables,
+gas's stored range. Ethane, propane, the butanes and H2S are fitted the same
+way to 1 atm tables from CoolProp's reference models
+(`tests/reference/coolprop_gases_1atm/`, written by
+`scripts/make_coolprop_gas_tables.py`), from just above each normal boiling
+point; H2S has no reference conductivity model, so its k is the Chung et al.
+estimate (about 5-8%). Air μ and k come from the Engineering ToolBox air tables,
 and air $c_p$ is the mass-weighted N2/O2/Ar NIST mixture. Outside a fit's
 range the value is extrapolated and a `GasRangeWarning` is raised (on
 concrete values only). Air at 300 K gives μ = 18.46 µPa s, k = 26.4 mW/m/K
@@ -3295,7 +3302,7 @@ The single-gas fits are for low pressure. Above about 10 bar use the
 dense-gas functions: they add the Jossi-Stiel-Thodos (μ) and Stiel-Thodos (k)
 residuals in the reduced density $\rho_r=\rho V_c$. The density comes from
 Peng-Robinson with the critical constants in `GAS_CRITICAL` (Poling et al. 5e,
-App. A), and a mixture uses Kay's-rule pseudo-critical constants. Methane at
+App. A; the reference-EOS critical points for the hydrocarbons and H2S), and a mixture uses Kay's-rule pseudo-critical constants. Methane at
 15 °C and 50 bar gives 11.8 µPa s against a NIST value of about 12.0 (dilute:
 10.75). The residuals suit nonpolar gases; they are not meant for H2, He or
 steam near saturation.
