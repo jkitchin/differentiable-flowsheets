@@ -6764,6 +6764,12 @@ class CoolingTowerParams:
     cycles_of_concentration: float = 4.0
     cp_water: float = 4186.0      # J/kg/K
     makeup_in_outlet: bool = True # outlet flow = inlet flow (basin after make-up)
+    fill_pressure_drop: float = None     # Pa, given directly
+    fill_loss_coefficient: float = None  # K_fill, velocity heads (needs frontal_area)
+    frontal_area: float = None           # fill plan area (m^2)
+    other_pressure_drop: float = None    # Pa: louvres, rain zone, eliminator, stack
+    fan_efficiency: float = 0.65         # the Ch. 18 book assumption, not a sourced value
+    fan_location: str = "induced"        # | "forced": which air the fan handles
 ```
 
 #### Equations and Assumptions
@@ -6773,11 +6779,54 @@ class CoolingTowerParams:
   Poppe method removes; Poppe and the e-NTU model are not included).
 - Constant water specific heat and constant $L/G$ through the fill;
   ideal-gas humid air (`difflow.psychrometrics`).
-- No fan, fill or spray pressure drop; the cold-water outlet is at the tower
-  pressure (the basin), which is what closes a pumped loop.
+- The air-side pressure drop is an input, not a correlation (see *Fan power*
+  below); the cold-water outlet is at the tower pressure (the basin), which is
+  what closes a pumped loop.
 - The evaporation fraction comes out near the rule of thumb
   $0.00085 \times 1.8 \times$ range (unverified, from recollection; checked
   only to 30 % when the model was written).
+
+#### Fan power
+
+Give the air-side pressure drop and the tower reports the fan power,
+$\dot W_{fan} = G\,v\,(\Delta p_{fill} + \Delta p_{other})/\eta_{fan}$, with
+$v$ the humid volume (m³/kg dry air) of the leaving air (`fan_location="induced"`)
+or the entering air (`"forced"`). The fill drop is given directly
+(`fill_pressure_drop`, Pa) or as a loss coefficient in velocity heads of the
+frontal flow, $\Delta p_{fill} = K_{fill}\,G_m^2/(2\rho_{in})$ with
+$G_m = G(1+W_{in})/A_{fr}$ (`fill_loss_coefficient`, `frontal_area`), which is
+just the definition of a loss coefficient: the drop goes as the square of the
+air rate, so the $L/G$ trade-off reaches the fan. `other_pressure_drop` is the
+rest (louvres, rain zone, sprays, drift eliminator, stack). The info dict gains
+`fill_pressure_drop`, `total_pressure_drop`, `air_volumetric_flow` (m³/s),
+`fan_power` (W) and, with `frontal_area`, `air_face_velocity` and
+`air_mass_velocity`; without any pressure-drop input none of these appear and
+every other output is unchanged.
+
+No published fill correlation is built in. The Kloppers & Kröger (2003,
+*Appl. Therm. Eng.* 23, 2201) splash/trickle/film loss-coefficient
+correlation is the intended one, but its constants could not be read from the
+paper when this was written, and none is taken from memory; take $K_{fill}$ or
+$\Delta p_{fill}$ from fill test data. The default `fan_efficiency = 0.65` is the
+book's Chapter 18 design assumption, not a vendor value.
+
+```python
+import jax
+from difflow import CoolingTower, CoolingTowerParams, make_stream
+from difflow.psychrometrics import MW_WATER
+
+K = 273.15
+L = 10e6 / (4186.0 * 8.0)
+hot = make_stream({"H2O": L / MW_WATER}, 35.0 + K, 3e5)
+
+def fan_kW(lg):
+    t = CoolingTower(CoolingTowerParams(mode="design", L_over_G=lg, T_out=27.0 + K,
+                                        fill_loss_coefficient=20.0, frontal_area=100.0,
+                                        other_pressure_drop=50.0))
+    return t(hot, T_wb=22.0 + K)[2]["fan_power"] / 1e3
+
+print(f"fan {float(fan_kW(1.2)):.1f} kW, d(fan)/d(L/G) = {float(jax.grad(fan_kW)(1.2)):.1f} kW")
+```
 
 #### A cooling-water loop
 
@@ -6838,6 +6887,24 @@ two periods separately). Between the table's points the rate is interpolated
 linearly in $R$ by default; `interpolate="inverse"` interpolates $1/R$ instead,
 which makes the integral exactly the trapezoid rule on a $1/R$ versus $X$ plot,
 the graphical method of Geankoplis Example 9.7-1. The Fick-diffusion series for a slab is not implemented.
+
+**Rate-table units.** The functions take `rate_curve=(X, R)` with $R$ in
+**kg/m$^2$/s, the units of `R_c`** (`rate_basis="absolute"`, the default), while
+`DryerParams(rate_curve=...)` takes the relative curve $R/R_c$ (1 at $X_c$). Pass
+`rate_basis="relative"` to give the functions a relative table. A relative table
+read as absolute is $1/R_c$ (about 2400 for 1.5 kg/h/m$^2$) too fast, so the
+falling period comes out seconds instead of hours; to catch that, a table whose
+maximum is outside 0.5-2 times `R_c` (absolute) or 0.5-2 (relative) raises
+`difflow.units.dryer.RateTableWarning`. The check runs on concrete values only;
+under `jit` the table is traced and is not checked.
+
+```python
+from difflow import drying_periods
+X_tab = [0.040, 0.050, 0.065, 0.100, 0.150, 0.195]
+R_rel = [0.18, 0.25, 0.47, 0.60, 0.80, 1.00]           # R/R_c
+t_c, t_f = drying_periods(0.38, 0.04, 0.195, 0.0, 1.51 / 3600, 21.5, "integral",
+                          rate_curve=(X_tab, R_rel), rate_basis="relative", interpolate="inverse")
+```
 
 **The smooth switch.** Which terms apply depends on where $X_c$ falls relative
 to $X_1$ and $X_2$: $X_1 > X_c > X_2$, falling only ($X_1 < X_c$) and constant
@@ -6934,11 +7001,22 @@ hotter at the product end.
 `info` carries the time or residence time, the constant/falling split, the
 exhaust state, the dew-point margin (exhaust dry bulb minus its dew point, with a
 `supersaturated` flag), the product-temperature margin against `max_solids_T`, the
-heat duty `Q_air` of heating the air from `T_ambient`, `energy_per_kg` water
-evaporated, `thermal_efficiency`, balance residuals recomputed from the streams, and
+heat duty `Q_air` (alias `heater_duty`) of heating the air at the inlet humidity
+from `T_heater_in` (default `T_ambient`, i.e. once-through air), `energy_per_kg`
+water evaporated (`Q_air / evaporation`), `thermal_efficiency`, balance residuals recomputed from the streams, and
 for the continuous dryer `fines` (the fraction `entrainment` of the dry solids
 split off at the product moisture and temperature; a downstream cyclone takes it
 from there).
+
+**Energy basis with recirculation.** By default the heater is charged for
+warming fresh air from `T_ambient`. When part of the exhaust is recirculated the
+heater warms the *mixed* air instead, and the default basis overstates the duty
+many times (about 40 against 6.5 MJ/kg at 90% recirculation on a tray dryer). Pass
+the mixed temperature as `T_heater_in` (K; the heater adds no water, so its inlet
+humidity is the dryer's inlet humidity, the converged mixed humidity) and
+`Q_air`/`heater_duty`, `energy_per_kg` and `thermal_efficiency` are on the
+heater's real duty. `T_ambient` stays the reference of the latent heat in the
+efficiency.
 
 ```python
 from difflow import Dryer, DryerParams
@@ -7090,7 +7168,8 @@ class DryerParams:
     max_solids_T: float = None         # K, reported as a margin
     heat_loss: float = 0.0             # W, used when adiabatic=False
     adiabatic: bool = True
-    T_ambient: float = 293.15          # K, reference of the energy per kg and efficiency
+    T_ambient: float = 293.15          # K, surroundings: efficiency reference, default heater inlet
+    T_heater_in: float = None          # K, heater-inlet (e.g. mixed recirculated) air; None -> T_ambient
     entrainment: float = 0.0           # fraction of the dry solids carried out as fines (continuous)
     lewis: float = 1.0
     rate_interpolation: str = "rate"   # | "inverse" (1/R linear between rate_curve points)
@@ -7254,6 +7333,12 @@ class CrystallizerParams:
     heat_of_crystallization: float = 0.0   # J per kg of crystal, released
     soft: float = 1e-6
     duty: float = 0.0                      # W, heat added in "adiabatic" mode
+    kinetics_Ea: list = None               # [E_g, E_b] J/mol -> Arrhenius k_g(T), k_b(T)
+    kinetics_T_ref: float = None           # K, where kinetics' k_g and k_b apply
+    fines_ratio: float = None              # R >= 1, fines destruction below fines_cut_size (R-z)
+    fines_cut_size: float = None           # L_F, m
+    product_classification: float = None   # z >= 1, classified removal above product_cut_size
+    product_cut_size: float = None         # L_P >= L_F, m
 ```
 
 #### Equations and Assumptions
@@ -7262,8 +7347,10 @@ class CrystallizerParams:
   (or anhydrous) crystal. Kinetic mode: the liquor leaves at $c_{sat} + \Delta C$ (below).
 - Duty $Q = m_F c_p (T - T_F) + E\,h_{fg}(T) - \Delta H_c C$ (W; negative is cooling),
   with constant $c_p$ and a user-supplied heat of crystallization (default 0).
-- Constant liquor density converts the liquor flow to a volume flow; no fines destruction,
-  classification, agglomeration, breakage, size-dependent growth or polymorph kinetics.
+- Constant liquor density converts the liquor flow to a volume flow; no agglomeration,
+  breakage, size-dependent growth or polymorph kinetics. Fines destruction and classified
+  product removal are optional (the R-z model, under MSMPR Functions below); both are off by
+  default.
 - `mode="adiabatic"` is a vacuum crystallizer: the feed flashes to `T` (set by the
   vapor-space pressure) and the solvent evaporated is solved from the same heat balance with
   $Q$ = `duty` (0 by default): $E = [Q - m_F c_p (T - T_F) + \Delta H_c (S_0 - c W_0)/d]/
@@ -7327,7 +7414,9 @@ print("crystals / fresh solute =", float(out["crystals"]["F_Na2SO4"] / fresh["F_
 
 **Functions**: `msmpr_distribution`, `msmpr_moments`, `msmpr_dominant_size`,
 `msmpr_mass_median_size`, `msmpr_mass_cv`, `msmpr_from_magma`, `fit_msmpr`,
-`sieve_population_density`, `growth_rate`, `nucleation_rate`, `msmpr_steady_state`
+`sieve_population_density`, `growth_rate`, `nucleation_rate`, `msmpr_steady_state`,
+`arrhenius_factor`, `rz_distribution`, `rz_moments` (the last three from
+`difflow.units.crystallizer`)
 
 For a steady mixed-suspension, mixed-product-removal crystallizer with residence time
 $\tau$, size-independent growth rate $G$ and nuclei density $n_0$ (Randolph & Larson):
@@ -7358,6 +7447,55 @@ $(1-j)\ln M_T - (b+3g)\ln\Delta C - \text{const}$ is monotone for $j \le 1$ (lar
 rejected). Since $G$ falls as $\tau$ grows ($\Delta C$ falls), $L_D(\tau)$ is **not**
 $3G\tau$ at a fixed $G$; as $k_g \to \infty$ the supersaturation vanishes and the yield approaches the
 equilibrium yield.
+
+**Temperature-dependent kinetics.** The power laws have no temperature in them, so at a fixed
+$\tau$ the size changes with $T$ only through the solubility (with $j = 1$ not at all). With
+`kinetics_Ea=[E_g, E_b]` (J/mol) and `kinetics_T_ref` the constants in `kinetics` are the
+values at $T_{ref}$ and follow Arrhenius,
+$k(T) = k(T_{ref})\,\exp[-E/R\,(1/T - 1/T_{ref})]$ (`arrhenius_factor`; also the optional
+`T`, `E_g`/`E_b`, `T_ref` arguments of `growth_rate` and `nucleation_rate` and
+`activation_energies`/`T_ref` of `msmpr_steady_state`). Off by default, and no activation
+energy is built in: like $k_g$ and $k_b$ it is fitted to data at several temperatures, and
+it depends on whether diffusion or the surface reaction controls growth.
+
+**Fines destruction and classified product removal (R-z model).** Randolph & Larson (1988,
+ch. 6) write the removal from an MSMPR as a step function of size: crystals below the fines
+cut $L_F$ leave at $R$ times the product rate (the excess $R-1$ to a fines dissolver whose solute
+returns to the liquor; `fines_ratio`, `fines_cut_size`), crystals above $L_P$ at $z$ times it
+(classified product removal; `product_classification`, `product_cut_size`). The steady balance
+$G\,dn/dL = -h(L)\,n/\tau$ with $h = R,\ 1,\ z$ gives a piecewise exponential, continuous at
+the cuts:
+
+$$n = n_0 e^{-RL/G\tau}\ (L < L_F), \qquad
+n = n_0 e^{-(R-1)L_F/G\tau}\,e^{-L/G\tau}\ (L_F \le L < L_P), \qquad
+n = n(L_P)\,e^{-z(L - L_P)/G\tau}\ (L \ge L_P).$$
+
+`rz_distribution` and `rz_moments` (closed-form piecewise integrals; `basis="product"` weights
+by the product removal, 1 below $L_P$ and $z$ above) evaluate it. In `msmpr_steady_state` (and
+the unit) the third-moment closure then uses the product's crystal mass per m$^3$, nucleation the
+vessel suspension density, and `L_D`, `L_50`, `cv` describe the product's mass distribution;
+`info` adds `M_product`, `product_moments` and `fines_dissolved` (kg/s through the dissolver).
+With $R = 1$ and no classification it is the MSMPR.
+
+```python
+import jax
+from difflow import Crystallizer, CrystallizerParams, make_stream
+
+# SYNTHETIC curve, kinetics and activation energies (illustrative only)
+base = dict(solute="Na2SO4", solute_MW=142.0, mode="cooling", T=278.15, solubility_coeffs=[0.35, 0.0075],
+            hydrate_waters=10.0, kinetics=[2.0e-6, 1.5, 1.0e9, 2.0, 0.6], residence_time=900.0,
+            crystal_density=1460.0, liquor_density=1250.0)
+feed = make_stream({"Na2SO4": 0.60 * 1000 / 142.0, "H2O": 1.0 * 1000 / 18.015}, T=333.15, P=1e5)
+for kw in ({}, dict(fines_ratio=5.0, fines_cut_size=50e-6)):
+    i = Crystallizer(CrystallizerParams(**base, **kw))(feed)[2]
+    print(kw or "MSMPR", f"L_50 = {float(i['L_50']) * 1e6:.0f} um, closure = {float(i['closure']):.0e}")
+
+def L50_of_T(T):
+    p = CrystallizerParams(**{**base, "T": T}, kinetics_Ea=[50e3, 30e3], kinetics_T_ref=278.15)
+    return Crystallizer(p)(feed)[2]["L_50"]
+
+print(f"dL_50/dT = {float(jax.grad(L50_of_T)(278.15)) * 1e6:.2f} um/K")
+```
 
 ```python
 import math

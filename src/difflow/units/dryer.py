@@ -76,6 +76,7 @@ References
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Literal
 
@@ -109,6 +110,12 @@ from difflow.water import T_REF
 R_GAS = 8.314462618
 
 _TINY = 1e-12
+
+
+def _concrete_float(x):
+    from difflow.flowsheet import _concrete
+
+    return _concrete(x)
 
 
 def _f(x) -> Array:
@@ -336,7 +343,23 @@ def _scale(X_c, X_eq, sharpness):
     return jnp.maximum(_f(X_c) - _f(X_eq), 1e-9) / _f(sharpness)
 
 
-def _check_falling(falling, rate_curve, interpolate="rate"):
+class RateTableWarning(UserWarning):
+    """A drying-rate table whose scale does not match its declared ``rate_basis``.
+
+    An absolute table (kg/m^2/s) should peak near ``R_c`` (it joins the
+    constant rate at ``X_c``); a relative table (``R/R_c``) near 1. A table on
+    the other basis is off by the factor ``R_c`` (typically 1e-4 to 1e-3 in SI),
+    which makes the falling-rate time wrong by the same factor without any error.
+    """
+
+
+#: Ratio of the table's maximum to its expected value (``R_c`` or 1) outside which a warning is raised
+_RATE_TABLE_RANGE = (0.5, 2.0)
+
+
+def _check_falling(falling, rate_curve, interpolate="rate", rate_basis="absolute"):
+    if rate_basis not in ("absolute", "relative"):
+        raise ValueError("rate_basis must be 'absolute' (R in kg/m^2/s, the units of R_c) or 'relative' (R/R_c)")
     if interpolate not in ("rate", "inverse"):
         raise ValueError("interpolate must be 'rate' (R linear between table points) or 'inverse' (1/R linear)")
     if falling not in ("linear", "integral"):
@@ -344,6 +367,29 @@ def _check_falling(falling, rate_curve, interpolate="rate"):
             "falling must be 'linear' or 'integral' (the Fick-diffusion series is not implemented)")
     if falling == "integral" and rate_curve is None:
         raise ValueError("falling='integral' needs rate_curve=(X, R)")
+
+
+def _absolute_table(rate_curve, R_c, rate_basis):
+    """``(X_table, R_table)`` in kg/m^2/s; warns (concrete values only) when the scale contradicts the basis."""
+    from difflow.flowsheet import _concrete
+
+    Xt, Rt = _f(rate_curve[0]), _f(rate_curve[1])
+    peak, Rc = _concrete(jnp.max(Rt)), _concrete(R_c)
+    if peak is not None and Rc is not None and Rc > 0:
+        expected = Rc if rate_basis == "absolute" else 1.0
+        ratio = peak / expected
+        lo, hi = _RATE_TABLE_RANGE
+        if not lo <= ratio <= hi:
+            other = "relative (R/R_c)" if rate_basis == "absolute" else "absolute (kg/m^2/s)"
+            warnings.warn(
+                f"rate_curve with rate_basis={rate_basis!r}: the table's maximum {peak:.4g} is {ratio:.3g} x "
+                f"the expected {expected:.4g} ({'R_c' if rate_basis == 'absolute' else '1'}); "
+                f"if the table is {other}, pass rate_basis="
+                f"{'relative' if rate_basis == 'absolute' else 'absolute'!r}",
+                RateTableWarning, stacklevel=3)
+    if rate_basis == "relative":
+        Rt = _f(R_c) * Rt
+    return Xt, Rt
 
 
 def _table_rate(X, Xt, Rt, interpolate):
@@ -355,7 +401,8 @@ def _table_rate(X, Xt, Rt, interpolate):
 
 def drying_rate_curve(X: Array | float, X_c: Array | float, X_eq: Array | float, R_c: Array | float,
                       falling: str = "linear", sharpness: float = 200.0,
-                      rate_curve: tuple | None = None, interpolate: str = "rate") -> Array:
+                      rate_curve: tuple | None = None, interpolate: str = "rate",
+                      rate_basis: str = "absolute") -> Array:
     """Drying rate ``R(X)`` (kg/m^2/s) against the dry-basis moisture, for plotting and for the unit.
 
     ``falling="linear"``: ``R_c`` above ``X_c`` and ``R_c (X - X_eq)/(X_c - X_eq)``
@@ -364,14 +411,21 @@ def drying_rate_curve(X: Array | float, X_c: Array | float, X_eq: Array | float,
     ``R_c`` above ``X_c`` and the tabulated ``rate_curve = (X_table, R_table)``
     (``X_table`` increasing) below, with ``R`` (``interpolate="rate"``) or ``1/R``
     (``"inverse"``) linear between the table points.
+
+    **Table units.** With ``rate_basis="absolute"`` (the default) ``R_table`` is
+    in kg/m^2/s, the units of ``R_c``; with ``rate_basis="relative"`` it is
+    ``R/R_c`` (dimensionless, 1 at ``X_c``), the convention of
+    ``DryerParams(rate_curve=...)``. A table whose maximum is outside 0.5-2x
+    ``R_c`` (absolute) or 0.5-2 (relative) raises :class:`RateTableWarning`
+    (checked on concrete values only; under ``jit`` there is no check).
     """
-    _check_falling(falling, rate_curve, interpolate)
+    _check_falling(falling, rate_curve, interpolate, rate_basis)
     X, X_c, X_eq, R_c = _f(X), _f(X_c), _f(X_eq), _f(R_c)
     s = 1.0 / _f(sharpness)
     if falling == "linear":
         fr = (X - X_eq) / jnp.maximum(X_c - X_eq, 1e-9)
         return R_c * _sp(1.0 - _sp(1.0 - fr, s), s)
-    Xt, Rt = _f(rate_curve[0]), _f(rate_curve[1])
+    Xt, Rt = _absolute_table(rate_curve, R_c, rate_basis)
     below = _table_rate(X, Xt, Rt, interpolate)
     sig = jax.nn.sigmoid((X - X_c) / _scale(X_c, X_eq, sharpness))  # smooth step at X_c
     return below + (R_c - below) * sig
@@ -379,9 +433,14 @@ def drying_rate_curve(X: Array | float, X_c: Array | float, X_eq: Array | float,
 
 def drying_periods(X1, X2, X_c, X_eq, R_c, Ls_over_A, falling: str = "linear",
                    sharpness: float = 200.0, rate_curve: tuple | None = None,
-                   n_quad: int = 12, interpolate: str = "rate") -> tuple[Array, Array]:
-    """Constant- and falling-rate times ``(t_c, t_f)`` (s) from ``X1`` to ``X2``; see :func:`drying_time`."""
-    _check_falling(falling, rate_curve, interpolate)
+                   n_quad: int = 12, interpolate: str = "rate",
+                   rate_basis: str = "absolute") -> tuple[Array, Array]:
+    """Constant- and falling-rate times ``(t_c, t_f)`` (s) from ``X1`` to ``X2``; see :func:`drying_time`.
+
+    ``rate_curve = (X_table, R_table)`` has ``R_table`` in kg/m^2/s (the units of
+    ``R_c``) by default, or ``R/R_c`` with ``rate_basis="relative"``.
+    """
+    _check_falling(falling, rate_curve, interpolate, rate_basis)
     X1, X2, X_c, X_eq, R_c, LsA = (_f(v) for v in (X1, X2, X_c, X_eq, R_c, Ls_over_A))
     s = _scale(X_c, X_eq, sharpness)
     c1 = _sp(X1 - X_c, s)
@@ -399,7 +458,7 @@ def drying_periods(X1, X2, X_c, X_eq, R_c, Ls_over_A, falling: str = "linear",
         # beyond the table hold its end values (jnp.interp clamps)
         xi, w = np.polynomial.legendre.leggauss(int(n_quad))
         xi, w = jnp.asarray(0.5 * (xi + 1.0)), jnp.asarray(0.5 * w)
-        Xt, Rt = _f(rate_curve[0]), _f(rate_curve[1])
+        Xt, Rt = _absolute_table(rate_curve, R_c, rate_basis)
         edges = jnp.concatenate([jnp.array([-1e3]), Xt, jnp.array([1e3])])
         lo = jnp.clip(edges[:-1], X_b, X_a)
         hi = jnp.clip(edges[1:], X_b, X_a)
@@ -411,7 +470,7 @@ def drying_periods(X1, X2, X_c, X_eq, R_c, Ls_over_A, falling: str = "linear",
 
 def drying_time(X1, X2, X_c, X_eq, R_c, Ls_over_A, falling: str = "linear",
                 sharpness: float = 200.0, rate_curve: tuple | None = None,
-                n_quad: int = 12, interpolate: str = "rate") -> Array:
+                n_quad: int = 12, interpolate: str = "rate", rate_basis: str = "absolute") -> Array:
     """Drying time (s) from moisture ``X1`` down to ``X2`` across the constant- and falling-rate periods.
 
     Args:
@@ -424,12 +483,13 @@ def drying_time(X1, X2, X_c, X_eq, R_c, Ls_over_A, falling: str = "linear",
         falling: ``"linear"`` (rate proportional to free moisture, the closed
             form ``t_f = (Ls/A)(X_c - X*)/R_c ln[(X_c - X*)/(X2 - X*)]``) or
             ``"integral"`` (numerical ``(Ls/A) int dX/R`` of the tabulated
-            ``rate_curve = (X, R)``, linearly interpolated, Gauss-Legendre with ``n_quad`` points per table segment). The
+            ``rate_curve``, linearly interpolated, Gauss-Legendre with ``n_quad`` points per table segment). The
             Fick-diffusion series for a slab is **not** implemented.
         sharpness: Smooth-switch sharpness (default 200); the softplus width is
             ``(X_c - X_eq)/sharpness``. See the module docstring.
         rate_curve: ``(X_table, R_table)`` for ``falling="integral"``, ``X_table``
-            increasing.
+            increasing. ``R_table`` is in **kg/m^2/s** (the units of ``R_c``)
+            unless ``rate_basis="relative"``.
         n_quad: Gauss-Legendre points per table segment for ``"integral"``.
         interpolate: How the table is read between its points for
             ``"integral"``: ``"rate"`` (``R`` linear, the default) or
@@ -437,6 +497,12 @@ def drying_time(X1, X2, X_c, X_eq, R_c, Ls_over_A, falling: str = "linear",
             trapezoid rule on ``1/R`` at the table points, the textbook's
             graphical integration). The two differ by a few percent where the
             curve bends; neither is "right" between measured points.
+        rate_basis: ``"absolute"`` (default: ``R_table`` in kg/m^2/s) or
+            ``"relative"`` (``R_table`` is ``R/R_c``, 1 at ``X_c``, as in
+            ``DryerParams(rate_curve=...)``). A table whose maximum is outside
+            0.5-2x ``R_c`` (absolute) or 0.5-2 (relative) raises
+            :class:`RateTableWarning` on concrete inputs: a relative table read
+            as absolute gives a falling-rate time ``1/R_c`` times too short.
 
     Returns:
         ``t_c + t_f`` (s). The three cases ``X1 > X_c > X2``, falling only
@@ -444,7 +510,7 @@ def drying_time(X1, X2, X_c, X_eq, R_c, Ls_over_A, falling: str = "linear",
         differentiable in every argument.
     """
     t_c, t_f = drying_periods(X1, X2, X_c, X_eq, R_c, Ls_over_A, falling, sharpness, rate_curve, n_quad,
-                              interpolate)
+                              interpolate, rate_basis)
     return t_c + t_f
 
 
@@ -452,7 +518,7 @@ def _rate_fraction(X, X_c, X_eq, falling, sharpness, rate_table, interpolate="ra
     """``R(X)/R_c`` (0-1), smooth; ``rate_table`` is the *relative* table ``(X, R/R_c)``."""
     if falling == "linear":
         return drying_rate_curve(X, X_c, X_eq, 1.0, "linear", sharpness)
-    return drying_rate_curve(X, X_c, X_eq, 1.0, "integral", sharpness, rate_table, interpolate)
+    return drying_rate_curve(X, X_c, X_eq, 1.0, "integral", sharpness, rate_table, interpolate, "relative")
 
 
 # =============================================================================
@@ -536,8 +602,11 @@ class DryerParams(ParamsMixin):
         air_mass_velocity: Air mass velocity ``G`` (kg/m^2/s) for the tray correlation.
         tray_flow: ``"parallel"`` or ``"perpendicular"`` air flow for that correlation.
         falling: ``"linear"`` or ``"integral"`` falling-rate model.
-        rate_curve: ``[[X ...], [R/R_c ...]]``: the falling-rate curve relative to the
-            constant rate, for ``falling="integral"``.
+        rate_curve: ``[[X ...], [R/R_c ...]]``: the falling-rate curve **relative** to the
+            constant rate (dimensionless, 1 at ``X_c``), for ``falling="integral"``. Note the
+            functions :func:`drying_time`, :func:`drying_periods` and :func:`drying_rate_curve`
+            take an absolute table (kg/m^2/s) unless ``rate_basis="relative"``. A table
+            peaking outside 0.5-2 raises :class:`RateTableWarning`.
         rate_interpolation: ``"rate"`` (``R`` linear between table points) or
             ``"inverse"`` (``1/R`` linear, the trapezoid rule on ``1/R``).
         sharpness: Smooth-switch sharpness (see :func:`drying_time`).
@@ -569,8 +638,15 @@ class DryerParams(ParamsMixin):
             margin is reported.
         heat_loss: Heat loss to the surroundings (W), used when ``adiabatic`` is False.
         adiabatic: ``True`` ignores ``heat_loss``.
-        T_ambient: Temperature (K) the air is heated from, the reference of
-            the energy per kg and the thermal efficiency.
+        T_ambient: Temperature (K) of the surroundings: the reference of the
+            thermal efficiency (``lambda(T_ambient)``) and, unless
+            ``T_heater_in`` is given, the temperature the air is heated from.
+        T_heater_in: Temperature (K) of the air entering the heater, at the dryer
+            inlet humidity (a heater adds no water). ``None`` (default) means
+            ``T_ambient``: once-through air. With recirculation pass the mixed
+            (fresh + recycled exhaust) temperature, so ``Q_air`` /
+            ``heater_duty``, ``energy_per_kg`` and ``thermal_efficiency`` are
+            on the heater's real duty.
         entrainment: Fraction of the dry solids carried out with the exhaust as fines
             (continuous mode); reported in ``info["fines"]``.
         lewis: Lewis factor of the wet-bulb relation.
@@ -607,6 +683,7 @@ class DryerParams(ParamsMixin):
     heat_loss: float = 0.0
     adiabatic: bool = True
     T_ambient: float = 293.15
+    T_heater_in: float | None = None
     entrainment: float = 0.0
     lewis: float = 1.0
 
@@ -621,6 +698,10 @@ class DryerParams(ParamsMixin):
             raise ValueError("falling='integral' needs rate_curve")
         if self.rate_interpolation not in ("rate", "inverse"):
             raise ValueError("rate_interpolation must be 'rate' or 'inverse'")
+        if self.T_heater_in is not None:
+            t = _concrete_float(self.T_heater_in)
+            if t is not None and not t > 0:
+                raise ValueError("T_heater_in must be a positive absolute temperature (K)")
         if self.diameter is not None and self.mode != "continuous":
             raise ValueError("diameter (three-zone rotary sizing) needs mode='continuous'")
 
@@ -693,7 +774,7 @@ class Dryer:
         "air_mass_velocity": "kg/(m^2 s)", "sharpness": "-", "product_moisture": "kg/kg",
         "residence_time": "s", "load": "kg", "area": "m^2", "solids_per_area": "kg/m^2",
         "turnaround_time": "s", "solid_molar_mass": "kg/mol", "solids_cp": "J/(kg K)",
-        "cp_water": "J/(kg K)", "max_solids_T": "K", "heat_loss": "W", "T_ambient": "K",
+        "cp_water": "J/(kg K)", "max_solids_T": "K", "heat_loss": "W", "T_ambient": "K", "T_heater_in": "K",
         "entrainment": "-", "lewis": "-", "T_solids_out": "K", "diameter": "m",
         "ua_coefficient": "W m^-2 K^-1 (kg m^-2 s^-1)^-0.67",
     }
@@ -740,9 +821,9 @@ class Dryer:
         table = None
         if p.falling == "integral":
             rt = self._rate_table()
-            table = (rt[0], R_c * rt[1])
+            table = (rt[0], rt[1])
         return drying_periods(X1, X2, p.X_c, X_eq, R_c, LsA, p.falling, p.sharpness, table,
-                              interpolate=p.rate_interpolation)
+                              interpolate=p.rate_interpolation, rate_basis="relative")
 
     def _frac(self, X, X_eq):
         p = self.params
@@ -817,8 +898,9 @@ class Dryer:
                 dry bulb minus its dew point; > 0 means not saturated),
                 ``supersaturated`` (bool), ``solids_T_margin`` (K,
                 ``max_solids_T - T_solids_out``; ``inf`` when unset),
-                ``Q_air`` (W, heating the air from ``T_ambient``),
-                ``energy_per_kg`` (J per kg water evaporated),
+                ``Q_air`` and its alias ``heater_duty`` (W, heating the air at
+                the inlet humidity from ``T_heater_in``, default ``T_ambient``),
+                ``energy_per_kg`` (J per kg water evaporated, ``Q_air / evaporation``),
                 ``thermal_efficiency`` (``evaporation lambda(T_amb) / Q_air``),
                 ``t_constant`` and ``t_falling`` (s), ``water_balance_residual``
                 (kg/s) and ``energy_balance_residual`` (W) recomputed from the
@@ -902,7 +984,8 @@ class Dryer:
     def _common_info(self, X1, X2, X_eq, R_c, T_s_out, st_out, evap, G, st_in, t_c, t_f):
         p = self.params
         T_amb = _f(p.T_ambient)
-        Q_air = G * (st_in["h"] - humid_enthalpy(T_amb, st_in["W"]))
+        T_heat = T_amb if p.T_heater_in is None else _f(p.T_heater_in)
+        Q_air = G * (st_in["h"] - humid_enthalpy(T_heat, st_in["W"]))
         epk = Q_air / jnp.maximum(evap, _TINY)
         margin = (_f(p.max_solids_T) - T_s_out) if p.max_solids_T is not None else _f(jnp.inf)
         return {
@@ -913,6 +996,7 @@ class Dryer:
             "supersaturated": st_out["RH"] > 1.0,
             "solids_T_margin": margin,
             "Q_air": Q_air,
+            "heater_duty": Q_air,
             "energy_per_kg": epk,
             "thermal_efficiency": evap * latent_heat(T_amb) / jnp.where(Q_air > 0, Q_air, jnp.inf),
             "t_constant": t_c, "t_falling": t_f,

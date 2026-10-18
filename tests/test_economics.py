@@ -88,3 +88,37 @@ def test_cost_range_warning():
         warnings.simplefilter("error", econ.CostRangeWarning)
         econ.compressor_cost(1000.0, "centrifugal")
         jax.grad(lambda s: econ.compressor_cost(s, "centrifugal"))(30.0)
+
+
+_NEW_COSTS = [
+    (lambda s, t: econ.dryer_cost(s, t), econ.DRYER_COSTS, "Unknown dryer type"),
+    (lambda s, t: econ.crystallizer_cost(s, t), econ.CRYSTALLIZER_COSTS,
+     "Unknown crystallizer type"),
+    (lambda s, t: econ.cooling_tower_cost(s, t), econ.COOLING_TOWER_COSTS,
+     "Unknown cooling tower type"),
+    (lambda s, t: econ.separator_cost(s, t), econ.SEPARATOR_COSTS, "Unknown separator type"),
+]
+
+
+def _mid(p):
+    return (p.S_min * p.S_max) ** 0.5
+
+
+@pytest.mark.parametrize("fn,table,_", _NEW_COSTS)
+def test_new_equipment_costs_smoke_and_grad(fn, table, _):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", econ.CostRangeWarning)
+        for kind, p in table.items():
+            c = fn(jnp.array(_mid(p)), kind)
+            g = jax.grad(lambda s: fn(s, kind))(jnp.array(_mid(p)))
+            assert _finite(c, g) and float(c) > 0, kind
+    assert "filter_press" in econ.SEPARATOR_COSTS
+
+
+@pytest.mark.parametrize("fn,table,msg", _NEW_COSTS)
+def test_new_equipment_costs_validation(fn, table, msg):
+    with pytest.raises(ValueError, match=msg):
+        fn(1.0, "no_such_type")
+    kind, p = next(iter(table.items()))
+    with pytest.warns(econ.CostRangeWarning, match="outside the correlation"):
+        fn(p.S_max * 10.0, kind)
