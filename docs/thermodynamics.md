@@ -1267,6 +1267,57 @@ pyglenn supplies **no critical properties** (Tc, Pc, ω), so there is no
 
 ---
 
+(gaspype-import)=
+## Gaspype Import
+
+**Location**: `difflow/gaspype_import.py`
+
+[Gaspype](https://www.gaspype.org/) (DLR, MIT licence) ships NASA-9 ideal-gas
+polynomials for about a thousand gas-phase species, and its own equilibrium
+solver with a NumPy or JAX backend. It is an **optional** dependency:
+
+```bash
+pip install gaspype          # or:  pip install "difflow[gaspype]"
+```
+
+`GaspypeThermo` adapts a list of gaspype species to the thermo interface that
+`GibbsReactor` takes: `names`, `gibbs(T)`, `enthalpy(T)` and `ELEMENTS`.
+difflow then solves the equilibrium with its element-potential Newton. Its
+gradients come from implicit differentiation, so `jax.jit(jax.grad(...))`
+works through the reactor:
+
+<!-- doc-test: skip: needs the optional gaspype package -->
+```python
+from difflow import GibbsReactor, GibbsReactorParams, make_stream
+from difflow.gaspype_import import GaspypeThermo, list_available_species
+
+list_available_species("C#H#", "C,H")          # gaspype's pattern syntax
+th = GaspypeThermo(["CH4", "H2O", "H2", "CO", "CO2"])
+out, info = GibbsReactor(GibbsReactorParams(thermo=th, T_out=1000.0))(
+    make_stream({"CH4": 1.0, "H2O": 3.0}, T=900.0, P=1e5))
+```
+
+Gaspype's own `gaspype.equilibrium` with `backend="jax"` differentiates only
+eagerly. Under `jax.jit` its Newton loop is a `lax.while_loop`, which reverse
+mode cannot differentiate. Use gaspype directly for vectorised forward sweeps,
+and the adapter where difflow needs a gradient. The example notebook
+`examples/65_gaspype_thermo.ipynb` compares the two.
+
+| `method` | Evaluates | Trade-off |
+|----------|-----------|-----------|
+| `"nasa9"` (default) | The NASA-9 polynomials in `jax.numpy`, from gaspype's database | Smooth within each interval; G steps ~0.01–0.1 J/mol where intervals meet (usually 1000 K); extrapolates outside the data range; reads gaspype's private database reader (checked on gaspype 1.1) |
+| `"table"` | Gaspype's public `fluid_system` (JAX backend) | Public API only; a 1 K linear table between `t_min` and `t_max`, so T derivatives are piecewise constant |
+
+`GaspypeThermo` is also exported as `difflow.GaspypeThermo`; gaspype itself
+is imported only when one is built, so `import difflow` does not need it. It is a
+dataclass, so `difflow.serialize` saves a flowsheet that uses it as the species
+list and `method`, and `difflow.codegen` writes it as a `GaspypeThermo(...)` call.
+
+The adapter is ideal-gas only. A gaspype `fluid` holds no liquids, and gaspype
+has no VLE or critical properties.
+
+---
+
 (dwsim-import)=
 ## DWSIM Import
 

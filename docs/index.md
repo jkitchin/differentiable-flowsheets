@@ -53,6 +53,7 @@ difflow/
 ├── uncertainty.py      # Uncertainty propagation
 ├── cantera_import.py   # Cantera data import
 ├── pyglenn_import.py   # NASA Glenn (pyglenn) thermo import
+├── gaspype_import.py   # gaspype species data for GibbsReactor
 ├── dwsim_import.py     # DWSIM thermo import (pythonnet; DWSIM 9.0.5)
 ├── units/              # Unit operations
 │   ├── cstr.py         # CSTR reactors
@@ -167,6 +168,7 @@ Streams are JAX pytrees, allowing seamless use with `jax.vmap`, `jax.jit`, and o
 - NumPy
 - PyYAML (for Cantera import)
 - pyglenn (optional, for NASA Glenn thermo import)
+- gaspype (optional, for gaspype species data in GibbsReactor)
 
 ## License
 

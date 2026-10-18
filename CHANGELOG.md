@@ -8,6 +8,13 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Gaspype species data in `GibbsReactor` (#492).** New `difflow.gaspype_import`: `GaspypeThermo(species)`
+  adapts [gaspype](https://www.gaspype.org/)'s ~1000 NASA-9 gas-phase species to `GibbsReactor`'s thermo
+  interface, and `list_available_species` searches its database. Gaspype's own JAX equilibrium cannot be
+  differentiated under `jax.jit` (a `while_loop`), but through the adapter the reactor's implicit gradients
+  compile. `GaspypeThermo` is exported flat (gaspype is imported only when one is built), and a flowsheet
+  using it saves, reloads and goes through `codegen`. Optional extra `difflow[gaspype]`; also in `dev`, so
+  the tests run in CI. Example notebook `examples/65_gaspype_thermo.ipynb`.
 - **The editor asks before a file runs code.** Opening a flowsheet ran its code context (and a `.py` script, and
   now modules named by import path) with no question asked. A file that would run code now opens nothing until
   trusted: the page shows the code and the modules and asks *Trust it and open?*; declining leaves no file open,
