@@ -60,7 +60,7 @@ def test_a_script_with_no_flowsheet(tmp_path):
 def test_gui_session_saves_beside_the_script(plant):
     from difflow.gui.session import FlowsheetSession
 
-    session = FlowsheetSession(path=plant)
+    session = FlowsheetSession(path=plant, trust=True)     # a script runs: asked first
     assert [u["name"] for u in session.document()["flowsheet"]["units"]] == ["heat"]
     before = plant.read_text()
     answer = session.save()
@@ -73,5 +73,7 @@ def test_cli_reports_a_bad_script(tmp_path, capsys):
 
     path = tmp_path / "bad.py"
     path.write_text('raise ValueError("no feed data")\n')
-    assert main([str(path), "--no-browser"]) == 1
+    # --trust: untrusted, the script is not run at all, and the editor
+    # would start and ask in the page instead of failing here
+    assert main([str(path), "--no-browser", "--trust"]) == 1
     assert "no feed data" in capsys.readouterr().err
