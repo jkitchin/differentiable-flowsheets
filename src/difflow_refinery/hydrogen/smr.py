@@ -277,10 +277,17 @@ class ReformerTubeParams:
     adjoint: str = "reverse"
 
 
-def _integrate(n0, T0, P0, q_per_len, tp: ReformerTubeParams, n_save: int = 0):
-    """Integrate a tube from ``(n0, T0, P0)`` with heat input ``q_per_len(z, T)``
-    (W/m). Returns the outlet state (and ``n_save`` interior profiles)."""
+def _integrate(n0, T0, P0, q_per_len, tp: ReformerTubeParams, n_save: int = 0, z_span=None):
+    """Integrate a tube from ``(n0, T0)`` with heat input ``q_per_len(z, T)``
+    (W/m). Returns the outlet state (and ``n_save`` interior profiles).
+
+    ``P0`` is the tube INLET pressure (the pressure falls linearly in ``z``
+    from it). ``z_span = (z0, z1)`` integrates one stretch of the tube from
+    ``(n0, T0)`` at ``z0`` (default the whole tube): the dynamic tube's cells
+    (:mod:`difflow_refinery.dynamic.hydrogen`) are the same equations taken
+    a stretch at a time."""
     L = tp.length
+    z0, z1 = (0.0, L) if z_span is None else z_span
     A = jnp.pi * tp.d_in**2 / 4.0
     eta = jnp.asarray(tp.eta, dtype=float)
 
@@ -299,9 +306,9 @@ def _integrate(n0, T0, P0, q_per_len, tp: ReformerTubeParams, n_save: int = 0):
         return jnp.concatenate([dn, dT[None]])
 
     adj = diffrax.ForwardMode() if tp.adjoint == "forward" else diffrax.RecursiveCheckpointAdjoint()
-    saveat = (diffrax.SaveAt(ts=jnp.linspace(0.0, L, n_save)) if n_save else diffrax.SaveAt(t1=True))
+    saveat = (diffrax.SaveAt(ts=jnp.linspace(z0, z1, n_save)) if n_save else diffrax.SaveAt(t1=True))
     sol = diffrax.diffeqsolve(
-        diffrax.ODETerm(rhs), diffrax.Tsit5(), 0.0, L, L / 200.0,
+        diffrax.ODETerm(rhs), diffrax.Tsit5(), z0, z1, (z1 - z0) / 200.0,
         jnp.concatenate([n0, jnp.asarray(T0, dtype=float)[None]]),
         stepsize_controller=diffrax.PIDController(rtol=tp.rtol, atol=tp.atol),
         saveat=saveat, adjoint=adj, max_steps=8192, throw=False)
