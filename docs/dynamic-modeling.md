@@ -145,6 +145,16 @@ class DynamicUnit(Protocol):
     def outputs(self, t: Array, y: Array, inputs: dict) -> dict[str, Stream]: ...
 ```
 
+### Refinery units
+
+`difflow_refinery.dynamic` builds dynamic versions of the refinery's
+hydrotreater and reformer on this protocol -- reactor beds as cells with
+holdups and catalyst heat capacity, furnace lags, separator levels and a
+recycle-gas loop -- from the solved steady units, so that their rest state
+is the steady answer. See [Refinery Unit Operations: Dynamic
+operation](unit-operations-refinery.md#dynamic-operation) and
+`examples/66_refinery_dynamic_hydrotreater.ipynb`.
+
 ### DynamicCSTR
 
 Continuous stirred-tank reactor with reaction kinetics:
