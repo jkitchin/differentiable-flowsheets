@@ -121,6 +121,18 @@ def test_trickle_bed_gradient_finite(bed):
     del lay
 
 
+def test_feed_sulfur_scaling_is_differentiable(bed):
+    # the feed_sulfur signal scales only the sulfur attributes, and has a derivative
+    from difflow_refinery.dynamic.hydrotreater import scale_feed_sulfur
+    lay, F = bed["lay"], bed["flows"]
+    S = lambda x: scale_feed_sulfur(F, lay, x).elements(lay)
+    np.testing.assert_allclose(np.asarray(S(1.0)), np.asarray(F.elements(lay)), rtol=1e-14)
+    _, dS = jax.jvp(S, (jnp.asarray(1.3),), (jnp.asarray(1.0),))
+    np.testing.assert_allclose(float(dS[2]), float(F.elements(lay)[2]), rtol=1e-12)     # d(S)/dx = S
+    g = jax.grad(lambda x: S(x)[2])(jnp.asarray(0.7))
+    assert np.isfinite(float(g))
+
+
 @pytest.fixture(scope="module")
 def reformer_bed():
     from difflow_refinery.reforming import ReformingKinetics, lean_naphtha
