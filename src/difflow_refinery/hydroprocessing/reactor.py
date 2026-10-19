@@ -311,6 +311,20 @@ def reaction_context(flows: Flows, layout: Layout, comps: Components, km: KModel
                            per_molecule=pm)
 
 
+def bed_derivatives(kinetics: KineticModel, params, layout: Layout, comps: Components, km: KModel,
+                    flows: Flows, T, P) -> tuple[Flows, Array]:
+    """``(dF/dW, dT/dW)`` of the steady bed balances at one point, per kg of catalyst.
+
+    The right-hand side :func:`integrate_bed` integrates (``dF/dW = r``,
+    ``C_eff dT/dW = q``), exposed so that the dynamic beds of
+    :mod:`difflow_refinery.dynamic` step the same equations.
+    """
+    ctx = reaction_context(flows, layout, comps, km, T, P)
+    r = kinetics.rates(ctx, params)
+    _, C_eff = jax.jvp(lambda t: stream_enthalpy(flows, layout, comps, km, t), (T,), (jnp.ones_like(T),))
+    return r.flows(), r.heat / C_eff
+
+
 def check_element_conservation(kinetics: KineticModel, ctx: ReactionContext, params) -> Array:
     """``(4,)`` net production of C, H, S, N atoms by ``kinetics`` at ``ctx`` (should be ~0)."""
     r = kinetics.rates(ctx, params)
@@ -408,11 +422,8 @@ def integrate_bed(kinetics: KineticModel, params, layout: Layout, comps: Compone
         yv = u * scale
         f = Flows.unravel(yv[:n], layout)
         T = yv[n]
-        ctx = reaction_context(f, layout, comps, km, T, P)
-        r = kinetics.rates(ctx, params)
-        _, C_eff = jax.jvp(lambda t: stream_enthalpy(f, layout, comps, km, t), (T,), (jnp.ones_like(T),))
-        dT = r.heat / C_eff
-        dy = jnp.concatenate([r.flows().ravel(), dT[None]]) * W
+        dF, dT = bed_derivatives(kinetics, params, layout, comps, km, f, T, P)
+        dy = jnp.concatenate([dF.ravel(), dT[None]]) * W
         return dy / scale
 
     term = diffrax.ODETerm(rhs)
@@ -589,5 +600,6 @@ class TrickleBedReactor:
 
 
 __all__ = ["ReactionContext", "Rates", "KineticModel", "KModel", "k_model_at", "phase_state",
-           "stream_enthalpy", "vapor_enthalpy", "reaction_context", "check_element_conservation",
+           "stream_enthalpy", "vapor_enthalpy", "reaction_context", "bed_derivatives",
+           "check_element_conservation",
            "BedResult", "ReactorOptions", "integrate_bed", "ReactorResult", "TrickleBedReactor"]
