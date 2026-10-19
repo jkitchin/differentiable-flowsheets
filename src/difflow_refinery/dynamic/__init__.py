@@ -58,3 +58,8 @@ __all__ += ["DynamicEquilibriumBed", "catalyst_heat_capacity", "DynamicHydrogenP
             "FiringLag", "SMRHoldupParams", "AmineHoldupParams", "DynamicAminePlant", "DynamicAmineUnit",
             "AirDemandControl", "DynamicSRU", "SRUHoldupParams", "TGTUSolvent", "CDUHoldupParams",
             "DynamicCrudeUnit"]
+
+from difflow_refinery.dynamic.hydrocracker import (  # noqa: E402
+    DynamicHydrocracker, DynamicRunawayWarning, HydrocrackerHoldupParams, QuenchControlledReactor)
+
+__all__ += ["DynamicHydrocracker", "DynamicRunawayWarning", "HydrocrackerHoldupParams", "QuenchControlledReactor"]

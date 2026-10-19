@@ -325,8 +325,14 @@ class DynamicTrickleBedReactor:
         dT = jax.vmap(heat)(Fs, Ts, T, n)
         return dn, dT, out, km
 
-    def _run(self, inputs, state):
+    def _run(self, inputs, state, shares: Array | None = None):
+        """Every bed's derivatives, outflows and inlet; ``shares`` overrides :attr:`quench_shares`.
+
+        ``shares[b]`` is the fraction of the ``"quench"`` stream mixed in
+        after bed ``b`` (a quench controller's valve positions, say).
+        """
         lay, comps = self.layout, self.comps
+        shares = self.quench_shares if shares is None else shares
         feed = Flows.from_stream(inputs["feed"], lay)
         T_feed = jnp.asarray(inputs["feed"]["T"], dtype=float)
         quench = Flows.from_stream(inputs["quench"], lay) if self.n_beds > 1 else None
@@ -343,7 +349,7 @@ class DynamicTrickleBedReactor:
             bed_in.append((F_in, T_in))
             if b + 1 < self.n_beds:
                 last = jax.tree_util.tree_map(lambda a: a[-1], out)
-                qf = quench.scale(self.quench_shares[b])
+                qf = quench.scale(shares[b])
                 T_last = T[b, -1]
 
                 def mix_res(Tm, args):
