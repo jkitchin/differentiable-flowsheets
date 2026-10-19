@@ -105,6 +105,19 @@ def _interp_profile(bed, xi_out: np.ndarray):
     return Flows(at(prof.gas), at(prof.cut), at(prof.attr)), T
 
 
+def scale_feed_sulfur(f: Flows, layout, x) -> Flows:
+    """``f`` with its sulfur attributes (every class) multiplied by ``x``.
+
+    Written as a column mask, not ``attr.at[:, cols].multiply(x)``: JAX's
+    scatter-multiply has no derivative rule for a traced ``x`` (forward or
+    reverse), so a trajectory could not be differentiated with respect to
+    the ``feed_sulfur`` signal.
+    """
+    S = {f"S_{k}" for k in SULFUR_CLASSES}
+    mask = jnp.asarray([a in S for a in layout.attributes])
+    return Flows(f.gas, f.cut, f.attr * jnp.where(mask, x, 1.0))
+
+
 class DynamicHydrotreater:
     """A dynamic hydrotreater (see the module docstring). Build with :meth:`from_steady`.
 
@@ -211,14 +224,9 @@ class DynamicHydrotreater:
 
         oil = th["oil"]
         feed_T = th["feed_T"]
-        ai = {a: i for i, a in enumerate(lay.attributes)}
-        s_cols = jnp.asarray([ai[f"S_{k}"] for k in SULFUR_CLASSES])
-
         def oil_feed(t, args):
             s = sig.evaluate(t, args)
-            f = oil.scale(s["feed_rate"])
-            f = Flows(f.gas, f.cut, f.attr.at[:, s_cols].multiply(s["feed_sulfur"]))
-            return f.to_stream(lay, feed_T, P)
+            return scale_feed_sulfur(oil.scale(s["feed_rate"]), lay, s["feed_sulfur"]).to_stream(lay, feed_T, P)
 
         def signals_feed(t, args):
             return sig.evaluate(t, args)
@@ -366,4 +374,4 @@ class DynamicHydrotreater:
         return {"accumulation": acc, "in_minus_out": inflow.elements(lay) - outflow.elements(lay)}
 
 
-__all__ = ["HoldupParams", "DynamicHydrotreater", "DEFAULT_RTOL", "DEFAULT_ATOL"]
+__all__ = ["HoldupParams", "scale_feed_sulfur", "DynamicHydrotreater", "DEFAULT_RTOL", "DEFAULT_ATOL"]
