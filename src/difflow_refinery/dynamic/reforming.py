@@ -30,10 +30,14 @@ ones as states and treats the gas as quasi-steady:
   integrated in ``N`` pieces.
 
 The interstage heaters are :class:`~difflow_refinery.dynamic.hydroprocessing.FurnaceLag`
-(an outlet-temperature lag on each reactor's inlet setpoint). The recycle
-gas and the separator are not dynamic here: the train takes the naphtha and
-a recycle stream as feeds, and the reformate is reported by running the
-steady separator and stabilizer on the train's effluent at each time.
+(an outlet-temperature lag on each reactor's inlet setpoint). By default the
+recycle gas and the separator are not dynamic: the train takes the naphtha
+and the steady unit's recycle as feeds, and the reformate is reported by
+running the steady separator and stabilizer on the train's effluent at each
+time. With ``recycle_loop=True`` (:meth:`DynamicReformerTrain.from_steady`)
+the separator and the recycle loop are holdups too
+(:class:`DynamicReformerLoop`): the recycle then responds to the effluent
+and a compressor trip starves the reactors of hydrogen.
 
 Stiffness: the gas is quasi-steady, so the fastest state is a cell's
 temperature (``W_c c_p / (F c_p)``, about a minute per cell at the default
@@ -194,6 +198,129 @@ class DynamicReformingReactor:
                 "T_out": T[-1], "T_in": jnp.asarray(inlet["T"], dtype=float)}
 
 
+class DynamicReformerLoop:
+    """The reformer's product separator and recycle-gas loop with holdups.
+
+    Ports ``"effluent"`` (the last reactor's outlet) and ``"signals"``. The
+    effluent is cooled and flashed at the separator's ``(T, P)`` by the
+    steady :class:`~difflow_refinery.reforming.separation.ProductSeparator`
+    (instantaneous). Two holdups, the state:
+
+    * the separator **liquid** ``n_L`` (every species, mol), drained to the
+      stabilizer with residence time ``tau_L`` (a level controller on the
+      outlet valve, idealised as proportional drainage);
+    * the loop's **gas** inventory ``n_G`` (separator vapour space, piping,
+      compressor suction drum), fed by the separator vapour and drained by
+      the recycle compressor and the net gas::
+
+          dn_G/dt = V - R - N_net
+
+      The compressor holds the steady unit's recycle spec, ``H2/HC`` mol of
+      hydrogen per mol of naphtha hydrocarbon: ``R = c(t) min(need / y_H2,
+      R_max) y`` (``y`` the inventory's composition, ``c`` the signal
+      ``"compressor"``: 1 running, 0 tripped; ``R_max`` its capacity). The net
+      gas leaves on the loop's pressure controller, proportional to the
+      inventory above a set level: ``N_net = max(N - N_lo, 0) / tau_p``, with
+      ``N_lo`` chosen so that the design inventory delivers the design net gas.
+
+    At rest the inventory's composition is the separator vapour's and the
+    recycle is ``need / H2_vapour`` of it: the steady splitter
+    (:class:`~difflow_refinery.reforming.separation.RecycleSplitter`), so the
+    rest state is the steady reformer's. Outputs ``"recycle"`` (compressed to
+    the reactor pressure by the steady compressor), ``"net_gas"`` and
+    ``"liquid"`` depend on the state and the signals alone, which breaks the
+    loop for the flowsheet. Pressures are fixed (the controller's level is a
+    moles inventory, not a pressure); the compressor's power is not modelled
+    beyond its discharge temperature.
+    """
+
+    output_ports = ("recycle", "net_gas", "liquid")
+    output_dependencies = {"recycle": ("signals",), "net_gas": (), "liquid": ()}
+
+    def __init__(self, separator, compressor, *, H2_HC: float, hydrocarbon_feed: float, tau_L: float,
+                 N_design: float, net_design: float, tau_p: float, R_max: float, y0: Array,
+                 T_sep: float, P_sep: float, name: str = "loop"):
+        self.separator = separator
+        self.compressor = compressor
+        self.H2_HC = jnp.asarray(H2_HC, dtype=float)
+        self.hydrocarbon_feed = jnp.asarray(hydrocarbon_feed, dtype=float)
+        self.tau_L = jnp.asarray(tau_L, dtype=float)
+        self.tau_p = jnp.asarray(tau_p, dtype=float)
+        self.N_lo = jnp.asarray(N_design - tau_p * net_design, dtype=float)
+        self.R_max = jnp.asarray(R_max, dtype=float)
+        self.T_sep = jnp.asarray(T_sep, dtype=float)
+        self.P_sep = jnp.asarray(P_sep, dtype=float)
+        y0 = jnp.asarray(y0, dtype=float)
+        self._scale = jnp.maximum(jnp.abs(y0), 1e-10 * jnp.max(jnp.abs(y0)) + 1e-300)
+        self._y0 = y0 / self._scale
+        self.name = name
+
+    def state_spec(self) -> StateSpec:
+        return StateSpec([StateVar(f"liquid.{k}", "moles", "mol", "") for k in sp.NAMES]
+                         + [StateVar(f"gas.{k}", "moles", "mol", "") for k in sp.NAMES])
+
+    def initial_state(self, inputs=None, params=None):
+        return self._y0
+
+    def holdups(self, state):
+        """``(liquid mol, gas mol)``, each ``(N_SPECIES,)``."""
+        x = state * self._scale
+        return x[:sp.N_SPECIES], x[sp.N_SPECIES:]
+
+    def _composition(self, state):
+        _, nG = self.holdups(state)
+        nG = jnp.maximum(nG, 0.0)
+        return nG / jnp.maximum(jnp.sum(nG), 1e-300)
+
+    def _recycle_rate(self, state, signals):
+        y = self._composition(state)
+        yH2 = jnp.maximum(y[sp.INDEX["H2"]], 1e-12)
+        need = self.H2_HC * self.hydrocarbon_feed * signals["feed_rate"]
+        return signals["compressor"] * jnp.minimum(need / yH2, self.R_max)
+
+    def _recycle_flows(self, state, signals):
+        return self._recycle_rate(state, signals) * self._composition(state)
+
+    def _net_flows(self, state):
+        _, nG = self.holdups(state)
+        nG = jnp.maximum(nG, 0.0)
+        N = jnp.sum(nG)
+        return jnp.maximum(N - self.N_lo, 0.0) / self.tau_p * nG / jnp.maximum(N, 1e-300)
+
+    def _liquid_flows(self, state):
+        nL, _ = self.holdups(state)
+        return jnp.maximum(nL, 0.0) / self.tau_L
+
+    def derivatives(self, t, state, inputs, params=None):
+        liq, vap, _ = self.separator(inputs["effluent"])
+        nL, _ = self.holdups(state)
+        dL = flows_of(liq) - self._liquid_flows(state)
+        dG = flows_of(vap) - self._recycle_flows(state, inputs["signals"]) - self._net_flows(state)
+        return jnp.concatenate([dL, dG]) / self._scale
+
+    def _state_outputs(self, state):
+        return {"net_gas": stream_of(self._net_flows(state), self.T_sep, self.P_sep),
+                "liquid": stream_of(self._liquid_flows(state), self.T_sep, self.P_sep)}
+
+    def _recycle(self, state, signals):
+        # the discharge temperature is intensive: compress one mol/s of the
+        # inventory's gas (finite with the compressor tripped) and scale it
+        y = self._composition(state)
+        out, _ = self.compressor(stream_of(y, self.T_sep, self.P_sep))
+        return stream_of(self._recycle_rate(state, signals) * y, out["T"], out["P"])
+
+    def outputs(self, t, state, inputs, params=None):
+        out = self._state_outputs(state)
+        out["recycle"] = self._recycle(state, inputs["signals"])
+        return out
+
+    def partial_outputs(self, t, state, inputs, params=None):
+        out = self._state_outputs(state)
+        if "signals" in inputs:
+            out["recycle"] = self._recycle(state, inputs["signals"])
+        return out
+
+
 class DynamicReformerTrain:
     """The reformer's heaters and reactors as a dynamic flowsheet, built with :meth:`from_steady`.
 
@@ -210,11 +337,21 @@ class DynamicReformerTrain:
     def from_steady(cls, reformer, feed, result=None, *, n_cells: int = 5, rtol: float = 1e-6,
                     adjoint: str = "reverse",
                     cp_cat: float = CATALYST_CP, heater_tau: float = 300.0,
-                    coke_alpha: float | None = None) -> "DynamicReformerTrain":
+                    coke_alpha: float | None = None, recycle_loop: bool = False,
+                    loop_volume: float = 30.0, separator_tau: float = 300.0, pressure_tau: float = 30.0,
+                    compressor_capacity: float = 1.3) -> "DynamicReformerTrain":
         """The dynamic train of a solved :class:`~difflow_refinery.reforming.CatalyticReformer`.
 
         The cells start at the steady bed's temperature profile and with no
         coke (start of run).
+
+        With ``recycle_loop`` the separator and the recycle-gas loop are
+        dynamic too (:class:`DynamicReformerLoop`: separator liquid holdup,
+        a gas inventory of ``loop_volume`` m^3 at the separator conditions,
+        the compressor on the H2/HC spec up to ``compressor_capacity`` times
+        its design rate, the net gas on a pressure controller with time
+        constant ``pressure_tau``); without it the recycle is the steady
+        unit's converged recycle, held. ILLUSTRATIVE holdups.
         """
         p = reformer.params
         res = reformer.solve(feed) if result is None else result
@@ -231,7 +368,8 @@ class DynamicReformerTrain:
             return out
 
         fs.add_feed("naphtha", naphtha_feed)
-        fs.add_feed("recycle", dict(rec))
+        if not recycle_loop:
+            fs.add_feed("recycle", dict(rec))
         fs.add_feed("signals", lambda t, args: sig.evaluate(t, args))
         reactors, heaters = [], []
         for k in range(nr):
@@ -254,6 +392,28 @@ class DynamicReformerTrain:
             heaters.append(h)
         base = {f"T_in{k + 1}": float(p.inlet_T[k]) for k in range(nr)}
         base["feed_rate"] = 1.0
+        loop = None
+        if recycle_loop:
+            from difflow.units.eos_units import Compressor, CompressorParams
+            from difflow_refinery.reforming.separation import ProductSeparator, ProductSeparatorParams
+            sep = ProductSeparator(ProductSeparatorParams(T=p.T_separator, P=p.P_separator))
+            comp = Compressor(CompressorParams(P_out=P, eta_isentropic=p.compressor_efficiency,
+                                               T_bounds=(200.0, 800.0)), th.cubic_thermo())
+            T_sep, P_sep = float(p.T_separator), float(p.P_separator)
+            F_v = flows_of(res.streams["sep_vapor"])
+            F_l = flows_of(res.streams["sep_liquid"])
+            N_design = P_sep * loop_volume / (8.314462618 * T_sep)
+            net = float(jnp.sum(flows_of(res.streams["net_gas"])))
+            R_design = float(jnp.sum(flows_of(rec)))
+            nG0 = F_v / jnp.sum(F_v) * N_design
+            loop = DynamicReformerLoop(sep, comp, H2_HC=float(p.H2_HC),
+                                       hydrocarbon_feed=float(feed.hydrocarbon_moles), tau_L=separator_tau,
+                                       N_design=N_design, net_design=net, tau_p=pressure_tau,
+                                       R_max=compressor_capacity * R_design, y0=jnp.concatenate([F_l * separator_tau, nG0]),
+                                       T_sep=T_sep, P_sep=P_sep)
+            fs.add_unit(loop, inlets={"effluent": f"rx{nr}_out", "signals": "signals"},
+                        outlets={"recycle": "recycle", "net_gas": "net_gas", "liquid": "sep_liquid"})
+            base["compressor"] = 1.0
         y0 = fs.initial_state(None, sig.signal_args(base))
         # the fastest state: a cell's catalyst heat capacity over the heat flow of the gas through it
         taus = []
@@ -262,8 +422,8 @@ class DynamicReformerTrain:
             F, T = flows_of(s), jnp.asarray(s["T"])
             C_flow = jax.jvp(lambda t: th.total_enthalpy(F, t, r.P), (T,), (jnp.ones_like(T),))[1]
             taus.append(float(r.W / r.n_cells * r.cp_cat / C_flow))
-        return cls(flowsheet=fs, reactors=reactors, heaters=heaters, y0=y0, base_signals=base, steady=res,
-                   reformer=reformer, feed=feed, n_cells=n_cells, tau_thermal_min=min(taus))
+        return cls(flowsheet=fs, reactors=reactors, heaters=heaters, loop=loop, y0=y0, base_signals=base,
+                   steady=res, reformer=reformer, feed=feed, n_cells=n_cells, tau_thermal_min=min(taus))
 
     def args(self, steps: Mapping[str, Sequence[tuple[float, float]]] | None = None,
              ramp: float | Mapping[str, float] = sig.DEFAULT_RAMP, **base) -> dict:
@@ -377,7 +537,15 @@ class DynamicReformerTrain:
         w = jnp.asarray(p.catalyst_split, dtype=float)
         out["wait"] = jnp.sum(w * out["T_in"]) / jnp.sum(w)
         eff = streams[f"rx{len(self.reactors)}_out"]
-        liq, vap, _ = ProductSeparator(ProductSeparatorParams(T=p.T_separator, P=p.P_separator))(eff)
+        if self.loop is None:
+            liq, vap, _ = ProductSeparator(ProductSeparatorParams(T=p.T_separator, P=p.P_separator))(eff)
+        else:
+            liq = streams["sep_liquid"]
+            nL, nG = self.loop.holdups(us["loop"])
+            out["loop.inventory"] = jnp.sum(nG)
+            out["recycle.rate"] = jnp.sum(flows_of(streams["recycle"]))
+            out["recycle.h2_purity"] = flows_of(streams["recycle"])[sp.INDEX["H2"]] / out["recycle.rate"]
+            out["net_gas.h2"] = flows_of(streams["net_gas"])[sp.INDEX["H2"]]
         ref, _, _, _ = Stabilizer(StabilizerParams(c4_recovery=p.c4_recovery))(liq)
         props = reformate_properties(flows_of(ref))
         out["reformate.RON"] = props["RON"]
@@ -402,10 +570,40 @@ class DynamicReformerTrain:
         """The steady reformer's values of the quantities :meth:`observe` reports."""
         r = self.steady
         o = r.outputs()
-        return {"T_in": jnp.stack([x["T_in"] for x in r.reactors]),
-                "T_out": jnp.stack([x["T_out"] for x in r.reactors]),
-                "coke_make": jnp.stack([x["coke"] for x in r.reactors]),
-                "reformate.RON": o["reformate.RON"]}
+        out = {"T_in": jnp.stack([x["T_in"] for x in r.reactors]),
+               "T_out": jnp.stack([x["T_out"] for x in r.reactors]),
+               "coke_make": jnp.stack([x["coke"] for x in r.reactors]),
+               "reformate.RON": o["reformate.RON"]}
+        if self.loop is not None:
+            rec = flows_of(r.streams["recycle"])
+            out["recycle.rate"] = jnp.sum(rec)
+            out["recycle.h2_purity"] = rec[sp.INDEX["H2"]] / jnp.sum(rec)
+            out["net_gas.h2"] = flows_of(r.streams["net_gas"])[sp.INDEX["H2"]]
+        return out
+
+    def element_balance(self, t, y, args: dict | None = None) -> dict:
+        """``{"accumulation", "in_minus_out"}``: (2,) mol/s of C and H over the train and loop.
+
+        Needs ``recycle_loop`` (the held recycle is not a balance). The cells
+        hold no gas (quasi-steady); the coke is bookkeeping, not removed from
+        the gas (as in the steady reformer), so it is neither.
+        """
+        if self.loop is None:
+            raise ValueError("build with recycle_loop=True for an element balance")
+        args = self.args() if args is None else args
+        fs = self.flowsheet
+        streams = fs.outputs(jnp.asarray(t), y, None, args)
+        dy = fs.derivatives(jnp.asarray(t), y, None, args)
+        E = jnp.asarray(sp.ELEMENTS)
+
+        def held(v):
+            nL, nG = self.loop.holdups(self._split(v)["loop"])
+            return E @ (nL + nG)
+
+        acc = jax.jvp(held, (y,), (dy,))[1]
+        inflow = flows_of(streams["naphtha"])
+        outflow = flows_of(streams["net_gas"]) + flows_of(streams["sep_liquid"])
+        return {"accumulation": acc, "in_minus_out": E @ (inflow - outflow)}
 
 
-__all__ = ["COKE_SCALE", "DynamicReformingReactor", "DynamicReformerTrain"]
+__all__ = ["COKE_SCALE", "DynamicReformingReactor", "DynamicReformerLoop", "DynamicReformerTrain"]

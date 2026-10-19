@@ -303,3 +303,94 @@ def test_crude_unit_starts_at_rest_and_conserves():
     assert bool(jnp.all(jnp.isfinite(dy)))
     b = du.balance(10.0, du.y0, a)
     np.testing.assert_allclose(np.asarray(b["accumulation"]), np.asarray(b["in_minus_out"]), atol=1e-9)
+
+
+@pytest.fixture(scope="module")
+def quench_beds(bed):
+    """Two three-cell beds behind an integral quench controller (the hydrocracker's), on the diesel layout."""
+    from difflow_refinery.dynamic import QuenchControlledReactor
+    lay, comps, km, geo = bed["lay"], bed["comps"], bed["km"], bed["geo"]
+    rx1 = bed["rx"]
+    h0 = holdup_from_outflow(bed["flows"], lay, comps, km, bed["T_in"], geo.tau_G, geo.tau_L)
+    cells = jax.tree_util.tree_map(lambda x: jnp.stack([jnp.stack([x] * 3)] * 2), h0)
+    T = jnp.full((2, 3), bed["T_in"])
+    scale = jnp.tile(rx1.scale, 2)
+    rx = QuenchControlledReactor(lay, rx1.kinetics, rx1.kin_params, comps, [geo, geo], 50e5,
+                                 quench_shares=(1.0,), n_cells=3, scale=scale, q0=[0.1], gain=[100.0],
+                                 tau_c=60.0, q_max=[0.3], setpoint="T_set")
+    y0 = jnp.concatenate([jax.vmap(jax.vmap(lambda f: f.ravel()))(cells).reshape(2, 3, -1),
+                          T[..., None]], axis=-1).reshape(-1) / scale
+    y0 = jnp.concatenate([y0, jnp.asarray([1.0])])                  # valve at its design opening
+    gas = Flows(jnp.zeros(lay.n_gas).at[lay.gas_index("hydrogen")].set(700.0),
+                jnp.zeros(lay.n_cut), jnp.zeros((lay.n_cut, lay.n_attr)))
+    header = gas.to_stream(lay, 340.0, 50e5)
+    return rx, y0, {"feed": bed["inlet"], "quench": header, "signals": {"T_set": jnp.asarray(bed["T_in"])}}
+
+
+def test_quench_controller_smoke_balance_and_windup(quench_beds, bed):
+    rx, y0, inp = quench_beds
+    lay = bed["lay"]
+    dy = jax.jit(lambda y, i: rx.derivatives(0.0, y, i))(y0, inp)
+    assert dy.shape == y0.shape and bool(jnp.all(jnp.isfinite(dy)))
+    out = rx.outputs(0.0, y0, inp)
+    draw = Flows.from_stream(out["quench_draw"], lay)
+    header = Flows.from_stream(inp["quench"], lay)
+    np.testing.assert_allclose(np.asarray(draw.gas), 0.1 * np.asarray(header.gas), rtol=1e-12)
+    assert set(rx.partial_outputs(0.0, y0, {"quench": inp["quench"]})) == {"quench_draw"}
+    # the beds' material balance with the drawn quench as an inflow
+    held = lambda y: jax.tree_util.tree_map(lambda a: jnp.sum(a, axis=(0, 1)), rx.unpack(y)[0]).elements(lay)
+    acc = jax.jvp(held, (y0,), (dy,))[1]
+    flux = (bed["flows"] + draw).elements(lay) - Flows.from_stream(out["outlet"], lay).elements(lay)
+    through = float(jnp.max(jnp.abs(bed["flows"].elements(lay))))
+    np.testing.assert_allclose(np.asarray(acc), np.asarray(flux), rtol=0, atol=1e-11 * through)
+    # a valve wound past its stop is pulled back to it (back-calculation anti-windup) and reads shut
+    hot = dict(inp, signals={"T_set": jnp.asarray(bed["T_in"] + 200.0)})       # inlet far below setpoint
+    y_past = y0.at[-1].set(-2.0)                                               # integrator below shut
+    assert float(rx.valves(y_past)[0]) < 1e-12
+    assert float(rx.derivatives(0.0, y0, hot)[-1]) < 0.0                      # an open valve closes
+    assert float(rx.derivatives(0.0, y_past, inp)[-1]) > 0.0                  # at the setpoint: back to the stop
+    np.testing.assert_allclose(float(rx.valves(y0)[0]), 0.1, rtol=1e-12)        # inside its range: the state
+
+
+def test_quench_controller_gradient_finite(quench_beds):
+    rx, y0, inp = quench_beds
+    g = jax.grad(lambda Ts: rx.derivatives(0.0, y0, dict(inp, signals={"T_set": Ts}))[-1])(
+        jnp.asarray(inp["signals"]["T_set"]))
+    assert np.isfinite(float(g)) and float(g) < 0.0
+
+
+def test_reformer_loop_balance_and_spec():
+    from difflow.units.eos_units import Compressor, CompressorParams
+    from difflow_refinery.dynamic import DynamicReformerLoop
+    from difflow_refinery.reforming import lean_naphtha
+    from difflow_refinery.reforming import species as sp
+    from difflow_refinery.reforming import thermo as rth
+    from difflow_refinery.reforming.reactor import flows_of, stream_of
+    from difflow_refinery.reforming.separation import ProductSeparator, ProductSeparatorParams
+    feed = lean_naphtha()
+    F = flows_of(feed.stream()).at[sp.INDEX["H2"]].add(6.0 * float(feed.hydrocarbon_moles))
+    eff = stream_of(F, jnp.asarray(760.0), jnp.asarray(14e5))
+    sep = ProductSeparator(ProductSeparatorParams(T=311.15, P=12e5))
+    comp = Compressor(CompressorParams(P_out=14e5, eta_isentropic=0.75, T_bounds=(200.0, 800.0)), rth.cubic_thermo())
+    liq, vap, _ = sep(eff)
+    Fv, Fl = flows_of(vap), flows_of(liq)
+    N = 12e5 * 30.0 / (8.314462618 * 311.15)
+    loop = DynamicReformerLoop(sep, comp, H2_HC=4.0, hydrocarbon_feed=float(feed.hydrocarbon_moles), tau_L=300.0,
+                               N_design=N, net_design=0.3 * float(jnp.sum(Fv)), tau_p=30.0,
+                               R_max=2.0 * float(jnp.sum(Fv)), y0=jnp.concatenate([Fl * 300.0, Fv / jnp.sum(Fv) * N]),
+                               T_sep=311.15, P_sep=12e5)
+    y0 = loop.initial_state()
+    sig_ = {"compressor": jnp.asarray(1.0), "feed_rate": jnp.asarray(1.0)}
+    inp = {"effluent": eff, "signals": sig_}
+    dy = loop.derivatives(0.0, y0, inp)
+    assert bool(jnp.all(jnp.isfinite(dy)))
+    out = loop.outputs(0.0, y0, inp)
+    rec = flows_of(out["recycle"])
+    assert float(rec[sp.INDEX["H2"]]) == pytest.approx(4.0 * float(feed.hydrocarbon_moles), rel=1e-10)
+    E = jnp.asarray(sp.ELEMENTS)
+    held = lambda y: E @ sum(loop.holdups(y))
+    acc = jax.jvp(held, (y0,), (dy,))[1]
+    flux = E @ (F - rec - flows_of(out["net_gas"]) - flows_of(out["liquid"]))
+    np.testing.assert_allclose(np.asarray(acc), np.asarray(flux), rtol=1e-10, atol=1e-9)
+    tripped = loop.outputs(0.0, y0, dict(inp, signals=dict(sig_, compressor=jnp.asarray(0.0))))
+    assert float(jnp.sum(flows_of(tripped["recycle"]))) == 0.0

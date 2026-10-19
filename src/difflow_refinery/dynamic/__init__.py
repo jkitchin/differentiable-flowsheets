@@ -15,6 +15,9 @@ enthalpies, and their ``t -> infinity`` limit is the steady unit's answer
   :class:`~difflow_refinery.hydrotreating.Hydrotreater`.
 * :mod:`.reforming` -- :class:`DynamicReformerTrain`: the reforming beds and
   interstage heaters with catalyst heat capacity and coke on catalyst.
+* :mod:`.hydrocracker` -- :class:`DynamicHydrocracker`, built from a solved
+  :class:`~difflow_refinery.hydrocracking.Hydrocracker` (quench controllers,
+  the UCO recycle as a fractionator holdup).
 * :mod:`.holdup` -- :class:`QuasiSteadyHoldup`, a steady unit behind outlet
   holdups (for units whose internals are fast).
 * :mod:`.beds` -- :class:`DynamicEquilibriumBed`, an adiabatic equilibrium
@@ -39,9 +42,9 @@ __all__ = ["evaluate", "signal_args", "smoothstep", "BedGeometry", "DynamicHPSep
            "DynamicTrickleBedReactor", "FurnaceLag", "RecycleGasLoop", "holdup_outflow",
            "DynamicHydrotreater", "HoldupParams"]
 
-from difflow_refinery.dynamic.reforming import DynamicReformerTrain, DynamicReformingReactor  # noqa: E402
+from difflow_refinery.dynamic.reforming import DynamicReformerLoop, DynamicReformerTrain, DynamicReformingReactor  # noqa: E402
 
-__all__ += ["DynamicReformerTrain", "DynamicReformingReactor"]
+__all__ += ["DynamicReformerLoop", "DynamicReformerTrain", "DynamicReformingReactor"]
 
 from difflow_refinery.dynamic.holdup import QuasiSteadyHoldup  # noqa: E402
 
@@ -58,3 +61,8 @@ __all__ += ["DynamicEquilibriumBed", "catalyst_heat_capacity", "DynamicHydrogenP
             "FiringLag", "SMRHoldupParams", "AmineHoldupParams", "DynamicAminePlant", "DynamicAmineUnit",
             "AirDemandControl", "DynamicSRU", "SRUHoldupParams", "TGTUSolvent", "CDUHoldupParams",
             "DynamicCrudeUnit"]
+
+from difflow_refinery.dynamic.hydrocracker import (  # noqa: E402
+    DynamicHydrocracker, DynamicRunawayWarning, HydrocrackerHoldupParams, QuenchControlledReactor)
+
+__all__ += ["DynamicHydrocracker", "DynamicRunawayWarning", "HydrocrackerHoldupParams", "QuenchControlledReactor"]

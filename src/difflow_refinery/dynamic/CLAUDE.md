@@ -65,3 +65,21 @@ apply, plus:
   `AirDemandControl` (integral trim, default off).
 - The crude column is re-specified with a COT spec (from an overflash or
   duty spec) at its steady COT; rate/duty specs scale with the charge.
+
+Phase 2a: `DynamicHydrocracker` (`hydrocracker.py`) and `DynamicReformerLoop`
+(`reforming.py`, `DynamicReformerTrain.from_steady(..., recycle_loop=True)`).
+Gates: `tests/reference/dynamic_hydrocracker_checks.py` (every upset capped at
+`MAX_STEPS`). Plus:
+- The cracking quench is CONTROLLED (`QuenchControlledReactor`): integral
+  control of each later bed's inlet on `T_crack`, smooth clip + back-calculation
+  anti-windup. Do not reintroduce a hard `jnp.where` switch: the RHS must stay
+  smooth (Tsit5 chattered at 0.1 s steps with it).
+- `min_gas_tau` (20 s) and `quench_tau` (300 s) are there for the explicit
+  integrator; lowering either makes disturbances stiff. A start far from rest
+  (cells 20 K cold) is stiff even so (open problem).
+- The UCO recycle is the fractionator `QuasiSteadyHoldup`'s `uco_recycle`
+  outlet (state-only output): it breaks the loop. Neither steady tear is solved.
+- `DynamicReformerLoop`: recycle = `need / y_H2` of the inventory (the steady
+  splitter at rest); the compressor's discharge T is computed on a unit flow of
+  the inventory's composition, so a tripped compressor stays finite.
+

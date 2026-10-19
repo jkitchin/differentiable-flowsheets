@@ -3690,6 +3690,7 @@ The refinery units are steady-state models. `difflow_refinery.dynamic` gives the
 | `DynamicHydrotreater.from_steady(unit, feed, result)` | `dynamic.hydrotreater` | charge-heater temperature; every cell's holdup (every gas, cut and attribute) and temperature; HP-separator liquid holdup; recycle-loop gas inventory |
 | `DynamicTrickleBedReactor`, `FurnaceLag`, `DynamicHPSeparator`, `RecycleGasLoop` | `dynamic.hydroprocessing` | the pieces it is wired from |
 | `DynamicReformerTrain.from_steady(reformer, feed, result)` | `dynamic.reforming` | each heater's outlet temperature; each cell's catalyst temperature and coke loading |
+| `DynamicHydrocracker.from_steady(unit, feed, result)` | `dynamic.hydrocracker` | heater and interstage temperatures; pretreat and cracking cells; quench-valve controllers; HP-separator liquid; loop gas; fractionator and UCO holdups ([below](#refinery-dynamic-hydrocracker)) |
 | `QuasiSteadyHoldup(op, ...)` | `dynamic.holdup` | outlet holdups of any steady unit (for units whose insides are fast) |
 | `signal_args`, `evaluate` | `dynamic.signals` | setpoints and disturbances as smoothed steps in `args` |
 
@@ -3825,10 +3826,63 @@ The tube is the one where a heat-capacity estimate does not hold: its gas is clo
 
 These are the model's own time scales; none has been compared with a plant transient or a published dynamic model. Example: `examples/68_refinery_dynamic_utilities.ipynb`.
 
+(refinery-dynamic-hydrocracker)=
+### The hydrocracker and the reformer's recycle loop
+
+| Class | Module | States | Signals |
+|---|---|---|---|
+| `DynamicHydrocracker.from_steady(unit, feed, result)` | `dynamic.hydrocracker` | charge-heater and interstage temperatures; every pretreat and cracking cell's holdup and temperature; the cracking quench valves; HP-separator liquid holdup; recycle-loop gas inventory; the fractionator's product and UCO holdups | `T_pretreat`, `T_crack`, `compressor`, `feed_rate`, `feed_sulfur`, `feed_nitrogen` |
+| `QuenchControlledReactor` | `dynamic.hydrocracker` | a `DynamicTrickleBedReactor`'s cells plus one quench valve per later bed | the setpoint signal |
+| `DynamicReformerTrain.from_steady(..., recycle_loop=True)` with `DynamicReformerLoop` | `dynamic.reforming` | the train's, plus the separator liquid holdup and the recycle loop's gas inventory (every species) | the train's, plus `compressor` |
+
+<!-- doc-test: skip: needs a solved Hydrocracker (about a minute) -->
+```python
+from difflow_refinery.dynamic import DynamicHydrocracker, DynamicRunawayWarning
+
+dyn = DynamicHydrocracker.from_steady(unit, feed, steady)        # a solved Hydrocracker, quench_crack=None
+y_rest = dyn.settle(2 * 3600.0)
+a = dyn.args(steps={"feed_nitrogen": [(600.0, 0.5)]})             # +50 % organic N in the feed
+traj = dyn.trajectory(dyn.simulate(3600.0, args=a, y0=y_rest, n_save=61), a)
+dyn.excursion(sim, a)          # hottest cell, alarm crossing, whether the integration completed
+```
+
+**The hydrocracker.** The pretreat and cracking beds are the hydrotreater's cells (`DynamicTrickleBedReactor`) stepping the steady unit's own bed equations -- the VGO pretreat parameters of the hydrotreating kinetics, and the cracking kinetics with the steady unit's prepared continuous-lumping state. A charge heater lags the pretreat inlet on `T_pretreat`; an interstage lag sets the first cracking bed's inlet on `T_crack` (the steady unit's implied exchanger). The HP separator and the recycle loop are the hydrotreater's (`DynamicHPSeparator`, `RecycleGasLoop`: inventory, compressor, makeup to the H2/oil spec up to its capacity, vent). The fractionator is a `QuasiSteadyHoldup` around the steady unit's TBP split (`fractionate`, not a column) with 10 minutes on every product and 30 minutes on the UCO (bottoms and surge drum); the UCO recycle leaves that holdup for the interstage lag, so **neither of the steady unit's tears is solved**: the loop inventory carries the recycle gas and the UCO holdup the UCO recycle, as ODE states.
+
+**Quench controllers.** The steady unit holds every cracking bed's inlet at `T_crack` and solves for the quench that does it (`quench_crack=None`; fixed quench rates are a knife-edge). The dynamic unit does what the plant's controllers do: each later bed's quench valve is an integral controller on that bed's mixed inlet temperature, `dq_k/dt = (T_in,k - T_set) / (G_k tau_c)`, with `G_k` the design gain from the steady solution and `tau_c` the closed loop's time constant. At rest `T_in,k = T_set`, the steady unit's own specification, so the rest state is the steady unit's. The valve opening is a smooth clip of the integrator to `[0, q_max]` (three times the design opening) with back-calculation anti-windup; a hard switch there made the adaptive integrator chatter at 0.1 s steps. A valve on its stop lets the inlet float: **that is how a bed runs away in this model**, and `simulate` reports it -- a failed integration returns with `info.success` False and a `DynamicRunawayWarning` naming the last finite time, and `excursion()` gives the hottest cell and when it crossed the alarm (`T_alarm`, 460 C, illustrative).
+
+**Two settings chosen for the explicit integrator** (both in `HydrocrackerHoldupParams`, both illustrative, neither moves the rest state):
+
+- A cell's gas residence time is floored at 20 s (`min_gas_tau`). A hydrocracker's treat gas (1500 Nm3/m3 at 150 bar) crosses a cell in about 3 s, against 6-22 s for the liquid and about a minute for the catalyst's heat; unfloored, the solver stepped at the gas's pace (more than 15 CPU-minutes for half an hour). The floor slows the gas's transit through a bed from seconds to about 100 s.
+- The quench loops' time constant is 5 minutes (`quench_tau`). With one minute, the controllers and the beds' gas holdup made every disturbance stiff (5000 steps did not cover ten simulated minutes; about 60 steps at five minutes). A real quench loop is faster: the inlet temperatures here recover more slowly than a plant's.
+
+**The reformer's recycle loop.** With `recycle_loop=True` the reformer train's effluent goes to `DynamicReformerLoop`: the steady `ProductSeparator`'s flash (instantaneous), a separator liquid holdup (5 minutes) drained to the steady stabilizer, and the loop's gas inventory (30 m3 at the separator's conditions), drained by the recycle compressor on the steady unit's H2/HC spec -- `need / y_H2` of the inventory, up to 1.3 times its design rate, times the `compressor` signal -- and by the net gas on a proportional pressure controller (30 s). At rest the inventory is the separator vapour and the recycle is the steady `RecycleSplitter`'s share of it, so the rest state is the steady reformer's. A compressor trip now starves the reactors of hydrogen.
+
+**Gates.** `tests/reference/dynamic_hydrocracker_checks.py` (not in the suite), on a 370-560 C straight-run VGO of the docs' light crude (50 kg/s, default `HydrocrackerParams`, cracking inlets 380 C) and the lean naphtha in the default reformer:
+
+| | result |
+|---|---|
+| hydrocracker rest state, 5 cells per bed (20221 states), from the steady profile mapped onto the cells, 2 h (448 steps, 4.3 min) | conversion 0.689676 against 0.689801 (-1.3e-4); WABT -0.057 K (pretreat), -0.003 K (cracking); bed outlets within 0.11 K; quench 3.5e-4, recycle 2.8e-5, makeup 1.1e-4 relative; organic N to the cracker 0.023 against 0.013 wppm |
+| the same with 50 % UCO recycle, 4 h (1225 steps) | conversion 0.51055 against 0.51265 (-2.1e-3); UCO recycle rate 2.4e-5; makeup 1.3e-5 relative; pretreat bed 1 outlet -0.25 K |
+| 3 cells per bed | did not settle: the coarser mapped start is stiff (100 000 steps, then non-finite) |
+| balances along a recycle-compressor trip (10 min, from rest) | element accumulation = in - out to 2.2e-10 (relative) at every saved state reached; **not completed**: the explicit integrator reached 720 s of the hour in its 3000-step cap |
+| +5 K step of `T_crack`; first-bed and pretreat thermal transit | **not completed** in 3000 steps (the step reached 600 s of the hour in 499 s of wall time); transit estimates from the heat capacities are 356 and 345 s (pretreat beds) and 123 s (first cracking bed), unmeasured |
+| trajectory gradient: d(organic N to the cracker at 15 min)/d(feed-N step size), a +50 % step | reverse mode 0.114 wppm (116 steps; 33 min with compile); central differences **do not converge** (0.877 at h = 0.1, 0.145 at h = 0.05): the slip is 13-23 ppb, at the adaptive solver's noise. **Not verified** |
+| heavy-VGO runaway (365 C steady, then +15 K) | **not completed**: settling the heavy VGO at 365 C did not produce a finite state with the explicit integrator |
+| implicit integration (Kvaerno5, matrix-free GMRES in its stage solve) | **fails to trace**: the right-hand side's nested optimistix solves (the quench-mixing temperature, the bed-inlet flash) leak closure-converted jaxprs into the stage solve's implicit derivative. A dense Jacobian is 3.2 GB at 20221 states |
+| reformer with `recycle_loop=True`, 5 cells, from every cell 20 K cold and the loop at 80 %, 3 h (443 steps) | reactor outlets within 1.8e-7 K; RON 92.501227 against 92.501226; recycle 1.5e-9, recycle purity 1.3e-9, net-gas H2 3.0e-9 relative |
+| reformer recycle compressor to 60 % for 10 min | C and H accumulation = in - out to 6.4e-9 at every saved state; RON dips from 92.50 to 89.50 and overshoots to 92.68; reactor outlets fall up to 11 K |
+| reformer: d(RON at 1 h)/d(depth of a compressor cut at 5 min), at 0.2 | -8.929573 by reverse mode (19 min with compile) against -8.929671 by a central difference (h = 0.02): 1.1e-5 |
+
+The rest-state errors are the cell discretisation of the steady beds (`N x n_sub` RK4 steps per bed against the steady unit's adaptive integration), not a modelling difference: the deep-HDN tail (13 ppb of organic N left of 1500 wppm) is the most sensitive to it. Unlike the hydrotreater's gate, the start is not far from rest: a start with every cell 20 K cold is stiff here (3000 steps did not reach ten simulated minutes, with either controller setting), and the cell ladder could not go further in the time available.
+
+**Open: the hydrocracker's large transients.** At rest and through a mild, slow disturbance (a feed-nitrogen step: about 60 steps per ten minutes) the dynamic hydrocracker runs; a setpoint step, a compressor trip, a start far from rest and the heavy VGO's runaway are too stiff for the explicit integrator at these holdups, and an implicit one does not trace through the nested solves in the right-hand side (table above). Those are the transients that matter most for operations. What it needs: the quench-mixing temperature and the bed-inlet K-model solved without a nested optimistix root inside the right-hand side (or the mixing enthalpy carried as a state), then an implicit stage solve with a matrix-free or block-sparse (per-bed) Jacobian. `simulate` caps and reports such a run (`info.success` False, `DynamicRunawayWarning`) rather than raising.
+
+Example: `examples/67_refinery_dynamic_hydrocracker.ipynb` (committed unexecuted: its feed-nitrogen cell exceeded a two-hour cell timeout on a loaded machine).
+
 (refinery-dynamic-not-done)=
 ### Not modelled
 
-Pressure dynamics (every pressure is fixed; flows are not pressure-driven); gas-liquid and liquid-solid transfer lags, catalyst-to-fluid heat transfer (instantaneous, as in the steady beds); reactor wall heat capacity; catalyst deactivation in the hydrotreater; controllers other than the makeup ratio rule, the separator level and the loop vent; the stripper, fractionators and stabilizer (steady at each time); the reformer's recycle loop and separator (held, and steady). The holdup sizes, the catalyst heat capacity (1000 J/(kg K)) and the time constants are illustrative design values. Phase 2 (the hydrocracker, the hydrogen plant and PSA, the amine unit, the sulfur plant and the crude unit; mostly on `QuasiSteadyHoldup`) and phase 3 (a dynamic version of the integrated refinery) are not built.
+Pressure dynamics (every pressure is fixed; flows are not pressure-driven); gas-liquid and liquid-solid transfer lags, catalyst-to-fluid heat transfer (instantaneous, as in the steady beds); reactor wall heat capacity; catalyst deactivation in the hydrotreater; controllers other than the makeup ratio rule, the separator level and the loop vent; the hydrotreater's stripper, the hydrocracker's fractionator and the reformer's stabilizer as columns with tray dynamics (each is its steady split, behind outlet holdups or at each time); the reformer's recycle loop unless `recycle_loop=True`. The holdup sizes, the catalyst heat capacity (1000 J/(kg K)) and the time constants are illustrative design values. Every unit of the refinery now has a dynamic version (the hydrotreater, the reformer train and its recycle loop, the hydrocracker, the hydrogen plant and PSA, the amine unit, the sulfur plant and the crude unit); a dynamic version of the integrated refinery is not built here.
 
 Example: `examples/66_refinery_dynamic_hydrotreater.ipynb` (three upsets, a trajectory gradient, a reformer step and a 120-day coking cycle).
 
@@ -5365,7 +5419,7 @@ validation](#refinery-validation), which has all of them.
 (refinery-limitations)=
 ## Limitations
 
-- **Dynamics: the hydrotreater and the reformer's reactor train only.** `difflow_refinery.dynamic` gives them holdups; the holdup sizes, catalyst heat capacity and time constants are illustrative, pressures are fixed, and the transients are not compared with a plant or a published dynamic model. The other units are steady. See [Dynamic operation](#refinery-dynamic).
+- **Dynamics: illustrative holdups, fixed pressures.** Every refinery unit has a dynamic version in `difflow_refinery.dynamic` (the hydrotreater, the reformer train and recycle loop, the hydrocracker, the hydrogen plant, the amine unit, the sulfur plant and the crude unit); the holdup sizes, heat capacities and time constants are illustrative, pressures are fixed, columns are their steady splits behind holdups, and no transient has been compared with a plant or a published dynamic model. See [Dynamic operation](#refinery-dynamic).
 - **The reformer's kinetics are illustrative.** The rate-law forms and activation energies are Smith's (1959, unverified transcription); the pre-exponentials are this module's, chosen for plausible behaviour, and no published commercial-reformer simulation is reproduced. Pure-compound octanes other than the reference fuels are recalled, not checked against ASTM STP 225. The stabilizer is a component split, not a column. See [Catalytic reforming](#refinery-reforming).
 - **The crude unit is the atmospheric column only.** The preflash drum and preheat train are not modelled; the inlet is the preheat train's outlet. The vacuum unit is a separate operation, fed from the crude unit's residue in a `Flowsheet` (above).
 - **Thermodynamics:** Raoult's law and ideal-gas-path enthalpies. This is the usual model for an atmospheric column at one or two bar; it is not a cubic equation of state.
