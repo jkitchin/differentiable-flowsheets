@@ -1,5 +1,5 @@
 {
- "n_sections": 1253,
+ "n_sections": 1254,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -10368,6 +10368,16 @@
     "refinery-dynamic-gates"
    ],
    "text": "`tests/reference/dynamic_refinery_checks.py` (about an hour, not part of the per-commit suite) produces these numbers, on the docs' test diesel (the 230-370 C cut, 50 kg/s, the default `HydrotreaterParams`) and the lean naphtha in the default reformer.\n\n**1. The steady limit.** From a start far from rest (every cell 30 K cold, the loop at 80 % of its inventory, the separator half full), eight hours at the design signals:\n\n| cells per bed | states | separator-liquid S (wppm), steady 217.409 | rel. error | WABT error (K) | recycle, makeup rel. error | wall time |\n|---|---|---|---|---|---|---|\n| 5 | 3299 | 217.981 | 2.6e-3 | -1.5e-4 | 1.3e-6, 8.0e-6 | 70 s |\n| 10 (default) | 6289 | 217.428 | 8.5e-5 | 2.0e-6 | 2.5e-7, 1.2e-6 | 91 s |\n| 20 | 12269 | 217.410 | 4.7e-6 | -6.2e-7 | 3.6e-9, 2.0e-8 | 174 s |\n\nThe error falls about 18 to 30 times per halving of the cell size: the fourth order of the RK4 cascade. Off design, the rest state after a +10 K bed-1 inlet step has 22.481 wppm against 22.464 from a steady solve at the new inlet (7.7e-4), WABT within 1.7e-4 K. The reformer train, every cell started 20 K cold, three hours:\n\n| cells per reactor | smallest cell's thermal time constant | outlet T error, reactors 1-3 (K) | RON (steady 92.50123) | coke-rate rel. error | wall time |\n|---|---|---|---|---|---|\n| 3 | 21 s | -3.2e-7, 4.7e-8, 2.3e-11 | 92.50123 | 1.2e-8 | 223 s |\n| 5 (default) | 12 s | -1.7e-7, -1.1e-7, 1.4e-7 | 92.50123 | 1.0e-8 | 370 s |\n| 10 | 6 s | -2.1e-7, 3.7e-8, -1.2e-7 | 92.50123 | 9.0e-9 | 845 s |\n\nExact at any cell count, because a reformer cell's reaction is the steady reformer's adaptive bed integration over that cell's catalyst. The solver's maximum step defaults to twice the smallest cell's thermal time constant: with a fixed 60 s, Tsit5 sat near its stability boundary at five and ten cells and the first reactor's outlet chattered at rest by 0.016 and 0.004 K."
+  },
+  {
+   "anchor": "the-hydrogen-plant-amine-unit-sulfur-plant-and-crude-unit",
+   "heading": "The hydrogen plant, amine unit, sulfur plant and crude unit",
+   "path": "Refinery Unit Operations > Dynamic operation > The hydrogen plant, amine unit, sulfur plant and crude unit",
+   "source": "unit-operations-refinery.md",
+   "targets": [
+    "refinery-dynamic-utilities"
+   ],
+   "text": "Four more units are dynamic, built from their solved steady units the same way: what holds heat or material long enough to matter to the plant around it is a state, and everything else is the steady unit's own functions evaluated at every time. Each starts and rests at its steady unit's answer.\n\n| Class | Module | States | Signals |\n|---|---|---|---|\n| `DynamicHydrogenPlant.from_steady(natural_gas, SMRParams)` | `dynamic.hydrogen` | furnace duty (lag); every reformer-tube cell's temperature (tube metal + catalyst); every HT (and LT) shift cell's temperature; the PSA product and tail-gas holdup | `feed_rate`, `S_C`, `firing` (W absorbed by the tubes), `T_hts` |\n| `DynamicAminePlant.from_steady(params, gases)` | `dynamic.treating` | lean inventory's CO2 and H2S; rich inventory's CO2, H2S and water; regenerator hot-end temperature | `gas_rate`, `circulation` (multiplier), `Q_reboiler` |\n| `DynamicSRU.from_steady(acid_gas, claus, tgtu)` | `dynamic.sulfur` | air trim; each reheater's outlet temperature; every Claus and hydrogenation cell's temperature; the TGTU solvent's H2S and CO2 | `acid_rate`, `air` (mol/s), `T_bed1`, `T_bed2`, ..., `T_hydrogenation` |\n| `DynamicCrudeUnit.from_steady(column, feed)` | `dynamic.crude` | coil outlet temperature (lag); every product's holdup (all components, temperature) | `feed_rate`, `COT` |\n| `DynamicEquilibriumBed` | `dynamic.beds` | cell temperatures | the shift, Claus and hydrogenation beds above |\n\n<!-- doc-test: skip: needs a solved SMR plant (about 20 s) and an SRU (about 3 minutes) -->\n```python\nfrom difflow_refinery.dynamic import DynamicHydrogenPlant, DynamicSRU, SRUHoldupParams\n\nplant = DynamicHydrogenPlant.from_steady(natural_gas, h2.SMRParams(n_tubes=240, psa=h2.PSA(0.90, 0.9999)))\na = plant.args(steps={\"firing\": [(600.0, 0.03 * plant.base_signals[\"firing\"])]})\ntraj = plant.trajectory(plant.simulate(3 * 3600.0, args=a, n_save=121), a)   # H2, T_reformer_out, ...\n\nsru = DynamicSRU.from_steady(acid_gas, claus, tgtu, holdup=SRUHoldupParams(air_Ki=2e-3))   # air trim on\n```\n\n**How each is built.**"
   },
   {
    "anchor": "not-modelled",
