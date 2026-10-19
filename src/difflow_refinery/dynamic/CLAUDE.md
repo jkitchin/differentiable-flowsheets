@@ -44,3 +44,24 @@ Invariants (do not weaken them):
   Holdup parameters are ILLUSTRATIVE (`HoldupParams`); they set speeds, not
   rest states.
 - The steady quench must be given (`HydrotreaterParams.quench`), not solved.
+
+Phase 2b (utilities): `DynamicHydrogenPlant` (`hydrogen.py`), `DynamicAminePlant`
+/ `DynamicAmineUnit` (`treating.py`), `DynamicSRU` (`sulfur.py`),
+`DynamicCrudeUnit` (`crude.py`), and `DynamicEquilibriumBed` (`beds.py`, the
+shift / Claus / hydrogenation beds). Gates:
+`tests/reference/dynamic_utilities_checks.py` (~40 min). The same invariants
+apply, plus:
+- An equilibrium bed's cell takes the steady unit's RESTRICTED equilibrium
+  isothermally at the cell temperature; at rest cell 1 is the adiabatic
+  equilibrium. Its thermal time uses the gas's heat flow ALONG equilibrium
+  (`thermal_time(equilibrium=True)`), which the simulation reproduces.
+- The SMR tube cells call `smr._integrate` over `z_span`; the tube is
+  flux-mode only (the firing is a signal behind `FiringLag`).
+- The amine loop's tear (lean loadings, hot-end T) IS its state: lean and
+  rich inventories hold fixed amine; water in the lean inventory is held at
+  design by the makeup, so only the rich water is a state.
+- The SRU's TGTU solvent inventory is what breaks the furnace <- recycle
+  loop (`recycle` reads the state only); the air comes from
+  `AirDemandControl` (integral trim, default off).
+- The crude column is re-specified with a COT spec (from an overflash or
+  duty spec) at its steady COT; rate/duty specs scale with the charge.

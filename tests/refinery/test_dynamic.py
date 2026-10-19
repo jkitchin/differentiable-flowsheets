@@ -178,3 +178,116 @@ def test_quasi_steady_holdup_conserves_and_rests():
     acc = jax.jvp(held, (y0,), (dy / u._scale,))[1]
     out = u.outputs(0.0, y0, {"in": step})
     assert float(acc) == pytest.approx(3.0 - float(out["top"]["F_A"] + out["bottom"]["F_A"]), rel=1e-12)
+
+
+# ----- phase 2: equilibrium beds, SMR tubes, amine loop, SRU control, crude unit -----------
+
+def _shift_bed(n_cells=3):
+    from difflow_refinery.dynamic import DynamicEquilibriumBed
+    from difflow_refinery.dynamic.hydrogen import _shift_equilibrium
+    from difflow_refinery.hydrogen import smr
+    n = jnp.asarray([2.0, 30.0, 45.0, 8.0, 6.0, 0.5, 0.0])
+    inlet = smr.to_stream(n, 593.15, 2.8e6)
+    bed = DynamicEquilibriumBed(_shift_equilibrium(0.0), smr.enthalpy, smr.to_vec, smr.to_stream, 4.0e7,
+                                n_cells, P=2.8e6, T0=[650.0, 640.0, 630.0][:n_cells], name="hts")
+    return bed, inlet, n
+
+
+def test_equilibrium_bed_rests_at_the_adiabatic_shift_and_conserves():
+    from difflow_refinery.hydrogen import smr
+    from difflow_refinery import thermochemistry as tc
+    bed, inlet, n = _shift_bed()
+    out, _ = smr.shift(inlet, 593.15)
+    T_ad = float(out["T"])
+    y = jnp.full(bed.n_cells, T_ad / 100.0)
+    dy = jax.jit(lambda y: bed.derivatives(0.0, y, {"inlet": inlet}))(y)
+    assert float(jnp.max(jnp.abs(dy))) < 1e-9                 # every cell at the adiabatic equilibrium
+    np.testing.assert_allclose(np.asarray(smr.to_vec(bed.outputs(0.0, y, {"inlet": inlet})["outlet"])),
+                               np.asarray(smr.to_vec(out)), rtol=1e-8, atol=1e-10)
+    # away from rest the cells hold no gas: elements in = out at every state
+    y1 = jnp.asarray([6.2, 6.4, 6.0])
+    o = smr.to_vec(bed.outputs(0.0, y1, {"inlet": inlet})["outlet"])
+    E = jnp.asarray([[tc.elements(k).get(e, 0) for k in smr.SYNGAS] for e in "CHO"])
+    np.testing.assert_allclose(np.asarray(E @ o), np.asarray(E @ n), rtol=1e-12)
+    g = jax.grad(lambda T: jnp.sum(bed.derivatives(0.0, y1, {"inlet": dict(inlet, T=T)})))(593.15)
+    assert np.isfinite(float(g))
+
+
+def test_reformer_tube_cells_smoke_and_rest():
+    from difflow_refinery.dynamic.hydrogen import DynamicReformerTube
+    from difflow_refinery.hydrogen import smr
+    tp = smr.ReformerTubeParams(rtol=1e-7, atol=1e-9)
+    n = jnp.asarray([1.6, 4.4, 0.3, 0.02, 0.1, 0.03, 0.0])      # per tube, after a prereformer
+    inlet = smr.to_stream(n * 10.0, 893.15, 3.2e6)                # ten tubes
+    tube = DynamicReformerTube(tp, 10.0, 2, 3.0e5, 3.2e6, [1000.0, 1150.0])
+    firing = {"Q": jnp.asarray(10 * 3.5e5)}
+    inp = {"inlet": inlet, "firing": firing}
+    y0 = tube.initial_state()
+    dy = jax.jit(lambda y: tube.derivatives(0.0, y, inp))(y0)
+    assert bool(jnp.all(jnp.isfinite(dy)))
+    # at T = T* the cells are at rest (iterate: each cell's T* depends on the cell upstream)
+    y = y0
+    for _ in range(4):
+        y = tube.report(y, inp)["T_star"] / 100.0
+    assert float(jnp.max(jnp.abs(tube.derivatives(0.0, y, inp)))) < 1e-9
+    g = jax.grad(lambda Q: jnp.sum(tube.derivatives(0.0, y0, {"inlet": inlet, "firing": {"Q": Q}})))(3.5e6)
+    assert np.isfinite(float(g))
+
+
+def test_amine_loop_species_balance_and_gradient():
+    from difflow_refinery.dynamic import AmineHoldupParams, DynamicAmineUnit
+    from difflow_refinery.treating import TrayParams
+    from difflow_refinery.treating.unit import AmineUnitParams, Contactor
+    p = AmineUnitParams("MDEA", 0.45, (Contactor("fuel", 60.0, 4, TrayParams(area=200.0, k_G=1e-5, k_L=1e-4)),),
+                        Q_reboiler=3e6, n_regenerator=4)
+    gas = {"F_methane": 350.0, "F_hydrogen": 50.0, "F_hydrogen_sulfide": 10.0, "F_carbon_dioxide": 10.0,
+           "F_water": 0.5, "T": 313.15, "P": 7e5}
+    hp = AmineHoldupParams()
+    L = 60.0
+    x0 = jnp.asarray([L * hp.tau_lean * 1e-4, L * hp.tau_lean * 1e-2, L * hp.tau_rich * 0.01,
+                      L * hp.tau_rich * 0.15, L * hp.tau_rich * 400.0 / 60.0, 393.0])
+    u = DynamicAmineUnit(p, hp, jnp.ones(6), x0)
+    sig_ = {"circulation": jnp.asarray(1.0), "Q_reboiler": jnp.asarray(3e6)}
+    inp = {"fuel": gas, "signals": sig_}
+    y0 = u.initial_state()
+    dy = jax.jit(lambda y: u.derivatives(0.0, y, inp))(y0)
+    assert bool(jnp.all(jnp.isfinite(dy)))
+    out = u.outputs(0.0, y0, inp)
+    acc = jax.jvp(lambda yy: jnp.stack([u.inventory(yy)[k] for k in ("hydrogen_sulfide", "carbon_dioxide",
+                                                                       "water")]), (y0,), (dy,))[1]
+    for i, k in enumerate(("hydrogen_sulfide", "carbon_dioxide", "water")):
+        fk = f"F_{k}"
+        io = gas.get(fk, 0.0) + out["makeup"].get(fk, 0.0) - sum(out[s].get(fk, 0.0) for s in
+                                                                  ("fuel_sweet", "flash_gas", "acid_gas"))
+        assert float(acc[i]) == pytest.approx(float(io), abs=1e-9 * 400.0)
+    g = jax.grad(lambda c: u.derivatives(0.0, y0, {"fuel": gas, "signals": dict(sig_, circulation=c)})[1])(1.0)
+    assert np.isfinite(float(g))
+
+
+def test_air_demand_control_trims_toward_the_ratio():
+    from difflow_refinery.dynamic import AirDemandControl
+    from difflow_refinery.sulfur import claus as cl
+    c = AirDemandControl(Ki=1e-3, S_in=100.0)
+    tail = cl.to_stream(jnp.zeros(len(cl.SPECIES)).at[cl._IDX["hydrogen_sulfide"]].set(2.0)
+                        .at[cl._IDX["sulfur_dioxide"]].set(0.5), 413.15, 1.3e5)
+    du = c.derivatives(0.0, c.initial_state(), {"tail_gas": tail, "signals": {"air": 200.0}})
+    assert float(du[0]) == pytest.approx(1e-3 * 1.0 / 100.0)      # H2S-rich tail gas: more air
+    assert float(c.outputs(0.0, jnp.asarray([0.01]), {"signals": {"air": 200.0}})["air"]["air"]) == pytest.approx(202.0)
+
+
+def test_crude_unit_starts_at_rest_and_conserves():
+    from difflow_refinery import Assay, CrudeUnit, column as cc
+    from difflow_refinery.dynamic import DynamicCrudeUnit
+    assay = Assay([0, 30, 70, 100], [320., 480., 640., 900.], sg=0.85)
+    unit = CrudeUnit(assay, cc.CrudeColumnParams(n_stages=8, feed_stage=7, bottom_steam=0.2,
+                                                 specs=(cc.product_rate("naphtha", 0.25, basis="mole"),
+                                                        cc.coil_outlet_temperature(620.0))))
+    feed = unit.feed(1.0, T=500.0, P=4e5, basis="mole")
+    du = DynamicCrudeUnit.from_steady(unit.column, feed, holdup=dr.dynamic.CDUHoldupParams(tau_side=60.0))
+    a = du.args(steps={"COT": [(0.0, 5.0)], "feed_rate": [(0.0, 0.1)]}, ramp=1.0)
+    rhs = jax.jit(lambda y, a: du.flowsheet.derivatives(jnp.asarray(10.0), y, None, a))
+    assert float(jnp.max(jnp.abs(rhs(du.y0, du.args())))) < 1e-8
+    dy = rhs(du.y0, a)
+    assert bool(jnp.all(jnp.isfinite(dy)))
+    b = du.balance(10.0, du.y0, a)
+    np.testing.assert_allclose(np.asarray(b["accumulation"]), np.asarray(b["in_minus_out"]), atol=1e-9)
