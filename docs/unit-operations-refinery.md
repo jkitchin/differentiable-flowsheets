@@ -3680,6 +3680,99 @@ Tests: `tests/refinery/test_plant.py` runs per commit, on toy stages with the un
 
 ---
 
+(refinery-dynamic)=
+## Dynamic operation
+
+The refinery units are steady-state models. `difflow_refinery.dynamic` gives the hydrotreater and the reformer holdups -- material in reactor cells, separators and the recycle loop; heat in the catalyst and the furnaces -- and runs them in time on difflow's dynamic framework ([Dynamic Modeling](dynamic-modeling.md)): every class implements the `DynamicUnit` protocol, so it goes into a `DynamicFlowsheet`, takes its disturbances as integrator `args`, and every trajectory is differentiable. Nothing is re-derived: a cell steps the steady unit's own rate laws, phase model and enthalpies, and the rest state of each dynamic unit is its steady unit's answer (the gates below).
+
+| Piece | Module | States |
+|---|---|---|
+| `DynamicHydrotreater.from_steady(unit, feed, result)` | `dynamic.hydrotreater` | charge-heater temperature; every cell's holdup (every gas, cut and attribute) and temperature; HP-separator liquid holdup; recycle-loop gas inventory |
+| `DynamicTrickleBedReactor`, `FurnaceLag`, `DynamicHPSeparator`, `RecycleGasLoop` | `dynamic.hydroprocessing` | the pieces it is wired from |
+| `DynamicReformerTrain.from_steady(reformer, feed, result)` | `dynamic.reforming` | each heater's outlet temperature; each cell's catalyst temperature and coke loading |
+| `QuasiSteadyHoldup(op, ...)` | `dynamic.holdup` | outlet holdups of any steady unit (for units whose insides are fast) |
+| `signal_args`, `evaluate` | `dynamic.signals` | setpoints and disturbances as smoothed steps in `args` |
+
+<!-- doc-test: skip: needs a solved Hydrotreater (about a minute) -->
+```python
+from difflow_refinery.dynamic import DynamicHydrotreater
+
+dh = DynamicHydrotreater.from_steady(unit, feed, steady)       # a solved Hydrotreater
+y_rest = dh.settle(2 * 3600.0)                                  # two hours at constant signals
+trip = dh.args(steps={"compressor": [(600.0, -1.0), (1200.0, 1.0)]}, ramp=30.0)
+sim = dh.simulate(3 * 3600.0, args=trip, y0=y_rest, n_save=181)
+traj = dh.trajectory(sim, trip)                  # WABT, cell temperatures, liquid S, H2, loop
+```
+
+Signals of the hydrotreater: `T_heater` (bed-1 inlet setpoint, K), `compressor` (1 running, 0 tripped), `quench` (fraction of the treat gas), `feed_rate` and `feed_sulfur` (multipliers). Of the reformer train: `T_in1`, `T_in2`, ... and `feed_rate`. A step is `(time, size)`, smoothed over `ramp` seconds (a smoothstep), which keeps the right-hand side continuous and makes a step's time and size differentiable.
+
+(refinery-dynamic-cells)=
+### Beds as cells: the steady bed, stepped
+
+Each catalyst bed is `N` cells. A cell holds a material holdup `n` (mol of every gas, cut and attribute; for the reformer, whose gas crosses a bed in seconds, none: its gas is quasi-steady) and a temperature `T` shared by its catalyst and fluid (pseudo-homogeneous, as the steady bed). Two things happen in a cell:
+
+1. **Reaction across the cell.** The cell's inflow -- the previous cell's outflow at its temperature -- is carried across the cell's catalyst `W_c` by the *steady* bed equations, to `(F*, T*)`. The hydrotreater does that with `n_sub` RK4 steps of `bed_derivatives` (the right-hand side `integrate_bed` integrates: `dF/dW = r`, `C_eff dT/dW = q`); the reformer with its own adaptive `integrate_bed` over the cell's catalyst (fixed RK4 steps are not stable there: the dehydrogenation equilibria at a bed inlet need more than a thousand).
+2. **Holdup.** The holdup is fed by `F*` and drains by its own outflow; the heat the reacted fluid brings in at `T*` warms or cools the catalyst and holdup at `T`:
+
+```
+dn/dt = F* - F_out(n, T)
+(W_c c_p,cat + C_hold) dT/dt = H(F*, T*) - H(F*, T)
+```
+
+`F_out` splits the holdup into its equilibrium vapour and liquid (the bed's K-values, Rachford-Rice on the holdup's composition); the vapour drains with residence time `tau_G` and the liquid with `tau_L`, both per cell and fixed at the design point from the bed's holdup volumes (`HoldupParams`: 40 % voids, 12 % of the bed volume liquid). The outflow's phases are the holdup's, in different amounts.
+
+At rest `F_out = F*` and `T = T*`, so **the dynamic bed's rest state is the steady bed integrated in `N x n_sub` steps**: it converges to the steady unit at fourth order in the cell size, whatever the holdups. Putting the reaction on the holdup composition instead (a series of CSTRs) would be first order, and a 99 % HDS bed's outlet sulfur is a factor of two off at ten cells. The price is that a cell's reaction sees its inflow, half a cell upstream of its holdup; the transient is first order in the cell size, with the numerical dispersion of a dispersed plug flow of Peclet number about `2N`.
+
+The element balances close exactly at every state of a trajectory: the RK4 step is a linear combination of element-conserving rates, so the elements accumulating in the cells equal those flowing in less those flowing out.
+
+**The rest of the hydrotreater.** The charge heater is a first-order lag of its outlet on its setpoint (`heater_tau`, 5 min: firebox and tube metal). The HP separator flashes the effluent (PR, as the steady unit, with the knock-out) and holds the liquid for `separator_tau` (5 min), draining it in proportion to its holdup (a level controller, idealised). The recycle loop holds the scrubbed gas less the purge in an inventory (`loop_volume`, 30 m3 at the separator's pressure and temperature); the compressor draws it at `compressor x n / tau_loop`; the makeup tops the treat gas up to its design H2 rate (the steady unit's ratio rule) up to `makeup_capacity` (1.5 times design); above 5 % over its design inventory the loop vents to flare (its pressure controller, time constant 60 s). The steady unit's recycle tear is gone: the loop inventory carries it as ODE states. The stripper and products section stays steady; the separator liquid's sulfur on the cuts is what the dynamic model reports.
+
+**The reformer train.** Heaters are furnace lags on each reactor's inlet setpoint; cells carry the catalyst temperature (`W_c c_p dT/dt = H(F_in, T_in) - H(F*, T)` on the reformer's one enthalpy basis, a true energy balance) and the coke (`dC/dt` = the coke made across the cell over `W_c`). With `coke_alpha` the cell's activity is `exp(-alpha C)` (the CCR module's form; alpha ILLUSTRATIVE): the semi-regenerative cycle as a trajectory. The recycle gas is held at the steady unit's; the separator and stabilizer are run steady on the effluent to report the reformate.
+
+**Two time scales.** In the reformer the temperatures settle in minutes and the coke moves over weeks. `DynamicReformerTrain.simulate` runs hours (Tsit5); `DynamicReformerTrain.cycle` runs months on the slow time scale alone: the temperatures on their rest manifold (each cell at its segment's adiabatic outlet), the heaters at their setpoints, and only the coke integrated -- the singular-perturbation reduction of the same model.
+
+(refinery-dynamic-gates)=
+### Gates
+
+`tests/reference/dynamic_refinery_checks.py` (about an hour, not part of the per-commit suite) produces these numbers, on the docs' test diesel (the 230-370 C cut, 50 kg/s, the default `HydrotreaterParams`) and the lean naphtha in the default reformer.
+
+**1. The steady limit.** From a start far from rest (every cell 30 K cold, the loop at 80 % of its inventory, the separator half full), eight hours at the design signals:
+
+| cells per bed | states | separator-liquid S (wppm), steady 217.409 | rel. error | WABT error (K) | recycle, makeup rel. error | wall time |
+|---|---|---|---|---|---|---|
+| 5 | 3299 | 217.981 | 2.6e-3 | -1.5e-4 | 1.3e-6, 8.0e-6 | 70 s |
+| 10 (default) | 6289 | 217.428 | 8.5e-5 | 2.0e-6 | 2.5e-7, 1.2e-6 | 91 s |
+| 20 | 12269 | 217.410 | 4.7e-6 | -6.2e-7 | 3.6e-9, 2.0e-8 | 174 s |
+
+The error falls about 18 to 30 times per halving of the cell size: the fourth order of the RK4 cascade. Off design, the rest state after a +10 K bed-1 inlet step has 22.481 wppm against 22.464 from a steady solve at the new inlet (7.7e-4), WABT within 1.7e-4 K. The reformer train, every cell started 20 K cold, three hours:
+
+| cells per reactor | smallest cell's thermal time constant | outlet T error, reactors 1-3 (K) | RON (steady 92.50123) | coke-rate rel. error | wall time |
+|---|---|---|---|---|---|
+| 3 | 21 s | -3.2e-7, 4.7e-8, 2.3e-11 | 92.50123 | 1.2e-8 | 223 s |
+| 5 (default) | 12 s | -1.7e-7, -1.1e-7, 1.4e-7 | 92.50123 | 1.0e-8 | 370 s |
+| 10 | 6 s | -2.1e-7, 3.7e-8, -1.2e-7 | 92.50123 | 9.0e-9 | 845 s |
+
+Exact at any cell count, because a reformer cell's reaction is the steady reformer's adaptive bed integration over that cell's catalyst. The solver's maximum step defaults to twice the smallest cell's thermal time constant: with a fixed 60 s, Tsit5 sat near its stability boundary at five and ten cells and the first reactor's outlet chattered at rest by 0.016 and 0.004 K.
+
+**2. Balances along a trajectory.** Over a ten-minute recycle-compressor trip (two hours, 121 saved states), the elements accumulating in the cells, the separator and the loop equal what enters less what leaves to 1.7e-9 (relative) at every saved state -- by construction, so this checks the code. Integrating `in - out` over the saved states by the trapezoid rule and comparing with the inventory change shows the quadrature, not the model: the worst element (sulfur) is off by 5.5 % of its inventory change with 60 s between states and by 0.12 % with 10 s (second order, as the trapezoid rule is).
+
+**3. Gradients through a trajectory.** The derivative of the separator liquid's sulfur one hour after a bed-1 inlet step with respect to the step's size (at 5 K) is -17.852717 wppm/K by reverse mode through the diffrax solve (`RecursiveCheckpointAdjoint`; 6 minutes with its compile); central differences give -17.8693 (h = 0.5 K), -17.8569 (0.25) and -17.8534 (0.1), converging on it: their Richardson extrapolation from the first two is -17.852718. The reformer's d(reformate RON one hour after a first-inlet step)/d(step) is 0.184485 by reverse mode (through the cells' own nested bed integrations; 10 minutes) and 0.184470 by a central difference (h = 0.5 K, 8e-5).
+
+**4. Time scales.** A bed's thermal transit time, the time a temperature change at its inlet takes to cross it, is the sum over its cells of (catalyst plus holdup heat capacity) over the heat-capacity flow of the oil and gas: 403 s for bed 1 and 579 s for bed 2 at the design point. The mean arrival time of each bed outlet's response to a +10 K inlet step (with the furnace lag set to 1 s) is 407 s and 598 s. The outlets settle 12.0 and 12.2 K higher, more than the step, because the hotter beds react faster. The gas crosses a bed in 32-42 s and the liquid in 2.5-4 minutes (the design residence times of `HoldupParams`), the separator holds 5 minutes of liquid and the loop inventory turns over in 77 s. In the reformer the smallest cell's thermal time constant is 12-21 s (five to three cells per bed); the coke's is weeks: on the slow time scale 120 days take 17 s and five solver steps, the RON falls from 92.50 to 90.45 and the mean coke reaches 2.6, 3.2 and 4.3 wt% in the three reactors with `coke_alpha = 10`. With fresh catalyst the train's coke rate is the steady reformer's (9.17886e-6, 2.38901e-5 and 6.40837e-5 kg/s, the steady unit's to 1e-8); it falls with the activity through the cycle.
+
+These are the model's own time scales, set by the illustrative holdups and heat capacity; they have not been compared with a plant transient or with a published dynamic HDT model. The closest published model is the axially distributed (PDE) trickle-bed model of Mederos, Ancheyta & Elizalde, "Dynamic modeling and simulation of hydrotreating of gas oil obtained from heavy crude oil", *Appl. Catal. A* 425-426, 13-27 (2012), doi:10.1016/j.apcata.2012.02.034 (DOI checked on Crossref); reproducing its transients is the natural next validation.
+
+The per-commit tests (`tests/refinery/test_dynamic.py`) only smoke-test the units and check finite gradients, per the test policy.
+
+(refinery-dynamic-not-done)=
+### Not modelled
+
+Pressure dynamics (every pressure is fixed; flows are not pressure-driven); gas-liquid and liquid-solid transfer lags, catalyst-to-fluid heat transfer (instantaneous, as in the steady beds); reactor wall heat capacity; catalyst deactivation in the hydrotreater; controllers other than the makeup ratio rule, the separator level and the loop vent; the stripper, fractionators and stabilizer (steady at each time); the reformer's recycle loop and separator (held, and steady). The holdup sizes, the catalyst heat capacity (1000 J/(kg K)) and the time constants are illustrative design values. Phase 2 (the hydrocracker, the hydrogen plant and PSA, the amine unit, the sulfur plant and the crude unit; mostly on `QuasiSteadyHoldup`) and phase 3 (a dynamic version of the integrated refinery) are not built.
+
+Example: `examples/66_refinery_dynamic_hydrotreater.ipynb` (three upsets, a trajectory gradient, a reformer step and a 120-day coking cycle).
+
+---
+
 (refinery-thermochemistry)=
 ## Thermochemical data
 
@@ -5211,6 +5304,7 @@ validation](#refinery-validation), which has all of them.
 (refinery-limitations)=
 ## Limitations
 
+- **Dynamics: the hydrotreater and the reformer's reactor train only.** `difflow_refinery.dynamic` gives them holdups; the holdup sizes, catalyst heat capacity and time constants are illustrative, pressures are fixed, and the transients are not compared with a plant or a published dynamic model. The other units are steady. See [Dynamic operation](#refinery-dynamic).
 - **The reformer's kinetics are illustrative.** The rate-law forms and activation energies are Smith's (1959, unverified transcription); the pre-exponentials are this module's, chosen for plausible behaviour, and no published commercial-reformer simulation is reproduced. Pure-compound octanes other than the reference fuels are recalled, not checked against ASTM STP 225. The stabilizer is a component split, not a column. See [Catalytic reforming](#refinery-reforming).
 - **The crude unit is the atmospheric column only.** The preflash drum and preheat train are not modelled; the inlet is the preheat train's outlet. The vacuum unit is a separate operation, fed from the crude unit's residue in a `Flowsheet` (above).
 - **Thermodynamics:** Raoult's law and ideal-gas-path enthalpies. This is the usual model for an atmospheric column at one or two bar; it is not a cubic equation of state.

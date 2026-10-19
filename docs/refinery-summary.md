@@ -66,6 +66,7 @@ These are not units, but every unit reads them.
 | Stage-network column | `vacuum.StageColumn` | The equation-oriented column the VDU, the gas plant and the hydrotreater's stripper are built on. [Details](unit-operations-refinery.md#the-stage-network-column) |
 | Hydroprocessing blocks | `difflow_refinery.hydroprocessing` | A trickle-bed reactor around any kinetic model, a Peng-Robinson high-pressure separator, the recycle-gas loop and a steam stripper. Shared by the hydrotreater and the hydrocracker. [Details](unit-operations-refinery.md#hydroprocessing-building-blocks) |
 | Chaining units | `difflow_refinery.plant` | `Chain`, `Stage` and `AD_MODES`: library units composed into one differentiable function. It uses one `jax.jacfwd`/`jacrev` when every unit supports that mode, and the chain rule by unit Jacobians when they do not (the reformer is forward-only, a default hydrotreater reverse-only). The AD-mode table of every unit and the measured compile costs are under [Details](unit-operations-refinery.md#chaining-units-into-one-differentiable-function). |
+| Dynamic operation | `difflow_refinery.dynamic` | Holdup-based dynamic versions on `difflow.dynamic`: `DynamicHydrotreater` (beds as cells with gas/liquid holdup and catalyst heat capacity, furnace lag, HP-separator level, recycle-loop inventory; built from a solved `Hydrotreater`) and `DynamicReformerTrain` (catalyst temperature and coke per cell, interstage furnace lags, a two-time-scale coking cycle). They reuse the steady units' physics, rest at the steady units' answers, close element balances along a trajectory, and are differentiable through it. `QuasiSteadyHoldup` puts any steady unit behind outlet holdups. [Details](unit-operations-refinery.md#dynamic-operation) |
 
 ---
 
@@ -176,6 +177,12 @@ reformer's numbers did not change.
   ([details](unit-operations-refinery.md#estimated-product-properties)).
   A measured value overrides each.
 - **Boiling ranges are TBP, not ASTM D86**, throughout.
+- **Dynamics: two units so far.** Only the hydrotreater and the reformer's
+  reactor train have dynamic versions (`difflow_refinery.dynamic`); the
+  holdups are illustrative, pressures are fixed, and the transients have not
+  been compared with a plant or a published dynamic model
+  ([details](unit-operations-refinery.md#dynamic-operation)). The other units
+  are steady.
 - **Connections between units.** The nine gaps that
   `examples/40_refinery_flowsheet.ipynb` first ran into (#326 to #334) are
   closed: `gas_plant_feed`, `NaphthaFeed.from_hydrotreater` and
