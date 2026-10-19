@@ -17,6 +17,16 @@ enthalpies, and their ``t -> infinity`` limit is the steady unit's answer
   interstage heaters with catalyst heat capacity and coke on catalyst.
 * :mod:`.holdup` -- :class:`QuasiSteadyHoldup`, a steady unit behind outlet
   holdups (for units whose internals are fast).
+* :mod:`.beds` -- :class:`DynamicEquilibriumBed`, an adiabatic equilibrium
+  bed (shift, Claus, hydrogenation) in thermal cells.
+* :mod:`.hydrogen` -- :class:`DynamicHydrogenPlant`: SMR tubes with tube and
+  catalyst heat capacity, furnace lag, shift bed, PSA lag.
+* :mod:`.treating` -- :class:`DynamicAminePlant`: the amine loop with its
+  lean and rich solvent inventories.
+* :mod:`.sulfur` -- :class:`DynamicSRU`: Claus and hydrogenation beds,
+  reheaters, TGTU solvent inventory, air-demand control.
+* :mod:`.crude` -- :class:`DynamicCrudeUnit`: furnace lag and product
+  holdups around the steady crude column.
 * :mod:`.signals` -- setpoints and disturbances as integrator ``args``.
 """
 
@@ -36,3 +46,15 @@ __all__ += ["DynamicReformerTrain", "DynamicReformingReactor"]
 from difflow_refinery.dynamic.holdup import QuasiSteadyHoldup  # noqa: E402
 
 __all__ += ["QuasiSteadyHoldup"]
+
+from difflow_refinery.dynamic.beds import DynamicEquilibriumBed, catalyst_heat_capacity  # noqa: E402
+from difflow_refinery.dynamic.hydrogen import (  # noqa: E402
+    DynamicHydrogenPlant, DynamicReformerTube, FiringLag, SMRHoldupParams)
+from difflow_refinery.dynamic.treating import AmineHoldupParams, DynamicAminePlant, DynamicAmineUnit  # noqa: E402
+from difflow_refinery.dynamic.sulfur import AirDemandControl, DynamicSRU, SRUHoldupParams, TGTUSolvent  # noqa: E402
+from difflow_refinery.dynamic.crude import CDUHoldupParams, DynamicCrudeUnit  # noqa: E402
+
+__all__ += ["DynamicEquilibriumBed", "catalyst_heat_capacity", "DynamicHydrogenPlant", "DynamicReformerTube",
+            "FiringLag", "SMRHoldupParams", "AmineHoldupParams", "DynamicAminePlant", "DynamicAmineUnit",
+            "AirDemandControl", "DynamicSRU", "SRUHoldupParams", "TGTUSolvent", "CDUHoldupParams",
+            "DynamicCrudeUnit"]

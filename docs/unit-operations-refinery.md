@@ -3764,6 +3764,67 @@ These are the model's own time scales, set by the illustrative holdups and heat 
 
 The per-commit tests (`tests/refinery/test_dynamic.py`) only smoke-test the units and check finite gradients, per the test policy.
 
+(refinery-dynamic-utilities)=
+### The hydrogen plant, amine unit, sulfur plant and crude unit
+
+Four more units are dynamic, built from their solved steady units the same way: what holds heat or material long enough to matter to the plant around it is a state, and everything else is the steady unit's own functions evaluated at every time. Each starts and rests at its steady unit's answer.
+
+| Class | Module | States | Signals |
+|---|---|---|---|
+| `DynamicHydrogenPlant.from_steady(natural_gas, SMRParams)` | `dynamic.hydrogen` | furnace duty (lag); every reformer-tube cell's temperature (tube metal + catalyst); every HT (and LT) shift cell's temperature; the PSA product and tail-gas holdup | `feed_rate`, `S_C`, `firing` (W absorbed by the tubes), `T_hts` |
+| `DynamicAminePlant.from_steady(params, gases)` | `dynamic.treating` | lean inventory's CO2 and H2S; rich inventory's CO2, H2S and water; regenerator hot-end temperature | `gas_rate`, `circulation` (multiplier), `Q_reboiler` |
+| `DynamicSRU.from_steady(acid_gas, claus, tgtu)` | `dynamic.sulfur` | air trim; each reheater's outlet temperature; every Claus and hydrogenation cell's temperature; the TGTU solvent's H2S and CO2 | `acid_rate`, `air` (mol/s), `T_bed1`, `T_bed2`, ..., `T_hydrogenation` |
+| `DynamicCrudeUnit.from_steady(column, feed)` | `dynamic.crude` | coil outlet temperature (lag); every product's holdup (all components, temperature) | `feed_rate`, `COT` |
+| `DynamicEquilibriumBed` | `dynamic.beds` | cell temperatures | the shift, Claus and hydrogenation beds above |
+
+<!-- doc-test: skip: needs a solved SMR plant (about 20 s) and an SRU (about 3 minutes) -->
+```python
+from difflow_refinery.dynamic import DynamicHydrogenPlant, DynamicSRU, SRUHoldupParams
+
+plant = DynamicHydrogenPlant.from_steady(natural_gas, h2.SMRParams(n_tubes=240, psa=h2.PSA(0.90, 0.9999)))
+a = plant.args(steps={"firing": [(600.0, 0.03 * plant.base_signals["firing"])]})
+traj = plant.trajectory(plant.simulate(3 * 3600.0, args=a, n_save=121), a)   # H2, T_reformer_out, ...
+
+sru = DynamicSRU.from_steady(acid_gas, claus, tgtu, holdup=SRUHoldupParams(air_Ki=2e-3))   # air trim on
+```
+
+**How each is built.**
+
+- **Equilibrium beds** (`DynamicEquilibriumBed`): the shift, Claus and TGTU hydrogenation beds are adiabatic equilibrium reactors in the steady units. Dynamically a bed is `N` thermal cells holding the catalyst's heat capacity; the gas is quasi-steady and leaves each cell at the steady unit's own restricted equilibrium taken isothermally at the cell temperature (with the bed's approach), so `C_k dT_k/dt = H(n_{k-1}, T_{k-1}) - H(n_k, T_k)`. At rest the first cell is at the adiabatic equilibrium and the rest hold it: the steady reactor. A Claus bed's COS/CS2 hydrolysis is the steady converter's fixed conversion, applied as the gas enters. Catalyst sized by space velocity (`catalyst_heat_capacity`): shift 3500 1/h, Claus 1000 1/h, hydrogenation 1500 1/h.
+- **SMR tubes** (`DynamicReformerTube`): eight cells per tube; a cell's gas is carried across its stretch of tube by the steady tube equations (`smr._integrate` over `z_k..z_{k+1}`: Xu-Froment rates, the flux heat input) and leaves at the cell temperature, `C_k dT_k/dt = H(n*, T*) - H(n*, T_k)`; `C_k` is the cell's tube metal (HP alloy, 12.7 mm wall, 600 J/(kg K)) and catalyst (1000 J/(kg K)), 363 kJ/K per tube. Flux mode only: the heat the tubes absorb is the `firing` signal behind a 5-minute furnace lag (`FiringLag`), and the supplementary fuel closes it with the lagged PSA tail gas, as in the steady plant. The prereformer, process-gas boiler and knock-out are instantaneous. The PSA is the steady PSA behind a 10-minute cycle-averaged lag (`QuasiSteadyHoldup`); a cycle-resolved PSA (switching beds, purity cycling within a cycle) is out of scope.
+- **Amine loop** (`DynamicAmineUnit`): the steady unit's tear -- the lean loadings and the regenerator hot-end temperature -- becomes the states of the lean inventory (regenerator sump and lean tank, 15 minutes of circulation), the rich inventory (absorber sumps and flash drum, 10 minutes) and the hot end (10 minutes). The absorbers, rich flash and regenerator are the steady functions on the current inventories. The inventories hold a fixed amount of amine; makeup water holds the lean solvent's strength, so the rich inventory's water is the only water state.
+- **SRU** (`DynamicSRU`): reheaters are furnace lags (2 minutes) on each bed's inlet setpoint; the converters and the hydrogenation reactor are equilibrium beds; the reaction furnace, waste-heat boiler, condensers, quench and absorber are instantaneous. The TGTU's absorbed acid gas enters a solvent inventory (20 minutes) and is stripped back to the furnace from it -- the steady SRU's recycle tear becomes that state, which is also what breaks the furnace-recycle loop. The air is the `air` setpoint, optionally with an integral trim on the tail gas's `(H2S - 2 SO2)/S_in` (`AirDemandControl`, `air_Ki`; off by default).
+- **Crude unit** (`DynamicCrudeUnit`): the steady column, quasi-steady, between a 10-minute coil-outlet-temperature lag and a holdup on every product (reflux drum 10 minutes, side strippers 5, bottom 5). A column specified by its overflash (or furnace duty) is re-specified by the coil outlet temperature it solves to, which has the same solution at rest. Draw and pumparound specs follow the charge in proportion.
+
+Every holdup, heat capacity, space velocity and lag above is ILLUSTRATIVE (`SMRHoldupParams`, `AmineHoldupParams`, `SRUHoldupParams`, `CDUHoldupParams`): they set the speeds, not the rest states.
+
+**Gates.** `tests/reference/dynamic_utilities_checks.py` (about 40 minutes, not in the suite), on the docs' SMR case (IEAGHG natural gas, 240 tubes, PSA shortcut), the treating tests' MDEA loop (one contactor, 120 mol/s amine, 5 MW), the sulfur tests' SRU (90 mol/s H2S, two Claus beds, SCOT) and the docs' crude column (95 000 bbl/d, 30 stages):
+
+| | hydrogen plant | amine unit | SRU | crude unit |
+|---|---|---|---|---|
+| states | 29 | 6 | 18 | 181 |
+| steady limit: start | tubes 30 K cold, shift 20 K hot, PSA and furnace at 90 % | inventories at 80 %, hot end 5 K cold | beds 20 K cold, solvent at 80 % | furnace 10 K cold, holdups at 90 % |
+| steady limit: largest rel. error after settling | 1.6e-9 (CH4 slip) | 3.6e-10 | 9.5e-13 | 3.9e-12 |
+| balance along an upset (worst, relative to throughput) | 2.7e-14 (elements) | 6.2e-14 (species) | 7.8e-14 (elements) | 1.1e-12 (components) |
+| trajectory gradient: d(output at 1 h)/d(step at 5 min) | H2 per W of firing: 7.685761e-6 (CD extrapolated 7.685797e-6) | lean H2S loading per unit gas rate: 5.779466e-3 (5.779252e-3) | SO2 emitted per K of bed-2 inlet: 3.48607e-6 (3.48659e-6) | residue T per K of COT: 0.768988 (0.768979) |
+| relative difference | 4.8e-6 | 3.7e-5 | 1.5e-4 | 1.2e-5 |
+
+The central differences (Richardson-extrapolated from two step sizes) themselves move by 1e-5 to 1e-4 between step sizes: the adaptive solver's tolerance. The gradients are reverse mode through the diffrax solve and, inside each right-hand side, through the steady units' own nested solves (the tube integrations, the Gibbs equilibria, the absorber, flash and regenerator Newton solves, the column's MESH solve); 35 s to 3 minutes each with their compile.
+
+**Time scales** (mean arrival time of an output's response to a step, with the step's own lag set to 1 s where it has one):
+
+| response | simulated | estimate | estimate from |
+|---|---|---|---|
+| HT shift outlet T to its inlet T | 555 s | 571 s | `C_bed / C_flow`, the gas's heat flow taken along the shift equilibrium |
+| Claus bed 2 outlet T to its inlet setpoint | 1498 s | 1488 s | the same, Claus + allotrope equilibria (plus the 1 s reheater) |
+| residue temperature to COT | 891 s | 900 s | furnace lag + residue holdup, lags in series |
+| lean H2S loading to a sour-gas step | 1556 s | 1500 s | lean + rich inventories (the loop's recirculation adds a little) |
+| reformer outlet T to a firing step | 250 s | 258 s | the model linearised at rest; the frozen-gas estimate, every cell's heat carried to the outlet, is 577 s |
+
+The tube is the one where a heat-capacity estimate does not hold: its gas is close to reforming equilibrium, so heat added in the upstream cells is mostly taken up by more reforming before it reaches the outlet, and the outlet temperature answers mainly to the last cells' heat (each cell's own time constant is about 130 s). The linearised model, which has that coupling, agrees with the simulation. Run times on a laptop CPU: the hydrogen plant runs 3.5 simulated hours in about 8 s; the amine loop, the SRU and the crude unit, whose right-hand sides contain Newton solves (absorber, regenerator, Gibbs equilibria, the column), take 40-130 s for 3-4 simulated hours, after building in 20 s (hydrogen plant, crude unit) to 2-3 minutes (amine loop, SRU: their steady solves compile). With the air trim on (`air_Ki = 2e-3`), a 10 % acid-gas step leaves the recovery at 99.991 % after three hours, against 93.1 % with the air held.
+
+These are the model's own time scales; none has been compared with a plant transient or a published dynamic model. Example: `examples/68_refinery_dynamic_utilities.ipynb`.
+
 (refinery-dynamic-not-done)=
 ### Not modelled
 
