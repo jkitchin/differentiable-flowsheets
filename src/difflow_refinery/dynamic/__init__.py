@@ -39,9 +39,9 @@ __all__ = ["evaluate", "signal_args", "smoothstep", "BedGeometry", "DynamicHPSep
            "DynamicTrickleBedReactor", "FurnaceLag", "RecycleGasLoop", "holdup_outflow",
            "DynamicHydrotreater", "HoldupParams"]
 
-from difflow_refinery.dynamic.reforming import DynamicReformerTrain, DynamicReformingReactor  # noqa: E402
+from difflow_refinery.dynamic.reforming import DynamicReformerLoop, DynamicReformerTrain, DynamicReformingReactor  # noqa: E402
 
-__all__ += ["DynamicReformerTrain", "DynamicReformingReactor"]
+__all__ += ["DynamicReformerLoop", "DynamicReformerTrain", "DynamicReformingReactor"]
 
 from difflow_refinery.dynamic.holdup import QuasiSteadyHoldup  # noqa: E402
 

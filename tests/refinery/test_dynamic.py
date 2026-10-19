@@ -303,3 +303,40 @@ def test_crude_unit_starts_at_rest_and_conserves():
     assert bool(jnp.all(jnp.isfinite(dy)))
     b = du.balance(10.0, du.y0, a)
     np.testing.assert_allclose(np.asarray(b["accumulation"]), np.asarray(b["in_minus_out"]), atol=1e-9)
+
+
+def test_reformer_loop_balance_and_spec():
+    from difflow.units.eos_units import Compressor, CompressorParams
+    from difflow_refinery.dynamic import DynamicReformerLoop
+    from difflow_refinery.reforming import lean_naphtha
+    from difflow_refinery.reforming import species as sp
+    from difflow_refinery.reforming import thermo as rth
+    from difflow_refinery.reforming.reactor import flows_of, stream_of
+    from difflow_refinery.reforming.separation import ProductSeparator, ProductSeparatorParams
+    feed = lean_naphtha()
+    F = flows_of(feed.stream()).at[sp.INDEX["H2"]].add(6.0 * float(feed.hydrocarbon_moles))
+    eff = stream_of(F, jnp.asarray(760.0), jnp.asarray(14e5))
+    sep = ProductSeparator(ProductSeparatorParams(T=311.15, P=12e5))
+    comp = Compressor(CompressorParams(P_out=14e5, eta_isentropic=0.75, T_bounds=(200.0, 800.0)), rth.cubic_thermo())
+    liq, vap, _ = sep(eff)
+    Fv, Fl = flows_of(vap), flows_of(liq)
+    N = 12e5 * 30.0 / (8.314462618 * 311.15)
+    loop = DynamicReformerLoop(sep, comp, H2_HC=4.0, hydrocarbon_feed=float(feed.hydrocarbon_moles), tau_L=300.0,
+                               N_design=N, net_design=0.3 * float(jnp.sum(Fv)), tau_p=30.0,
+                               R_max=2.0 * float(jnp.sum(Fv)), y0=jnp.concatenate([Fl * 300.0, Fv / jnp.sum(Fv) * N]),
+                               T_sep=311.15, P_sep=12e5)
+    y0 = loop.initial_state()
+    sig_ = {"compressor": jnp.asarray(1.0), "feed_rate": jnp.asarray(1.0)}
+    inp = {"effluent": eff, "signals": sig_}
+    dy = loop.derivatives(0.0, y0, inp)
+    assert bool(jnp.all(jnp.isfinite(dy)))
+    out = loop.outputs(0.0, y0, inp)
+    rec = flows_of(out["recycle"])
+    assert float(rec[sp.INDEX["H2"]]) == pytest.approx(4.0 * float(feed.hydrocarbon_moles), rel=1e-10)
+    E = jnp.asarray(sp.ELEMENTS)
+    held = lambda y: E @ sum(loop.holdups(y))
+    acc = jax.jvp(held, (y0,), (dy,))[1]
+    flux = E @ (F - rec - flows_of(out["net_gas"]) - flows_of(out["liquid"]))
+    np.testing.assert_allclose(np.asarray(acc), np.asarray(flux), rtol=1e-10, atol=1e-9)
+    tripped = loop.outputs(0.0, y0, dict(inp, signals=dict(sig_, compressor=jnp.asarray(0.0))))
+    assert float(jnp.sum(flows_of(tripped["recycle"]))) == 0.0
