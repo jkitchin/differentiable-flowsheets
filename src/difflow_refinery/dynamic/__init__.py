@@ -15,6 +15,9 @@ enthalpies, and their ``t -> infinity`` limit is the steady unit's answer
   :class:`~difflow_refinery.hydrotreating.Hydrotreater`.
 * :mod:`.reforming` -- :class:`DynamicReformerTrain`: the reforming beds and
   interstage heaters with catalyst heat capacity and coke on catalyst.
+* :mod:`.hydrocracker` -- :class:`DynamicHydrocracker`, built from a solved
+  :class:`~difflow_refinery.hydrocracking.Hydrocracker` (quench controllers,
+  the UCO recycle as a fractionator holdup).
 * :mod:`.holdup` -- :class:`QuasiSteadyHoldup`, a steady unit behind outlet
   holdups (for units whose internals are fast).
 * :mod:`.beds` -- :class:`DynamicEquilibriumBed`, an adiabatic equilibrium

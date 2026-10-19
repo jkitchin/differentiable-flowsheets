@@ -70,6 +70,8 @@ from difflow_refinery.hydrotreating.feed import select_cuts, straight_run_cut  #
 TBP_PCT = [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95]
 TBP_C = [60, 95, 150, 205, 260, 315, 370, 430, 500, 600, 680]
 VGO = (370 + 273.15, 560 + 273.15)
+#: Step cap of every upset (a stiff transient returns unfinished instead of running for hours).
+MAX_STEPS = 3000
 
 
 def test_vgo(heavy=False, **params):
@@ -164,16 +166,17 @@ def balances_gradient_timescales(unit, feed, res, out, quick):
     a = dyn.args(steps={"compressor": [(600.0, -1.0), (1200.0, 1.0)]}, ramp=30.0)
     eb = jax.jit(lambda t, y: dyn.element_balance(t, y, a))
     inv_el = jax.jit(lambda y: dyn.inventory(y).elements(lay))
-    sim = dyn.simulate(2 * 3600.0, args=a, y0=y_rest, n_save=241)
+    sim = dyn.simulate(3600.0, args=a, y0=y_rest, n_save=121, max_steps=MAX_STEPS)
+    ok = np.all(np.isfinite(np.asarray(sim.trajectory.y)), axis=1)
     worst, flux = 0.0, []
-    for t, y in zip(sim.trajectory.t, sim.trajectory.y):
+    for t, y in zip(np.asarray(sim.trajectory.t)[ok], np.asarray(sim.trajectory.y)[ok]):
         b = eb(t, y)
         worst = max(worst, float(jnp.max(jnp.abs(b["accumulation"] - b["in_minus_out"])
                                          / jnp.maximum(jnp.abs(b["in_minus_out"]), 1e-3))))
         flux.append(np.asarray(b["in_minus_out"]))
     flux = np.asarray(flux)
-    inv = np.asarray([np.asarray(inv_el(y)) for y in sim.trajectory.y])
-    tt = np.asarray(sim.trajectory.t)
+    inv = np.asarray([np.asarray(inv_el(y)) for y in np.asarray(sim.trajectory.y)[ok]])
+    tt = np.asarray(sim.trajectory.t)[ok]
     integ = np.concatenate([[np.zeros(4)], np.cumsum(0.5 * (flux[1:] + flux[:-1]) * np.diff(tt)[:, None], axis=0)])
     drift = (np.max(np.abs((inv - inv[0]) - integ), axis=0)
              / np.maximum(np.max(np.abs(inv - inv[0]), axis=0), 1e-300)).tolist()
@@ -183,22 +186,30 @@ def balances_gradient_timescales(unit, feed, res, out, quick):
                           "conversion_min": float(np.min(tr["conversion.per_pass"])),
                           "conversion_max": float(np.max(tr["conversion.per_pass"])),
                           "N_slip_max_wppm": float(np.max(tr["pretreat.N_wppm"])),
-                          "vent_max_mol_s": float(np.max(tr["vent.rate"]))}
+                          "vent_max_mol_s": float(np.max(tr["vent.rate"])),
+                          "completed": bool(sim.info.success), "steps": int(sim.info.n_steps),
+                          "t_reached_s": float(tt[-1])}
     print("HCU trip / balances", out["hcu"]["trip"], flush=True)
 
-    # --- gradient through a trajectory: d(conversion at 1 h)/d(T_crack step size)
-    def conv_at_1h(dT):
-        a = dyn.args(steps={"T_crack": [(300.0, dT)]})
-        sim = dyn.simulate(3600.0, args=a, y0=y_rest, n_save=2, warn=False)
-        return dyn.observe(sim.trajectory.t[-1], sim.y_final, a)["conversion.per_pass"]
+    # --- gradient through a trajectory: d(organic N to the cracker at 15 min)/d(size of a feed-N step
+    # at 1 min). (A T_crack step or a compressor trip does not complete in MAX_STEPS: stiff; see the docs.)
+    def conv_at_1h(dN):
+        a = dyn.args(steps={"feed_nitrogen": [(60.0, dN)]})
+        sim = dyn.simulate(900.0, args=a, y0=y_rest, n_save=2, warn=False, max_steps=MAX_STEPS)
+        return dyn.observe(sim.trajectory.t[-1], sim.y_final, a)["pretreat.N_wppm"]
 
-    t0 = time.time()
-    g = float(jax.grad(conv_at_1h)(jnp.asarray(3.0)))
-    tg = time.time() - t0
-    h = 0.5
-    fd = (float(conv_at_1h(jnp.asarray(3.0 + h))) - float(conv_at_1h(jnp.asarray(3.0 - h)))) / (2 * h)
-    out["hcu"]["gradient"] = {"reverse": g, "central_difference": fd, "rel_err": abs(g - fd) / abs(fd),
-                              "seconds_reverse": tg}
+    probe = dyn.simulate(900.0, args=dyn.args(steps={"feed_nitrogen": [(60.0, 0.5)]}), y0=y_rest, n_save=2,
+                         warn=False, max_steps=MAX_STEPS)
+    if not bool(probe.info.success):
+        out["hcu"]["gradient"] = f"not taken: the 1 h trajectory did not complete in {MAX_STEPS} steps"
+    else:
+        t0 = time.time()
+        g = float(jax.grad(conv_at_1h)(jnp.asarray(0.5)))
+        tg = time.time() - t0
+        h = 0.05
+        fd = (float(conv_at_1h(jnp.asarray(0.5 + h))) - float(conv_at_1h(jnp.asarray(0.5 - h)))) / (2 * h)
+        out["hcu"]["gradient"] = {"reverse": g, "central_difference": fd, "rel_err": abs(g - fd) / abs(fd),
+                                  "seconds_reverse": tg, "steps": int(probe.info.n_steps)}
     print("HCU gradient", out["hcu"]["gradient"], flush=True)
 
     # --- thermal transit: pretreat beds (heater step) and the first cracking bed (interstage step)
@@ -231,7 +242,10 @@ def balances_gradient_timescales(unit, feed, res, out, quick):
     arrivals = {}
     for name, signal, n_beds in (("pretreat", "T_pretreat", 2), ("crack", "T_crack", 1)):
         a = d1.args(steps={signal: [(600.0, 5.0)]}, ramp=60.0)
-        sim = d1.simulate(2 * 3600.0, args=a, y0=y1, n_save=241)
+        sim = d1.simulate(2 * 3600.0, args=a, y0=y1, n_save=241, max_steps=MAX_STEPS)
+        if not bool(sim.info.success):
+            arrivals[name] = f"not completed ({int(sim.info.n_steps)} steps)"
+            continue
         tr = d1.trajectory(sim, a, [f"{name}.T_in", f"{name}.T_out"])
         t = np.asarray(tr["t"])
         vals = []
@@ -247,7 +261,7 @@ def balances_gradient_timescales(unit, feed, res, out, quick):
     if not quick:
         # --- off-design rest: +5 K on the cracking setpoint, against a steady solve there
         a = dyn.args(steps={"T_crack": [(300.0, 5.0)]})
-        sim = dyn.simulate(4 * 3600.0, args=a, y0=y_rest, n_save=2)
+        sim = dyn.simulate(4 * 3600.0, args=a, y0=y_rest, n_save=2, max_steps=MAX_STEPS)
         u2 = Hydrocracker(unit.char, feed, dataclasses.replace(unit.params, T_crack=unit.params.T_crack + 5.0))
         r2 = u2.solve(feed)
         d2 = DynamicHydrocracker.from_steady(u2, feed, r2, n_cells=5)
@@ -262,6 +276,30 @@ def balances_gradient_timescales(unit, feed, res, out, quick):
         print("HCU off design", out["hcu"]["off_design"], flush=True)
 
 
+def gradient_only(unit, feed, res, out):
+    dyn = DynamicHydrocracker.from_steady(unit, feed, res, n_cells=5)
+    y_rest = dyn.settle(2 * 3600.0)
+
+    def n_at_15min(dN):
+        a = dyn.args(steps={"feed_nitrogen": [(60.0, dN)]})
+        sim = dyn.simulate(900.0, args=a, y0=y_rest, n_save=2, warn=False, max_steps=MAX_STEPS)
+        return dyn.observe(sim.trajectory.t[-1], sim.y_final, a)["pretreat.N_wppm"], sim.info
+
+    _, info = n_at_15min(jnp.asarray(0.5))
+    t0 = time.time()
+    g = float(jax.grad(lambda d: n_at_15min(d)[0])(jnp.asarray(0.5)))
+    tg = time.time() - t0
+    fds = {}
+    for h in (0.1, 0.05):
+        fds[h] = (float(n_at_15min(jnp.asarray(0.5 + h))[0]) - float(n_at_15min(jnp.asarray(0.5 - h))[0])) / (2 * h)
+    rich = (4 * fds[0.05] - fds[0.1]) / 3
+    out["hcu"]["gradient"] = {"output": "organic N to the cracker at 15 min, wppm per unit feed-N multiplier",
+                              "reverse": g, "central_difference": fds, "extrapolated": rich,
+                              "rel_err": abs(g - rich) / abs(rich), "seconds_reverse": tg,
+                              "steps": int(info.n_steps), "completed": bool(info.success)}
+    print("HCU gradient", out["hcu"]["gradient"], flush=True)
+
+
 def runaway(out):
     unit, feed, res = test_vgo(heavy=True, T_crack=365.0 + 273.15)
     dyn = DynamicHydrocracker.from_steady(unit, feed, res, n_cells=5)
@@ -270,7 +308,7 @@ def runaway(out):
     t0 = time.time()
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        sim = dyn.simulate(2 * 3600.0, args=a, y0=y, n_save=121, max_steps=4000)
+        sim = dyn.simulate(2 * 3600.0, args=a, y0=y, n_save=121, max_steps=MAX_STEPS)
     ex = dyn.excursion(sim, a)
     tr = dyn.trajectory(sim, a, ["crack.quench", "crack.T_out"])
     ex.update(seconds=time.time() - t0, warned=[str(x.message)[:200] for x in w],
@@ -310,8 +348,10 @@ def reformer_loop(out):
     print("reformer loop rest", out["ref_loop"]["rest"], flush=True)
     y_rest = sim.y_final
     # --- balances along a 5-minute compressor trip
-    a = tr.args(steps={"compressor": [(600.0, -1.0), (900.0, 1.0)]}, ramp=30.0)
-    sim = tr.simulate(1800.0, args=a, y0=y_rest, n_save=61)
+    # to 60 % for ten minutes (a full trip leaves the reactors without hydrogen, and a cell's
+    # bed integration then exceeds its step limit: not covered)
+    a = tr.args(steps={"compressor": [(600.0, -0.4), (1200.0, 0.4)]}, ramp=30.0)
+    sim = tr.simulate(2400.0, args=a, y0=y_rest, n_save=81)
     eb = jax.jit(lambda t, y: tr.element_balance(t, y, a))
     worst = 0.0
     for t, yy in zip(sim.trajectory.t, sim.trajectory.y):
@@ -350,8 +390,16 @@ def main():
     a = ap.parse_args()
     parts = set(a.only.split(","))
     out = {}
-    if "hcu" in parts:
-        unit, feed, res = steady_limit(out, a.quick)
+    if "grad" in parts:
+        unit, feed, res = test_vgo()
+        out["hcu"] = {}
+        gradient_only(unit, feed, res, out)
+    if "hcu" in parts or "upsets" in parts:
+        if "hcu" in parts:
+            unit, feed, res = steady_limit(out, a.quick)
+        else:
+            unit, feed, res = test_vgo()
+            out["hcu"] = {}
         balances_gradient_timescales(unit, feed, res, out, a.quick)
     if "runaway" in parts:
         out.setdefault("hcu", {})

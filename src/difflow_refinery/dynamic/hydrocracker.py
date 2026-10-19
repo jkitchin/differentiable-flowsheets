@@ -67,7 +67,7 @@ from jax import Array
 from difflow.dynamic import DynamicFlowsheet
 from difflow.dynamic.instantaneous import InstantaneousUnit
 from difflow.dynamic.state import StateSpec, StateVar
-from difflow_refinery.composition import NITROGEN_CLASSES, SULFUR_CLASSES
+from difflow_refinery.composition import NITROGEN_CLASSES
 from difflow_refinery.hydrocracking.fractionator import PRODUCTS, cut_shares, fractionate
 from difflow_refinery.hydroprocessing.layout import Flows
 from difflow_refinery.hydroprocessing.recycle import MOL_PER_NM3
@@ -76,7 +76,8 @@ from difflow_refinery.dynamic.holdup import QuasiSteadyHoldup
 from difflow_refinery.dynamic.hydroprocessing import (
     R_GAS, BedGeometry, DynamicHPSeparator, DynamicTrickleBedReactor, FurnaceLag, RecycleGasLoop,
     flows_scale, holdup_from_outflow, phase_flows)
-from difflow_refinery.dynamic.hydrotreater import DEFAULT_ATOL, DEFAULT_RTOL, HoldupParams, _interp_profile
+from difflow_refinery.dynamic.hydrotreater import (
+    DEFAULT_ATOL, DEFAULT_RTOL, HoldupParams, _interp_profile, scale_feed_sulfur)
 
 jax.config.update("jax_enable_x64", True)
 
@@ -84,8 +85,19 @@ jax.config.update("jax_enable_x64", True)
 FRACTIONATOR_OUTLETS: tuple[str, ...] = tuple(p for p in PRODUCTS if p != "uco") + ("uco_bleed", "uco_recycle")
 
 
+def scale_feed_nitrogen(f: Flows, layout, x) -> Flows:
+    """``f`` with its nitrogen attributes (every class) multiplied by ``x``.
+
+    The nitrogen twin of :func:`~.hydrotreater.scale_feed_sulfur`: a column
+    mask, so a trajectory can be differentiated with respect to ``x``.
+    """
+    N = {f"N_{k}" for k in NITROGEN_CLASSES}
+    mask = jnp.asarray([a in N for a in layout.attributes])
+    return Flows(f.gas, f.cut, f.attr * jnp.where(mask, x, 1.0))
+
+
 class DynamicRunawayWarning(UserWarning):
-    """A dynamic hydroprocessing simulation did not reach its end time (a bed running away, typically)."""
+    """A dynamic hydroprocessing simulation did not reach its end time (a runaway, or a stiff transient)."""
 
 
 @dataclass
@@ -408,16 +420,11 @@ class DynamicHydrocracker:
 
         oil = th["oil"]
         feed_T = float(n["T_pretreat"])
-        ai = {a: i for i, a in enumerate(lay.attributes)}
-        s_cols = jnp.asarray([ai[f"S_{k}"] for k in SULFUR_CLASSES])
-        n_cols = jnp.asarray([ai[f"N_{k}"] for k in NITROGEN_CLASSES])
 
         def oil_feed(t, args):
             s = sig.evaluate(t, args)
-            f = oil.scale(s["feed_rate"])
-            f = Flows(f.gas, f.cut, f.attr.at[:, s_cols].multiply(s["feed_sulfur"])
-                      .at[:, n_cols].multiply(s["feed_nitrogen"]))
-            return f.to_stream(lay, feed_T, P)
+            f = scale_feed_sulfur(oil.scale(s["feed_rate"]), lay, s["feed_sulfur"])
+            return scale_feed_nitrogen(f, lay, s["feed_nitrogen"]).to_stream(lay, feed_T, P)
 
         def signals_feed(t, args):
             return sig.evaluate(t, args)
@@ -495,8 +502,10 @@ class DynamicHydrocracker:
             ok = np.all(np.isfinite(np.asarray(r.trajectory.y)), axis=1)
             t_ok = float(np.asarray(r.trajectory.t)[ok][-1]) if ok.any() else 0.0
             warnings.warn(f"the dynamic hydrocracker stopped before {t_end:.0f} s (last finite saved state "
-                          f"at {t_ok:.0f} s): {r.info.message}; a bed running away is the usual cause "
-                          "(see excursion())", DynamicRunawayWarning, stacklevel=2)
+                          f"at {t_ok:.0f} s): {r.info.message}; either a bed running away (see "
+                          "excursion()) or a transient too stiff for the explicit integrator within "
+                          "max_steps (setpoint steps and compressor trips are, at the default holdups)",
+                          DynamicRunawayWarning, stacklevel=2)
         return r
 
     def settle(self, t_end: float = 4 * 3600.0, args: dict | None = None, **kw) -> Array:
@@ -628,5 +637,5 @@ class DynamicHydrocracker:
         return {"accumulation": acc, "in_minus_out": inflow.elements(lay) - outflow.elements(lay)}
 
 
-__all__ = ["FRACTIONATOR_OUTLETS", "DynamicRunawayWarning", "HydrocrackerHoldupParams", "cells_from_steady",
+__all__ = ["FRACTIONATOR_OUTLETS", "scale_feed_nitrogen", "DynamicRunawayWarning", "HydrocrackerHoldupParams", "cells_from_steady",
            "QuenchControlledReactor", "DynamicHydrocracker"]
