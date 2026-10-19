@@ -156,7 +156,7 @@ class DynamicEquilibriumBed:
             f = lambda t: self.enthalpy(self.equilibrate(n, t, P), t)  # noqa: E731
         else:
             f = lambda t: self.enthalpy(n, t)  # noqa: E731
-        C_flow = jax.jvp(f, (T,), (jnp.asarray(1.0),))[1]
+        C_flow = jax.jit(lambda t: jax.jvp(f, (t,), (jnp.asarray(1.0),))[1])(T)
         return self.n_cells * self.C_cell / C_flow
 
 

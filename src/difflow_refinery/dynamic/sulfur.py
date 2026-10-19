@@ -26,7 +26,8 @@ enough to matter:
   and makeup water holds the solvent's strength.
 * **Air-demand control** (:class:`AirDemandControl`): air =
   ``air_set (1 + u)``, with an integral trim on the tail gas's
-  ``(H2S - 2 SO2) / S_in``, ``du/dt = -K_i r``. With ``K_i = 0`` (default)
+  ``(H2S - 2 SO2) / S_in``, ``du/dt = K_i r`` (an H2S-rich tail gas, ``r > 0``,
+  means too little air). With ``K_i = 0`` (default)
   the air is the setpoint signal ``air`` (open loop).
 
 The reaction furnace, waste-heat boiler, condensers, quench and absorber are
@@ -128,9 +129,10 @@ class AirDemandControl:
     Ports ``"signals"`` (reads ``air``, mol/s) and ``"tail_gas"``. Output
     ``"air"`` (``{"air": mol/s}``; from the state alone). State ``u``::
 
-        air = air_set (1 + u),   du/dt = -K_i (H2S - 2 SO2)_tail / S_in
+        air = air_set (1 + u),   du/dt = K_i (H2S - 2 SO2)_tail / S_in
 
-    ``S_in`` is the design sulfur feed (a fixed normalisation).
+    ``S_in`` is the design sulfur feed (a fixed normalisation). An H2S-rich
+    tail gas (``r > 0``) is short of air, so ``u`` rises.
     """
 
     output_ports = ("air",)
@@ -150,7 +152,7 @@ class AirDemandControl:
     def derivatives(self, t, state, inputs, params=None):
         n = cl.to_vec(inputs["tail_gas"])
         r = (n[_IDX[H2S]] - 2.0 * n[_IDX[SO2]]) / self.S_in
-        return jnp.reshape(-self.Ki * r, (1,))
+        return jnp.reshape(self.Ki * r, (1,))
 
     def outputs(self, t, state, inputs, params=None):
         return {"air": {"air": inputs["signals"]["air"] * (1.0 + state[0])}}
