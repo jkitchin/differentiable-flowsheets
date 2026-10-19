@@ -255,8 +255,15 @@ class DynamicReformerTrain:
         base = {f"T_in{k + 1}": float(p.inlet_T[k]) for k in range(nr)}
         base["feed_rate"] = 1.0
         y0 = fs.initial_state(None, sig.signal_args(base))
+        # the fastest state: a cell's catalyst heat capacity over the heat flow of the gas through it
+        taus = []
+        for k, r in enumerate(reactors):
+            s = res.streams[f"rx{k + 1}_in"]
+            F, T = flows_of(s), jnp.asarray(s["T"])
+            C_flow = jax.jvp(lambda t: th.total_enthalpy(F, t, r.P), (T,), (jnp.ones_like(T),))[1]
+            taus.append(float(r.W / r.n_cells * r.cp_cat / C_flow))
         return cls(flowsheet=fs, reactors=reactors, heaters=heaters, y0=y0, base_signals=base, steady=res,
-                   reformer=reformer, feed=feed, n_cells=n_cells)
+                   reformer=reformer, feed=feed, n_cells=n_cells, tau_thermal_min=min(taus))
 
     def args(self, steps: Mapping[str, Sequence[tuple[float, float]]] | None = None,
              ramp: float | Mapping[str, float] = sig.DEFAULT_RAMP, **base) -> dict:
@@ -267,16 +274,20 @@ class DynamicReformerTrain:
 
     def simulate(self, t_end: float, args: dict | None = None, y0: Array | None = None, n_save: int = 61,
                  saveat: Array | None = None, method: str = "diffrax:tsit5", rtol: float = 1e-5,
-                 atol: float = 1e-6, max_steps: int = 100_000, dtmax: float = 60.0, **kwargs):
+                 atol: float = 1e-6, max_steps: int = 100_000, dtmax: float | None = None, **kwargs):
         """Integrate from ``y0`` (default :attr:`y0`) to ``t_end`` seconds (see
         :meth:`DynamicHydrotreater.simulate <difflow_refinery.dynamic.hydrotreater.DynamicHydrotreater.simulate>`).
 
         The tolerances are on the scaled states (temperatures in 100 K):
         looser than the hydrotreater's because every cell's bed integration
         carries its own tolerance (``rtol`` of :meth:`from_steady`) into the
-        right-hand side. ``dtmax`` stops the step from growing across a
-        quiet spell into a disturbance (at rest the error estimate is zero).
+        right-hand side. ``dtmax`` (default twice the smallest cell's thermal
+        time constant, :attr:`tau_thermal_min`) keeps the explicit step inside
+        its stability region -- near the boundary the cells chatter at rest
+        -- and stops the step from growing across a quiet spell into a
+        disturbance (at rest the error estimate is zero).
         """
+        dtmax = 2.0 * self.tau_thermal_min if dtmax is None else dtmax
         args = self.args() if args is None else args
         y0 = self.y0 if y0 is None else y0
         ts = jnp.linspace(0.0, t_end, n_save) if saveat is None else jnp.asarray(saveat)
