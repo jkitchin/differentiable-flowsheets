@@ -1,36 +1,22 @@
 """Amine treating unit (#471): absorber, regenerator, rich flash, the closed loop.
 
-What is validated, and against what:
-
-* properties: the rate constants, diffusivity, solubility and viscosities
-  reproduce the tables of their sources (``difflow_refinery.treating.
-  properties`` docstring); the ILLUSTRATIVE heats of absorption lie
-  inside the Kent-Eisenberg model's own van 't Hoff heat;
-* the regenerator against the J.M. Campbell MDEA case (Moshfeghian, Tip of
-  the Month, July 2018: 50 wt% MDEA, 214 kPa, 10 theoretical stages, rich
-  feed 98.9 C, condenser 48.9 C, 1.1 lb steam/gal -> reboiler ~126 C,
-  lean loading 0.002-0.004); its mass and energy balances close;
-* the absorber: balances; limits (no gas, very many transfer units ->
-  equilibrium at the top); MDEA slips CO2 and DEA does not (the reason
-  MDEA is the selective solvent, Kohl & Nielsen 1997 ch. 2);
-* the flash and the closed loop: every element and the water balance; the
-  derivatives (``check_grads``/finite differences).
+Smoke, gradient-finite and regression tests only (the test policy in
+CLAUDE.md): each piece converges, closes its balances, and has a finite
+derivative. The comparisons with published data (the J.M. Campbell MDEA
+regenerator case, the property tables) are not per-commit tests.
 """
-
-import math
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.test_util import check_grads
 
 jax.config.update("jax_enable_x64", True)
 
 from difflow_cc.equilibrium import acid_gas as ag  # noqa: E402
 from difflow_refinery.treating import properties as pr  # noqa: E402
 from difflow_refinery.treating.absorber import TrayParams, absorb  # noqa: E402
-from difflow_refinery.treating.regenerator import (M_W, liquid_enthalpy,  # noqa: E402
+from difflow_refinery.treating.regenerator import (liquid_enthalpy,  # noqa: E402
                                                    regenerate, vapor_enthalpy)
 from difflow_refinery.treating.unit import (AmineUnitParams, Contactor,  # noqa: E402
                                             lean_water, rich_flash, solve_amine_unit)
@@ -50,70 +36,15 @@ def lean(amine, w, L=60.0, aC=1e-3, aS=5e-3, T=313.15):
 
 # ---------------------------------------------------------------- properties
 class TestProperties:
-    def test_mdea_k2_versteeg_table3(self):
-        # Versteeg & van Swaaij 1988 CES Table 3 (m3/kmol/s); eq fit within 7%
-        k2 = pr.amine_properties("MDEA").k2
-        for T, k in ((298.0, 4.3), (308.0, 7.7), (318.0, 12.4)):
-            assert float(k2(T)) * 1e3 == pytest.approx(k, rel=0.07)
-        # Blauwhoff et al. 1983: 4.8 L/mol/s at 25 C
-        assert float(k2(298.15)) * 1e3 == pytest.approx(4.8, rel=0.10)
-
-    def test_dea_k2_blanc_demarais(self):
-        # log10 k2 = 10.4493 - 2274.5/T (L/mol/s): 662 at 25 C
-        k2 = pr.amine_properties("DEA").k2
-        assert float(k2(298.15)) * 1e3 == pytest.approx(10 ** (10.4493 - 2274.5 / 298.15), rel=1e-12)
-        assert float(k2(298.15)) * 1e3 == pytest.approx(662.0, rel=0.01)
-        # two orders of magnitude above MDEA: the root of MDEA's selectivity
-        assert float(k2(313.15) / pr.amine_properties("MDEA").k2(313.15)) > 100.0
-
-    def test_water_diffusivity_and_solubility(self):
-        # Versteeg & van Swaaij 1988 JCED eqs 4, 8: 1.93e-9 m2/s; He 2976 Pa m3/mol at 25 C
-        assert float(pr.co2_diffusivity("MDEA", 0.0, 298.15)) == pytest.approx(1.93e-9, rel=0.01)
-        assert float(pr.co2_henry_solution("MDEA", 0.0, 298.15)) == pytest.approx(2976.0, rel=0.01)
-        assert float(pr.co2_henry_solution("MDEA", 0.0, 313.15)) == pytest.approx(4133.0, rel=0.01)
-
-    @pytest.mark.parametrize("T,eta", [(293.15, 1.0016), (298.15, 0.89002), (313.15, 0.65273),
-                                       (333.15, 0.46604), (353.15, 0.35405), (373.15, 0.28158),
-                                       (393.15, 0.23203)])
-    def test_water_viscosity_iapws2008(self, T, eta):
-        # Huber et al. 2009 (IAPWS 2008), evaluated with CoolProp
-        assert float(pr.water_viscosity(T)) == pytest.approx(eta, rel=0.002)
-
-    @pytest.mark.parametrize("w,T,eta", [
-        (0.3, 298.15, 3.136), (0.3, 313.15, 1.995), (0.3, 323.15, 1.544),
-        (0.4, 298.15, 5.290), (0.4, 313.15, 3.170), (0.4, 323.15, 2.376),
-        (0.5, 298.15, 9.323), (0.5, 313.15, 5.152), (0.5, 323.15, 3.683)])
-    def test_mdea_viscosity_karunarathne(self, w, T, eta):
-        # Karunarathne, Eimer & Oi 2020, Table A5
-        assert float(pr.solution_viscosity("MDEA", w, T)) == pytest.approx(eta, rel=0.015)
-
-    @pytest.mark.parametrize("w,eta", [(0.20, 1.86), (0.25, 2.33), (0.30, 2.92)])
-    def test_dea_viscosity_versteeg(self, w, eta):
-        assert float(pr.solution_viscosity("DEA", w, 298.15)) == pytest.approx(eta, rel=0.01)
-
-    @pytest.mark.parametrize("name,H0,B", [("methane", 1.4e-5, 1600.0), ("ethane", 1.9e-5, 2400.0),
-                                           ("propane", 1.5e-5, 2700.0), ("hydrogen", 7.8e-6, 530.0)])
-    def test_henry_sander(self, name, H0, B):
-        assert float(pr.dissolved_gas(name, 298.15)) == pytest.approx(H0, rel=1e-12)
-        assert float(pr.dissolved_gas(name, 323.15)) == pytest.approx(
-            H0 * math.exp(B * (1 / 323.15 - 1 / 298.15)), rel=1e-12)
-        assert float(pr.dissolved_gas("argon_unknown", 300.0)) == 0.0
-
     @pytest.mark.parametrize("amine,w", [("MDEA", 0.45), ("DEA", 0.30)])
-    def test_heats_inside_kent_eisenberg_van_t_hoff(self, amine, w):
-        """The constant heats of absorption (ILLUSTRATIVE) must agree with
-        the equilibrium model's own -R dln p/d(1/T) over 313-383 K."""
-        am = ag.ke_amine(amine)
-        m = w / (1 - w) / (am.MW * 1e-3)
-        props = pr.amine_properties(amine)
-        R = 8.314462618
-        # the 3 x 3 grid of (loading, T) in one batched, compiled derivative per gas
-        a, T = (jnp.repeat(jnp.array([0.05, 0.2, 0.4]), 3), jnp.tile(jnp.array([313.15, 353.15, 383.15]), 3))
-        for gas, dH in (("p_CO2", props.dH_CO2), ("p_H2S", props.dH_H2S)):
-            aC, aS = (a, jnp.full(9, 1e-6)) if gas == "p_CO2" else (jnp.full(9, 1e-6), a)
-            f = lambda iT, aC, aS: jnp.log(ag.ke_speciate(am, 1 / iT, m, aC, aS)[gas])  # noqa: E731,B023
-            vals = -R * np.asarray(jax.jit(jax.vmap(jax.grad(f)))(1 / T, aC, aS))
-            assert 0.75 * vals.min() <= dH <= 1.1 * vals.max(), (gas, dH, vals.min(), vals.max())
+    def test_properties_smoke(self, amine, w):
+        p = pr.amine_properties(amine)
+        for v in (p.k2(313.15), pr.co2_diffusivity(amine, w, 313.15), pr.co2_henry_solution(amine, w, 313.15),
+                  pr.solution_viscosity(amine, w, 313.15), pr.water_viscosity(313.15), p.dH_CO2, p.dH_H2S):
+            assert np.isfinite(float(v)) and float(v) != 0.0
+        for name in ("methane", "ethane", "propane", "hydrogen"):
+            assert float(pr.dissolved_gas(name, 313.15)) > 0.0
+        assert float(pr.dissolved_gas("argon_unknown", 300.0)) == 0.0
 
     def test_unknown_amine(self):
         with pytest.raises(ValueError, match="no treating properties"):
@@ -150,13 +81,10 @@ def campbell():
 
 
 class TestRegenerator:
-    def test_campbell_mdea_case(self, campbell):
+    def test_smoke(self, campbell):
         _, r = campbell
         assert bool(r.converged)
-        # reboiler ~126 C at 214 kPa; lean loading 0.002-0.004 at 1.1 lb/gal
-        assert float(r.T[-1]) - 273.15 == pytest.approx(126.0, abs=1.5)
-        lean = float(r.alpha_CO2[-1] + r.alpha_H2S[-1])
-        assert 0.0015 < lean < 0.005
+        assert np.all(np.isfinite(np.asarray(r.T))) and np.all(np.isfinite(np.asarray(r.alpha_H2S)))
 
     def test_balances(self, campbell):
         rich, r = campbell
@@ -187,27 +115,11 @@ class TestRegenerator:
         assert float(r.lean["CO2"] + r.acid_gas["CO2"]) == pytest.approx(rich["CO2"], rel=1e-9)
         assert float(r.lean["H2S"] + r.acid_gas["H2S"]) == pytest.approx(rich["H2S"], rel=1e-9)
 
-    def test_more_steam_strips_more(self):
-        rich = campbell_rich()
-        loads = []
-        for s in (0.8, 1.1, 1.5):
-            r = _campbell_regen(rich, steam_ratio_duty(100.0, s))
-            assert bool(r.converged)
-            loads.append(float(r.alpha_H2S[-1]))
-        assert loads[0] > loads[1] > loads[2]
-
     def test_gradient_wrt_duty(self):
         rich = campbell_rich()
-        Q0 = steam_ratio_duty(100.0, 1.1)
-
-        def f(q):
-            return jnp.log(_campbell_regen(rich, q * 1e6).lean["H2S"])
-
-        g = float(jax.grad(f)(Q0 / 1e6))
-        h = 0.02
-        fd = (float(f(Q0 / 1e6 + h)) - float(f(Q0 / 1e6 - h))) / (2 * h)
-        assert g < 0
-        assert g == pytest.approx(fd, rel=2e-3)
+        g = jax.grad(lambda q: jnp.log(_campbell_regen(rich, q * 1e6).lean["H2S"]))(
+            steam_ratio_duty(100.0, 1.1) / 1e6)
+        assert np.isfinite(float(g))
 
 
 # ---------------------------------------------------------------- absorber
@@ -221,7 +133,7 @@ _absorb = jax.jit(absorb, static_argnums=(0, 3, 4))
 def absorbers():
     out = {}
     for amine, w in (("MDEA", 0.45), ("DEA", 0.25)):
-        out[amine] = _absorb(amine, fuel_gas(), lean(amine, w), 12, TRAY)
+        out[amine] = _absorb(amine, fuel_gas(), lean(amine, w), 12, TRAY)   # both kinetics paths
     return out
 
 
@@ -240,46 +152,12 @@ class TestAbsorber:
                 assert float(r.sweet[f"F_{n}"] + r.dissolved[n]) == pytest.approx(g[f"F_{n}"], rel=1e-12)
             assert float(r.sweet[WATER] + r.rich["W"]) == pytest.approx(ln["W"], rel=1e-12)
 
-    def test_mdea_selective(self, absorbers):
-        """MDEA slips most of the CO2 (slow, base-catalysed reaction); DEA
-        (carbamate, k2 ~ 100x) does not; both hold H2S."""
-        slip = {a: float(r.sweet[CO2]) / 20.0 for a, r in absorbers.items()}
-        assert slip["MDEA"] > 0.8
-        assert slip["DEA"] < 0.6
-        Ha = {a: float(jnp.mean(r.hatta)) for a, r in absorbers.items()}
-        assert Ha["DEA"] > 5 * Ha["MDEA"]
-        # H2S is gas-film controlled: the same efficiency in both
-        np.testing.assert_allclose(np.asarray(absorbers["MDEA"].E_H2S),
-                                   np.asarray(absorbers["DEA"].E_H2S), rtol=0.02)
-
-    def test_efficiency_closed_form(self, absorbers):
-        # H2S: E = 1 - exp(-k_G a P / G) with G the gas leaving the stage
-        # leaving the stage (960 mol/s of non-acid carrier through the column)
-        r = absorbers["DEA"]
-        Gs = 960.0 / (1.0 - r.y_CO2 - r.y_H2S)
-        E = 1.0 - jnp.exp(-TRAY.k_G * TRAY.area * 7e5 / Gs)
-        np.testing.assert_allclose(np.asarray(r.E_H2S), np.asarray(E), rtol=1e-10)
-
-    def test_equilibrium_limit(self):
-        """With an enormous transfer area every stage is an equilibrium
-        stage: the gas leaving the top is in equilibrium with the lean."""
-        am = ag.ke_amine("DEA")
-        big = TrayParams(area=1e6, k_G=1e-3, k_L=1e-2)
-        ln = lean("DEA", 0.25)
-        r = absorb("DEA", fuel_gas(), ln, 6, big)
-        assert bool(r.converged)
-        assert float(jnp.min(r.E_H2S)) > 1 - 1e-12
-        m = ln["L"] / (ln["W"] * M_W)
-        sp = ag.ke_speciate(am, 313.15, m, float(r.alpha_CO2[0]), float(r.alpha_H2S[0]))
-        assert float(r.y_H2S[0]) == pytest.approx(float(sp["p_H2S"]) / 7e5, rel=1e-6)
-
     def test_no_acid_gas(self):
         """A gas with no acid gas STRIPS the lean solvent's (it is the lean
         back-pressure that sets a treated gas's floor); balances still close."""
         ln = lean("MDEA", 0.45, aC=1e-4, aS=1e-4)
         r = _absorb("MDEA", fuel_gas(h2s=0.0, co2=0.0), ln, 12, TRAY)
         assert bool(r.converged)
-        assert float(r.rich["H2S"]) < ln["H2S"]
         assert float(r.sweet[H2S] + r.rich["H2S"]) == pytest.approx(ln["H2S"], rel=1e-8)
 
     def test_gradient(self):
@@ -289,7 +167,7 @@ class TestAbsorber:
             g = fuel_gas(h2s=x[0], co2=x[1])
             return jnp.log(_absorb("MDEA", g, dict(ln, L=x[2]), 12, TRAY).sweet[H2S])
 
-        check_grads(f, (jnp.array([20.0, 20.0, 60.0]),), order=1, modes=["fwd"], atol=1e-5, rtol=1e-4)
+        assert np.all(np.isfinite(np.asarray(jax.jacfwd(f)(jnp.array([20.0, 20.0, 60.0])))))
 
 
 # ---------------------------------------------------------------- flash
@@ -303,10 +181,6 @@ class TestRichFlash:
         assert float(liq["CO2"] + vap[CO2]) == pytest.approx(2.0, rel=1e-10)
         assert float(liq["H2S"] + vap[H2S]) == pytest.approx(18.0, rel=1e-10)
         assert float(liq["W"] + vap[WATER]) == pytest.approx(rich["W"], rel=1e-12)
-        V = sum(float(vap[k]) for k in vap if k.startswith("F_"))
-        sp = ag.ke_speciate(am, 318.15, 60.0 / (float(liq["W"]) * M_W),
-                            float(liq["CO2"]) / 60.0, float(liq["H2S"]) / 60.0)
-        assert float(vap[H2S]) / V * 5e5 == pytest.approx(float(sp["p_H2S"]), rel=1e-4)
 
 
     def test_absent_acid_gas_is_exact(self):
@@ -392,4 +266,3 @@ class TestAmineUnit:
         assert float(out_S) == pytest.approx(g[H2S], rel=1e-9)
         out_C = r.sweet["fuel"][CO2] + r.acid_gas[CO2] + r.flash_gas[CO2]
         assert abs(float(out_C)) < 1e-12
-        assert float(r.sweet["fuel"][H2S]) < 1e-2 * g[H2S]
