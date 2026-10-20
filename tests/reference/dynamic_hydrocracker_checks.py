@@ -300,6 +300,90 @@ def gradient_only(unit, feed, res, out):
     print("HCU gradient", out["hcu"]["gradient"], flush=True)
 
 
+def operating_scenarios(out):
+    """The hydrocracker's large transients posed as a unit is operated (5 cells, 3 RK4 steps per cell).
+
+    * Setpoint moves as operator ramps (``DynamicHydrocracker.move``): +5 K on
+      ``T_crack`` at 5 and 10 K/h.
+    * Loss of half the recycle compressor's capacity (a 60 s rundown) with an
+      emergency cut of the cracking setpoint, 10 K at 30 K/h.
+    * A full compressor trip with the interlock sequence modelled here
+      (rundown 60 s, feed cut to 5 % over 2 min, heater and interstage
+      setpoints down 60 K over 10 min; depressuring is not modelled).
+    * The margin to runaway: ``T_crack`` ramped up 40 K at 15 K/h, the hottest
+      cell, each bed's rise and the quench valves' opening against their stops.
+    * A gradient on a smooth scenario: d(conversion at 2 h)/d(size of a 5 K/h
+      ramp of ``T_crack``), reverse mode against central differences at two
+      tolerances.
+    """
+    from difflow_refinery.dynamic.signals import ramp_for_rate
+    unit, feed, res = test_vgo()
+    dyn = DynamicHydrocracker.from_steady(unit, feed, res, n_cells=5, n_sub=3)
+    t0 = time.time()
+    y = dyn.settle(2 * 3600.0, max_steps=MAX_STEPS)
+    o = out.setdefault("hcu", {})
+    o["scenarios"] = {"settle_s": time.time() - t0}
+    R = lambda **kw: {**{k: 60.0 for k in dyn.base_signals}, **kw}       # noqa: E731
+
+    def run(name, a, t_end, keys, n_save=13):
+        t0 = time.time()
+        s = dyn.simulate(t_end, args=a, y0=y, n_save=n_save, max_steps=MAX_STEPS, warn=False)
+        ok = np.all(np.isfinite(np.asarray(s.trajectory.y)), axis=1)
+        row = {"completed": bool(s.info.success), "steps": int(s.info.n_steps), "seconds": time.time() - t0,
+               "t_reached_s": float(np.asarray(s.trajectory.t)[ok][-1])}
+        tr = dyn.trajectory(s, a, keys)
+        for k in keys:
+            v = np.asarray(tr[k])
+            row[k + ".min"], row[k + ".max"], row[k + ".end"] = (v.min(axis=0).tolist(), v.max(axis=0).tolist(),
+                                                                v[-1].tolist())
+        o["scenarios"][name] = row
+        print("HCU", name, row, flush=True)
+        return s, tr
+
+    keys = ["T_max", "conversion.per_pass", "pretreat.N_wppm", "crack.quench", "recycle.rate"]
+    for rate in (5.0, 10.0):
+        st, rp = dyn.move("T_crack", 5.0, max_rate_K_per_h=rate)
+        run(f"ramp_+5K_at_{rate:.0f}K_per_h", dyn.args(steps=st, ramp=rp), 2 * 3600.0, keys)
+    run("compressor_to_50pct_with_setpoint_cut",
+        dyn.args(steps={"compressor": [(300.0, -0.5)], "T_crack": [(300.0, -10.0)]},
+                 ramp=R(compressor=60.0, T_crack=ramp_for_rate(10.0, 30.0 / 3600))), 3600.0, keys)
+    run("compressor_trip_with_interlocks",
+        dyn.args(steps={"compressor": [(300.0, -1.0)], "feed_rate": [(300.0, -0.95)], "T_crack": [(300.0, -60.0)],
+                        "T_pretreat": [(300.0, -60.0)]},
+                 ramp=R(compressor=60.0, feed_rate=120.0, T_crack=600.0, T_pretreat=600.0)), 3600.0, keys)
+    r40 = ramp_for_rate(40.0, 15.0 / 3600)
+    _, tr = run("runaway_margin_+40K_at_15K_per_h", dyn.args(steps={"T_crack": [(300.0, 40.0)]}, ramp=R(T_crack=r40)),
+                300.0 + r40 + 1800.0, ["T_max", "conversion.per_pass", "crack.quench", "crack.T_in", "crack.T_out"],
+                n_save=41)
+    T, Tin1 = np.asarray(tr["T_max"]), np.asarray(tr["crack.T_in"])[:, 0]
+    hot = np.nonzero(T > dyn.holdups.T_alarm)[0]
+    sat = np.asarray(tr["crack.quench"]) / np.asarray(dyn.crack.q_max)
+    o["scenarios"]["runaway_margin"] = {
+        "T_alarm_K": dyn.holdups.T_alarm, "alarm_at_inlet_K": float(Tin1[hot[0]]) if hot.size else None,
+        "first_valve_at_90pct_at_inlet_K": float(Tin1[np.nonzero(sat.max(axis=1) > 0.9)[0][0]])
+        if (sat.max(axis=1) > 0.9).any() else None,
+        "max_bed_rise_K": float(np.max(np.asarray(tr["crack.T_out"]) - np.asarray(tr["crack.T_in"]))),
+        "inlet_K": Tin1.tolist(), "T_max_K": T.tolist()}
+    print("HCU runaway margin", o["scenarios"]["runaway_margin"], flush=True)
+
+    def conv(d, rtol=1e-6, atol=1e-8):
+        a = dyn.args(steps={"T_crack": [(300.0, d)]}, ramp=R(T_crack=ramp_for_rate(5.0, 5.0 / 3600)))
+        s = dyn.simulate(2 * 3600.0, args=a, y0=y, n_save=2, max_steps=MAX_STEPS, warn=False, rtol=rtol, atol=atol)
+        return dyn.observe(s.trajectory.t[-1], s.y_final, a)["conversion.per_pass"]
+
+    t0 = time.time()
+    g = float(jax.grad(conv)(jnp.asarray(5.0)))
+    tg = time.time() - t0
+    cds = {}
+    for h in (0.5, 0.25):
+        for rt in (1e-6, 1e-8):
+            cds[f"h={h},rtol={rt}"] = (float(conv(jnp.asarray(5.0 + h), rt, rt * 1e-2))
+                                       - float(conv(jnp.asarray(5.0 - h), rt, rt * 1e-2))) / (2 * h)
+    o["scenarios"]["gradient_ramp"] = {"output": "conversion at 2 h per K of a 5 K/h T_crack ramp", "reverse": g,
+                                       "central_differences": cds, "seconds_reverse": tg}
+    print("HCU ramp gradient", o["scenarios"]["gradient_ramp"], flush=True)
+
+
 def runaway(out):
     unit, feed, res = test_vgo(heavy=True, T_crack=365.0 + 273.15)
     dyn = DynamicHydrocracker.from_steady(unit, feed, res, n_cells=5)
@@ -385,7 +469,7 @@ def reformer_loop(out):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true")
-    ap.add_argument("--only", default="hcu,runaway,ref")
+    ap.add_argument("--only", default="hcu,scenarios,ref")
     ap.add_argument("--out", default="dynamic_hydrocracker_checks.json")
     a = ap.parse_args()
     parts = set(a.only.split(","))
@@ -401,6 +485,8 @@ def main():
             unit, feed, res = test_vgo()
             out["hcu"] = {}
         balances_gradient_timescales(unit, feed, res, out, a.quick)
+    if "scenarios" in parts:
+        operating_scenarios(out)
     if "runaway" in parts:
         out.setdefault("hcu", {})
         runaway(out)

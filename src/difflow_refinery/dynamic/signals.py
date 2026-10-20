@@ -74,4 +74,15 @@ def evaluate(t: Array, args: Mapping) -> dict:
     return out
 
 
-__all__ = ["DEFAULT_RAMP", "smoothstep", "signal_args", "evaluate"]
+def ramp_for_rate(delta: float, max_rate: float) -> float:
+    """The ramp time (s) of a smoothstep move of size ``delta`` whose fastest rate is ``max_rate``.
+
+    The smoothstep's steepest slope is 1.5 times its average, so a move of
+    ``delta`` over ``r`` seconds peaks at ``1.5 delta / r``: an operator
+    move limited to ``max_rate`` (units of ``delta`` per second) takes
+    ``r = 1.5 |delta| / max_rate``.
+    """
+    return 1.5 * abs(float(delta)) / float(max_rate)
+
+
+__all__ = ["DEFAULT_RAMP", "smoothstep", "signal_args", "evaluate", "ramp_for_rate"]
