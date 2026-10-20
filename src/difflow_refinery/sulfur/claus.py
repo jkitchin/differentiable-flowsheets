@@ -279,38 +279,61 @@ def claus_train(acid_gas, air, p: ClausParams):
 def solve_air(acid_gas, p: ClausParams, tol: float = 1e-12, max_iter: int = 30):
     """Air (mol/s) at which the tail gas has ``H2S = 2 SO2`` (air-demand control).
 
-    Secant on stop-gradient inputs from the stoichiometric air, then one
-    secant/Newton step with the slope held fixed: the value is the root and
-    its derivative the implicit one.
+    Secant on stop-gradient inputs from the stoichiometric air; the train is
+    evaluated once per pass inside the loop, so it is traced once there. The
+    result is then taken at the root by :func:`difflow_refinery.implicit.solution`
+    (one more trace, or one linearisation when differentiated): the value is
+    the root and its derivative the implicit one. The solve is jitted, cached
+    by the train's structure, when ``p`` holds no arrays.
 
     Returns:
         ``(air, result)``: the air and :func:`claus_train` at it, plus
         ``air_converged`` and ``air_iterations`` in ``result``.
     """
-    acid0 = jax.tree_util.tree_map(lax.stop_gradient, dict(acid_gas))
+    from difflow_refinery.implicit import hashable, split_params
 
-    def r(a, acid):
-        return claus_train(acid, a, p)["ratio_residual"]
+    skel, arrays = split_params(p)
+    acid = {k: jnp.asarray(v, dtype=float) for k, v in dict(acid_gas).items()}
+    if hashable(skel):
+        return _solve_air_jit(acid, arrays, skel, tol, max_iter)
+    return _solve_air(acid, arrays, skel, tol, max_iter)
 
-    a0 = oxygen_demand(acid0) / AIR_O2
-    a1 = 1.01 * a0
-    r0, r1 = r(a0, acid0), r(a1, acid0)
 
+def _solve_air(acid, arrays, skel, tol, max_iter):
+    from difflow_refinery.implicit import merge_params, solution
+
+    theta = (acid, arrays)
+
+    def G(a, th):
+        out = claus_train(th[0], a[0], merge_params(skel, th[1]))
+        return out["ratio_residual"][None], out
+
+    th0 = jax.tree_util.tree_map(lax.stop_gradient, theta)
+    a0 = oxygen_demand(th0[0]) / AIR_O2
+
+    # secant, with the first two passes evaluating a0 and 1.01 a0: one
+    # evaluation of the train per pass, so one trace of it
     def cond(st):
-        a0, a1, r0, r1, k = st
-        return (jnp.abs(r1) > tol) & (k < max_iter)
+        _, _, _, r_cur, _, k = st
+        return (k < 2) | ((jnp.abs(r_cur) > tol) & (k - 2 < max_iter))
 
     def body(st):
-        a0, a1, r0, r1, k = st
-        a2 = a1 - r1 * (a1 - a0) / (r1 - r0)
-        a2 = jnp.clip(a2, 0.5 * a1, 2.0 * a1)
-        return a1, a2, r1, r(a2, acid0), k + 1
+        a_prev, a_cur, r_prev, r_cur, a_ev, k = st
+        r = G(a_ev[None], th0)[0][0]
+        first = k == 0
+        a_prev, r_prev = jnp.where(first, a_ev, a_cur), jnp.where(first, r, r_cur)
+        a_cur, r_cur = a_ev, r
+        a_sec = a_cur - r_cur * (a_cur - a_prev) / (r_cur - r_prev)
+        a_next = jnp.where(first, 1.01 * a_ev, jnp.clip(a_sec, 0.5 * a_cur, 2.0 * a_cur))
+        return a_prev, a_cur, r_prev, r_cur, a_next, k + 1
 
-    a_prev, a_star, _, r_star, k = lax.while_loop(cond, body, (a0, a1, r0, r1, 0))
-    a_star = lax.stop_gradient(a_star)
-    slope = lax.stop_gradient(jax.grad(r)(a_star, acid0))
-    a = a_star - r(a_star, acid_gas) / slope
-    out = claus_train(acid_gas, a, p)
+    st0 = (a0, a0, jnp.zeros(()), jnp.asarray(jnp.inf), a0, 0)
+    _, a_star, _, r_star, _, k = lax.while_loop(cond, body, st0)
+    a, out = solution(G, a_star[None], theta, fixed_point=False)
+    out = dict(out)
     out["air_converged"] = jnp.abs(r_star) <= tol * 10
-    out["air_iterations"] = k
-    return a, out
+    out["air_iterations"] = k - 2
+    return a[0], out
+
+
+_solve_air_jit = jax.jit(_solve_air, static_argnums=(2, 3, 4))
