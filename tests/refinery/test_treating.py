@@ -107,14 +107,13 @@ class TestProperties:
         m = w / (1 - w) / (am.MW * 1e-3)
         props = pr.amine_properties(amine)
         R = 8.314462618
+        # the 3 x 3 grid of (loading, T) in one batched, compiled derivative per gas
+        a, T = (jnp.repeat(jnp.array([0.05, 0.2, 0.4]), 3), jnp.tile(jnp.array([313.15, 353.15, 383.15]), 3))
         for gas, dH in (("p_CO2", props.dH_CO2), ("p_H2S", props.dH_H2S)):
-            vals = []
-            for a in (0.05, 0.2, 0.4):
-                for T in (313.15, 353.15, 383.15):
-                    aC, aS = (a, 1e-6) if gas == "p_CO2" else (1e-6, a)
-                    f = lambda iT: jnp.log(ag.ke_speciate(am, 1 / iT, m, aC, aS)[gas])  # noqa: E731,B023
-                    vals.append(-R * float(jax.grad(f)(1 / T)))
-            assert 0.75 * min(vals) <= dH <= 1.1 * max(vals), (gas, dH, min(vals), max(vals))
+            aC, aS = (a, jnp.full(9, 1e-6)) if gas == "p_CO2" else (jnp.full(9, 1e-6), a)
+            f = lambda iT, aC, aS: jnp.log(ag.ke_speciate(am, 1 / iT, m, aC, aS)[gas])  # noqa: E731,B023
+            vals = -R * np.asarray(jax.jit(jax.vmap(jax.grad(f)))(1 / T, aC, aS))
+            assert 0.75 * vals.min() <= dH <= 1.1 * vals.max(), (gas, dH, vals.min(), vals.max())
 
     def test_unknown_amine(self):
         with pytest.raises(ValueError, match="no treating properties"):
@@ -139,10 +138,15 @@ def steam_ratio_duty(L, lb_per_gal):
     return lb_per_gal * gal * 0.45359237 * float(water_latent_heat(147.7 + 273.15))
 
 
+#: The Campbell column with the feed and duty traced: one compile serves the
+#: case, the steam sweep and the finite differences of the gradient.
+_campbell_regen = jax.jit(lambda rich, Q: regenerate("MDEA", rich, Q=Q, **CAMPBELL))
+
+
 @pytest.fixture(scope="module")
 def campbell():
     rich = campbell_rich()
-    return rich, regenerate("MDEA", rich, Q=steam_ratio_duty(100.0, 1.1), **CAMPBELL)
+    return rich, _campbell_regen(rich, steam_ratio_duty(100.0, 1.1))
 
 
 class TestRegenerator:
@@ -177,7 +181,7 @@ class TestRegenerator:
         real one: each acid gas balances on its own feed, not the total, so
         the trace is resolved and the bottoms loading stays positive (#475)."""
         rich = dict(L=250.0, W=lean_water("MDEA", 250.0, 0.45), CO2=2.5e-10, H2S=31.2, T=380.0)
-        r = regenerate("MDEA", rich, Q=1.2e7, P=1.9e5, n_stages=8, T_condenser=318.15)
+        r = _campbell_regen(rich, 1.2e7)              # the Campbell column: no new compile
         assert bool(r.converged)
         assert 0 < float(r.lean["CO2"]) < 1e-3 * rich["CO2"]
         assert float(r.lean["CO2"] + r.acid_gas["CO2"]) == pytest.approx(rich["CO2"], rel=1e-9)
@@ -187,7 +191,7 @@ class TestRegenerator:
         rich = campbell_rich()
         loads = []
         for s in (0.8, 1.1, 1.5):
-            r = regenerate("MDEA", rich, Q=steam_ratio_duty(100.0, s), **CAMPBELL)
+            r = _campbell_regen(rich, steam_ratio_duty(100.0, s))
             assert bool(r.converged)
             loads.append(float(r.alpha_H2S[-1]))
         assert loads[0] > loads[1] > loads[2]
@@ -197,7 +201,7 @@ class TestRegenerator:
         Q0 = steam_ratio_duty(100.0, 1.1)
 
         def f(q):
-            return jnp.log(regenerate("MDEA", rich, Q=q * 1e6, **CAMPBELL).lean["H2S"])
+            return jnp.log(_campbell_regen(rich, q * 1e6).lean["H2S"])
 
         g = float(jax.grad(f)(Q0 / 1e6))
         h = 0.02
@@ -207,11 +211,17 @@ class TestRegenerator:
 
 
 # ---------------------------------------------------------------- absorber
+#: The absorber with the gas and lean traced (amine, stages and tray static):
+#: the 12-stage MDEA column compiles once for the fixture, the no-acid-gas
+#: case and the gradient.
+_absorb = jax.jit(absorb, static_argnums=(0, 3, 4))
+
+
 @pytest.fixture(scope="module")
 def absorbers():
     out = {}
     for amine, w in (("MDEA", 0.45), ("DEA", 0.25)):
-        out[amine] = absorb(amine, fuel_gas(), lean(amine, w), 12, TRAY)
+        out[amine] = _absorb(amine, fuel_gas(), lean(amine, w), 12, TRAY)
     return out
 
 
@@ -267,7 +277,7 @@ class TestAbsorber:
         """A gas with no acid gas STRIPS the lean solvent's (it is the lean
         back-pressure that sets a treated gas's floor); balances still close."""
         ln = lean("MDEA", 0.45, aC=1e-4, aS=1e-4)
-        r = absorb("MDEA", fuel_gas(h2s=0.0, co2=0.0), ln, 4, TRAY)
+        r = _absorb("MDEA", fuel_gas(h2s=0.0, co2=0.0), ln, 12, TRAY)
         assert bool(r.converged)
         assert float(r.rich["H2S"]) < ln["H2S"]
         assert float(r.sweet[H2S] + r.rich["H2S"]) == pytest.approx(ln["H2S"], rel=1e-8)
@@ -277,7 +287,7 @@ class TestAbsorber:
 
         def f(x):
             g = fuel_gas(h2s=x[0], co2=x[1])
-            return jnp.log(absorb("MDEA", g, dict(ln, L=x[2]), 6, TRAY).sweet[H2S])
+            return jnp.log(_absorb("MDEA", g, dict(ln, L=x[2]), 12, TRAY).sweet[H2S])
 
         check_grads(f, (jnp.array([20.0, 20.0, 60.0]),), order=1, modes=["fwd"], atol=1e-5, rtol=1e-4)
 

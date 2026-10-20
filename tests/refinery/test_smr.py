@@ -76,9 +76,15 @@ class TestKinetics:
 
 
 # ---------------------------------------------------------------- tube
+#: The default tube with its inlet and outlet T traced: one compile serves the
+#: fixture and the slip trends.
+_tube = jax.jit(lambda inlet, T_out: smr.reformer_tube(inlet, smr.ReformerTubeParams(), T_out=T_out,
+                                                       n_profile=41))
+
+
 @pytest.fixture(scope="module")
 def tube():
-    return smr.reformer_tube(tube_inlet(), smr.ReformerTubeParams(), T_out=1123.15, n_profile=41)
+    return _tube(tube_inlet(), 1123.15)
 
 
 class TestTube:
@@ -138,11 +144,11 @@ class TestTube:
     ])
     def test_slip_trends(self, tube, change, direction):
         base = float(tube[0]["F_methane"])
-        out, _ = smr.reformer_tube(tube_inlet(**change), smr.ReformerTubeParams(), T_out=1123.15)
+        out, _ = _tube(tube_inlet(**change), 1123.15)
         assert np.sign(float(out["F_methane"]) - base) == direction
 
     def test_slip_falls_with_outlet_T(self, tube):
-        out, _ = smr.reformer_tube(tube_inlet(), smr.ReformerTubeParams(), T_out=1173.15)
+        out, _ = _tube(tube_inlet(), 1173.15)
         assert float(out["F_methane"]) < float(tube[0]["F_methane"])
 
     def test_gradient_is_finite(self):
@@ -332,13 +338,13 @@ class TestPlanning:
 
         assert np.isfinite(float(jax.grad(f)(1193.15)))
 
-    def test_smr_block_links_to_network(self):
+    def test_smr_block_links_to_network(self, plant):
         from difflow_refinery.hydrogen import link_smr, smr_block
         b = smr_block(natural_gas(), smr.SMRParams(psa=SHORTCUT), jit=False)
         assert b.u_names == ["ng", "S_C", "T_out"]
         assert b.y_names == ["h2.net_mol_s", "h2.purity", "ng.lhv_MW", "co2.mol_s"]
         y = np.asarray(b.fn(jnp.asarray(b.u0)))
-        r = smr.smr_plant(natural_gas(), smr.SMRParams(psa=SHORTCUT))
+        r = plant                                     # the same plant, solved once
         np.testing.assert_allclose(y, [float(r["H2"]), 99.9, float(r["ng_lhv"]) / 1e6, float(r["CO2"])],
                                    rtol=1e-9)
         assert link_smr() == [("smr.h2.net_mol_s", "h2.smr.h2"), ("smr.h2.purity", "h2.smr.purity")]
