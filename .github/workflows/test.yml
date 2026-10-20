@@ -56,12 +56,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,gui,solvers,mcp]"
 
+      # JAX's persistent compilation cache: XLA executables keyed on the
+      # program (HLO), the jax/jaxlib version and the backend, so a stale
+      # entry is a miss, never a wrong answer. A module whose code did not
+      # change since the cached run skips its XLA compiles (test_treating +
+      # test_sulfur: 200 s -> 115 s locally with a warm cache; tens of MB).
+      # Saved under a key per commit; restored from the newest earlier one.
+      - name: Restore the JAX compilation cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/jax-compilation
+          key: jax-${{ runner.os }}-py${{ matrix.python-version }}-shard${{ matrix.shard }}-${{ github.sha }}
+          restore-keys: |
+            jax-${{ runner.os }}-py${{ matrix.python-version }}-shard${{ matrix.shard }}-
+
       # DIFFLOW_TEST_BUDGET fails a test whose call runs past it
       # (tests/conftest.py); `--durations=15` names the next candidates. 180 s
       # is generous because the first test in a file pays its JIT compile.
       - name: Run tests
         env:
           DIFFLOW_TEST_BUDGET: "180"
+          JAX_COMPILATION_CACHE_DIR: ${{ runner.temp }}/jax-compilation
+          JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS: "0.5"
         run: |
           python -m pytest tests/ -q --tb=short \
             -n auto --dist loadfile \
