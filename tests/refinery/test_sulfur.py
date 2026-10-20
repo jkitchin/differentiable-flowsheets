@@ -207,3 +207,11 @@ class TestSRU:
     def test_gradient_is_finite(self, sru):
         """tests/reference/gradient_checks.py compares it with FD."""
         assert np.isfinite(float(sru[1]))
+
+    def test_regression(self, sru):
+        """Values recorded before solve_sru / solve_air were rewritten to trace
+        the train once (difflow_refinery.implicit); unchanged to round-off."""
+        r, g = sru
+        assert float(r["SO2_emitted"]) == pytest.approx(2.474353852243781, rel=1e-9)
+        assert float(r["air"]) == pytest.approx(203.5544845268881, rel=1e-9)
+        assert float(g) == pytest.approx(0.06491886281106696, rel=1e-7)

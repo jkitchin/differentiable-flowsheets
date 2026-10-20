@@ -37,6 +37,7 @@ import jax.numpy as jnp
 from jax import lax
 
 from difflow_cc.equilibrium import acid_gas as ag
+from difflow_refinery.implicit import solution
 from difflow_refinery.treating.absorber import CO2, H2S, WATER, TrayParams, absorb
 from difflow_refinery.treating.regenerator import (M_W, RegeneratorResult, liquid_enthalpy,
                                                    regenerate)
@@ -113,36 +114,40 @@ def _newton_seq(res, z0, cap, max_iter=40, tol=1e-10):
     """Damped Newton with a SEQUENTIAL backtracking search (halving up to 12
     times). The acid-gas Newton evaluates its 16 trial steps at once with
     ``vmap``; around a whole loop of nested solves that batches every inner
-    ``while_loop`` 16 ways and the compile grows with it."""
+    ``while_loop`` 16 ways and the compile grows with it.
 
-    def norm(z):
-        r = res(z)
+    The residual is traced twice: once with its Jacobian (``jacfwd`` with the
+    value as aux), once in the line search, whose first pass tries the full
+    step. The descent test uses the norm at ``z`` from the Jacobian pass."""
+
+    def norm_of(r):
         return jnp.where(jnp.all(jnp.isfinite(r)), jnp.max(jnp.abs(r)), jnp.inf)
 
     def body(state):
-        z, k, e = state
-        r, J = res(z), jax.jacfwd(res)(z)
+        z, k, _ = state
+        J, r = jax.jacfwd(lambda x: (lambda v: (v, v))(res(x)), has_aux=True)(z)
+        e = norm_of(r)
         dz = -jnp.linalg.solve(J, r)
         dz = jnp.where(jnp.all(jnp.isfinite(dz)), dz, 0.0)
         dz = dz / jnp.maximum(1.0, jnp.max(jnp.abs(dz)) / cap)
 
         def ls_cond(c):
             a, en, i = c
-            return (en >= e) & (i < 12)
+            return (en >= e) & (i < 13)
 
         def ls_body(c):
             a, _, i = c
             a = 0.5 * a
-            return a, norm(z + a * dz), i + 1
+            return a, norm_of(res(z + a * dz)), i + 1
 
-        a, en, _ = lax.while_loop(ls_cond, ls_body, (1.0, norm(z + dz), 0))
+        a, en, _ = lax.while_loop(ls_cond, ls_body, (2.0, jnp.asarray(jnp.inf), 0))
         return z + a * dz, k + 1, en
 
     def cond(state):
         _, k, e = state
         return (k < max_iter) & (e > tol)
 
-    return lax.while_loop(cond, body, (z0, jnp.asarray(0), norm(z0)))
+    return lax.while_loop(cond, body, (z0, jnp.asarray(0), jnp.asarray(jnp.inf)))
 
 
 def lean_water(amine, L, w_amine):
@@ -315,8 +320,8 @@ def _solve(p: AmineUnitParams, theta, max_iter: int = 40) -> AmineUnitResult:
                     jnp.log(jnp.minimum(fed[H2S] / Lt, 5e-3) + LEAN_FLOOR),
                     (water_saturation_temperature(p.P_regenerator) + 3.0) / 100.0])
     x_star, k, err = _newton_seq(lambda x: res(x, th0), x0, cap=2.0, max_iter=max_iter, tol=1e-10)
-    x = ag._implicit(res, x_star, theta)
-    _, o = run(x, theta)
+    # the loop at the solution, with implicit derivatives (one trace of run)
+    x, o = solution(run, x_star, theta, fixed_point=True)
     reg = o["reg"]
     lean_hot = reg.lean
     W_design = lean_water(am, sum(theta["Ls"]), p.w_amine)

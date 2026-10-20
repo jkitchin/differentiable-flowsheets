@@ -29,9 +29,13 @@ sources below were made when the unit was written and are not per-commit tests:
   closed SRU: liquid S + SO2 emitted = S in (recycle internal).
 - Solves: scalar roots by bisection (`bracket_root`; NaN counts as positive)
   then ONE implicit Newton step; air by secant (lax.while_loop on stop-gradient
-  inputs) + implicit step; recycle by substitution + one `(I-J)^-1` step. All
-  derivatives are exact (tests vs FD). `solve_sru` compiles in ~65 s: its tests
-  and the solve_air tests are `slow`.
+  inputs, one claus_train evaluation per pass) and recycle by substitution,
+  each finished by `difflow_refinery.implicit.solution` (the model at the
+  solution, IFT derivatives from one linearisation). solve_air and solve_sru
+  are jitted, cached on the params' structure (params holding arrays, e.g. a
+  traced bed T, take the unjitted path). solve_sru traces claus_train 3 times
+  (was 24): first call ~25 s, repeat calls ~0.2 s. Never close over a tracer
+  in a G passed to `solution`; pass it through theta.
 - The regenerator is NOT solved in `solve_sru` (solvent returned to its lean
   loading); quench water dissolves no H2S/CO2. Tray coefficients ILLUSTRATIVE.
 - Steam make uses `difflow.water` fits valid 20-200 C, so steam saturation T

@@ -201,17 +201,27 @@ LOOP = AmineUnitParams("MDEA", 0.45, (Contactor("fuel", 120.0, 3, TRAY),), Q_reb
                        n_regenerator=3)
 
 
+def loop_gas():
+    """``{contactor: sour gas}`` for LOOP (also used by tests/reference)."""
+    g = fuel_gas()
+    g[WATER] = 1.0
+    return {"fuel": g}
+
+
+def _f(c, gases):
+    r = solve_amine_unit(LOOP, gases, circulation=(c,))
+    return jnp.log(r.sweet["fuel"][H2S]), r
+
+
+#: the loop and d ln(sweet H2S)/d circulation; the gas is an argument, so a
+#: gas with the same keys reuses the compile
+_loop_jvp = jax.jit(lambda c, gases: jax.jvp(lambda cc: _f(cc, gases), (c,), (1.0,)))
+
+
 @pytest.fixture(scope="module")
 def loop_and_grad():
     """The loop and d ln(sweet H2S)/d circulation from one forward-mode compile."""
-    g = fuel_gas()
-    g[WATER] = 1.0
-
-    def f(c):
-        r = solve_amine_unit(LOOP, {"fuel": g}, circulation=(c,))
-        return jnp.log(r.sweet["fuel"][H2S]), r
-
-    (_, r), (dlog, _) = jax.jit(lambda c: jax.jvp(f, (c,), (1.0,)))(120.0)
+    (_, r), (dlog, _) = _loop_jvp(120.0, loop_gas())
     return r, dlog
 
 
@@ -225,3 +235,20 @@ class TestAmineUnit:
     def test_gradient_is_finite(self, loop_and_grad):
         """tests/reference/gradient_checks.py compares it with FD."""
         assert np.isfinite(float(loop_and_grad[1]))
+
+    def test_regression(self, loop_and_grad):
+        """Values recorded before the loop was rewritten to trace it three
+        times instead of eight (difflow_refinery.implicit); unchanged."""
+        r, dlog = loop_and_grad
+        assert float(r.sweet["fuel"][H2S]) == pytest.approx(2.0433203863309295, rel=1e-9)
+        assert float(dlog) == pytest.approx(-0.005091460059777989, rel=1e-7)
+
+    def test_gas_without_co2(self, loop_and_grad):
+        """A fuel gas with H2S and no CO2 (#475): the loop converges and makes
+        no CO2. Same keys as the fixture's gas, so the compile is reused."""
+        n = _loop_jvp._cache_size()
+        (_, r), _ = _loop_jvp(120.0, {"fuel": dict(loop_gas()["fuel"], **{CO2: 0.0})})
+        assert _loop_jvp._cache_size() == n
+        assert bool(r.converged)
+        assert np.isfinite(float(r.sweet["fuel"][H2S]))
+        assert abs(float(r.sweet["fuel"][CO2] + r.acid_gas[CO2] + r.flash_gas[CO2])) < 1e-12

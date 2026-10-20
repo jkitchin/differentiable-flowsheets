@@ -180,9 +180,12 @@ def solve_sru(acid_gas, claus_params, tgtu_params, tol: float = 1e-10, max_iter:
 
     The tear is the recycle's (H2S, CO2, H2O). It is converged by direct
     substitution on stop-gradient inputs (the loop gain is the fraction of
-    the furnace S and CO2 that comes back, a few percent), then ONE Newton
-    step ``x - (I - J)^-1 (x - F(x))`` with ``J`` held fixed: the value is
-    the fixed point and its derivative the implicit one.
+    the furnace S and CO2 that comes back, a few percent), and the plant is
+    then taken at the fixed point by :func:`difflow_refinery.implicit.solution`:
+    the value is the fixed point and its derivative the implicit one. The
+    plant is traced once in the loop and once there (a linearisation when
+    differentiated). The solve is jitted, cached by the parameters'
+    structure, when the parameters hold no arrays.
 
     Returns:
         dict: ``claus`` (:func:`difflow_refinery.sulfur.claus.solve_air`
@@ -190,6 +193,18 @@ def solve_sru(acid_gas, claus_params, tgtu_params, tol: float = 1e-10, max_iter:
         ``recovery`` (1 - S emitted / S in), ``SO2_emitted`` (mol/s and
         ``SO2_emitted_kg_h``), ``tear_iterations``, ``converged``.
     """
+    from difflow_refinery.implicit import hashable, split_params
+
+    cskel, carr = split_params(claus_params)
+    tskel, tarr = split_params(tgtu_params)
+    acid = {k: jnp.asarray(v, dtype=float) for k, v in dict(acid_gas).items()}
+    if hashable(cskel, tskel):
+        return _solve_sru_jit(acid, carr, tarr, cskel, tskel, tol, max_iter)
+    return _solve_sru(acid, carr, tarr, cskel, tskel, tol, max_iter)
+
+
+def _solve_sru(acid, carr, tarr, cskel, tskel, tol, max_iter):
+    from difflow_refinery.implicit import merge_params, solution
     from difflow_refinery.sulfur.claus import solve_air
 
     def furnace_feed(x, acid):
@@ -199,16 +214,15 @@ def solve_sru(acid_gas, claus_params, tgtu_params, tol: float = 1e-10, max_iter:
         # the recycle enters at the acid gas's T (its sensible heat is small)
         return g
 
-    def plant(x, acid):
-        air, cr = solve_air(furnace_feed(x, acid), claus_params)
-        tr = tgtu(cr["tail_gas"], tgtu_params)
+    def G(x, th):
+        acid, ca, ta = th
+        air, cr = solve_air(furnace_feed(x, acid), merge_params(cskel, ca))
+        tr = tgtu(cr["tail_gas"], merge_params(tskel, ta))
         x_new = jnp.stack([tr["recycle"][f"F_{k}"] for k in _TEAR])
-        return x_new, (air, cr, tr)
+        return x_new, (x_new, air, cr, tr)
 
-    acid0 = jax.tree_util.tree_map(lax.stop_gradient, dict(acid_gas))
-
-    def F(x, acid):
-        return plant(x, acid)[0]
+    theta = (acid, carr, tarr)
+    th0 = jax.tree_util.tree_map(lax.stop_gradient, theta)
 
     def cond(st):
         x, dx, k = st
@@ -216,21 +230,21 @@ def solve_sru(acid_gas, claus_params, tgtu_params, tol: float = 1e-10, max_iter:
 
     def body(st):
         x, _, k = st
-        xn = F(x, acid0)
+        xn = G(x, th0)[0]
         scale = jnp.maximum(jnp.sum(jnp.abs(xn)), 1e-30)
         return xn, jnp.sum(jnp.abs(xn - x)) / scale, k + 1
 
     x0 = jnp.zeros(len(_TEAR))
     x_star, dx, k = lax.while_loop(cond, body, (x0, jnp.inf, 0))
-    x_star = lax.stop_gradient(x_star)
-    J = lax.stop_gradient(jax.jacfwd(F)(x_star, acid0))
-    x = x_star - jnp.linalg.solve(jnp.eye(len(_TEAR)) - J, x_star - F(x_star, acid_gas))
-    x_out, (air, cr, tr) = plant(x, acid_gas)
-    S_in = cl.sulfur_in(to_vec(acid_gas))
+    x, (x_out, air, cr, tr), J = solution(G, x_star, theta, fixed_point=True, jac=True)
+    S_in = cl.sulfur_in(to_vec(acid))
     return {"claus": cr, "tgtu": tr, "air": air, "recycle": x,
             "recovery": 1.0 - tr["SO2_emitted"] / S_in,
             "SO2_emitted": tr["SO2_emitted"],
             "SO2_emitted_kg_h": tr["SO2_emitted"] * M_SO2 * 3600.0,
             "tear_residual": jnp.sum(jnp.abs(x_out - x)), "tear_iterations": k,
-            "gain": jnp.max(jnp.abs(jnp.linalg.eigvals(J))),
+            "gain": jnp.max(jnp.abs(jnp.linalg.eigvals(lax.stop_gradient(J)))),
             "converged": (dx <= tol) & cr["converged"] & cr["air_converged"] & tr["converged"]}
+
+
+_solve_sru_jit = jax.jit(_solve_sru, static_argnums=(3, 4, 5, 6))

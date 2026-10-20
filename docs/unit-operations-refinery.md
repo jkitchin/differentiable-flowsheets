@@ -4454,12 +4454,12 @@ jax.grad(lambda h: su.solve_sru(dict(acid_gas, F_hydrogen_sulfide=h), claus, tgt
 | WHB, condensers | non-sulfur gas frozen; S2–S8 in gas equilibrium; condensation to saturation; duty to steam | JANAF; liquid S JANAF S-004 |
 | Sulfur vapour pressure | Wagner equation, liquid Gibbs energy corrected so the saturated total matches it | Ferreira & Lobo (2011) |
 | Converters | reheat; specified COS/CS2 hydrolysis; adiabatic equilibrium restricted to Claus + allotropes, with an approach dT | — |
-| Air demand | secant on tail-gas `H2S - 2 SO2 = 0`, implicit derivative | Kohl & Nielsen (1997) |
+| Air demand | secant on tail-gas `H2S - 2 SO2 = 0` (one evaluation of the train per pass), implicit derivative (`difflow_refinery.implicit.solution`); jitted, cached on the train | Kohl & Nielsen (1997) |
 | Hydrogenation | adiabatic equilibrium restricted to SO2/S hydrogenation, COS/CS2 hydrolysis, shift | — |
 | Quench | water to saturation | IAPWS-IF97 |
 | Absorber | Kent-Eisenberg MDEA, Murphree trays | see the amine section |
 | Regenerator | NOT solved: the solvent is returned to its lean loading; acid gas leaves the reflux drum saturated; the water the solvent loses (to the saturated off-gas and the recycle) is reported as `makeup_water` | — |
-| Recycle | substitution, then one implicit Newton step | — |
+| Recycle | substitution on stop-gradient inputs, then the plant at the fixed point with implicit derivatives (`difflow_refinery.implicit.solution`: one trace of the plant, one linearisation when differentiated); the solve is jitted, cached on the parameters | — |
 
 **Validation** (checked when the unit was written; `tests/refinery/test_sulfur.py`
 keeps the balances, convergence and finite gradients per commit; the Gamson-Elkins curve and

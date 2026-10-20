@@ -39,7 +39,10 @@ sources below were made when the unit was written and are not per-commit tests:
 - Solves: damped Newton on stop-gradient inputs, then ONE implicit step
   (`ag._implicit`), so derivatives are exact. The loop's outer Newton is
   `_newton_seq` (sequential backtracking): the vmapped 16-alpha line search of
-  `ag._newton` batches every nested solve 16 ways. `solve_amine_unit` is jitted
+  `ag._newton` batches every nested solve 16 ways. It traces the loop twice
+  (jacfwd with the value as aux; the line search), and the loop at the
+  solution comes from `difflow_refinery.implicit.solution` (one more trace /
+  one linearisation): 3 traces of the loop, was 8. `solve_amine_unit` is jitted
   and cached on the params with circulation/Q zeroed; pass those as arguments
-  to differentiate. First call compiles ~60 s; loop tests are `slow`.
+  to differentiate. First call compiles ~35 s.
 - Absorber is isothermal; water through it is fixed (sweet gas leaves saturated).
