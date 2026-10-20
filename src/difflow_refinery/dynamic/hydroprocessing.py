@@ -281,15 +281,10 @@ class DynamicTrickleBedReactor:
 
     # ----- one bed ----------------------------------------------------------------
 
-    def _segment(self, km: KModel, F_in: Flows, T_in, W, n_sub: int | None = None, unroll: bool = True):
-        """``(F*, T*)``: RK4 steps of the steady bed equations across ``W`` kg of catalyst.
-
-        ``n_sub`` overrides :attr:`n_sub` (the rest-state check uses it);
-        ``unroll=False`` loops the steps (``lax.fori_loop``: one step compiled,
-        for the rest-state check) instead of unrolling them (the dynamics).
-        """
+    def _segment(self, km: KModel, F_in: Flows, T_in, W):
+        """``(F*, T*)``: RK4 steps of the steady bed equations across ``W`` kg of catalyst."""
         lay, comps, kin, prm, P = self.layout, self.comps, self.kinetics, self.kin_params, self.P
-        n_sub = self.n_sub if n_sub is None else int(n_sub)
+        n_sub = self.n_sub
         h = W / n_sub
 
         def g(f, T):
@@ -305,8 +300,6 @@ class DynamicTrickleBedReactor:
                     T + (k1[1] + 2.0 * k2[1] + 2.0 * k3[1] + k4[1]) / 6.0)
 
         f, T = F_in, T_in
-        if not unroll:
-            return jax.lax.fori_loop(0, n_sub, lambda _, c: rk4(*c), (f, jnp.asarray(T, dtype=float)))
         for _ in range(n_sub):
             f, T = rk4(f, T)
         return f, T
@@ -320,16 +313,39 @@ class DynamicTrickleBedReactor:
         the dynamic model settles to; :func:`check_rest_state` compares it
         with the steady unit. Returns ``(Flows (n_cells, ...), T (n_cells,))``.
         """
+        n = self.n_sub if n_sub is None else int(n_sub)
+        cache = self.__dict__.setdefault("_rest_jit", {})
+        if b not in cache:
+            # one compile per bed, reused for every n_sub (it is a traced loop bound)
+            cache[b] = jax.jit(lambda f, t, k: self._march(b, f, t, k))
+        return cache[b](F_in, jnp.asarray(T_in, dtype=float), jnp.asarray(n, dtype=jnp.int32))
+
+    def _march(self, b: int, F_in: Flows, T_in, n_sub):
+        """:meth:`rest_profile`'s body; ``n_sub`` may be traced."""
+        lay, comps, kin, prm, P = self.layout, self.comps, self.kinetics, self.kin_params, self.P
         geo = self.beds[b]
         Wc = geo.W / self.n_cells
-        km, _ = k_model_at(F_in, self.layout, self.comps, T_in, self.P)
+        km, _ = k_model_at(F_in, lay, comps, T_in, P)
+        h = Wc / n_sub
 
-        def step(carry, _):
-            f, t = carry
-            f2, t2 = self._segment(km, f, t, Wc, n_sub, unroll=False)
-            return (f2, t2), (f2, t2)
+        def g(f, T):
+            dF, dT = bed_derivatives(kin, prm, lay, comps, km, f, T, P)
+            return dF.scale(h), dT * h
 
-        _, (F, T) = jax.lax.scan(step, (F_in, jnp.asarray(T_in, dtype=float)), None, length=self.n_cells)
+        def rk4(_, c):
+            f, T = c
+            k1 = g(f, T)
+            k2 = g(f + k1[0].scale(0.5), T + 0.5 * k1[1])
+            k3 = g(f + k2[0].scale(0.5), T + 0.5 * k2[1])
+            k4 = g(f + k3[0], T + k3[1])
+            return (f + (k1[0] + k2[0].scale(2.0) + k3[0].scale(2.0) + k4[0]).scale(1.0 / 6.0),
+                    T + (k1[1] + 2.0 * k2[1] + 2.0 * k3[1] + k4[1]) / 6.0)
+
+        def cell(carry, _):
+            out = jax.lax.fori_loop(0, n_sub, rk4, carry)
+            return out, out
+
+        _, (F, T) = jax.lax.scan(cell, (F_in, T_in), None, length=self.n_cells)
         return F, T
 
     def _bed(self, b: int, F_in: Flows, T_in, n: Flows, T: Array):
