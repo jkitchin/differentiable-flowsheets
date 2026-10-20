@@ -96,6 +96,14 @@ def scale_feed_nitrogen(f: Flows, layout, x) -> Flows:
     return Flows(f.gas, f.cut, f.attr * jnp.where(mask, x, 1.0))
 
 
+#: Fastest reactor-temperature move an operator makes, K/h (an ASSUMPTION: a
+#: few K/h is the usual practice for hydroprocessing reactors, so that the
+#: exotherm can be watched as it develops; not taken from a cited source).
+#: :meth:`DynamicHydrocracker.move` turns a setpoint change into a smooth ramp
+#: no faster than this.
+OPERATOR_RAMP_K_PER_H = 5.0
+
+
 class DynamicRunawayWarning(UserWarning):
     """A dynamic hydroprocessing simulation did not reach its end time (a runaway, or a stiff transient)."""
 
@@ -308,7 +316,7 @@ class DynamicHydrocracker:
     # ----- construction ----------------------------------------------------------
 
     @classmethod
-    def from_steady(cls, unit, feed: Mapping, result=None, *, n_cells: int = 5, n_sub: int = 1,
+    def from_steady(cls, unit, feed: Mapping, result=None, *, n_cells: int = 5, n_sub: int = 3,
                     holdups: HydrocrackerHoldupParams | None = None) -> "DynamicHydrocracker":
         """The dynamic twin of a steady :class:`~difflow_refinery.hydrocracking.Hydrocracker`.
 
@@ -320,7 +328,11 @@ class DynamicHydrocracker:
             feed: The feed stream it was solved for.
             result: Its solved result (solved here if omitted).
             n_cells: Cells per bed (pretreat and cracking).
-            n_sub: RK4 steps of the steady bed equations per cell.
+            n_sub: RK4 steps of the steady bed equations per cell. Three by
+                default: with one, the step across a cell is outside RK4's
+                stability region for the fastest HDS classes (the sulfides on
+                the heavy cuts, which the pretreat bed takes to a few ppb), and
+                their trace holdups grow without bound in any brisk transient.
             holdups: :class:`HydrocrackerHoldupParams`.
 
         The initial state is the steady solution mapped onto the cells; it is
@@ -477,6 +489,20 @@ class DynamicHydrocracker:
         b = dict(self.base_signals)
         b.update(base)
         return sig.signal_args(b, steps, ramp)
+
+    def move(self, signal: str, delta: float, t_start: float = 300.0,
+             max_rate_K_per_h: float = OPERATOR_RAMP_K_PER_H) -> tuple[dict, dict]:
+        """``(steps, ramp)`` for :meth:`args`: an operator move of ``signal`` by ``delta`` K at ``t_start``.
+
+        The move is a smoothstep whose steepest rate is ``max_rate_K_per_h``
+        (:func:`~.signals.ramp_for_rate`), the way a reactor temperature is
+        changed in practice; a step (the default 60 s ramp) is a disturbance
+        no operator makes. Pass both to :meth:`args`: ``dyn.args(steps=s, ramp=r)``.
+        """
+        r = sig.ramp_for_rate(delta, max_rate_K_per_h / 3600.0)
+        ramp = {k: sig.DEFAULT_RAMP for k in self.base_signals}
+        ramp[signal] = r
+        return {signal: [(t_start, float(delta))]}, ramp
 
     def simulate(self, t_end: float, args: dict | None = None, y0: Array | None = None, n_save: int = 61,
                  saveat: Array | None = None, method: str = "diffrax:tsit5", rtol: float = DEFAULT_RTOL,
@@ -637,5 +663,5 @@ class DynamicHydrocracker:
         return {"accumulation": acc, "in_minus_out": inflow.elements(lay) - outflow.elements(lay)}
 
 
-__all__ = ["FRACTIONATOR_OUTLETS", "scale_feed_nitrogen", "DynamicRunawayWarning", "HydrocrackerHoldupParams", "cells_from_steady",
+__all__ = ["FRACTIONATOR_OUTLETS", "OPERATOR_RAMP_K_PER_H", "scale_feed_nitrogen", "DynamicRunawayWarning", "HydrocrackerHoldupParams", "cells_from_steady",
            "QuenchControlledReactor", "DynamicHydrocracker"]
