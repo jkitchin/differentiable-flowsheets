@@ -44,7 +44,8 @@ from difflow_refinery.hydroprocessing.recycle import MOL_PER_NM3
 from difflow_refinery.dynamic import signals as sig
 from difflow_refinery.dynamic.hydroprocessing import (
     CATALYST_CP, R_GAS, BedGeometry, DynamicHPSeparator, DynamicTrickleBedReactor, FurnaceLag,
-    RecycleGasLoop, flows_scale, holdup_from_outflow, phase_flows)
+    RecycleGasLoop, choose_n_sub, flows_scale, holdup_from_outflow,
+    phase_flows, rest_mismatch, warn_rest_state)
 
 jax.config.update("jax_enable_x64", True)
 
@@ -135,8 +136,8 @@ class DynamicHydrotreater:
     # ----- construction ----------------------------------------------------------
 
     @classmethod
-    def from_steady(cls, unit, feed: Mapping, result=None, *, n_cells: int = 10, n_sub: int = 1,
-                    holdups: HoldupParams | None = None) -> "DynamicHydrotreater":
+    def from_steady(cls, unit, feed: Mapping, result=None, *, n_cells: int = 10, n_sub: int | None = None,
+                    holdups: HoldupParams | None = None, n_sub_max: int = 64) -> "DynamicHydrotreater":
         """The dynamic twin of a steady :class:`~difflow_refinery.hydrotreating.Hydrotreater`.
 
         Args:
@@ -144,8 +145,24 @@ class DynamicHydrotreater:
             feed: The feed stream it was solved for.
             result: Its solved result (solved here if omitted).
             n_cells: Cells per bed.
-            n_sub: RK4 steps of the steady bed equations per cell.
+            n_sub: RK4 steps of the steady bed equations per cell. ``None``
+                (default) chooses it: the fewest of 1, 2, 4, ... (up to
+                ``n_sub_max``) whose rest state reproduces every steady bed's
+                outlet (:func:`~.hydroprocessing.choose_n_sub`). A given value
+                is used as is.
             holdups: :class:`HoldupParams`.
+            n_sub_max: Upper limit of the automatic choice.
+
+        Whatever ``n_sub``, the bed's own rest state (the cells marched down the
+        bed) is compared with the steady unit's bed outlets, and a
+        :class:`~.hydroprocessing.DynamicRestStateWarning` is raised if outlet
+        sulfur, temperature or the major flows disagree beyond
+        :data:`~.hydroprocessing.REST_TOL` -- a model that would settle to the
+        wrong answer never does so silently. The comparison is kept as
+        :attr:`rest_check`. On a high-conversion bed one RK4 step per cell is
+        unstable for the fastest sulfur class: notebook-scale naphtha and
+        distillate beds (8 cells) settle at about 10^3 wppm against the steady
+        0.003 and 6 wppm with ``n_sub=1``, and need 4.
 
         The initial state is the steady solution mapped onto the cells (the
         steady profile at each cell outlet, turned into the holdup that drains
@@ -194,8 +211,17 @@ class DynamicHydrotreater:
         y0_rx = jnp.stack(y_rx).reshape(-1) / scale_rx
         shares = tuple(q / q_tot) if q_tot > 0 else tuple(np.ones(len(q)) / max(len(q), 1))
         reactor = DynamicTrickleBedReactor(lay, unit.kinetics, kin, comps, beds, P, quench_shares=shares,
-                                           n_cells=n_cells, n_sub=n_sub, cp_cat=hp.cp_cat,
-                                           scale=scale_rx, y0=y0_rx)
+                                           n_cells=n_cells, n_sub=1 if n_sub is None else n_sub,
+                                           cp_cat=hp.cp_cat, scale=scale_rx, y0=y0_rx)
+        bed_refs = []
+        for bed in res.reactor.beds:
+            bed_refs.append((bed.inlet, bed.T_in, bed.outlet, bed.T_out))
+        if n_sub is None:
+            n_sub, rest = choose_n_sub(reactor, bed_refs, n_max=n_sub_max)
+            reactor.n_sub = n_sub
+        else:
+            rest = [rest_mismatch(reactor, b, *ref) for b, ref in enumerate(bed_refs)]
+        warn_rest_state(rest, "dynamic hydrotreater", n_cells, n_sub)
 
         # --- separator liquid holdup
         liq = res.streams["hps_liquid"]
@@ -247,7 +273,7 @@ class DynamicHydrotreater:
         y0 = jnp.concatenate([heater.initial_state(), y0_rx, hps.initial_state(), loop.initial_state()])
         return cls(flowsheet=fs, reactor=reactor, separator=hps, loop=loop, heater=heater, y0=y0,
                    base_signals=base, steady=res, unit=unit, layout=lay, comps=comps, holdups=hp,
-                   n_cells=n_cells, n_sub=n_sub, oil=oil, tau_loop=tau_loop)
+                   n_cells=n_cells, n_sub=n_sub, oil=oil, tau_loop=tau_loop, rest_check=rest)
 
     # ----- signals and simulation ------------------------------------------------
 

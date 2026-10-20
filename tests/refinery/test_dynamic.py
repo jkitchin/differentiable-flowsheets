@@ -20,7 +20,8 @@ import difflow_refinery as dr
 from difflow_refinery.dynamic import (
     BedGeometry, DynamicReformingReactor, DynamicTrickleBedReactor, QuasiSteadyHoldup, evaluate,
     holdup_outflow, signal_args, smoothstep)
-from difflow_refinery.dynamic.hydroprocessing import flows_scale, holdup_from_outflow
+from difflow_refinery.dynamic.hydroprocessing import (
+    DynamicRestStateWarning, choose_n_sub, flows_scale, holdup_from_outflow, rest_mismatch, warn_rest_state)
 from difflow_refinery.hydroprocessing.layout import Flows
 from difflow_refinery.hydroprocessing.reactor import k_model_at
 from difflow_refinery.hydrotreating import Hydrotreater, HydrotreaterParams, straight_run_cut
@@ -120,6 +121,26 @@ def test_trickle_bed_gradient_finite(bed):
     d = jax.jit(jax.grad(g))(jnp.asarray(bed["T_in"]))
     assert np.isfinite(float(d))
     del lay
+
+
+def test_high_conversion_bed_needs_more_rk4_steps(bed):
+    # Five times the catalyst in three cells: one RK4 step per cell is unstable
+    # for the fastest sulfur class, and the marched rest state is garbage.
+    rx = DynamicTrickleBedReactor(bed["rx"].layout, bed["rx"].kinetics, bed["rx"].kin_params, bed["comps"],
+                                  [BedGeometry(W=300000.0, tau_G=5.0, tau_L=25.0)], 50e5, n_cells=3,
+                                  scale=bed["rx"].scale)
+    F, T = rx.rest_profile(0, bed["flows"], bed["T_in"], n_sub=32)
+    ref = (bed["flows"], bed["T_in"], jax.tree_util.tree_map(lambda a: a[-1], F), T[-1])
+    coarse = rest_mismatch(rx, 0, *ref, n_sub=1)
+    assert not np.isfinite(coarse["S_wppm"]) or coarse["rel_S"] > 1.0
+    with pytest.warns(DynamicRestStateWarning, match="bed 1"):
+        assert warn_rest_state([coarse], "test bed", 3, 1)
+    n, ms = choose_n_sub(rx, [ref])
+    assert 1 < n < 32
+    assert ms[0]["rel_S"] < 0.02 and abs(ms[0]["dT"]) < 0.5
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DynamicRestStateWarning)
+        assert not warn_rest_state(ms, "test bed", 3, n)
 
 
 def test_feed_sulfur_scaling_is_differentiable(bed):

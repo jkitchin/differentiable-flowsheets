@@ -281,24 +281,56 @@ class DynamicTrickleBedReactor:
 
     # ----- one bed ----------------------------------------------------------------
 
-    def _segment(self, km: KModel, F_in: Flows, T_in, W):
-        """``(F*, T*)``: RK4 steps of the steady bed equations across ``W`` kg of catalyst."""
+    def _segment(self, km: KModel, F_in: Flows, T_in, W, n_sub: int | None = None, unroll: bool = True):
+        """``(F*, T*)``: RK4 steps of the steady bed equations across ``W`` kg of catalyst.
+
+        ``n_sub`` overrides :attr:`n_sub` (the rest-state check uses it);
+        ``unroll=False`` loops the steps (``lax.fori_loop``: one step compiled,
+        for the rest-state check) instead of unrolling them (the dynamics).
+        """
         lay, comps, kin, prm, P = self.layout, self.comps, self.kinetics, self.kin_params, self.P
-        h = W / self.n_sub
+        n_sub = self.n_sub if n_sub is None else int(n_sub)
+        h = W / n_sub
 
         def g(f, T):
             dF, dT = bed_derivatives(kin, prm, lay, comps, km, f, T, P)
             return dF.scale(h), dT * h
 
-        f, T = F_in, T_in
-        for _ in range(self.n_sub):
+        def rk4(f, T):
             k1 = g(f, T)
             k2 = g(f + k1[0].scale(0.5), T + 0.5 * k1[1])
             k3 = g(f + k2[0].scale(0.5), T + 0.5 * k2[1])
             k4 = g(f + k3[0], T + k3[1])
-            f = f + (k1[0] + k2[0].scale(2.0) + k3[0].scale(2.0) + k4[0]).scale(1.0 / 6.0)
-            T = T + (k1[1] + 2.0 * k2[1] + 2.0 * k3[1] + k4[1]) / 6.0
+            return (f + (k1[0] + k2[0].scale(2.0) + k3[0].scale(2.0) + k4[0]).scale(1.0 / 6.0),
+                    T + (k1[1] + 2.0 * k2[1] + 2.0 * k3[1] + k4[1]) / 6.0)
+
+        f, T = F_in, T_in
+        if not unroll:
+            return jax.lax.fori_loop(0, n_sub, lambda _, c: rk4(*c), (f, jnp.asarray(T, dtype=float)))
+        for _ in range(n_sub):
+            f, T = rk4(f, T)
         return f, T
+
+    def rest_profile(self, b: int, F_in: Flows, T_in, n_sub: int | None = None):
+        """The rest state of bed ``b`` fed ``(F_in, T_in)``: each cell's outflow and temperature.
+
+        At rest every cell's outflow is its reacted inflow (``F_out = F*``,
+        ``T = T*``), so the cell series' steady state is the cells' RK4 steps
+        marched down the bed -- whatever the holdups. This is the steady state
+        the dynamic model settles to; :func:`check_rest_state` compares it
+        with the steady unit. Returns ``(Flows (n_cells, ...), T (n_cells,))``.
+        """
+        geo = self.beds[b]
+        Wc = geo.W / self.n_cells
+        km, _ = k_model_at(F_in, self.layout, self.comps, T_in, self.P)
+
+        def step(carry, _):
+            f, t = carry
+            f2, t2 = self._segment(km, f, t, Wc, n_sub, unroll=False)
+            return (f2, t2), (f2, t2)
+
+        _, (F, T) = jax.lax.scan(step, (F_in, jnp.asarray(T_in, dtype=float)), None, length=self.n_cells)
+        return F, T
 
     def _bed(self, b: int, F_in: Flows, T_in, n: Flows, T: Array):
         """Derivatives and outflows of bed ``b`` with inlet ``(F_in, T_in)``.
@@ -393,6 +425,95 @@ class DynamicTrickleBedReactor:
         p = self.profiles(state, inputs)
         W = jnp.asarray([g.W for g in self.beds])
         return jnp.sum(W * (p["T_in"] + 2.0 * p["T"][:, -1]) / 3.0) / jnp.sum(W)
+
+
+class DynamicRestStateWarning(UserWarning):
+    """A dynamic bed's own rest state is far from the steady unit it was built from.
+
+    The cells' fixed RK4 steps across the catalyst are too coarse for the
+    bed's fastest reactions (unstable, or simply inaccurate), so the model
+    would settle somewhere else than the steady answer. Use more steps per
+    cell (``n_sub``) or more cells.
+    """
+
+
+def _sulfur_wppm(f: Flows, layout: Layout) -> Array:
+    """Sulfur on the cuts of ``f``, wppm of the cuts' mass (as ``DynamicHydrotreater.cut_sulfur_wppm``)."""
+    from difflow_refinery.composition import SULFUR_CLASSES
+    ai = {a: i for i, a in enumerate(layout.attributes)}
+    cols = [ai[f"S_{k}"] for k in SULFUR_CLASSES if f"S_{k}" in ai]
+    if not cols:
+        return jnp.asarray(0.0)
+    S = jnp.sum(f.attr[:, cols]) * 32.065e-3
+    return 1e6 * S / jnp.sum(f.cut_mass(layout))
+
+
+def rest_mismatch(reactor: "DynamicTrickleBedReactor", b: int, F_in: Flows, T_in, F_ref: Flows, T_ref,
+                  n_sub: int | None = None) -> dict:
+    """How far bed ``b``'s rest outlet is from a reference outlet ``(F_ref, T_ref)``.
+
+    Returns ``{"S_wppm", "S_wppm_ref", "rel_S", "dT", "rel_flow"}``: the outlet
+    sulfur (wppm of the cuts), its relative error (floored at 0.01 wppm), the
+    outlet temperature error (K) and the largest relative error over the outlet
+    flows that carry at least 1e-6 of the total.
+    """
+    F, T = reactor.rest_profile(b, F_in, T_in, n_sub)
+    last = jax.tree_util.tree_map(lambda a: a[-1], F)
+    lay = reactor.layout
+    S, S_ref = float(_sulfur_wppm(last, lay)), float(_sulfur_wppm(F_ref, lay))
+    v, v_ref = np.asarray(last.ravel()), np.asarray(F_ref.ravel())
+    big = np.abs(v_ref) > 1e-6 * np.sum(np.abs(v_ref))
+    rel_flow = float(np.max(np.abs(v - v_ref)[big] / np.abs(v_ref)[big])) if big.any() else 0.0
+    return {"S_wppm": S, "S_wppm_ref": S_ref, "rel_S": abs(S - S_ref) / max(abs(S_ref), 0.01),
+            "dT": float(T[-1]) - float(T_ref), "rel_flow": rel_flow}
+
+
+#: Tolerances of the rest-state check: outlet sulfur (relative, floored at
+#: 0.01 wppm), outlet temperature (K) and the major outlet flows (relative).
+REST_TOL = {"rel_S": 0.02, "dT": 0.5, "rel_flow": 0.01}
+
+
+def _rest_ok(m: dict, tol: dict = REST_TOL) -> bool:
+    return (np.isfinite([m["S_wppm"], m["dT"], m["rel_flow"]]).all() and m["rel_S"] <= tol["rel_S"]
+            and abs(m["dT"]) <= tol["dT"] and m["rel_flow"] <= tol["rel_flow"])
+
+
+def warn_rest_state(rest: Sequence[dict], what: str, n_cells: int, n_sub: int,
+                    tol: dict = REST_TOL) -> bool:
+    """Warn (:class:`DynamicRestStateWarning`) for the beds whose rest state is off; True if any is.
+
+    ``rest`` is one :func:`rest_mismatch` dict per bed; ``what`` names the unit.
+    """
+    import warnings
+    bad = [(b, m) for b, m in enumerate(rest) if not _rest_ok(m, tol)]
+    if bad:
+        msg = "; ".join(f"bed {b + 1}: outlet S {m['S_wppm']:.4g} wppm against {m['S_wppm_ref']:.4g}, "
+                        f"dT {m['dT']:+.3g} K, flows {m['rel_flow']:.2g}" for b, m in bad)
+        warnings.warn(f"the {what}'s rest state (n_cells={n_cells}, n_sub={n_sub}) differs from the steady "
+                      f"unit: {msg}. Use a larger n_sub (or n_sub=None) or more cells.",
+                      DynamicRestStateWarning, stacklevel=3)
+    return bool(bad)
+
+
+def choose_n_sub(reactor: "DynamicTrickleBedReactor", bed_refs, n_max: int = 64,
+                 tol: dict = REST_TOL) -> tuple[int, list]:
+    """The fewest RK4 steps per cell whose rest state reproduces the steady beds.
+
+    ``bed_refs`` is one ``(F_in, T_in, F_out_ref, T_out_ref)`` per bed (the
+    steady unit's bed inlet and outlet). Tries ``n_sub = 1, 2, 4, ...`` up to
+    ``n_max`` and returns the first that meets ``tol`` on every bed, with the
+    per-bed mismatches; if none does, returns ``n_max`` (the caller warns).
+
+    Why it is needed: a fixed RK4 step across a cell of a high-conversion bed
+    can exceed the step's stability limit for the fastest sulfur class, and the
+    marched rest state is then wrong by orders of magnitude, silently.
+    """
+    n = 1
+    while True:
+        ms = [rest_mismatch(reactor, b, *ref, n_sub=n) for b, ref in enumerate(bed_refs)]
+        if all(_rest_ok(m, tol) for m in ms) or n >= n_max:
+            return n, ms
+        n = min(2 * n, n_max)
 
 
 # =============================================================================
@@ -640,5 +761,6 @@ class RecycleGasLoop:
                 "makeup": makeup.gas[self.layout.gas_index("hydrogen")]}
 
 
-__all__ = ["CATALYST_CP", "flows_scale", "holdup_outflow", "holdup_from_outflow", "phase_flows",
+__all__ = ["CATALYST_CP", "REST_TOL", "DynamicRestStateWarning", "choose_n_sub", "rest_mismatch", "warn_rest_state",
+           "flows_scale", "holdup_outflow", "holdup_from_outflow", "phase_flows",
            "BedGeometry", "DynamicTrickleBedReactor", "FurnaceLag", "DynamicHPSeparator", "RecycleGasLoop"]
