@@ -80,9 +80,13 @@ Gates: `tests/reference/dynamic_hydrocracker_checks.py` (every upset capped at
   control of each later bed's inlet on `T_crack`, smooth clip + back-calculation
   anti-windup. Do not reintroduce a hard `jnp.where` switch: the RHS must stay
   smooth (Tsit5 chattered at 0.1 s steps with it).
-- `min_gas_tau` (20 s) and `quench_tau` (300 s) are there for the explicit
-  integrator; lowering either makes disturbances stiff. A start far from rest
-  (cells 20 K cold) is stiff even so (open problem).
+- `min_gas_tau` (20 s), `quench_tau` (300 s) and `n_sub=3` (RK4 steps per
+  cell; one is unstable for the heavy-cut sulfides) are there for the explicit
+  integrator; lowering any of them makes transients stiff.
+- Pose transients as they are operated: setpoint moves as ramps
+  (`DynamicHydrocracker.move`, `signals.ramp_for_rate`), equipment losses with a
+  rundown and a console answer, runaway as a margin probe. A full recycle trip
+  still does not integrate (it needs depressuring, i.e. pressure dynamics).
 - The UCO recycle is the fractionator `QuasiSteadyHoldup`'s `uco_recycle`
   outlet (state-only output): it breaks the loop. Neither steady tear is solved.
 - `DynamicReformerLoop`: recycle = `need / y_H2` of the inventory (the steady

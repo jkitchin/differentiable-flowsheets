@@ -75,7 +75,7 @@ from difflow_refinery.dynamic import signals as sig
 from difflow_refinery.dynamic.holdup import QuasiSteadyHoldup
 from difflow_refinery.dynamic.hydroprocessing import (
     R_GAS, BedGeometry, DynamicHPSeparator, DynamicTrickleBedReactor, FurnaceLag, RecycleGasLoop,
-    flows_scale, holdup_from_outflow, phase_flows)
+    flows_scale, holdup_from_outflow, phase_flows, rest_mismatch, warn_rest_state)
 from difflow_refinery.dynamic.hydrotreater import (
     DEFAULT_ATOL, DEFAULT_RTOL, HoldupParams, _interp_profile, scale_feed_sulfur)
 
@@ -382,6 +382,13 @@ class DynamicHydrocracker:
                                         n_sub=n_sub, cp_cat=hp.cp_cat, scale=s2, y0=y2, name="crack",
                                         q0=q_crk, gain=gain, tau_c=hp.quench_tau,
                                         q_max=hp.quench_max * np.maximum(q_crk, 0.02))
+
+        # the rest state against the steady beds (the hydrotreater's check, #504). n_sub is
+        # NOT chosen by it: the fixed three steps are for stability in transients, which a
+        # rest-state check does not see (one step rests within 1e-4 here and still blows up)
+        for name, rx, beds in (("pretreat", pretreat, res.pretreat.beds), ("cracking", crack, res.crack.beds)):
+            rest = [rest_mismatch(rx, k, bd.inlet, bd.T_in, bd.outlet, bd.T_out) for k, bd in enumerate(beds)]
+            warn_rest_state(rest, f"dynamic hydrocracker's {name} reactor", n_cells, n_sub)
 
         # --- separator liquid holdup
         liq = res.streams["hps_liquid"]
