@@ -87,14 +87,15 @@ beyond ``t_ads``. The LDF coefficients :data:`LDF_OMEGA` are ILLUSTRATIVE
 (no source gives them for these pellets); purity depends on them, recovery
 hardly at all.
 
-Validation (``tests/refinery/test_psa.py``): the isotherms reproduce the
+Validation (checked when the model was written; ``tests/refinery/test_psa.py``
+keeps the balances, validation and finite gradients per commit): the isotherms reproduce the
 affinity orders Zhang et al. state (AC: CO2 > CH4 > CO > H2; 5A: CO2 > CO >
 CH4 > H2) and the breakthrough order of their Fig. 4 (CO before CH4 in AC,
 CH4 before CO in 5A, the two together in a 0.7 AC layered bed); the
 Klinkenberg form agrees with the exact Anzelius/Thomas linear-LDF solution;
 balances close to round-off; purity and recovery move with adsorption time,
 P/F and pressure as in Zhang et al., Table 6, with recovery in the range
-reported there; ``check_grads`` in the cycle parameters.
+reported there; derivatives in the cycle parameters agree with finite differences.
 
 References
 ----------

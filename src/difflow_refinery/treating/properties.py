@@ -2,8 +2,8 @@
 
 Every constant names its source; ``ILLUSTRATIVE`` marks a value that was
 NOT read in a source (recalled, or an assumption) and should be replaced by
-a measured one before the answer is relied on. The source tables are
-pinned in ``tests/refinery/test_treating.py``.
+a measured one before the answer is relied on. The source tables were
+checked when the module was written (not a per-commit test).
 
 Units: SI throughout (mol, m, s, Pa, K, J), except the viscosities, which
 are mPa s (only their ratios enter).

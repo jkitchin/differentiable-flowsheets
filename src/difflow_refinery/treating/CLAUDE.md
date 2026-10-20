@@ -5,13 +5,15 @@ Amine treating (#471): `absorb` (Murphree stages, KE equilibrium), `regenerate`
 loop `solve_amine_unit` (tear = lean ln alphas + reboiler T). A library, NOT a
 palette operation; the gas plant's `AmineTreater` stays the fixed-fraction shortcut.
 
-Invariants (each has a test in `tests/refinery/test_treating.py`; do not weaken them):
+Invariants (do not weaken them). Per the test policy `tests/refinery/test_treating.py` keeps only
+the balance, convergence, gradient and regression ones; the comparisons with
+sources below were made when the unit was written and are not per-commit tests:
 - Every constant in `properties.py` names its source; anything not read in a
   source is marked ILLUSTRATIVE: the heats of absorption, the amine Cp, the
   density slope, N2's Henry constant, CO2's physical solubility in the solution
   (taken as water's; the N2O-analogy table was not read) and DEA's viscosity
   T-dependence. The heats are held inside the KE model's own van 't Hoff heat
-  (313-383 K) by a test: change one, re-run it.
+  (313-383 K): change one, re-check it.
 - MDEA k2 is Versteeg & van Swaaij 1988 (NOT the Ko & Li 4.01e8 exp(-5400/T),
   which an earlier draft misattributed to Versteeg 1996); DEA k2 is Blanc &
   Demarais 1981 (an APPARENT first-order constant; DEA is zwitterionic), not Hikita.
