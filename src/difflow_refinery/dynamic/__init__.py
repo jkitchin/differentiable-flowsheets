@@ -35,11 +35,12 @@ enthalpies, and their ``t -> infinity`` limit is the steady unit's answer
 
 from difflow_refinery.dynamic.signals import evaluate, signal_args, smoothstep
 from difflow_refinery.dynamic.hydroprocessing import (
-    BedGeometry, DynamicHPSeparator, DynamicTrickleBedReactor, FurnaceLag, RecycleGasLoop, holdup_outflow)
+    BedGeometry, DynamicHPSeparator, DynamicRestStateWarning, DynamicTrickleBedReactor, FurnaceLag,
+    RecycleGasLoop, holdup_outflow)
 from difflow_refinery.dynamic.hydrotreater import DynamicHydrotreater, HoldupParams
 
 __all__ = ["evaluate", "signal_args", "smoothstep", "BedGeometry", "DynamicHPSeparator",
-           "DynamicTrickleBedReactor", "FurnaceLag", "RecycleGasLoop", "holdup_outflow",
+           "DynamicTrickleBedReactor", "DynamicRestStateWarning", "FurnaceLag", "RecycleGasLoop", "holdup_outflow",
            "DynamicHydrotreater", "HoldupParams"]
 
 from difflow_refinery.dynamic.reforming import DynamicReformerLoop, DynamicReformerTrain, DynamicReformingReactor  # noqa: E402

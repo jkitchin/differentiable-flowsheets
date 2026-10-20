@@ -30,7 +30,13 @@ Invariants (do not weaken them):
   out at every state; tested). Anything new must keep that: e.g. a vent or a
   bleed is a stream, never a sink term.
 - Hydrotreater cells: fixed RK4 (`n_sub` per cell) is stable and accurate
-  on the diesel (10 steps/bed: bed-outlet S within 5e-5 of adaptive).
+  on the diesel (10 steps/bed: bed-outlet S within 5e-5 of adaptive), but
+  NOT on every bed: one step per cell of a high-conversion bed is unstable
+  and settles orders of magnitude off, silently. `from_steady` therefore
+  picks `n_sub` (None = fewest of 1, 2, 4, ... reproducing every steady bed
+  outlet within `REST_TOL`) and always checks the marched rest state against
+  the steady unit (`rest_check`, `DynamicRestStateWarning`). Keep both; any
+  new fixed-step bed builder should use `choose_n_sub` / `rest_mismatch`.
   Reformer cells must NOT use fixed RK4: the dehydrogenation equilibria at a
   bed inlet need >1000 steps (NaN otherwise) -- hence `integrate_bed`.
 - States are SCALED (design holdups, floored like the steady bed's scale;
