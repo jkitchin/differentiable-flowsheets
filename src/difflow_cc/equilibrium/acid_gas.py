@@ -34,8 +34,8 @@ lowest loading fitted (0.003), keeps the correction finite in an unloaded
 solvent, where a bare ``ln alpha`` would make the amine 10^5 times weaker
 a base. For DEA the
 carbamate constant is fitted as ``a + b/T``. The fits are in
-``tests/reference/amine_ke_fit.py`` and are tested against data that
-were held out of them (``tests/cc/test_acid_gas_vle.py``).
+``tests/reference/amine_ke_fit.py``, which also compares them with data
+that were held out of them.
 
 The MDEA constants were fitted at 10-40 C. Against Jou, Mather & Otto
 (1982), held out (25-120 C, 12-49 wt%, p <= 1 MPa; AAPD in p, printed by

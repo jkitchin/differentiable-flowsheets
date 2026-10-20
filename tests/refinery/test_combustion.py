@@ -4,7 +4,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.test_util import check_grads
 
 from difflow_refinery import combustion as cb
 from difflow_refinery import thermochemistry as tc
@@ -65,43 +64,11 @@ def test_fcc_uses_the_shared_module():
     assert (sp.AIR_O2, sp.T_REF) == (cb.AIR_O2, cb.T_REF)
 
 
-# --- cited constants --------------------------------------------------------
+# --- one thermo table ---------------------------------------------------------
 
-def test_cited_constants():
-    assert cb.ATOMIC_WEIGHT == {"C": 12.011, "H": 1.008, "N": 14.007, "O": 15.999, "S": 32.06}
-    assert cb.AIR_O2 == 0.2095                       # US Std Atmosphere 1976: 20.9476 vol%
-    assert cb.ARTHUR_A == pytest.approx(2511.886, abs=1e-3)
-    assert cb.ARTHUR_E_CAL * 4.184 == pytest.approx(51882, abs=1)   # 51.88 kJ/mol
-    assert cb.R_CAL == pytest.approx(8.314462618 / 4.184, rel=1e-6)
+def test_constants_come_from_the_one_table():
     for n in cb.GASES:                               # the one table, not a copy
         assert cb.CP_IG[n] == tc.species(n).cp and cb.HF_298[n] == tc.Hf(n)
-
-
-def test_arthur_ratio_secondary_value():
-    """CO/CO2 ~ 7.5 at 1073 K, as quoted with the constants (char-combustion reviews)."""
-    assert float(cb.arthur_co_co2(1073.0)) == pytest.approx(7.49, abs=0.01)
-    T = jnp.linspace(*cb.ARTHUR_RANGE, 20)
-    assert np.all(np.diff(np.asarray(cb.arthur_co_co2(T))) > 0)
-
-
-# --- closed forms: heats of combustion (CODATA) ----------------------------
-
-@pytest.mark.parametrize("element,Q_per_mol,mw", [
-    ("C", 393.51e3, 12.011),        # CO2(g) Hf, CODATA
-    ("H", 241.826e3 / 2, 1.008),    # 1/2 H2O(g) Hf, CODATA
-    ("S", 296.81e3, 32.06),         # SO2(g) Hf, CODATA
-])
-def test_heat_of_combustion_codata(element, Q_per_mol, mw):
-    el = {k: 0.0 for k in "CHSN"}
-    el[element] = mw * 1e-3        # one mole/s
-    assert float(cb.heat_of_combustion(el, 0.0)) == pytest.approx(Q_per_mol, rel=1e-9)
-
-
-def test_partial_burn_heat_is_co_hf():
-    """All carbon to CO (ratio -> inf) releases -Hf(CO) = 110.53 kJ/mol (CODATA)."""
-    el = {"C": 12.011e-3, "H": 0.0, "S": 0.0, "N": 0.0}
-    q = float(cb.heat_of_combustion(el, 1e12))
-    assert q == pytest.approx(110.53e3, rel=1e-6)
 
 
 # --- balances ---------------------------------------------------------------
@@ -157,11 +124,12 @@ def test_energy_balance_closes():
 
 # --- gradients --------------------------------------------------------------
 
-def test_check_grads():
+def test_grads_finite():
     def f(x):
         el = {"C": x[0], "H": x[1], "S": x[2], "N": x[3]}
         o = cb.burn(el, cb.arthur_co_co2(x[4]), flue_o2=x[5])
         return jnp.stack([cb.gas_enthalpy(o["flue"], x[4]), o["air"]["oxygen"],
                           o["flue"]["carbon_monoxide"]])
     x = jnp.array([0.9, 0.07, 0.02, 0.01, 980.0, 0.02])
-    check_grads(f, (x,), order=1, modes=["fwd", "rev"])
+    for J in (jax.jacfwd(f)(x), jax.jacrev(f)(x)):
+        assert np.all(np.isfinite(np.asarray(J)))

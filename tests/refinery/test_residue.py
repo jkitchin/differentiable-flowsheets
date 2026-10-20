@@ -96,4 +96,4 @@ def test_grad_finite(rds, feed):
     def fo_S(T):
         return fuel_oil(rds.solve(feed, params=rds.params.update(T_in=(T,)))).properties["S_ppm"]
 
-    assert np.isfinite(float(jax.grad(fo_S)(rds.params.T_in[0])))
+    assert np.isfinite(float(jax.jit(jax.grad(fo_S))(rds.params.T_in[0])))

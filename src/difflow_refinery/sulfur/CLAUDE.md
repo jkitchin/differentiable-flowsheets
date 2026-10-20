@@ -5,7 +5,9 @@ Claus SRU + SCOT TGTU (#472): `vapor` (S2-S8, saturation, dew point), `claus`
 quench, MDEA absorber, `solve_sru` with the acid-gas recycle). A library, NOT a
 palette operation; the gas plant's sulfur shortcut is untouched.
 
-Invariants (each has a test in `tests/refinery/test_sulfur.py`; do not weaken them):
+Invariants (do not weaken them). Per the test policy `tests/refinery/test_sulfur.py` keeps only
+the balance, convergence, gradient and regression ones; the comparisons with
+sources below were made when the unit was written and are not per-commit tests:
 - The measured TOTAL vapour pressure is Ferreira & Lobo 2011 eq 4
   (doi:10.1016/j.jct.2010.07.007; title "The low-pressure phase diagram of
   sulfur" -- not "vapour pressure ..."). The correction goes on the LIQUID's

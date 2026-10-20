@@ -87,9 +87,10 @@ def test_holdup_split_inverts(bed):
 def test_trickle_bed_smoke_and_balance(bed):
     rx, y0, inp = bed["rx"], bed["y0"], {"feed": bed["inlet"]}
     f = jax.jit(lambda y: rx.derivatives(0.0, y, inp))
+    outlet = jax.jit(lambda y: rx.outputs(0.0, y, inp)["outlet"])
     dy = f(y0)
     assert dy.shape == y0.shape and bool(jnp.all(jnp.isfinite(dy)))
-    out = Flows.from_stream(rx.outputs(0.0, y0, inp)["outlet"], bed["lay"])
+    out = Flows.from_stream(outlet(y0), bed["lay"])
     # accumulation of every element = in - out, to round-off (the RK4 segments conserve elements)
     lay = bed["lay"]
     held = lambda y: jax.tree_util.tree_map(lambda a: jnp.sum(a, axis=(0, 1)), rx.unpack(y)[0]).elements(lay)
@@ -100,7 +101,7 @@ def test_trickle_bed_smoke_and_balance(bed):
     # and a perturbed state (a real transient): the identity still holds
     y1 = y0 * (1.0 + 0.05 * jnp.sin(jnp.arange(y0.size)))
     dy1 = f(y1)
-    out1 = Flows.from_stream(rx.outputs(0.0, y1, inp)["outlet"], lay)
+    out1 = Flows.from_stream(outlet(y1), lay)
     acc1 = jax.jvp(held, (y1,), (dy1,))[1]
     flux1 = bed["flows"].elements(lay) - out1.elements(lay)
     assert float(jnp.max(jnp.abs(flux1))) > 1e-6 * through
@@ -116,7 +117,7 @@ def test_trickle_bed_gradient_finite(bed):
         s["T"] = T_in
         return jnp.sum(rx.derivatives(0.0, y0, {"feed": s})[-1::rx.n_per_cell])
 
-    d = jax.grad(g)(jnp.asarray(bed["T_in"]))
+    d = jax.jit(jax.grad(g))(jnp.asarray(bed["T_in"]))
     assert np.isfinite(float(d))
     del lay
 
@@ -150,15 +151,17 @@ def reformer_bed():
 def test_reformer_cells_smoke_and_rest(reformer_bed):
     rx, inlet = reformer_bed
     y0 = rx.initial_state()
-    dy = jax.jit(lambda y: rx.derivatives(0.0, y, {"inlet": inlet}))(y0)
+    f = jax.jit(lambda y: rx.derivatives(0.0, y, {"inlet": inlet}))
+    run = jax.jit(lambda y: rx._run(inlet, y))
+    dy = f(y0)
     assert bool(jnp.all(jnp.isfinite(dy)))
     assert bool(jnp.all(dy[rx.n_cells:] >= 0.0))                 # coke only accumulates
     # at T = T* (each cell at its own segment's adiabatic outlet) the temperatures are at rest
-    _, Ts, _, _ = rx._run(inlet, y0)
+    _, Ts, _, _ = run(y0)
     for _ in range(6):                                             # Ts depends on the upstream cell's T
         y = jnp.concatenate([Ts / 100.0, y0[rx.n_cells:]])
-        _, Ts, _, _ = rx._run(inlet, y)
-    dT = rx.derivatives(0.0, y, {"inlet": inlet})[:rx.n_cells]
+        _, Ts, _, _ = run(y)
+    dT = f(y)[:rx.n_cells]
     assert float(jnp.max(jnp.abs(dT))) < 1e-8
 
 
@@ -170,7 +173,7 @@ def test_reformer_cells_gradient_finite(reformer_bed):
         s["T"] = T_in
         return jnp.sum(rx.derivatives(0.0, rx.initial_state(), {"inlet": s}))
 
-    assert np.isfinite(float(jax.grad(g)(jnp.asarray(773.15))))
+    assert np.isfinite(float(jax.jit(jax.grad(g))(jnp.asarray(773.15))))
 
 
 def test_quasi_steady_holdup_conserves_and_rests():
@@ -214,14 +217,14 @@ def test_equilibrium_bed_rests_at_the_adiabatic_shift_and_conserves():
     y = jnp.full(bed.n_cells, T_ad / 100.0)
     dy = jax.jit(lambda y: bed.derivatives(0.0, y, {"inlet": inlet}))(y)
     assert float(jnp.max(jnp.abs(dy))) < 1e-9                 # every cell at the adiabatic equilibrium
-    np.testing.assert_allclose(np.asarray(smr.to_vec(bed.outputs(0.0, y, {"inlet": inlet})["outlet"])),
-                               np.asarray(smr.to_vec(out)), rtol=1e-8, atol=1e-10)
+    outlet = jax.jit(lambda y: smr.to_vec(bed.outputs(0.0, y, {"inlet": inlet})["outlet"]))
+    np.testing.assert_allclose(np.asarray(outlet(y)), np.asarray(smr.to_vec(out)), rtol=1e-8, atol=1e-10)
     # away from rest the cells hold no gas: elements in = out at every state
     y1 = jnp.asarray([6.2, 6.4, 6.0])
-    o = smr.to_vec(bed.outputs(0.0, y1, {"inlet": inlet})["outlet"])
+    o = outlet(y1)
     E = jnp.asarray([[tc.elements(k).get(e, 0) for k in smr.SYNGAS] for e in "CHO"])
     np.testing.assert_allclose(np.asarray(E @ o), np.asarray(E @ n), rtol=1e-12)
-    g = jax.grad(lambda T: jnp.sum(bed.derivatives(0.0, y1, {"inlet": dict(inlet, T=T)})))(593.15)
+    g = jax.jit(jax.grad(lambda T: jnp.sum(bed.derivatives(0.0, y1, {"inlet": dict(inlet, T=T)}))))(593.15)
     assert np.isfinite(float(g))
 
 
@@ -239,10 +242,11 @@ def test_reformer_tube_cells_smoke_and_rest():
     assert bool(jnp.all(jnp.isfinite(dy)))
     # at T = T* the cells are at rest (iterate: each cell's T* depends on the cell upstream)
     y = y0
+    t_star = jax.jit(lambda y: tube.report(y, inp)["T_star"])
     for _ in range(4):
-        y = tube.report(y, inp)["T_star"] / 100.0
-    assert float(jnp.max(jnp.abs(tube.derivatives(0.0, y, inp)))) < 1e-9
-    g = jax.grad(lambda Q: jnp.sum(tube.derivatives(0.0, y0, {"inlet": inlet, "firing": {"Q": Q}})))(3.5e6)
+        y = t_star(y) / 100.0
+    assert float(jnp.max(jnp.abs(jax.jit(lambda y: tube.derivatives(0.0, y, inp))(y)))) < 1e-9
+    g = jax.jit(jax.grad(lambda Q: jnp.sum(tube.derivatives(0.0, y0, {"inlet": inlet, "firing": {"Q": Q}}))))(3.5e6)
     assert np.isfinite(float(g))
 
 
@@ -264,7 +268,7 @@ def test_amine_loop_species_balance_and_gradient():
     y0 = u.initial_state()
     dy = jax.jit(lambda y: u.derivatives(0.0, y, inp))(y0)
     assert bool(jnp.all(jnp.isfinite(dy)))
-    out = u.outputs(0.0, y0, inp)
+    out = jax.jit(lambda y: u.outputs(0.0, y, inp))(y0)
     acc = jax.jvp(lambda yy: jnp.stack([u.inventory(yy)[k] for k in ("hydrogen_sulfide", "carbon_dioxide",
                                                                        "water")]), (y0,), (dy,))[1]
     for i, k in enumerate(("hydrogen_sulfide", "carbon_dioxide", "water")):
@@ -272,7 +276,7 @@ def test_amine_loop_species_balance_and_gradient():
         io = gas.get(fk, 0.0) + out["makeup"].get(fk, 0.0) - sum(out[s].get(fk, 0.0) for s in
                                                                   ("fuel_sweet", "flash_gas", "acid_gas"))
         assert float(acc[i]) == pytest.approx(float(io), abs=1e-9 * 400.0)
-    g = jax.grad(lambda c: u.derivatives(0.0, y0, {"fuel": gas, "signals": dict(sig_, circulation=c)})[1])(1.0)
+    g = jax.jit(jax.grad(lambda c: u.derivatives(0.0, y0, {"fuel": gas, "signals": dict(sig_, circulation=c)})[1]))(1.0)
     assert np.isfinite(float(g))
 
 
@@ -330,9 +334,10 @@ def quench_beds(bed):
 def test_quench_controller_smoke_balance_and_windup(quench_beds, bed):
     rx, y0, inp = quench_beds
     lay = bed["lay"]
-    dy = jax.jit(lambda y, i: rx.derivatives(0.0, y, i))(y0, inp)
+    f = jax.jit(lambda y, i: rx.derivatives(0.0, y, i))       # one compile: every call below has inp's structure
+    dy = f(y0, inp)
     assert dy.shape == y0.shape and bool(jnp.all(jnp.isfinite(dy)))
-    out = rx.outputs(0.0, y0, inp)
+    out = jax.jit(lambda y: rx.outputs(0.0, y, inp))(y0)
     draw = Flows.from_stream(out["quench_draw"], lay)
     header = Flows.from_stream(inp["quench"], lay)
     np.testing.assert_allclose(np.asarray(draw.gas), 0.1 * np.asarray(header.gas), rtol=1e-12)
@@ -347,14 +352,14 @@ def test_quench_controller_smoke_balance_and_windup(quench_beds, bed):
     hot = dict(inp, signals={"T_set": jnp.asarray(bed["T_in"] + 200.0)})       # inlet far below setpoint
     y_past = y0.at[-1].set(-2.0)                                               # integrator below shut
     assert float(rx.valves(y_past)[0]) < 1e-12
-    assert float(rx.derivatives(0.0, y0, hot)[-1]) < 0.0                      # an open valve closes
-    assert float(rx.derivatives(0.0, y_past, inp)[-1]) > 0.0                  # at the setpoint: back to the stop
+    assert float(f(y0, hot)[-1]) < 0.0                                        # an open valve closes
+    assert float(f(y_past, inp)[-1]) > 0.0                                    # at the setpoint: back to the stop
     np.testing.assert_allclose(float(rx.valves(y0)[0]), 0.1, rtol=1e-12)        # inside its range: the state
 
 
 def test_quench_controller_gradient_finite(quench_beds):
     rx, y0, inp = quench_beds
-    g = jax.grad(lambda Ts: rx.derivatives(0.0, y0, dict(inp, signals={"T_set": Ts}))[-1])(
+    g = jax.jit(jax.grad(lambda Ts: rx.derivatives(0.0, y0, dict(inp, signals={"T_set": Ts}))[-1]))(
         jnp.asarray(inp["signals"]["T_set"]))
     assert np.isfinite(float(g)) and float(g) < 0.0
 
@@ -382,9 +387,10 @@ def test_reformer_loop_balance_and_spec():
     y0 = loop.initial_state()
     sig_ = {"compressor": jnp.asarray(1.0), "feed_rate": jnp.asarray(1.0)}
     inp = {"effluent": eff, "signals": sig_}
-    dy = loop.derivatives(0.0, y0, inp)
+    dy = jax.jit(lambda y: loop.derivatives(0.0, y, inp))(y0)
     assert bool(jnp.all(jnp.isfinite(dy)))
-    out = loop.outputs(0.0, y0, inp)
+    outputs = jax.jit(lambda i: loop.outputs(0.0, y0, i))      # one compile for the running and tripped loop
+    out = outputs(inp)
     rec = flows_of(out["recycle"])
     assert float(rec[sp.INDEX["H2"]]) == pytest.approx(4.0 * float(feed.hydrocarbon_moles), rel=1e-10)
     E = jnp.asarray(sp.ELEMENTS)
@@ -392,5 +398,5 @@ def test_reformer_loop_balance_and_spec():
     acc = jax.jvp(held, (y0,), (dy,))[1]
     flux = E @ (F - rec - flows_of(out["net_gas"]) - flows_of(out["liquid"]))
     np.testing.assert_allclose(np.asarray(acc), np.asarray(flux), rtol=1e-10, atol=1e-9)
-    tripped = loop.outputs(0.0, y0, dict(inp, signals=dict(sig_, compressor=jnp.asarray(0.0))))
+    tripped = outputs(dict(inp, signals=dict(sig_, compressor=jnp.asarray(0.0))))
     assert float(jnp.sum(flows_of(tripped["recycle"]))) == 0.0

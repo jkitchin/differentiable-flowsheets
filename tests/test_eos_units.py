@@ -24,6 +24,6 @@ def test_jt_valve_runs_and_is_differentiable():
         out, _ = JTValve(JTValveParams(P_out=P), thermo)(feed)
         return out["T"], out
 
-    (T, out), g = jax.value_and_grad(T_out, has_aux=True)(jnp.array(20e5))
+    (T, out), g = jax.jit(jax.value_and_grad(T_out, has_aux=True))(jnp.array(20e5))
     assert bool(jnp.isfinite(T)) and bool(jnp.isfinite(g))
     assert float(get_flows(out)["methane"]) == pytest.approx(1.0)

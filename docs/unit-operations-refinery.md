@@ -2117,7 +2117,8 @@ At the defaults (four reactors, 3.5 bar separator, H2/HC 2.5, WAIT 500 C,
 | burn capacity used | 0.97 | design 52 lb coke/h per 1000 lb/h [AFPM13] |
 | reactor pressure | 5.5 bar | 0.3-0.8 MPa [US7285205] |
 
-Validation (`tests/refinery/test_ccr.py`):
+Validation (checked when the CCR was written; `tests/refinery/test_ccr.py` keeps the
+balances, convergence and finite gradients per commit):
 
 - `mean_activity` against quadrature, including the series branch near zero
   coke pick-up; `check_grads` to second order.
@@ -3475,7 +3476,8 @@ Any other species raises.
 
 Not modelled: heat effects, roll-up, axial dispersion, pressure drop.
 
-**What is tested** (`tests/refinery/test_psa.py`, a few seconds):
+**What was checked** when the model was written (`tests/refinery/test_psa.py` keeps the
+balances, validation and finite gradients per commit):
 
 - Isotherm values on Table 2 read as mol/g.
 - The affinity orders Zhang et al. state for each adsorbent, and their
@@ -4284,7 +4286,8 @@ cb.heat_of_combustion(el, 0.0)                                # W released, LHV 
 Coke's enthalpy of formation is taken as zero (it is treated as the
 elements). Its heat of combustion therefore follows from its composition.
 
-**Validation** (`tests/refinery/test_combustion.py`):
+**Validation** (checked when the module was written; `tests/refinery/test_combustion.py`
+keeps the balances, the bit-identical FCC pins and finite gradients per commit):
 
 - `heat_of_combustion` returns the CODATA values: 393.51 kJ/mol for C to
   CO2, 110.53 kJ/mol for C to CO, 120.913 kJ/mol for H to H2O(g), and 296.81
@@ -4348,9 +4351,10 @@ jax.jacfwd(lambda x: tr.solve_amine_unit(p, {"fuel": sour_gas}, circulation=(x[0
 | Regenerator | equilibrium stages, condenser with water reflux, MESH equations solved by Newton | Kohl & Nielsen (1997) |
 | Heats of absorption, amine Cp, density | constants | **ILLUSTRATIVE** |
 
-**Validation** (`tests/refinery/test_treating.py`; the closed loop's gradient
-against finite differences is in `tests/reference/gradient_checks.py`, run by
-hand):
+**Validation** (checked when the unit was written; `tests/refinery/test_treating.py`
+keeps the balances, convergence and finite gradients per commit; the closed
+loop's gradient against finite differences is in
+`tests/reference/gradient_checks.py`, run by hand):
 
 - The property correlations match their source tables:
   - k2 matches Versteeg's Table 3 to within 7%.
@@ -4450,7 +4454,8 @@ jax.grad(lambda h: su.solve_sru(dict(acid_gas, F_hydrogen_sulfide=h), claus, tgt
 | Regenerator | NOT solved: the solvent is returned to its lean loading; acid gas leaves the reflux drum saturated; the water the solvent loses (to the saturated off-gas and the recycle) is reported as `makeup_water` | — |
 | Recycle | substitution, then one implicit Newton step | — |
 
-**Validation** (`tests/refinery/test_sulfur.py`; the Gamson-Elkins curve and
+**Validation** (checked when the unit was written; `tests/refinery/test_sulfur.py`
+keeps the balances, convergence and finite gradients per commit; the Gamson-Elkins curve and
 recovery against the number of beds are in `tests/reference/refinery_checks.py`,
 the finite-difference gradients in `tests/reference/gradient_checks.py`, both
 run by hand):
