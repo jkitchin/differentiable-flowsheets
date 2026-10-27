@@ -56,6 +56,8 @@ tests/                 pytest; plugin tests in tests/<plugin>/
 examples/              Jupyter notebooks
 docs/                  Jupyter Book source (Markdown)
 _ext/                  Sphinx extension for the book's "Ask" assistant
+skills/ commands/      agent skills + slash commands, hooks/ and mcp/ configs in
+hooks/ mcp/            knowhow layout (`uvx knowhow validate .`); .claude/ is ignored
 ```
 
 ## Key concepts

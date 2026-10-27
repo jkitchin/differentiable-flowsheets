@@ -69,6 +69,33 @@ claude mcp add difflow -- difflow mcp
 
 Then ask in plain language, for example "build a flash drum for an equimolar water and ethanol feed at 362 K and tell me the vapor composition", or "this flowsheet does not converge; find out why". The server discovers operations and plugins from the installed code, so new units are available without changes to it. `difflow mcp --no-exec` leaves out the tools that run Python, for shared or desktop clients. Setup for Claude Desktop and other clients, the full tool list and troubleshooting are in the [agent documentation](https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/docs/agents.html).
 
+### Agent skills, commands and hooks
+
+The repository also ships [Agent Skills](https://agentskills.io) for any
+compatible agent (Claude Code, Codex, OpenCode, Gemini CLI, Cursor, Copilot),
+plus Claude Code slash commands, a session hook and the MCP server config,
+in the layout [knowhow](https://github.com/jkitchin/knowhow) and
+[`npx skills`](https://github.com/vercel-labs/skills) install from:
+
+| Item | Name | What it does |
+|---|---|---|
+| skill | `difflow` | Build, solve, differentiate and debug flowsheets with difflow |
+| skill | `difflow-add-unit` | Add a unit operation to the difflow codebase by its conventions |
+| skill | `difflow-gradient-check` | Check gradients against finite differences; chase NaNs |
+| command | `test`, `test-unit`, `lint`, `example`, `optimize` | Claude Code slash commands for working on difflow |
+| hook | `difflow-session-start` | Session-start status: environment, difflow import, JAX backend |
+| mcp | `difflow`, `difflow-no-exec` | The `difflow mcp` server, with or without the Python tools |
+
+```bash
+uvx knowhow add jkitchin/differentiable-flowsheets --list
+uvx knowhow add jkitchin/differentiable-flowsheets -s difflow -g    # for every project
+uvx knowhow add jkitchin/differentiable-flowsheets --mcp difflow -a claude-code
+# or: npx skills add jkitchin/differentiable-flowsheets --skill difflow
+```
+
+They live in `skills/`, `commands/`, `hooks/` and `mcp/`; check them with
+`uvx knowhow validate .`.
+
 ## Installation
 
 ```bash

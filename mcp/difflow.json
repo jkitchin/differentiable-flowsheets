@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "difflow": {
+      "description": "difflow flowsheet tools: find units, build, solve, diagnose, sensitivity, optimize, TEA (needs pip install \"difflow[mcp]\")",
+      "command": "difflow",
+      "args": ["mcp"]
+    },
+    "difflow-no-exec": {
+      "description": "difflow flowsheet tools without the tools that run Python (run_python, set_code_context, open_file)",
+      "command": "difflow",
+      "args": ["mcp", "--no-exec"]
+    }
+  }
+}

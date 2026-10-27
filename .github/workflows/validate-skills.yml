@@ -1,0 +1,13 @@
+name: Validate skills
+on:
+  push:
+    paths: ["skills/**", "commands/**", "hooks/**", "mcp/**", ".github/workflows/validate-skills.yml"]
+  pull_request:
+    paths: ["skills/**", "commands/**", "hooks/**", "mcp/**", ".github/workflows/validate-skills.yml"]
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uvx --from git+https://github.com/jkitchin/knowhow knowhow validate . --strict
