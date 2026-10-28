@@ -10,7 +10,7 @@ editor uses.
 
 ### Install
 
-The server needs the MCP SDK, which is an optional extra (difflow 0.3.0 or
+The server needs the MCP SDK, which is an optional extra (difflow 0.4.0 or
 later):
 
 ```bash
