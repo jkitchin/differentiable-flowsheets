@@ -1075,11 +1075,13 @@ correlations of `difflow.economics.capital` (Towler & Sinnott, Turton et al.,
 Seider et al.), escalated to 2020; a unit larger than its correlation's range
 is costed as parallel units. Fans are Seider's backward-curved fan with its
 head factor, material factors Towler & Sinnott's (`MATERIAL_FACTORS`), driver
-factors Seider's (`DRIVER_FACTORS`), and the polymeric membrane price the
-mature-plant $50/m² of Zhai & Rubin (2019) (`MEMBRANE_PRICES`; pass
-`price_per_m2=200` for a first-of-a-kind plant). Structured packing is
-Seider's installed, "very approximate" price. Entries with no cited source
-(`alloy_20`, `titanium`, non-polymeric membranes) are marked in the code.
+factors Seider's (`DRIVER_FACTORS`), and the polymeric membrane skid $50/m²
+(modules, housings, frame, valves and piping, before installation; Merkel et
+al. 2010, Zhai & Rubin 2019). Pass `price_per_m2=200` for Zhai & Rubin's
+first-of-a-kind plant, or a vendor price for another membrane type; today's
+commercial gas-separation skids are $500–750/m². Structured packing is
+Seider's installed, "very approximate" price. Materials and membrane types
+without a published factor or price are not offered and raise `ValueError`.
 
 ```python
 from difflow_cc import (

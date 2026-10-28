@@ -5,9 +5,8 @@ and compressors use the sourced purchased-cost correlations of
 :mod:`difflow.economics.capital` (Towler & Sinnott; Turton et al.; Seider
 et al.). A unit larger than its correlation's range is costed as equal units
 in parallel. Blowers are Seider et al.'s fans, material factors Towler &
-Sinnott's, driver factors Seider et al.'s, and the polymeric membrane price
-Zhai & Rubin's. Values with no cited source are marked as such where they
-are defined.
+Sinnott's, driver factors Seider et al.'s, and the polymeric membrane skid
+Merkel et al.'s. Options without a published value are not offered.
 
 All costs are in USD (2020 basis). Use CEPCI indices for
 year-to-year adjustments.
@@ -23,9 +22,12 @@ References:
         Elsevier (material cost factors).
     Seider WD et al. (2016). Product and Process Design Principles, 4th ed.
         Wiley, Sec. 16.5 (fans, compressor drivers, packing).
+    Merkel TC, Lin H, Wei X, Baker R (2010). Power plant post-combustion
+        carbon dioxide capture: an opportunity for membranes. J Membr Sci
+        359:126-139, Table 2.
     Zhai H, Rubin ES (2019). Advanced membranes and learning scale required
-        for cost-effective post-combustion carbon capture. iScience.
-        doi:10.1016/j.isci.2019.03.006.
+        for cost-effective post-combustion carbon capture. iScience
+        13:440-451, Table 1.
 """
 
 __all__ = [
@@ -80,8 +82,7 @@ _VERTICAL_VESSEL = CostParams(
 _STEEL_DENSITY = 7850.0  # kg/m³, carbon steel
 
 # Materials cost factors relative to carbon steel, Towler & Sinnott 3e (2022),
-# as transcribed by openpytea 3.2.1. alloy_20 and titanium are not in that
-# table; their factors have no cited source.
+# as transcribed by openpytea 3.2.1.
 MATERIAL_FACTORS = {
     "carbon_steel": 1.0,
     "aluminum": 1.07,
@@ -92,8 +93,6 @@ MATERIAL_FACTORS = {
     "monel": 1.65,
     "nickel": 1.7,
     "inconel": 1.7,
-    "alloy_20": 3.5,   # no cited source
-    "titanium": 4.5,   # no cited source
 }
 
 # Compressor driver factors relative to an electric motor: Seider et al. 4e
@@ -139,16 +138,14 @@ _FAN_HEAD_RANGE = CostParams(
     base_year=2013, source="Seider et al. 4e Sec. 16.5: fan head factors",
 )
 
-# Installed membrane price ($/m²). Polymeric: Zhai & Rubin (2019) -- installed
-# module prices of $27-80/m² are widely assumed for a mature (nth-of-a-kind)
-# plant, with $50/m² the usual value; they take $200/m² for a first-of-a-kind
-# plant, and commercial gas-separation membranes cost up to several hundred
-# $/m². The other types have no cited source.
+# Membrane skid cost ($/m²), purchased: modules, housings, frame, valves and
+# piping, before installation. Polymeric: Merkel et al. (2010) Table 2, $50/m²
+# for a flue-gas system built with low-pressure components like large RO
+# plants (they apply a 1.6 installation factor on top); Zhai & Rubin (2019)
+# Table 1 take $50/m² for a mature plant and $200/m² for a first-of-a-kind
+# one. Today's commercial gas-separation skids are $500-750/m² (Merkel).
 MEMBRANE_PRICES = {
     "polymeric": 50.0,
-    "ceramic": 650.0,       # no cited source
-    "facilitated": 260.0,   # no cited source
-    "mixed_matrix": 130.0,  # no cited source
 }
 
 
@@ -449,16 +446,17 @@ def membrane_module_cost(
 ) -> Array:
     """Membrane module capital cost.
 
-    Installed price per m² times area. The polymeric default, $50/m², is the
-    mature-technology value widely assumed in the literature (Zhai & Rubin
-    2019); a first-of-a-kind plant is nearer $200/m², which ``price_per_m2``
-    sets. The other types' prices have no cited source.
+    Skid cost per m² (modules, housings, frame, valves, piping; purchased,
+    before installation) times area. The polymeric default, $50/m², is
+    Merkel et al.'s (2010) flue-gas skid and Zhai & Rubin's (2019) mature
+    plant; ``price_per_m2=200`` is Zhai & Rubin's first-of-a-kind plant, and
+    commercial gas-separation skids today are $500-750/m². Other membrane
+    types have no published skid cost here; pass ``price_per_m2``.
 
     Args:
         area: Membrane area (m²)
-        membrane_type: Key of :data:`MEMBRANE_PRICES` ('polymeric',
-            'ceramic', 'facilitated', 'mixed_matrix')
-        price_per_m2: Installed price ($/m²); overrides ``membrane_type``
+        membrane_type: Key of :data:`MEMBRANE_PRICES` ('polymeric')
+        price_per_m2: Skid cost ($/m²); overrides ``membrane_type
 
     Returns:
         Equipment cost (USD)

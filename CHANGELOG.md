@@ -1078,12 +1078,13 @@ All notable changes to difflow are recorded here. The format follows
   with motor on the inlet flow, with Seider's head factor for `pressure_rise` (interpolated across the gaps
   between bins) and `CostRangeWarning` above 40 in H2O. Material factors are Towler & Sinnott 3e
   (`MATERIAL_FACTORS`; stainless 1.3, was 1.7-2.1), driver factors Seider's (`DRIVER_FACTORS`; 1.15 steam,
-  1.25 gas turbine, were 1.4 and 1.6). `membrane_module_cost` is an installed price per m²
-  (`MEMBRANE_PRICES`; polymeric $50/m², the mature-plant value of Zhai & Rubin 2019) with a new
-  `price_per_m2` override; the old extra 30% housing factor is folded into the other types' prices.
-  Unknown `material`, `packing`, `driver` or `membrane_type` raise `ValueError`. Still without a source and
-  marked so: `alloy_20` and `titanium`, the ceramic, facilitated and mixed-matrix membrane prices, and the
-  adsorber's 15% internals.
+  1.25 gas turbine, were 1.4 and 1.6). `membrane_module_cost` is a purchased skid cost per m² (modules,
+  housings, frame, valves, piping): polymeric $50/m², Merkel et al. 2010 Table 2 and Zhai & Rubin 2019
+  Table 1 (was $50 x 1.3), with a new `price_per_m2` override ($200/m² for Zhai & Rubin's first-of-a-kind
+  plant). **Breaking:** the unsourced options are gone and raise `ValueError` -- materials `alloy_20` and
+  `titanium`, membrane types `ceramic`, `facilitated` and `mixed_matrix` (pass `price_per_m2` instead) --
+  as do unknown `material`, `packing`, `driver` or `membrane_type` values, which used to cost a silent
+  default. The adsorber's 15% internals allowance is still unsourced.
 - **Drying-rate tables in R/R_c units were silently misread (#451).** `drying_rate_curve`, `drying_periods` and
   `drying_time` take `rate_basis="absolute"|"relative"` and raise `RateTableWarning` when a table's scale
   contradicts its basis. A relative (R/R_c) table passed to them gave a falling time about 1/R_c times too short
