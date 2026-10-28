@@ -4,11 +4,15 @@ Residual analysis, R-squared, RMSE, AIC, BIC.
 """
 
 from dataclasses import dataclass, field
+from typing import Any
+
+import numpy as np
 
 import jax.numpy as jnp
 from jax import Array
 
 from difflow.params_mixin import ParamsMixin
+from difflow.estimation._batch import Batch
 
 
 @dataclass
@@ -16,17 +20,19 @@ class DiagnosticsResult(ParamsMixin):
     """Result of diagnostic analysis.
 
     Attributes:
-        residuals: list of dicts [{output_name: residual}, ...] per experiment
+        residuals: list of dicts [{output_name: residual}, ...] per experiment;
+            a residual is a float, or an array for an array-valued output
         r_squared: Coefficient of determination
         r_squared_adj: Adjusted R-squared
         rmse: Root mean squared error
         aic: Akaike Information Criterion
         bic: Bayesian Information Criterion
-        n_obs: Number of observations
+        n_obs: Number of scalar observations (every entry of an
+            array-valued output counts)
         n_params: Number of parameters
     """
 
-    residuals: list[dict[str, float]]
+    residuals: list[dict[str, Any]]
     r_squared: float
     r_squared_adj: float
     rmse: float
@@ -36,7 +42,8 @@ class DiagnosticsResult(ParamsMixin):
     n_params: int
 
 
-def compute_diagnostics(model_fn, theta_dict, experiments, n_params):
+def compute_diagnostics(model_fn, theta_dict, experiments, n_params, *,
+                        vectorize=True):
     """Compute diagnostic statistics for a fitted model.
 
     Args:
@@ -44,6 +51,8 @@ def compute_diagnostics(model_fn, theta_dict, experiments, n_params):
         theta_dict: dict of optimal parameter values
         experiments: list of Experiment objects
         n_params: number of estimated parameters
+        vectorize: evaluate the model over the experiments in one
+            ``jax.vmap`` when they can be stacked (see :class:`Estimator`).
 
     Returns:
         DiagnosticsResult
@@ -52,14 +61,17 @@ def compute_diagnostics(model_fn, theta_dict, experiments, n_params):
     obs_values = []
     resid_values = []
 
-    for exp in experiments:
-        preds = model_fn(theta_dict, exp)
+    names = list(theta_dict)
+    theta = jnp.array([theta_dict[n] for n in names], dtype=float)
+    preds_all = Batch(model_fn, experiments, names, vectorize).predictions(theta)
+    for exp, preds in zip(experiments, preds_all):
         exp_resid = {}
         for key in exp.output_names:
-            r = float(preds[key]) - float(exp.observed[key])
-            exp_resid[key] = r
-            resid_values.append(r)
-            obs_values.append(float(exp.observed[key]))
+            obs = np.asarray(exp.observed[key], dtype=float)
+            r = np.asarray(preds[key], dtype=float) - obs
+            exp_resid[key] = float(r) if r.ndim == 0 else r
+            resid_values.extend(np.ravel(r).tolist())
+            obs_values.extend(np.broadcast_to(obs, r.shape).ravel().tolist())
         all_residuals.append(exp_resid)
 
     resid_arr = jnp.array(resid_values)

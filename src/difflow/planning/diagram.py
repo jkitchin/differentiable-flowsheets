@@ -662,7 +662,7 @@ def draw_trust_region(result, *, decisions=(0, 1), grid: int = 31,
     from matplotlib.lines import Line2D
     from matplotlib.patches import Rectangle
 
-    planner, net = result.planner, result.network
+    net = result.network
     names = net.decision_names
     idx = [names.index(d) if isinstance(d, str) else int(d)
            for d in decisions]
@@ -677,7 +677,7 @@ def draw_trust_region(result, *, decisions=(0, 1), grid: int = 31,
         for b, yv in enumerate(gy):
             u = base.copy()
             u[idx[0]], u[idx[1]] = xv, yv
-            z[b, a] = planner.score(u)["merit"]
+            z[b, a] = result.score(u)["merit"]
 
     if ax is None:
         _, ax = plt.subplots(figsize=(6.6, 4.6))

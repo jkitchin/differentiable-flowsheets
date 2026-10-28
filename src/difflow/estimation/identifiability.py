@@ -56,6 +56,7 @@ import jax.numpy as jnp
 from jax import Array
 
 from difflow.params_mixin import ParamsMixin
+from difflow.estimation._batch import NotStackable, batched_model, stack_inputs
 
 # Reused rather than reimplemented: the SVD-based numerical rank used for
 # observability analysis in data reconciliation is exactly the test needed
@@ -230,6 +231,71 @@ def _row_sigma(model_fn, theta_arr, exp, names, out_names) -> Array:
     )
 
 
+def _sensitivity_blocks(model_fn, theta_arr, experiments, names, weighted):
+    """One ``(rows_i, n_params)`` Jacobian block per experiment.
+
+    Tries a single compiled ``vmap`` of the Jacobian over the stacked
+    experiments (one trace of the model, however many there are) and falls
+    back to one ``jax.jacobian`` per experiment when they cannot be
+    stacked or the model does not vectorize.
+    """
+    for exp in experiments:
+        if not exp.measured_names:
+            raise ValueError(
+                f"experiment {exp.name or '(unnamed)'} measures nothing; give "
+                "it observed values or build it with Experiment.candidate"
+            )
+    try:
+        return _batched_blocks(model_fn, theta_arr, experiments, names, weighted)
+    except Exception:  # noqa: BLE001, S110 - the loop below reports real errors
+        pass
+
+    blocks = []
+    for exp in experiments:
+        out_names = exp.measured_names
+        jac = jax.jacobian(
+            lambda t, e=exp, o=tuple(out_names): _predictions(
+                model_fn, t, e, names, o
+            )
+        )(theta_arr)
+        jac = jnp.atleast_2d(jac)
+        if weighted:
+            # One sigma per named output, broadcast across the entries of a
+            # vector-valued output.
+            sigma = _row_sigma(model_fn, theta_arr, exp, names, tuple(out_names))
+            if sigma.shape[0] != jac.shape[0]:  # pragma: no cover - defensive
+                raise ValueError(
+                    f"experiment {exp.name or '(unnamed)'}: model_fn returned "
+                    f"{jac.shape[0]} scalar prediction(s) but "
+                    f"{sigma.shape[0]} uncertainty slot(s)"
+                )
+            jac = jac / sigma[:, None]
+        blocks.append(jac)
+    return blocks
+
+
+def _batched_blocks(model_fn, theta_arr, experiments, names, weighted):
+    """The vectorized path of :func:`_sensitivity_blocks` (raises if it cannot)."""
+    out_names = tuple(experiments[0].measured_names)
+    if any(tuple(e.measured_names) != out_names for e in experiments[1:]):
+        raise NotStackable("experiments measure different outputs")
+    stacked, static = stack_inputs(experiments)
+    one = batched_model(model_fn, names, experiments, static)
+
+    def rows(t, inp):
+        preds = one(t, inp)
+        return tuple(jnp.ravel(jnp.asarray(preds[k], dtype=float))
+                     for k in out_names)
+
+    jac = jax.jit(jax.vmap(jax.jacobian(rows), in_axes=(None, 0)))(
+        theta_arr, stacked)                      # per output: (N, size_k, p)
+    if weighted:
+        sigma = jnp.stack([e.sigma_array for e in experiments])   # (N, n_out)
+        jac = tuple(j / sigma[:, i, None, None] for i, j in enumerate(jac))
+    full = jnp.concatenate(jac, axis=1)          # (N, rows, p)
+    return [full[i] for i in range(full.shape[0])]
+
+
 def sensitivity_matrix(
     model_fn: Callable,
     theta: dict[str, float] | Sequence[float] | Array,
@@ -243,8 +309,10 @@ def sensitivity_matrix(
 
     Row ``k`` is one scalar measurement (an experiment/output pair, in the
     order the experiments and their ``measured_names`` are given); column
-    ``j`` is a parameter. One ``jax.jacobian`` call per experiment -- exact,
-    no finite differences.
+    ``j`` is a parameter. Exact, by ``jax.jacobian``, no finite differences;
+    when the experiments can be stacked (same input keys and measured
+    outputs, numeric inputs) it is one compiled ``vmap`` over all of them,
+    otherwise one call per experiment.
 
     Args:
         model_fn: ``model_fn(theta_dict, experiment) -> dict[str, value]``.
@@ -277,33 +345,7 @@ def sensitivity_matrix(
     if len(experiments) == 0:
         return jnp.zeros((0, len(names)))
 
-    blocks = []
-    for exp in experiments:
-        out_names = exp.measured_names
-        if not out_names:
-            raise ValueError(
-                f"experiment {exp.name or '(unnamed)'} measures nothing; give "
-                "it observed values or build it with Experiment.candidate"
-            )
-        jac = jax.jacobian(
-            lambda t, e=exp, o=tuple(out_names): _predictions(
-                model_fn, t, e, names, o
-            )
-        )(theta_arr)
-        jac = jnp.atleast_2d(jac)
-        if weighted:
-            # One sigma per named output, broadcast across the entries of a
-            # vector-valued output.
-            sigma = _row_sigma(model_fn, theta_arr, exp, names, tuple(out_names))
-            if sigma.shape[0] != jac.shape[0]:  # pragma: no cover - defensive
-                raise ValueError(
-                    f"experiment {exp.name or '(unnamed)'}: model_fn returned "
-                    f"{jac.shape[0]} scalar prediction(s) but "
-                    f"{sigma.shape[0]} uncertainty slot(s)"
-                )
-            jac = jac / sigma[:, None]
-        blocks.append(jac)
-
+    blocks = _sensitivity_blocks(model_fn, theta_arr, experiments, names, weighted)
     s = jnp.concatenate(blocks, axis=0)
 
     if scale is None:

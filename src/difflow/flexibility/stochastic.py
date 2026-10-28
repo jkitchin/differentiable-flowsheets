@@ -180,7 +180,10 @@ def sample_set(uncertainty_set, n_samples: int, key=0, *,
         distribution: ``"uniform"`` over the box, or ``"normal"``, a two-piece
             normal whose one-sigma half-widths are the box deviations, so an
             asymmetric envelope stays asymmetric and roughly 68% of draws land
-            inside the ``scale = 1`` box.
+            inside the ``scale = 1`` box.  The half-width *is* one standard
+            deviation: a box written as +/-2 sigma (as a flexibility study
+            usually writes it) samples at 2 sigma; pass ``scale=0.5`` to
+            sample the distribution it was built from.
         scale: Set scaling.
 
     Returns:
@@ -226,6 +229,8 @@ def expected_feasibility(model_fn: ModelFn, d, uncertainty_set, controls=None,
         n_samples: Number of realizations.
         key: A ``jax.random`` key or an integer seed.
         distribution: ``"uniform"`` or ``"normal"``; see :func:`sample_set`.
+            Under ``"normal"`` each box half-width is one standard deviation,
+            so a +/-2 sigma box samples at twice the real spread.
         scale: Set scaling to sample at.
         options: Search settings.
         constraint_names: Names for the rows of ``f``.

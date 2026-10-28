@@ -130,12 +130,14 @@ def _spec_value(spec, values):
 
 
 def _spec_violation(spec, values):
+    # Against the backed-off limit, as the planner scores it (issue 513).
     v = _spec_value(spec, values)
+    rhs = spec.effective_rhs
     if spec.op == "<=":
-        return _relu(v - spec.rhs)
+        return _relu(v - rhs)
     if spec.op == ">=":
-        return _relu(spec.rhs - v)
-    return jnp.abs(v - spec.rhs)
+        return _relu(rhs - v)
+    return jnp.abs(v - rhs)
 
 
 def _flatten_theta(theta: Mapping[str, Mapping[str, Any]]
@@ -191,7 +193,9 @@ def plan_sensitivity(result, wrt: str = "prices",
         >>> s.objective_sensitivity()["power.Power"]   # = the power sold
         1832.4...
     """
-    planner = result.planner
+    # The problem as it was solved, not the planner as it is now: a planner
+    # is shared, and its specs may have been changed since (issue 514).
+    planner = getattr(result, "solved_with", None) or result.planner
     network = result.network
     sign = planner._merit_sign
     u_star = jnp.asarray(result.decisions, dtype=float)

@@ -2360,6 +2360,43 @@ class Flowsheet:
         new_fs.view = copy.deepcopy(self.view)
         return new_fs
 
+    def _param_value(self, key: str) -> Any:
+        """Present value of a ``"<unit_name>.<param_name>"`` key.
+
+        The read counterpart of :meth:`_apply_params`, with the same lookup:
+        a key of the unit's :attr:`Unit.params` call keywords first (they
+        override the operation's parameters at call time), then a field of
+        the operation's ``.params``.
+
+        Raises:
+            KeyError: If the unit does not exist, or the name is neither a
+                call keyword nor an operation parameter.
+            ValueError: If the key does not contain a dot.
+        """
+        unit_name, sep, field_name = key.partition(".")
+        if not sep:
+            raise ValueError(
+                f"Parameter key {key!r} must use dot notation "
+                f"'<unit_name>.<param_name>'"
+            )
+        for unit in self.units:
+            if unit.name != unit_name:
+                continue
+            if field_name in unit.params:
+                return unit.params[field_name]
+            op_params = getattr(unit.operation, "params", None)
+            if op_params is not None and hasattr(op_params, field_name):
+                return getattr(op_params, field_name)
+            raise KeyError(
+                f"Unit {unit_name!r} has no parameter {field_name!r}: it is "
+                f"neither a key of its Unit.params {sorted(unit.params)} nor "
+                f"a field of its operation's params"
+            )
+        raise KeyError(
+            f"No unit named {unit_name!r} in flowsheet. "
+            f"Available units: {[u.name for u in self.units]}"
+        )
+
     def make_objective_fn(
         self,
         objective_fn: Callable[[dict[str, Stream]], Array],

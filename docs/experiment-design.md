@@ -7,6 +7,8 @@ This page covers the two questions that come *before* that:
    available? (`check_identifiability`)
 2. **Which experiments should be run next**, and what confidence intervals
    would they buy? (`design_experiments`, `predicted_covariance`)
+3. **Which experiments tell rival models apart**, when more than one mechanism
+   is still in contention? (`design_discrimination`)
 
 Both rest on the sensitivity matrix
 
@@ -29,11 +31,13 @@ the wider method.
 4. [Fisher information](#fisher-information)
 5. [Design criteria](#design-criteria)
 6. [Choosing a run list](#choosing-a-run-list)
-7. [Predicted confidence intervals](#predicted-confidence-intervals)
-8. [Numerical notes](#numerical-notes)
-9. [Worked example](#worked-example)
-10. [Related tools: `discopt-doe`, and sensor placement](#related-tools-discopt-doe-and-sensor-placement)
-11. [Limitations](#limitations)
+7. [c-optimal design: one quantity that matters](#c-optimal-design-one-quantity-that-matters)
+8. [Model discrimination](#model-discrimination)
+9. [Predicted confidence intervals](#predicted-confidence-intervals)
+10. [Numerical notes](#numerical-notes)
+11. [Worked example](#worked-example)
+12. [Related tools: `discopt-doe`, and sensor placement](#related-tools-discopt-doe-and-sensor-placement)
+13. [Limitations](#limitations)
 
 > **difflow is not the only place design of experiments lives, and for many
 > problems it is not the right one.** The `discopt-doe` plugin is a far larger
@@ -205,9 +209,12 @@ ellipsoid. Each criterion is a different scalar summary of that ellipsoid:
 | `'A'` | $\mathrm{tr}(\mathrm{FIM}^{-1})$ | minimize | shrink the average axis (sum of variances) |
 | `'E'` | $\lambda_{\min}(\mathrm{FIM})$ | maximize | shrink the longest axis (worst direction) |
 | `'ME'` | $\lambda_{\max}/\lambda_{\min}$ | minimize | round the ellipsoid out (conditioning) |
+| `'C'` | $c^T\mathrm{FIM}^{-1}c$ | minimize | shrink it along one direction $c$ (the variance of one derived quantity) |
 
-`design_criterion(fim, criterion)` returns the conventional value, so `'D'` and
-`'E'` are better when larger and `'A'` and `'ME'` better when smaller.
+`design_criterion(fim, criterion, c=None)` returns the conventional value, so
+`'D'` and `'E'` are better when larger and `'A'`, `'ME'` and `'C'` better when
+smaller. `'C'` takes the direction `c` (see
+[c-optimal design](#c-optimal-design-one-quantity-that-matters)).
 
 **D-optimality is the default**, because it is the only one of the four that is
 invariant to rescaling the parameters. A- and E-optimality compare variances of
@@ -244,6 +251,66 @@ diminishing returns is visible), the `identifiability` report, and `summary()`.
 The design is **local**: it is computed at the current `theta`, and a different
 `theta` can give a different design. That is not a defect of the method, it is
 why the loop is *design → run → refit → design again*.
+
+## c-optimal design: one quantity that matters
+
+Often the parameters are not the point: a campaign exists to size one reactor,
+or to predict the conversion at the production temperature. The variance of a
+derived quantity $g(\theta)$ is, to first order,
+$\sigma_g^2 = c^T\,\mathrm{FIM}^{-1}c$ with $c = \partial g/\partial\theta$, and
+a **c-optimal** design chooses the runs that minimize it:
+
+```python
+def volume(theta):            # any JAX-differentiable function of theta
+    ...                       # e.g. an implicit solve for the CSTR volume
+
+design = design_experiments(model_fn, theta, candidates, n=7, criterion='C',
+                            quantity=volume, existing=runs_so_far)
+design.c                      # dg/dtheta at theta, by jax.grad
+design.criterion_value ** 0.5 # the predicted standard deviation of g
+```
+
+`quantity` is a function `g(theta_dict) -> scalar`, differentiated by
+`jax.grad` at `theta`, or the gradient `c` itself (one entry per parameter).
+The design puts its runs where they inform that one combination of parameters
+and nothing else, so it is the best plan for that decision and a poorer one for
+any other: if the decision might change, D-optimality is the safer choice.
+
+The value is reported as `+inf` while the information matrix is singular, as
+for the other criteria, and selection ranks on `(rank, c^T FIM^+ c)` until it is
+not. A combination $c^T\theta$ can be estimable from a singular FIM (one run
+fixes $k$ at its own temperature), so for a c-optimal campaign from scratch pass
+the runs in hand as `existing=` or a weak `prior_fim`.
+
+## Model discrimination
+
+A D-optimal design for $p$ parameters typically uses $p$ distinct conditions,
+and a $p$-parameter model can fit $p$ conditions whatever its form: such a
+design cannot test the model. When two or more mechanisms are in contention,
+fit each to the data in hand and run where their predictions disagree most:
+
+```python
+res = design_discrimination(
+    {'first order': model_1, 'second order': model_2},
+    {'first order': theta_1_hat, 'second order': theta_2_hat},
+    candidates, n=2, criterion='HR')
+res.selected            # the runs
+res.scores              # the criterion of every candidate alone
+res.predictions         # each model's predictions over the pool
+```
+
+| criterion | value per run | notes |
+|---|---|---|
+| `'HR'`, Hunter–Reiner (default) | $\sum_{j<k}\sum_m (y_{j,m} - y_{k,m})^2/\sigma_m^2$ | additive over runs, so the best `n` runs are the best run replicated (`replace=False`: the `n` best) |
+| `'BF'`, Buzzi-Ferraris | $\sum_{j<k}\Delta^T(2\Sigma + S_jC_jS_j^T + S_kC_kS_k^T)^{-1}\Delta$ | also counts each model's prediction variance, from its parameter covariance $C_j$ (`covariances=`, or computed from `existing=` runs); chosen greedily on the set |
+
+The Hunter–Reiner value of one measurement is the expected increase in the
+wrong model's $\chi^2$ (its weighted sum of squares) per run, if the other model
+is right. Buzzi-Ferraris discounts a difference that the models' own parameter
+uncertainty could explain; with no parameter uncertainty it is half the
+Hunter–Reiner value. Models may have different parameters; each gets its own
+`theta` (a dict). After the runs, refit every model and compare them
+(`Estimator.diagnostics` gives AIC and BIC); repeat if it is still unclear.
 
 ## Predicted confidence intervals
 
@@ -367,12 +434,12 @@ data. `discopt-doe` builds the design layer on top of that matrix.
 |---|---|---|
 | what model can it take? | any JAX-differentiable `model_fn(theta, exp)` — including a difflow flowsheet with recycles | a `discopt.estimate.Experiment` whose `create_model` builds a symbolic `discopt.modeling` DAG (plus a sympy string-expression path and a numpy basis-row path for models linear in the parameters) |
 | FIM | `fisher_information` (diagonal Σ, `prior_fim`) | `compute_fim` → `FIMResult` (diagonal Σ, `prior_fim`, autodiff or finite-difference Jacobian) |
-| criteria | `'D'`, `'A'`, `'E'`, `'ME'` | `DesignCriterion.D_OPTIMAL / A_OPTIMAL / E_OPTIMAL / ME_OPTIMAL` |
+| criteria | `'D'`, `'A'`, `'E'`, `'ME'`, `'C'` (one derived quantity) | `DesignCriterion.D_OPTIMAL / A_OPTIMAL / E_OPTIMAL / ME_OPTIMAL` |
 | how a design is found | **pick `n` runs from a candidate list** — greedy, or Fedorov exchange | **optimize over a continuous design box** — random multi-start then `L-BFGS-B` (`SLSQP` with constraints): `optimal_experiment`, `batch_optimal_experiment` (greedy / joint / penalized, with a `min_distance` diversity penalty) |
 | identifiability | `check_identifiability` — SVD rank test, null-space directions, condition number | `check_identifiability` (rank/condition) **and** `diagnose_identifiability` — the full Belsley–Kuh–Welsch bundle: condition indices, VIF, variance-decomposition proportions, Gutenkunst sloppy-model spectrum |
 | estimability (which parameters to fit at all) | — | `estimability_rank` (Yao orthogonalization), `collinearity_index`, `d_optimal_subset` |
 | profile likelihood | — | `profile_likelihood`, `profile_all` |
-| model discrimination | — | `discriminate_design`, `discriminate_compound`, `sequential_discrimination`, `model_selection`, `likelihood_ratio_test`, `vuong_test` |
+| model discrimination | `design_discrimination` — Hunter–Reiner or Buzzi-Ferraris, from a candidate list | `discriminate_design`, `discriminate_compound`, `sequential_discrimination`, `model_selection`, `likelihood_ratio_test`, `vuong_test` |
 | sequential campaigns | write the loop yourself (`existing=`, `prior_fim=`) | `sequential_doe` — estimate, use the FIM as the next round's prior, design, run, repeat |
 | classical / screening designs | — | `factorial_2level_design`, `fractional_factorial_design`, `central_composite_design`, `box_behnken_design`, `latin_hypercube_design`, Latin/Graeco-Latin squares, `anova_report` |
 | mixture / constrained design | — | `DesignConstraint`, `sum_constraint`, simplex sampling and projection, Scheffé templates |
@@ -391,7 +458,7 @@ which is most algebraic kinetics, thermodynamics and response-surface work. Also
 reach for it, regardless of the model, when the design space is a continuous box
 and you want the optimizer to *find* the conditions rather than pick from a grid
 you discretized by hand, and for anything in the bottom two-thirds of that table:
-profile likelihood, model discrimination, estimability, screening, ANOVA,
+profile likelihood, sequential model discrimination, estimability, screening, ANOVA,
 Bayesian optimization.
 
 **Reach for `difflow.estimation`** when the model is a difflow flowsheet or any
@@ -464,11 +531,12 @@ is answered in two other places, and it is worth knowing which one you are in:
   model that JAX can differentiate, including a flowsheet with recycles.
 - **No cost model.** Candidates are ranked purely by information, so a run list
   cannot yet trade information against the cost or duration of a run.
-- **One model at a time, and no profile likelihood.** There is no model
-  discrimination criterion (which experiment best tells two rival mechanisms
-  apart) and no likelihood-profile confidence interval, so the intervals here
-  are always the linearized ones. Both live in `discopt-doe`
-  (`discriminate_design`, `profile_likelihood`) — see
+- **No profile likelihood, and discrimination from a pool only.** There is no
+  likelihood-profile confidence interval, so the intervals here are always the
+  linearized ones; `design_discrimination` scores a candidate list (no
+  continuous search, no sequential discrimination loop or model-probability
+  update). `discopt-doe` has `profile_likelihood`, `discriminate_design` and
+  `sequential_discrimination` — see
   [Related tools](#related-tools-discopt-doe-and-sensor-placement).
 - **No estimability ranking.** When the parameters are identifiable but badly
   correlated, this module tells you *that* (the condition number) but will not

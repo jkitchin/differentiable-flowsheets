@@ -186,6 +186,43 @@ cstr = DynamicCSTR(
 # State variables: [n_A, n_B] (moles of each species)
 ```
 
+`mode` sets the energy balance: `"isothermal"` (no temperature state; the
+reactor runs at the inlet temperature), `"adiabatic"` (Q = 0),
+`"specified_duty"` (Q = `duty`, W, positive heats the reactor) and `"jacket"`
+(Q = `UA * (Tc - T)`, with `UA` in W/K and coolant temperature `Tc` in K).
+`duty`, `UA` and `Tc` are each a constant, a function of time `f(t)`, or
+`f(t, args)` reading the `args` passed to `DynamicFlowsheet.simulate`. Each
+may also name an inlet port, whose stream temperature `T` is then the value: a
+coolant stream for `Tc`, or the output signal of a
+[`PIDController`](control.md) for any of the three. The outlet does not read
+those ports, so a controller that measures the outlet and drives the jacket
+closes the loop in one `DynamicFlowsheet` without an algebraic loop. They live in the unit's params under the same keys, so
+`fs.simulate(..., params={"UA": ua})` overrides them for that call and
+`jax.grad` goes through them. The heat capacity is fixed at 75 J/(mol K) and
+the molar density at 55 500 mol/m³ (a water-like liquid).
+
+```python
+import jax
+import jax.numpy as jnp
+from difflow.dynamic import DynamicCSTR, integrate_unit
+from difflow.streams import make_stream
+
+def rate_fn(C, T, params):
+    return jnp.array([params["k0"] * jnp.exp(-params["Ea"] / (8.314 * T)) * C["A"]])
+
+feed = {"inlet": make_stream({"A": 1.0, "B": 50.0}, T=330.0, P=2e5)}
+
+def T_after_10_min(UA):
+    cstr = DynamicCSTR(volume=1.0, rate_fn=rate_fn, stoich=jnp.array([[-1.0], [1.0]]),
+                       species_order=["A", "B"], rate_params={"k0": 1e6, "Ea": 50000.0},
+                       dH_rxn=jnp.array([-60e3]), mode="jacket",
+                       UA=UA, Tc=lambda t: 320.0 + 5.0 * (t > 300.0))  # coolant step at 5 min
+    res = integrate_unit(cstr, feed, (0.0, 600.0), method="RK4", n_steps=120)
+    return res.y_final[-1]                                    # [n_A, n_B, T]: T last
+
+print(T_after_10_min(2000.0), jax.grad(T_after_10_min)(2000.0))   # K, K/(W/K)
+```
+
 ### DynamicTank
 
 Storage tank with variable holdup:
@@ -764,6 +801,7 @@ dy_final_dy0 = grad_fn(jnp.ones_like(result.y_final))
 | `DynamicUnitBase` | Base class with utilities |
 | `DynamicCSTR` | Dynamic CSTR reactor |
 | `DynamicTank` | Storage tank with holdup |
+| `PIDController` | PI(D) controller with limits and anti-windup ([control](control.md)) |
 | `DynamicFlowsheet` | Multi-unit flowsheet |
 | `DAEUnit` | Protocol for DAE units |
 | `DAEUnitBase` | Base class for DAE units |

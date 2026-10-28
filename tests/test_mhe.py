@@ -154,3 +154,27 @@ def test_window_is_params_like():
     window = window_of(3)
     assert isinstance(window, MeasurementWindow)
     assert "y" in window and {"times", "y", "sigma", "u"} <= set(window.keys())
+
+
+def _counting_model():
+    traces = []
+
+    def f(x, u, w, th):
+        traces.append(1)              # runs once per trace, not per call
+        return 0.9 * x + w
+
+    return StateSpaceModel(f=f, h=lambda x, u, th: x, n_x=1, n_y=1), traces
+
+
+def test_run_mhe_compiles_once_across_windows_and_runs():
+    # Regression (#519): the arrival-cost update ran eagerly and recompiled
+    # at every window, and a second identical run compiled everything again.
+    kw = {"horizon": 3, "process_std": jnp.array([0.05]), "x0": jnp.zeros(1), "P0": jnp.eye(1)}
+    counts = []
+    for n in (6, 12):
+        model, traces = _counting_model()
+        run_mhe(model, window_of(n), **kw)
+        counts.append(len(traces))
+        run_mhe(model, window_of(n), **kw)
+        assert len(traces) == counts[-1]          # the second run traces nothing
+    assert counts[0] == counts[1]                 # independent of the number of windows

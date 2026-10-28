@@ -302,9 +302,21 @@ running off-spec — it predicts feasibility it does not achieve, and is never
 charged for the difference. In the prototype this let a static planner beat a
 provably optimal oracle.
 
-Back-off (below) is treated as a margin, not a promise: `Spec.violation`
-measures against the stated right-hand side, so eating into the margin is not
-scored as a violation.
+Back-off (below) is kept, not just asked for: the LP rows, the acceptance
+test, the merit and `res.violations` all measure against
+`Spec.effective_rhs`, the limit less the back-off, so a step that eats into
+the margin is charged like any other violation. Scoring against the stated
+limit while the LP held the tightened one let accepted steps drift back to
+the nominal constraint (issue 513). `res.stated_violations` (and
+`Spec.violation(values, stated=True)`) report the stated limits alone.
+
+Violations are keyed by `Spec.name`, which defaults to the variable name. Two
+specs on one variable -- a `>=` and a `<=` bracketing a tank level -- would share
+that key, so the planner extends each colliding default with its operator and
+limit (`"tank.level>=0"`, `"tank.level<=4"`); a duplicate name you chose raises
+`ValueError`. Keyed by the bare name, the second spec hid the first: a violated
+lower bound scored zero, restoration judged an infeasible start feasible, and
+the loop ran to `max_iter` reporting no violation (issue 515).
 
 ### A block that cannot be evaluated
 
@@ -582,6 +594,14 @@ $$\frac{\mathrm{d}\phi^*}{\mathrm{d}\theta}
 which is exact even at a vertex where $\mathrm{d}u/\mathrm{d}\theta$ is zero.
 Every derivative in that system comes from AD on your own blocks.
 
+The KKT system is built from the problem the plan was solved against. A
+`PlanResult` keeps a snapshot of its planner (`res.solved_with`, with
+`res.specs`, `res.prices` and `res.theta`), taken at the solve, so a planner
+that is changed and re-solved afterwards -- `planner.specs =
+apply_backoff(...)`, say -- leaves the earlier result's sensitivities as they
+were. (Before issue 514 they were silently recomputed against the planner's
+new specs.) `res.planner` is still the live planner.
+
 Rows for decisions pinned at a bound are exactly zero, and the result says so
 in `s.note` rather than letting you read a vertex as if it were an interior
 solution. A rank-deficient KKT matrix is reported through `s.degenerate`, and a
@@ -721,6 +741,10 @@ found = constraint_backoff(chain_planner, problem.network.decision_start(),
 print(found.summary())
 chain_planner.specs = apply_backoff(chain_planner.specs, found)
 ```
+
+The re-solved plan satisfies `value <= rhs - backoff` (`>= rhs + backoff` for a
+lower bound) at convergence; `res.violations` measures against that, and
+`res.stated_violations` against `rhs`.
 
 This is a thin layer over `difflow.uncertainty.propagate_covariance`. No
 commercial planning system does it.
@@ -1081,7 +1105,8 @@ check_delta_vectors(blk)["passed"]             # AD vs central differences
 ```
 
 Lever keys are `Flowsheet._apply_params` notation: `"<unit>.<param>"` for a unit
-parameter, and `"feed:<stream>.<field>"` for a feed, where the field is `T`,
+parameter (a key of the unit's call keywords, `Unit.params`, such as a CSTR's
+`T_spec`, first, then a field of the operation's `Params`), and `"feed:<stream>.<field>"` for a feed, where the field is `T`,
 `P`, `total_flow`, `F_<species>` or `x_<species>`. Feed rate and composition are
 the most common planning levers there are, so they are first-class: `total_flow`
 scales the stream at constant composition, `x_<species>` moves a mole fraction

@@ -46,8 +46,10 @@ class Experiment(ParamsMixin):
 
     Attributes:
         inputs: Model inputs (flexible dict, passed to user's model function)
-        observed: Measured outputs {name: value}
+        observed: Measured outputs {name: value}; a value may be an array
+            (a profile, a composition), each entry one observation
         uncertainties: Optional 1-sigma measurement uncertainties per output
+            (a scalar, or for an array output an array of its shape)
         name: Optional experiment label
         metadata: Optional extra information
         measured: Names of the outputs that are (or would be) measured.
@@ -131,9 +133,21 @@ class Experiment(ParamsMixin):
         return jnp.array([float(self.uncertainties.get(k, 1.0)) for k in names])
 
     @property
+    def n_obs(self) -> int:
+        """Number of scalar observations: an array-valued output counts
+        each of its entries, not once."""
+        return int(sum(jnp.size(self.observed[k]) for k in self.output_names))
+
+    @property
     def observed_array(self) -> Array:
-        """Observed values as a JAX array (ordered by output_names)."""
-        return jnp.array([float(self.observed[k]) for k in self.output_names])
+        """Observed values as a flat JAX array (ordered by output_names,
+        array-valued outputs raveled in place), of length :attr:`n_obs`."""
+        if not self.observed:
+            return jnp.zeros((0,))
+        return jnp.concatenate([
+            jnp.ravel(jnp.asarray(self.observed[k], dtype=float))
+            for k in self.output_names
+        ])
 
     @property
     def weights(self) -> Array:

@@ -70,6 +70,12 @@ from difflow.flexibility.inner import smooth_max
 #: Comparison operators a constraint may use.
 OPERATORS = ("<=", ">=", "==")
 
+#: A constraint counts as satisfied when its residual is at or below this,
+#: taken relative to the size of the constraint's own right-hand side so it is
+#: a tolerance and not a hidden unit.  Used both for ``SAAResult.feasible``
+#: and for the per-scenario violation count.
+FEASIBILITY_TOL = 1e-6
+
 #: Relative floor on a smoothing temperature, so annealing never divides by
 #: zero on the last step.
 _TAU_FLOOR = 1e-12
@@ -496,13 +502,21 @@ class StochasticConstraint:
         Reported for every constraint kind, including the ones that were never
         posed per scenario, because it is the number an operator recognizes.
 
+        A scenario counts as violated only past the same tolerance
+        :data:`FEASIBILITY_TOL` that decides ``SAAResult.feasible``.  A
+        recourse that holds the constrained output exactly *at* its bound
+        (the operator turns the steam until conversion is 0.90) leaves it a
+        rounding error either side, and counting the wrong side as a
+        violation would decide a chance constraint by round-off.
+
         Args:
             g: ``(n_scenarios,)`` values of the constrained output.
 
         Returns:
             A fraction in ``[0, 1]``.
         """
-        return float(np.mean(np.asarray(self.signed(jnp.asarray(g))) > 0.0))
+        tol = FEASIBILITY_TOL * (abs(self.bound) + 1.0)
+        return float(np.mean(np.asarray(self.signed(jnp.asarray(g))) > tol))
 
 
 @dataclass(frozen=True)

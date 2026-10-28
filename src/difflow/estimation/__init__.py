@@ -14,7 +14,9 @@ The intended order of operations is:
    enforce the ordering by running this check first and refusing to
    proceed when it fails.
 2. ``design_experiments`` / ``predicted_covariance`` — choose the runs and
-   see the confidence intervals they would buy, before running them.
+   see the confidence intervals they would buy, before running them
+   (``criterion='C'`` for the variance of one derived quantity);
+   ``design_discrimination`` chooses runs that tell rival models apart.
 3. ``Estimator.fit`` and the uncertainty tools — fit the data once it
    exists.
 
@@ -68,6 +70,11 @@ from difflow.estimation.design import (
     log_det,
     predicted_covariance,
 )
+from difflow.estimation.discrimination import (
+    DISCRIMINATION_CRITERIA,
+    DiscriminationResult,
+    design_discrimination,
+)
 from difflow.estimation.estimator import Estimator, EstimationResult
 
 __all__ = [
@@ -106,4 +113,8 @@ __all__ = [
     "fisher_information",
     "log_det",
     "predicted_covariance",
+    # Model discrimination
+    "DISCRIMINATION_CRITERIA",
+    "DiscriminationResult",
+    "design_discrimination",
 ]

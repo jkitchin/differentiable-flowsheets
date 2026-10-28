@@ -68,7 +68,7 @@ from jax import Array
 
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.dynamic.state import StateSpec, StateVar
-from difflow.dynamic.base import DynamicUnit, Params
+from difflow.dynamic.base import DynamicUnit, Params, _takes_args
 from difflow.dynamic.integrators import (
     integrate,
     IntegrationResult,
@@ -79,26 +79,6 @@ from difflow.dynamic.integrators import (
     EventResult,
     detect_events,
 )
-
-
-def _takes_args(fn) -> bool:
-    """True for a feed written ``(t, args)``: a second positional parameter
-    that is required or is named ``args`` (or a ``*args``)."""
-    import inspect
-    try:
-        prms = list(inspect.signature(fn).parameters.values())
-    except (TypeError, ValueError):
-        return False
-    positional = []
-    for prm in prms:
-        if prm.kind is prm.VAR_POSITIONAL:
-            return len(positional) <= 1
-        if prm.kind in (prm.POSITIONAL_ONLY, prm.POSITIONAL_OR_KEYWORD):
-            positional.append(prm)
-    if len(positional) < 2:
-        return False
-    second = positional[1]
-    return second.default is second.empty or second.name == "args"
 
 
 @dataclass
@@ -137,12 +117,17 @@ class DynamicUnitEntry:
     def output_dependencies(self) -> dict[str, set[str]] | None:
         """``{outlet port: inlet ports it reads}``, or None if unknown.
 
-        Read from the unit's ``output_dependencies`` (port names). Only used
+        Read from the unit's ``output_dependencies`` (port names; or a
+        method ``output_dependencies(inlet_ports)`` returning them). Only used
         when the outlet ports are known and the unit can evaluate a subset of
         its outputs (``partial_outputs``); otherwise every output is taken to
         depend on every input.
         """
         deps = getattr(self.unit, "output_dependencies", None)
+        if callable(deps):
+            # A unit whose dependencies follow its configuration (which
+            # inlet ports carry signals) computes them from its ports.
+            deps = deps(tuple(self.inlet_ports))
         if (deps is None or self.outlet_ports is None
                 or not hasattr(self.unit, "partial_outputs")):
             return None
@@ -233,6 +218,35 @@ class DynamicFlowsheetResult:
         state = self.trajectory.y[idx, entry.state_slice]
         spec = entry.unit.state_spec()
         return {name: state[i] for i, name in enumerate(spec.names)}
+
+    def stream_history(
+        self, name: str, params: Params | None = None, args: Any = None
+    ) -> Stream:
+        """A stream over the trajectory: each key an array over time.
+
+        The streams are not stored during integration; this re-evaluates the
+        flowsheet at every saved time (one ``vmap``). Pass the ``params`` and
+        ``args`` the simulation used, so a stream that depends on them (a
+        controller output, say) comes back as simulated.
+
+        Args:
+            name: Stream name (a feed or a unit outlet).
+            params: The ``params`` given to ``simulate``.
+            args: The ``args`` given to ``simulate``.
+
+        Returns:
+            ``{key: array of shape (n_times,)}`` for the stream's numeric keys.
+        """
+        import jax
+
+        def at(t, y):
+            stream = self.flowsheet.outputs(t, y, params, args)[name]
+            return {k: v for k, v in stream.items() if not isinstance(v, str)}
+
+        if name not in self.flowsheet.outputs(
+                self.trajectory.t[0], self.trajectory.y[0], params, args):
+            raise KeyError(f"no stream {name!r} in the flowsheet")
+        return jax.vmap(at)(self.trajectory.t, self.trajectory.y)
 
 
 class DynamicFlowsheet:
@@ -677,9 +691,11 @@ class DynamicFlowsheet:
             if entry.n_states == 0:
                 continue
             inputs = self._unit_inputs(entry, streams)
-            derivs.append(jnp.atleast_1d(
-                entry.unit.derivatives(t, unit_states[entry.name], inputs, params)
-            ))
+            if getattr(entry.unit, "wants_args", False):
+                d = entry.unit.derivatives(t, unit_states[entry.name], inputs, params, args)
+            else:
+                d = entry.unit.derivatives(t, unit_states[entry.name], inputs, params)
+            derivs.append(jnp.atleast_1d(d))
         return jnp.concatenate(derivs)
 
     def outputs(
@@ -741,7 +757,8 @@ class DynamicFlowsheet:
                 ``DynamicFlowsheetResult.events`` (#130).
             args: Optional pytree handed to every ``(t, args)`` feed and to
                 every :class:`InstantaneousUnit` whose function or
-                ``call_params`` take it: the one place for time-varying
+                ``call_params`` take it, and to a ``DynamicCSTR`` duty or
+                coolant temperature given as ``f(t, args)``: the one place for time-varying
                 disturbances (``params`` is for design parameters). It and
                 ``params`` are passed to the integrator as its ``args``
                 rather than closed over, so with a diffrax method one compiled

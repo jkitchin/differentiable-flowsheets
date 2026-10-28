@@ -16,11 +16,12 @@ from scipy.optimize import minimize
 from difflow.params_mixin import ParamsMixin
 from difflow.estimation.experiment import Experiment
 from difflow.estimation.objectives import OBJECTIVES
+from difflow.estimation._batch import Batch
 from difflow.estimation.confidence import fisher_confidence_intervals, ConfidenceResult
 from difflow.estimation.diagnostics import compute_diagnostics, DiagnosticsResult
 from difflow.estimation.bootstrap import (
     nonparametric_bootstrap,
-    parametric_bootstrap,
+    residual_bootstrap,
     BootstrapResult,
 )
 from difflow.estimation.cross_validation import leave_n_out_cv, CrossValidationResult
@@ -81,6 +82,15 @@ class Estimator:
             - Returns: predictions dict matching experiment.observed keys
         param_names: list of parameter names
         param_bounds: optional dict of (lo, hi) bounds per parameter
+        vectorize: evaluate the model over all experiments in one
+            ``jax.vmap`` (default). The model then sees an ``Experiment``
+            whose ``inputs`` are one run's traced values; when the runs
+            cannot be stacked (different input keys or observed outputs,
+            non-numeric inputs that differ) or the model cannot be traced
+            that way (Python ``if`` on an input value), the methods fall
+            back to calling it one experiment at a time, so the default is
+            always safe. ``False`` forces the loop. Either way the model is
+            compiled once per call, not once per experiment.
 
     The design-side methods -- :meth:`check_identifiability`,
     :meth:`design_experiments` and :meth:`predicted_covariance` -- come
@@ -102,10 +112,14 @@ class Estimator:
         print(est.summary(result, experiments))
     """
 
-    def __init__(self, model_fn, param_names, param_bounds=None):
+    def __init__(self, model_fn, param_names, param_bounds=None, vectorize=True):
         self.model_fn = model_fn
         self.param_names = list(param_names)
         self.param_bounds = param_bounds
+        self.vectorize = bool(vectorize)
+
+    def _batch(self, experiments):
+        return Batch(self.model_fn, experiments, self.param_names, self.vectorize)
 
     def fit(
         self,
@@ -122,7 +136,8 @@ class Estimator:
             theta_init: dict or array of initial parameter guesses
             objective: 'sse', 'wsse', or 'nll'
             method: scipy.optimize.minimize method
-            jit_objective: whether to JIT-compile the objective
+            jit_objective: whether to JIT-compile the objective and its
+                gradient (one compilation, reused at every iteration)
 
         Returns:
             EstimationResult
@@ -133,26 +148,17 @@ class Estimator:
         else:
             theta0 = jnp.array(theta_init, dtype=jnp.float64)
 
-        # Select objective function
-        obj_fn = _OBJECTIVE_MAP[objective]
-
-        # Build closed-over objective
-        def objective_fn(theta):
-            return obj_fn(self.model_fn, theta, experiments, self.param_names)
-
+        _OBJECTIVE_MAP[objective]  # KeyError on an unknown name, as before
+        batch = self._batch(experiments)
+        value_and_grad = jax.value_and_grad(batch.objective(objective))
         if jit_objective:
-            objective_fn = jax.jit(objective_fn)
+            value_and_grad = jax.jit(value_and_grad)
+        data = batch.data
 
-        grad_fn = jax.jit(jax.grad(
-            lambda theta: obj_fn(self.model_fn, theta, experiments, self.param_names)
-        ))
-
-        # scipy interface
+        # scipy interface: value and gradient from one call
         def scipy_obj(x):
-            return float(objective_fn(jnp.array(x)))
-
-        def scipy_grad(x):
-            return np.array(grad_fn(jnp.array(x)), dtype=np.float64)
+            v, g = value_and_grad(jnp.array(x), data)
+            return float(v), np.array(g, dtype=np.float64)
 
         # Build bounds
         bounds_list = None
@@ -163,7 +169,7 @@ class Estimator:
         result = minimize(
             scipy_obj,
             np.array(theta0, dtype=np.float64),
-            jac=scipy_grad,
+            jac=True,
             method=method,
             bounds=bounds_list,
         )
@@ -189,18 +195,26 @@ class Estimator:
             result: EstimationResult from fit()
             experiments: list of Experiment objects
             alpha: significance level (0.05 = 95% CI)
-            objective: which objective to use for Hessian ('sse', 'wsse', 'nll')
+            objective: which objective to use for Hessian ('sse', 'wsse', 'nll').
+                'sse' estimates the residual variance from the fit,
+                ``cov = s^2 (J^T J)^{-1}``; 'wsse' takes the declared
+                uncertainties as known, ``cov = (J^T W J)^{-1}``; 'nll'
+                inverts the Hessian of the Gaussian negative
+                log-likelihood. See :func:`fisher_confidence_intervals`.
 
         Returns:
             ConfidenceResult
         """
-        obj_fn = _OBJECTIVE_MAP[objective]
+        _OBJECTIVE_MAP[objective]
+        batch = self._batch(experiments)
+        f, data = batch.objective(objective), batch.data
 
         def closed_obj(theta):
-            return obj_fn(self.model_fn, theta, experiments, self.param_names)
+            return f(theta, data)
 
         return fisher_confidence_intervals(
-            closed_obj, result.theta_array, experiments, self.param_names, alpha
+            closed_obj, result.theta_array, experiments, self.param_names, alpha,
+            objective=objective,
         )
 
     def bootstrap(
@@ -219,7 +233,12 @@ class Estimator:
             result: EstimationResult from fit()
             experiments: list of Experiment objects
             n_bootstrap: number of bootstrap resamples
-            method: 'nonparametric' or 'parametric'
+            method: 'nonparametric' (resample the experiments with
+                replacement) or 'residual' (keep the fitted predictions and
+                add residuals resampled from the fit's own). 'parametric'
+                is accepted as the old name of 'residual': no
+                distribution is assumed, so it is not a parametric
+                bootstrap.
             alpha: significance level
             seed: random seed
             objective: 'sse', 'wsse' or 'nll'. Pass the SAME objective
@@ -230,6 +249,9 @@ class Estimator:
 
         Returns:
             BootstrapResult
+
+        Every refit reuses one compiled objective: the resampled data are
+        an argument of it, not constants baked into a fresh trace.
         """
         theta_init = np.array(result.theta_array, dtype=np.float64)
 
@@ -237,11 +259,13 @@ class Estimator:
             return nonparametric_bootstrap(
                 self.model_fn, theta_init, experiments, self.param_names,
                 self.param_bounds, n_bootstrap, alpha, seed, objective,
+                vectorize=self.vectorize,
             )
-        elif method == 'parametric':
-            return parametric_bootstrap(
+        elif method in ('residual', 'parametric'):
+            return residual_bootstrap(
                 self.model_fn, theta_init, experiments, self.param_names,
                 self.param_bounds, n_bootstrap, alpha, seed, objective,
+                vectorize=self.vectorize, method_name=method,
             )
         else:
             raise ValueError(f"Unknown bootstrap method: {method}")
@@ -265,7 +289,7 @@ class Estimator:
 
         return leave_n_out_cv(
             self.model_fn, theta0, experiments, self.param_names,
-            n, self.param_bounds, max_folds,
+            n, self.param_bounds, max_folds, vectorize=self.vectorize,
         )
 
     def diagnostics(self, result, experiments):
@@ -279,7 +303,8 @@ class Estimator:
             DiagnosticsResult
         """
         return compute_diagnostics(
-            self.model_fn, result.theta_opt, experiments, len(self.param_names)
+            self.model_fn, result.theta_opt, experiments, len(self.param_names),
+            vectorize=self.vectorize,
         )
 
     def check_identifiability(self, theta, experiments, **kwargs):
@@ -316,7 +341,8 @@ class Estimator:
             candidates: Pool of candidate conditions, typically built with
                 ``Experiment.candidate``.
             n: Number of runs to select.
-            criterion: 'D' (default), 'A', 'E' or 'ME'.
+            criterion: 'D' (default), 'A', 'E', 'ME' or 'C' (with
+                ``quantity=``, see :func:`difflow.estimation.design_experiments`).
             **kwargs: Passed through to
                 :func:`difflow.estimation.design_experiments`.
 

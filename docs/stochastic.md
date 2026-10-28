@@ -166,6 +166,17 @@ violations with an indicator instead is exact, non-convex, has zero gradient
 almost everywhere, and turns the problem into a MINLP. That is deliberately
 not implemented.
 
+Both `SAAResult.feasible` and the per-scenario `violation_rates` use the same
+tolerance, `FEASIBILITY_TOL * (|b| + 1)`. A scenario counts as violated only
+past it. That matters for an output the recourse drives *to* its bound. If
+the operator turns the temperature until the conversion is exactly 0.90, a
+constraint `("X", ">=", 0.90, 0.95)` is met with equality in most scenarios,
+and the sign of a rounding error would otherwise decide the count (one run
+reported 44 % "violations"). Where you can, constrain a quantity that keeps
+its slack instead, such as the temperature the spec *requires* rather than
+the conversion the recourse holds. Its margin is visible, and the tolerance
+plays no part.
+
 ## Three implementation choices worth knowing about
 
 These are not stylistic preferences. Each of them is the difference between a
@@ -212,6 +223,31 @@ the starting point. This is not an approximation: every risk measure here
 satisfies `rho(a + bZ) = a + b rho(Z)` for `b > 0` and every constraint form is
 positively homogeneous in its residual, so the rescaled problem has the *same*
 solution and the reported numbers unscale exactly.
+
+### Warm restarts until the point stops moving
+
+One cosine-decayed run of projected Adam is a fixed budget of `steps`
+iterations, and on a smooth model it is plenty. It is not when the recourse
+sits on a kink of the model. The common case is an operator who holds a spec
+exactly: the temperature is turned until the conversion is 0.90, so the cost
+has a `max(0.90 - X, 0)` rework term whose kink every scenario sits on. The
+optimum is then a valley along `X_s(x, u_s) = 0.90` that no coordinate axis
+follows. Adam walks it slowly (the steep side of each kink inflates the second
+moment, so steps on the flat side are tiny), and a single schedule stops it
+wherever the budget runs out. On a CSTR sized against 128 scenarios with the
+temperature as recourse that was anywhere from 7 to 12.6 m³ against a 5.68 m³
+optimum, depending only on `steps` and `learning_rate`.
+
+So each augmented-Lagrangian round runs up to `SAAOptions.max_cycles` cycles.
+Each restarts Adam (fresh moments) from the last point. The step is halved
+(`cycle_decay`) whenever a cycle gains less than half what the previous one
+did, and the round stops when a cycle changes the augmented objective by less
+than `tol` and moves the first stage by less than `tol` of its box. Warm
+restarts, and every round after the first, stay at the final smoothing and
+start from the step the last round ended on (doubled), instead of
+re-smoothing and re-crossing the box from a point that is already close. On
+that CSTR every setting now returns 5.679 m³. `max_cycles=1` gives one cycle
+per round, close to the old fixed budget.
 
 Feasibility is always scored by re-evaluating the model at the candidate point,
 never read off the multipliers — the same rule [Delta-Base Planning](planning.md) states for its
@@ -295,6 +331,20 @@ with a number attached. It never raises and never re-solves.
 * **Sample sensitivity.** The risk value on half the sample against the whole
   sample, plus a bootstrap standard error. Differences between two designs
   smaller than that error are not real.
+* **Not stationary.** Trial moves scored by calling the model: each
+  first-stage lever (steps of 1e-4 to 0.1 of its box, both ways) with the
+  recourse held, and again with each scenario's recourse re-chosen from a
+  finer grid of steps (the joint move a kink calls for), and each recourse
+  variable scenario by scenario with the design held. A move is dropped if it leaves its box or pushes a
+  constraint that is met (or active) past its bound. `stationarity` reports
+  the best risk improvement found for each, and a variable is flagged when
+  that exceeds `STATIONARITY_TOL` (1e-4) of `|risk| + sd`. This is a
+  *certificate*, not a slope: a positive number means a better point exists.
+  The autodiff `gradients` are not a stationarity test once the recourse sits
+  on a kink. With the recourse held where the solve left it, `dRisk/dx` there
+  is one side of a jump, and it can be 2 or 3 at a true optimum. A zero is not
+  a proof either, since the trials are a finite grid. For one or two levers,
+  scan the design with the recourse policy written in.
 
 The formal version is `optimality_gap`, the Mak–Morton–Wood replication bound:
 solve on several independent samples for a statistical lower bound, evaluate

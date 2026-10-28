@@ -6,6 +6,153 @@ All notable changes to difflow are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Model-discrimination and c-optimal experiment design (issue 520).**
+  `difflow.estimation.design_discrimination(models, thetas, candidates, n, criterion='HR')` chooses the
+  candidate runs that best tell rival models apart, each model at its own fitted parameters: `'HR'`
+  (Hunter-Reiner, the squared prediction differences over the model pairs weighted by `1/sigma^2`; additive,
+  so the best run replicated) or `'BF'` (Buzzi-Ferraris, the difference against the measurement and both
+  models' prediction variances, from `covariances=` or the `existing=` runs; greedy on the set). It returns a
+  `DiscriminationResult` with every candidate's score, per model pair, and each model's predictions over the
+  pool (one `vmap` per model). `design_experiments(..., criterion='C', quantity=g)` is c-optimal design: it
+  minimizes `c^T FIM^-1 c`, the predicted variance of a derived quantity `g(theta)` (`c = jax.grad(g)` at
+  `theta`, or `quantity=c` directly); `design_criterion(fim, 'C', c=...)` gives the value and
+  `DesignResult.c` the gradient. `CRITERIA` now includes `'C'`.
+- **Feedback control: PI(D) and linear MPC (issue 520).** New `difflow.control` (docs/control.md).
+  `PIDController` (also in `difflow.dynamic`) is a dynamic unit for a `DynamicFlowsheet`: parallel PI(D) with
+  derivative on the filtered measurement, output limits and back-calculation anti-windup (tracking time
+  constant `tau_T`, `inf` for none), reverse/direct action; gains, setpoint and limits are constants, `f(t)`,
+  `f(t, args)` or (setpoint) a port, read per call from `params`, so `jax.grad` through `simulate` tunes the
+  loop. Its output is a signal stream whose `T` carries `u`; `DynamicCSTR` now takes `duty`, `UA` or `Tc` from
+  such a port and declares that its outlet does not read it (`output_dependencies`/`partial_outputs`), so a
+  controller measuring the outlet closes the loop without an algebraic loop (`DynamicFlowsheet` accepts
+  `output_dependencies(inlet_ports)` as a method). `LinearMPC` (`from_model` linearizes a `StateSpaceModel` by
+  autodiff) solves the input-bounded receding-horizon QP exactly with `box_qp` (primal-dual active set, JAX),
+  offset-free through an output bias; `run_mpc` runs the closed loop against any JAX plant as one `lax.scan`.
+  `StateSpaceModel.from_flowsheet` makes a `DynamicFlowsheet` a model for `difflow.mhe` and the MPC (input as
+  the flowsheet's `args`, `theta` as its `params`), and `DynamicFlowsheetResult.stream_history` returns a
+  stream over the trajectory.
+
+### Fixed
+
+- **Fisher confidence intervals were too narrow by sqrt(2) (issue 512).**
+  `fisher_confidence_intervals` / `Estimator.confidence_intervals` computed `s^2 H^-1` from the Hessian of the
+  sum of squares, which has no 1/2, so `H = 2 J^T J` and every standard error was 1/sqrt(2) of the textbook
+  `s^2 (J^T J)^-1`. The covariance now depends on the objective: `'sse'` gives `s^2 (J^T J)^-1` (`2 s^2 H^-1`),
+  `'wsse'` treats the declared uncertainties as known and gives `(J^T W J)^-1` (no `s^2`; the same covariance
+  `predicted_covariance` predicts), and `'nll'` gives `H^-1`. `fisher_confidence_intervals` takes a new
+  `objective='sse'` argument; `Estimator.confidence_intervals` and `summary` pass theirs through. Standard errors
+  and intervals from earlier versions grow by sqrt(2) on `'sse'`; on `'wsse'` and `'nll'` by `sqrt(2/s^2)` and
+  `sqrt(1/s^2)`.
+
+- **`apply_backoff` margins were not kept by the planner (issue 513).** The LP rows used
+  `Spec.effective_rhs`, but the trust-region acceptance test, the merit and `PlanResult.violations` scored
+  each step against the stated `rhs`, so accepted steps ate into the back-off and the plan drifted back to
+  the nominal constraint. All of them now measure against `effective_rhs` (as does the merit that
+  `plan_sensitivity` differentiates). `Spec.violation(values, stated=True)`,
+  `DeltaBasePlanner.violations(values, stated=True)` and the new `PlanResult.stated_violations` report the
+  stated limits.
+
+- **`PlanResult.plan_sensitivity` read the planner's current specs (issue 514).** The active set and KKT
+  system were built from `result.planner` at call time; a planner is shared, so after
+  `planner.specs = apply_backoff(...)` and a re-solve, an earlier result's sensitivities were silently
+  taken against the new specs (Ch 28 of the unit-ops book: d(profit*)/d ln k1 5180 instead of 2819). A
+  `PlanResult` now keeps `solved_with`, a `DeltaBasePlanner.snapshot()` taken at the solve (specs,
+  prices, theta, modifiers, penalty, options), with `specs`, `prices`, `theta` and `score()` on the
+  result; `plan_sensitivity`, `stated_violations`, `DeltaVectorSet.from_result` and `draw_trust_region`
+  read it.
+
+- **`Block.from_flowsheet` without `u0` refused call-keyword levers (issue 515).** A lever that is a key
+  of the unit's `Unit.params` (e.g. a CSTR's `T_spec`) can be set by `_apply_params`, but the default `u0`
+  was looked up only among the operation's `Params` fields and raised `KeyError`. It now reads the value
+  through the new `Flowsheet._param_value`, the read side of `_apply_params` with the same lookup order.
+
+- **Two specs on one variable hid each other's violation (issue 515).** `Spec.name` defaults to the
+  variable name, and violations, the penalty charge and the LP's elastic slack columns are keyed by it, so
+  with a `>=` and a `<=` on one variable (hard tank-level bounds) only the last survived. From a start
+  below the lower bound, `res.violations` read 0, restoration judged the start feasible, and the loop ran
+  to `max_iter`. The planner (and `build_lp`) now extend colliding default names with the operator and
+  limit (`"tank.level>=0"`), via `difflow.planning.lp.unique_spec_names`; duplicate names chosen by the
+  caller raise `ValueError`. Such a run now restores, or ends `restoration_failed` with the violation
+  reported.
+
+- **`MonitorResult.diagnose` read fouling as an instrument fault; `track_parameters` leaked a meter bias
+  into the parameter (issue 516).** With two equations (an exchanger's energy balance and its `UA` rate
+  equation) fouling moves both outlet temperatures together and the measurement test blames the same
+  sensor every day, so drift was diagnosed "instrument fault ... on Th_out". `monitor` and
+  `track_parameters` now also reconcile each period against the constraints with no model parameter
+  (rows where `dF/dparams` is identically zero; new `parameter_free_rows`, `balance_test`, and a
+  `parameter_free=` override) and record `balance_statistic`, `balance_detected` and `balance_checks` on
+  each `MonitorStep`. `diagnose` decides on that test where it can (passes: model drift; rejects:
+  instrument fault or undiagnosed) and falls back on the blame pattern otherwise; `MonitorDiagnosis`
+  gains `balance_rejection_rate` and `basis`. `update_gate(..., step=)` also holds a `model drift` verdict on
+  a period whose own parameter-free test rejects, which stops the first days of a new fault moving the parameter (a +4 K
+  thermocouple bias gave `UA` 62.7 +/- 0.4 kW/K against 60; it now holds at 60). `track_parameters`
+  passes the step.
+
+- **`reconcile_multi` recompiled for every new data set (issues 516, 519).** The stacked residual was a
+  fresh closure per call and `solve_reconciliation` takes the residual as a static argument; it is now a
+  structurally hashable object, so a sliding window re-uses the compiled solve (about 17 s to about 1.5 s
+  per week of exchanger data). `parameter_measurement`'s augmented residual gets the same treatment.
+  Notebook 29 re-run: the default-gate leak of its section 7 (eta dragged to 1.131 by a meter bias) is gone.
+
+- **`solve_saa` with a per-scenario recourse converged poorly, and `check_scenario_health` missed it (issue 517).**
+  When the recourse holds a spec exactly (the temperature turned until conversion is 0.90, so the cost has a
+  kink each scenario sits on), one cosine schedule of projected Adam ran out of budget partway along the kinked
+  valley: a 128-scenario CSTR came back at 7.1-12.6 m^3 against a 5.68 m^3 scan optimum depending on
+  `SAAOptions`, and `bounds()` broke `WS <= SP <= EEV`. Each augmented-Lagrangian round now runs warm
+  restarts (`SAAOptions.max_cycles`, `cycle_decay`, `tol`): fresh Adam moments, the step halved once progress
+  slows, stopping when the point stops moving; warm restarts and later rounds keep the final smoothing and
+  start from the step the previous round ended on instead of re-crossing the box (which also let a later
+  round wander off a mean-value optimum it had already found). Every setting of that problem now gives
+  5.679 m^3. `check_scenario_health` reports `stationarity` (the best risk improvement a feasible, bounded
+  trial move of each first-stage or recourse variable finds) and flags `not_stationary`; the autodiff
+  gradient it already printed is one side of a jump at a kink and can be 2-3 at a true optimum.
+  `StochasticConstraint.violation_rate` counts a scenario as violated only past `FEASIBILITY_TOL`, the
+  tolerance `SAAResult.feasible` uses, so an output the recourse holds exactly at its bound is not decided by
+  round-off (`FEASIBILITY_TOL` now lives in `difflow.stochastic.risk`; `saa` re-exports it). Results of every
+  `solve_saa` change slightly; solves take up to `max_cycles` times longer when they need it
+  (`max_cycles=1` for one cycle per round). `expected_feasibility(distribution="normal")`'s docstring now says
+  in so many words that the box half-widths are one standard deviation. `examples/32_stochastic_ree_separation`
+  is re-executed: every solve there now finds a better CVaR (the mean-value and stochastic designs move to the
+  solvent lower bound; SP 241.0 -> 242.6, VSS 3.9 -> 4.1, EVPI 0.21 -> 0.02 $M/yr), and its prose follows.
+
+- **`DynamicCSTR(mode="specified_duty")` could not set a duty, and there was no jacket (issue 518).** The energy
+  balance read `params["Q_spec"]`, which nothing stored, so a specified-duty reactor always ran adiabatic.
+  `DynamicCSTR` now takes keyword-only `duty=` (W) for `"specified_duty"` and a new `mode="jacket"` with `UA=`
+  (W/K) and `Tc=` (K), Q = UA (Tc - T). Each is a constant, `f(t)`, or `f(t, args)` reading
+  `DynamicFlowsheet.simulate(args=...)`; `Tc` may also name an inlet port whose stream temperature is the
+  coolant's. They are params keys, so `simulate(params={"UA": ua})` overrides them and `jax.grad` goes through
+  them (`"Q_spec"` is still read as a duty override). New `DynamicCSTR.heat_input(t, T, inputs)`. Building a
+  `"specified_duty"` CSTR without `duty`, a `"jacket"` one without `UA` or `Tc`, passing them to a mode that does
+  not use them, or an unknown mode now raises `ValueError`. `DynamicUnitBase.derivatives`/`outputs` no longer
+  write a call's `params` into the unit (a traced value from `jax.grad` stayed behind and broke the next call);
+  the override holds for that call only. They also take the integrator `args` (`wants_args`), which
+  `DynamicFlowsheet` now hands to a unit's `derivatives` as it already did to `outputs`.
+
+- **`Estimator`, `sensitivity_matrix`, `design_experiments` and `run_mhe` compiled per experiment or per
+  window (issue 519).** The estimation objectives looped over the experiments in Python, so one `jit` traced
+  a copy of the model per `Experiment`. They now stack experiments that share their structure (same input
+  keys and observed outputs, numeric inputs of equal shape) and `jax.vmap` the model over them: one trace
+  however many runs. The model still receives an `Experiment` (its `inputs` hold one run's traced values);
+  runs that cannot be stacked, or a model that cannot be traced that way (Python `if` on an input), fall back
+  to the loop. `Estimator(..., vectorize=False)` forces it. Sensitivities, `check_identifiability` and
+  `design_experiments` take one compiled, vmapped Jacobian over the pool. With a difflow `CSTR` written
+  naively as `model(theta, exp)` on the unit-ops book's 15 runs: fit 7.1 s -> 0.8 s, confidence intervals
+  28 s -> 3.3 s; a 72-candidate design 100 s -> 2.4 s. The bootstrap and cross-validation refit one compiled
+  objective (a resample is a vector of per-experiment counts, a residual resample new observations, both
+  arguments): 1.5 s -> about 0.1 s per refit. `fit` uses one `value_and_grad`.
+  `Experiment` observations may be arrays: `Experiment.n_obs` counts entries, `observed_array` ravels them,
+  the objectives sum every entry, and `diagnostics` and the Fisher degrees of freedom count entries (they
+  called `float()` on each value, and counted keys). The "parametric" bootstrap resamples the fitted residuals
+  and assumes no distribution; it is now `method="residual"` / `residual_bootstrap`, documented as such
+  (variance `S/n`, not `S/(n-p)`); `"parametric"` and `parametric_bootstrap` remain as aliases.
+  `run_mhe` jits the arrival-cost update (it ran `ekf_predict` and the model Jacobians eagerly, one
+  compilation per window), and the window solve, the arrival update and `run_ekf` are cached by model and
+  settings (`theta` and `process_std` by value), so a second run, and `solve_mhe` called window by window,
+  compile nothing. The book's 67-window Ch 30 run: 56 s -> 7 s, a second run 51 s -> 1.4 s.
+
 ## [0.4.0] - 2026-10-28
 
 The first release on PyPI since 0.2.2: 0.3.0 was prepared but never tagged or published, so

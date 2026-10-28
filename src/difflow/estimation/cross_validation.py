@@ -14,7 +14,7 @@ from jax import Array
 from scipy.optimize import minimize
 
 from difflow.params_mixin import ParamsMixin
-from difflow.estimation.objectives import sum_squared_errors
+from difflow.estimation._batch import Batch
 
 
 @dataclass
@@ -46,6 +46,8 @@ def leave_n_out_cv(
     n=1,
     param_bounds=None,
     max_folds=None,
+    *,
+    vectorize=True,
 ):
     """Leave-N-out cross-validation.
 
@@ -60,6 +62,11 @@ def leave_n_out_cv(
         n: number of experiments to hold out per fold
         param_bounds: optional dict of (lo, hi) bounds
         max_folds: maximum number of folds to evaluate (None = all)
+        vectorize: evaluate the model over the experiments in one
+            ``jax.vmap`` when they can be stacked (see :class:`Estimator`).
+
+    Every fold reuses one compiled objective: a fold is a 0/1 weight per
+    experiment, an argument of the objective, not a new list to trace.
 
     Returns:
         CrossValidationResult
@@ -76,34 +83,32 @@ def leave_n_out_cv(
     if param_bounds is not None:
         bounds_list = [param_bounds.get(name, (None, None)) for name in param_names]
 
+    batch = Batch(model_fn, experiments, param_names, vectorize)
+    sse = batch.objective('sse')
+    value_and_grad = jax.jit(jax.value_and_grad(sse))
+    sse_jit = jax.jit(sse)
+
     cv_scores = []
     fold_params = []
 
     for holdout_indices in folds:
-        holdout_set = set(holdout_indices)
-        train_exps = [experiments[i] for i in range(n_exp) if i not in holdout_set]
-        test_exps = [experiments[i] for i in holdout_indices]
+        test = np.zeros(n_exp)
+        test[list(holdout_indices)] = 1.0
+        train_data = batch.data_for(count=1.0 - test)
 
-        # Fit on training set
-        def obj(theta):
-            return float(sum_squared_errors(model_fn, jnp.array(theta), train_exps, param_names))
-
-        def grad_obj(theta):
-            g = jax.grad(lambda t: sum_squared_errors(model_fn, t, train_exps, param_names))(
-                jnp.array(theta)
-            )
-            return np.array(g, dtype=np.float64)
+        # Fit on the training set
+        def obj(theta, train_data=train_data):
+            v, g = value_and_grad(jnp.asarray(theta), train_data)
+            return float(v), np.array(g, dtype=np.float64)
 
         result = minimize(obj, np.array(theta_init, dtype=np.float64),
-                          jac=grad_obj, method='L-BFGS-B', bounds=bounds_list)
+                          jac=True, method='L-BFGS-B', bounds=bounds_list)
 
         theta_dict = {name: float(result.x[i]) for i, name in enumerate(param_names)}
         fold_params.append(theta_dict)
 
-        # Prediction error on test set
-        score = float(sum_squared_errors(
-            model_fn, jnp.array(result.x), test_exps, param_names
-        ))
+        # Prediction error on the held-out experiments
+        score = float(sse_jit(jnp.asarray(result.x), batch.data_for(count=test)))
         cv_scores.append(score)
 
     return CrossValidationResult(

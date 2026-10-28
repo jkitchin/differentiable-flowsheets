@@ -114,8 +114,10 @@ serial_elimination(residual_fn, y, sigma, *, alpha=0.05, max_removed=3) -> list
 sensor_value(residual_fn, x, sigma, *, target, candidate, candidate_sigma) -> dict
 sensor_ranking(residual_fn, x, sigma, *, target, candidates, candidate_sigma) -> list
 
-monitor(residual_fn, measurements, sigma, *, names=None, alpha=0.05) -> MonitorResult
+monitor(residual_fn, measurements, sigma, *, params=None, names=None, alpha=0.05,
+        parameter_free=None) -> MonitorResult
 blame_concentration(suspects, window=15) -> (fraction, culprit)
+parameter_free_rows(fn_of_params, params) -> list[int] | None
 reconcile_multi(residual_fn, measurements, sigma, *, shared, names=None) -> MultiReconcileResult
 ```
 
@@ -218,7 +220,7 @@ See [`examples/28_data_reconciliation.ipynb`](../examples/28_data_reconciliation
 
 Both are the same optimisation — a variable with a finite `sigma` is a measurement you may move at a cost, one with `sigma = inf` is a parameter you may move for free — so the interesting question is not *how* to update a model but **when you are entitled to**. Letting a parameter float absorbs whatever is wrong, including a broken sensor, and hands back a confident wrong number.
 
-The practical discipline is two clocks: reconcile routinely with parameters **fixed**, so the global test stays a genuine instrument-health monitor; re-estimate parameters only as a deliberate campaign. The trigger is the pair of tests read together — persistent rejection with the *same* sensor blamed every day is an instrument fault, while persistent rejection with a *wandering* suspect is model drift.
+The practical discipline is two clocks: reconcile routinely with parameters **fixed**, so the global test stays a genuine instrument-health monitor; re-estimate parameters only as a deliberate campaign. The trigger is persistent rejection; what decides between the two causes is, first, the constraints that contain **no model parameter** — a balance beside a rate equation — and, where the model has none, where the blame lands: the *same* sensor blamed every day is an instrument fault, a *wandering* suspect is model drift.
 
 ### The routine clock: `monitor`
 
@@ -242,13 +244,17 @@ mon.diagnose(window=15)
 
 `monitor(residual_fn, measurements, sigma, names=...)` is the domain-agnostic form; `dg.monitor_network` is the same call with the network's residual closure and the layout's names and scales filled in.
 
-`diagnose` applies the rule above. `blame_concentration` is the measurement behind it — the fraction of the window blaming the single most-blamed sensor, counted over the *whole* window including the quiet days, so a campaign that rejects rarely does not read as a concentrated fault just because its few rejections agreed. A verdict of `instrument fault` names the culprit and means go and calibrate it; `model drift` is the one verdict that entitles you to the second clock. Both thresholds are arguments, so the rule can be tuned to a plant's own noise.
+`diagnose` applies the rule above. When `params` holds the model's parameters, `monitor` also reconciles each period against the rows of `F` on which `dF/dparams` is identically zero (found by `parameter_free_rows`, or named with `parameter_free=[...]`). Those constraints hold whatever the parameters are, so their test checks the instruments alone, and it decides the verdict whenever it can: the parameter-free constraints pass while the full model rejects — the meters agree with each other and the model does not — is `model drift`; they reject on most of the window is `instrument fault` on the concentrated suspect (`undiagnosed` if blame wanders). `MonitorDiagnosis.basis` says which rule decided.
+
+That test exists because blame needs redundancy to wander. On a counter-current exchanger with one energy balance and one rate equation carrying `UA`, fouling moves both outlet temperatures together and the measurement test blames the same thermocouple every day, so the blame pattern alone reads slow fouling as an instrument fault (issue 516); the energy balance, which contains no `UA`, passes, and the verdict is drift.
+
+`blame_concentration` is the measurement behind the fallback rule — the fraction of the window blaming the single most-blamed sensor, counted over the *whole* window including the quiet days, so a campaign that rejects rarely does not read as a concentrated fault just because its few rejections agreed. A verdict of `instrument fault` names the culprit and means go and calibrate it; `model drift` is the one verdict that entitles you to the second clock. Both thresholds are arguments, so the rule can be tuned to a plant's own noise.
 
 A data set whose problem cannot be posed at all records `failed` on its step rather than aborting the campaign.
 
 ### The campaign clock: `reconcile_multi`
 
-One day's data gives a noisy parameter estimate, so pool a window. `reconcile_multi` gives each data set its own copy of the plant state while the variables in `shared` appear **once**, estimated from all of them in a single solve:
+One day's data gives a noisy parameter estimate, so pool a window. The stacked problem is compiled once per model, number of data sets and shared set, so sliding a window over a campaign re-uses it (issue 516/519; a week of exchanger data went from about 17 s per window to about 1.5 s). `reconcile_multi` gives each data set its own copy of the plant state while the variables in `shared` appear **once**, estimated from all of them in a single solve:
 
 ```python
 from difflow.reconciliation import global_test
@@ -343,16 +349,18 @@ Four properties of that combination are worth stating, because they are what mak
 
 | verdict | gate | why |
 |---|---|---|
-| `model drift` | **update** | persistent rejection, blame wanders — the signature of a model fault |
-| `instrument fault` | hold | blame is concentrated; go calibrate the named sensor |
+| `model drift` | **update** | persistent rejection, and the parameter-free constraints pass (or, without them, blame wanders) — the signature of a model fault |
+| `instrument fault` | hold | the parameter-free constraints reject (or, without them, blame is concentrated); go calibrate the named sensor |
 | `consistent` | hold | the data gave the model nothing to correct |
 | `undiagnosed` | hold | persistent rejection with nothing testable to blame |
+
+The gate also reads the period's own step (`update_gate(diagnosis, step=...)`; `track_parameters` passes it): a period whose parameter-free constraints reject never moves the parameter, whatever the window's verdict. The verdict is drawn from a window, and the first days of a new fault are a minority of it; without this a +4 K thermocouple bias on an exchanger leaked into `UA` as a confident 4.5% fouling claim (issue 516).
 
 Holding on `consistent` makes the loop **event-triggered**: the parameter sits still until the evidence is strong enough to reject, then moves. That deadband is deliberate. A parameter re-estimated every period tracks whatever that period's noise favoured, and the twin stops being a model.
 
 The policy is an argument (`allow=`), so it can be widened — deliberately, and at a known cost. With the gate opened, the same filter on the same biased-meter data reports a pipe several percent off clean.
 
-The gate is a **statistical rule, not a guarantee**, and the rule has two knobs. `track_parameters` forwards `window`, `rejection_threshold` and `concentration_threshold` to `diagnose`, because the defaults are not right for every plant: on a small network a few days early in a sensor bias can read as diffuse, slip through as `model drift`, and move the parameter before the rule settles. When that happens the fix is to tune the rule to the plant's own noise — lengthen the window, lower the concentration threshold — never to widen `allow`, which removes the rule instead of sharpening it. Section 7 of [`examples/29_model_updating.ipynb`](../examples/29_model_updating.ipynb) shows both the leak and the tuning on a real gas network.
+The gate is a **statistical rule, not a guarantee**, and the rule has two knobs. `track_parameters` forwards `window`, `rejection_threshold` and `concentration_threshold` to `diagnose`, because the defaults are not right for every plant: where the verdict falls back on the blame pattern, a few days early in a sensor bias on a small network can read as diffuse, slip through as `model drift`, and move the parameter before the rule settles. (On the gas network of [`examples/29_model_updating.ipynb`](../examples/29_model_updating.ipynb), section 7, that leak — two days, $\eta$ dragged to 1.131 — is now closed by the test against the equations free of $\eta$ and the day-by-day rule.) When it happens the fix is to tune the rule to the plant's own noise — lengthen the window, lower the concentration threshold — never to widen `allow`, which removes the rule instead of sharpening it.
 
 ### Where the parameter lives
 
@@ -368,4 +376,4 @@ A filter on parameters assumes the model *form* is right. Under structural misma
 
 `track_parameters` is the offline driver, and it is also a backtest — run it over a recorded campaign to choose `drift_std` before trusting the loop live. The four steps are public and stateless (`update_gate`, `time_update`, `parameter_measurement`, `measurement_update`), so an online loop is the same four calls with a `TrackerState` carried between them.
 
-Section 7 of [`examples/29_model_updating.ipynb`](../examples/29_model_updating.ipynb) runs the whole loop on the gas network the notebook builds, over both campaigns. The gated loop tracks the fouling pipe to 1.257 against a truth of 1.300 and never moves at all on the biased-meter campaign; wiring the gate open buys 0.03 of that lag back and reports 1.165 — a confident 16% fouling claim — on the pipe that is clean.
+Section 7 of [`examples/29_model_updating.ipynb`](../examples/29_model_updating.ipynb) runs the whole loop on the gas network the notebook builds, over both campaigns. The gated loop tracks the fouling pipe to 1.260 against a truth of 1.300 and never moves at all on the biased-meter campaign; wiring the gate open buys 0.03 of that lag back and reports 1.165 — a confident 16% fouling claim — on the pipe that is clean.

@@ -44,6 +44,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import Array
@@ -51,6 +52,7 @@ from jax.scipy.linalg import solve_triangular
 
 from difflow.params_mixin import ParamsMixin
 
+from difflow.mhe._compiled import cached, value_key
 from difflow.mhe.ekf import ekf_predict, ekf_update
 from difflow.mhe.measurements import MeasurementWindow
 from difflow.mhe.model import StateSpaceModel
@@ -190,18 +192,36 @@ def advance_arrival_cost(
 
     Returns:
         The :class:`ArrivalCost` for the next window.
+
+    The update is compiled once per model and ``theta`` (by value) and
+    reused at every window and by later runs: the arrays are arguments,
+    so a sliding run does not recompile the Jacobians at each step.
     """
     x_hat = jnp.asarray(x_hat, dtype=jnp.float64)
-    u0 = window.u[0]
-    # Update at the oldest grid point, linearised at the MHE estimate of
-    # that state rather than at the prior mean.
-    _, p_up, _ = ekf_update(
-        model, arrival.x_bar, arrival.P, window.y[0], window.sigma[0], u0,
-        theta, x_lin=x_hat[0], clip=False,
+    process_std = jnp.broadcast_to(
+        jnp.asarray(process_std, dtype=jnp.float64), (int(model.n_w),)
     )
-    _, p_next = ekf_predict(
-        model, x_hat[0], p_up, u0, process_std, theta, x_lin=x_hat[0]
-    )
+    update = cached("arrival", model, (value_key(theta),),
+                    lambda: jax.jit(_make_arrival_update(model, theta)))
+    p_next = update(arrival.x_bar, arrival.P, window.y[0], window.sigma[0],
+                    window.u[0], x_hat[0], process_std)
     return ArrivalCost(
         x_bar=x_hat[1], P=p_next, time=float(window.times[1])
     )
+
+
+def _make_arrival_update(model: StateSpaceModel, theta: Any):
+    """``update(x_bar, P, y0, sigma0, u0, x_lin, process_std) -> P_next``."""
+
+    def update(x_bar, p, y0, sigma0, u0, x_lin, process_std):
+        # Update at the oldest grid point, linearised at the MHE estimate
+        # of that state rather than at the prior mean.
+        _, p_up, _ = ekf_update(
+            model, x_bar, p, y0, sigma0, u0, theta, x_lin=x_lin, clip=False,
+        )
+        _, p_next = ekf_predict(
+            model, x_lin, p_up, u0, process_std, theta, x_lin=x_lin
+        )
+        return p_next
+
+    return update

@@ -98,6 +98,8 @@ from difflow.reconciliation.monitoring import (
     MonitorResult,
     MonitorStep,
     REJECTION_THRESHOLD,
+    balance_test,
+    parameter_free_rows,
 )
 from difflow.reconciliation.reconcile import ReconcileResult, reconcile
 from difflow.reconciliation.structure import ReconciliationStructureError
@@ -149,6 +151,7 @@ def update_gate(
     diagnosis: MonitorDiagnosis,
     *,
     allow: frozenset[str] | Sequence[str] = UPDATE_WHEN_DRIFTING,
+    step: MonitorStep | None = None,
 ) -> GateDecision:
     """Decide whether a monitoring verdict permits a parameter update.
 
@@ -164,10 +167,20 @@ def update_gate(
     data that gave no reason to, so the parameter tracks whatever the
     period's noise happens to favour.
 
+    The verdict is drawn from a window, and a fault that started
+    yesterday is still a minority of it. So given the period's own
+    ``step``, a ``model drift`` verdict is also held when *that
+    period's* test against the parameter-free constraints rejects: a
+    meter disagrees with equations no parameter value can fix, and the
+    period would pull the parameter toward the bias. Other verdicts
+    added to ``allow`` are taken as asked.
+
     Args:
         diagnosis: from
             :meth:`~difflow.reconciliation.MonitorResult.diagnose`.
         allow: verdicts that permit an update.
+        step: the period about to be used for the update, as
+            :func:`~difflow.reconciliation.monitor` records it.
 
     Returns:
         A :class:`GateDecision`.
@@ -179,6 +192,18 @@ def update_gate(
     """
     allow = frozenset(allow)
     verdict = diagnosis.verdict
+    if (verdict == MONITOR_MODEL_DRIFT and verdict in allow
+            and step is not None and step.balance_detected is True):
+        return GateDecision(
+            allowed=False,
+            verdict=verdict,
+            reason=(
+                "this period's parameter-free constraints reject; a meter "
+                "disagrees with the balances, so the period cannot move "
+                "the parameter"
+            ),
+            culprit=step.suspect,
+        )
     if verdict in allow:
         return GateDecision(
             allowed=True,
@@ -584,9 +609,7 @@ def parameter_measurement(
             "the augmented problem needs them distinct"
         )
 
-    def augmented(z: Array, ps: Any) -> Array:
-        theta = {nm: z[n + i] for i, nm in enumerate(state.names)}
-        return residual_fn(z[:n], inject_fn(ps, theta))
+    augmented = _Augmented(residual_fn, inject_fn, n, tuple(state.names))
 
     mask = measured_mask(sigma)
     if x0 is None:
@@ -631,6 +654,36 @@ def parameter_measurement(
         names=plant_names + list(state.names), x0=z0, **reconcile_kw,
     )
     return result.x[n:], result.covariance[n:, n:], result
+
+
+class _Augmented:
+    """``F`` with the tracked parameters appended to the state.
+
+    Hashable by structure, so the jitted solve inside
+    :func:`~difflow.reconciliation.reconcile` (whose residual function
+    is static) is compiled once per model rather than once per period.
+    """
+
+    def __init__(self, residual_fn: Callable, inject: Callable, n: int,
+                 names: tuple[str, ...]):
+        self.residual_fn = residual_fn
+        self.inject = inject
+        self.n = n
+        self.names = names
+
+    def _key(self) -> tuple:
+        return (self.residual_fn, self.inject, self.n, self.names)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _Augmented) and other._key() == self._key()
+
+    def __hash__(self) -> int:
+        return hash((_Augmented,) + self._key())
+
+    def __call__(self, z: Array, ps: Any) -> Array:
+        n = self.n
+        theta = {nm: z[n + i] for i, nm in enumerate(self.names)}
+        return self.residual_fn(z[:n], self.inject(ps, theta))
 
 
 # --------------------------------------------------------------------------
@@ -782,6 +835,7 @@ def track_parameters(
     allow: frozenset[str] | Sequence[str] = UPDATE_WHEN_DRIFTING,
     max_std: Sequence[float] | Array | float | None = None,
     keep_results: bool = False,
+    parameter_free: Sequence[int] | bool | None = None,
     **reconcile_kw: Any,
 ) -> TrackResult:
     """Run the gated filter over a campaign, one period at a time.
@@ -790,9 +844,13 @@ def track_parameters(
 
     1. reconcile with the parameters **frozen** at the current estimate
        and record the global and measurement tests --- the routine
-       clock, and the only reason the tests mean anything;
+       clock, and the only reason the tests mean anything --- plus the
+       test against the constraints that contain none of the tracked
+       parameters, which checks the instruments alone;
     2. draw a verdict from the campaign so far and put it to
-       :func:`update_gate`;
+       :func:`update_gate`, with this period's step, so under the default
+       gate a period whose parameter-free constraints reject never moves
+       the parameter;
     3. :func:`time_update` the tracker, whatever the verdict said;
     4. only if the gate opened, estimate the parameters from this
        period with :func:`parameter_measurement` and fold the result in
@@ -854,6 +912,11 @@ def track_parameters(
         keep_results: retain each full
             :class:`~difflow.reconciliation.ReconcileResult` on its
             monitoring step.
+        parameter_free: the constraint rows free of the tracked
+            parameters. ``None`` (default) finds them from the Jacobian
+            with respect to the tracked parameters; a sequence of row
+            indices names them; ``False`` turns the instrument check
+            off, leaving the verdict to the blame pattern.
         **reconcile_kw: forwarded to
             :func:`~difflow.reconciliation.reconcile`.
 
@@ -888,6 +951,11 @@ def track_parameters(
     monitor_steps: list[MonitorStep] = []
     steps: list[TrackStep] = []
     initial = state
+    find_rows = parameter_free is None or parameter_free is True
+    rows: list[int] | None = (
+        None if isinstance(parameter_free, bool) or parameter_free is None
+        else [int(r) for r in parameter_free]
+    )
 
     for i, (t, y) in enumerate(zip(clock, measurements)):
         # 1. the routine clock: the model is frozen at the current
@@ -912,12 +980,24 @@ def track_parameters(
             mt = measurement_test(res, alpha=alpha)
             if plant_names is None:
                 plant_names = list(res.names)
+            if find_rows:
+                # Which rows hold a tracked parameter is structural.
+                find_rows = False
+                x_hat = res.x
+                rows = parameter_free_rows(
+                    lambda th, x=x_hat: residual_fn(x, inject_fn(params, th)),
+                    state.as_params(),
+                )
             monitor_steps.append(
                 MonitorStep(
                     index=i, statistic=gt.statistic, dof=gt.dof,
                     critical=gt.critical, p_value=gt.p_value,
                     detected=gt.detected, suspect=mt.suspect, z_max=mt.z_max,
                     result=res if keep_results else None,
+                    **balance_test(
+                        residual_fn, y, sigma, rows, params=frozen,
+                        names=plant_names, alpha=alpha, **reconcile_kw,
+                    ),
                 )
             )
 
@@ -930,7 +1010,7 @@ def track_parameters(
             rejection_threshold=rejection_threshold,
             concentration_threshold=concentration_threshold,
         )
-        decision = update_gate(diagnosis, allow=allow)
+        decision = update_gate(diagnosis, allow=allow, step=monitor_steps[-1])
 
         # 3. the random walk runs whether or not the data were usable.
         state = time_update(state, t - state.time, drift_std, max_std=max_std)

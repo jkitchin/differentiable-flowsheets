@@ -8,6 +8,7 @@ import pytest
 jax.config.update("jax_enable_x64", True)
 
 from difflow.reconciliation import (
+    MONITOR_INSTRUMENT_FAULT,
     MONITOR_MODEL_DRIFT,
     ReconciliationStructureError,
     blame_concentration,
@@ -132,3 +133,34 @@ def test_wandering_suspect_verdict():
                          detected=True, suspect=s, z_max=5.0)
              for i, s in enumerate(["a", "b", "c", "a", "d", "b", "c", "d"])]
     assert MonitorResult(steps=steps).diagnose(window=None).verdict == MONITOR_MODEL_DRIFT
+
+
+def test_reconcile_multi_reuses_the_compiled_solve(leak_campaign):
+    # Regression (#516): a fresh stacked closure per call recompiled the solve
+    # for every new window of data.
+    ys, sigma = leak_campaign
+    reconcile_multi(leak_balance, ys, sigma, shared=["leak"], names=LEAK_NAMES)
+    size = solve_reconciliation._cache_size()
+    shifted = [y + 0.5 for y in ys]
+    reconcile_multi(leak_balance, shifted, sigma, shared=["leak"], names=LEAK_NAMES)
+    assert solve_reconciliation._cache_size() == size
+
+
+def split_flow(x, params):
+    """A parameter-free balance and a rate equation carrying ``k``."""
+    a, b, c = x
+    return jnp.array([a - b - c, b - params["k"] * a])
+
+
+def test_diagnose_uses_the_parameter_free_constraints():
+    # Regression (#516): with two equations, drift of k moved the blame onto one
+    # meter every day and was read as an instrument fault.
+    sigma = jnp.array([1.0, 1.0, 1.0])
+    drift = [jnp.array([100.0, 60.0, 40.0])] * 4             # k = 0.6, model says 0.5
+    mon = monitor(split_flow, drift, sigma, params={"k": 0.5}, names=["a", "b", "c"])
+    assert mon.diagnose(window=None).verdict == MONITOR_MODEL_DRIFT
+
+    biased = [jnp.array([100.0, 50.0, 58.0])] * 4            # k right, c reads 8 high
+    mon = monitor(split_flow, biased, sigma, params={"k": 0.5}, names=["a", "b", "c"])
+    diag = mon.diagnose(window=None)
+    assert diag.verdict == MONITOR_INSTRUMENT_FAULT and diag.culprit == "c"

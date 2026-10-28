@@ -172,10 +172,11 @@ def apply_backoff(specs: Sequence[Spec],
                   backoff: BackOffResult | Mapping[str, float]) -> list[Spec]:
     """Return copies of ``specs`` carrying the given back-offs.
 
-    Back-off tightens a spec inside the LP but is *not* part of the promise
-    the spec makes: :meth:`difflow.planning.lp.Spec.violation` still measures
-    against the stated right-hand side, so eating into the margin is not
-    scored as a violation.
+    The planner keeps the margin: the LP rows, the trust-region acceptance
+    test, the merit function and ``PlanResult.violations`` all measure
+    against :attr:`~difflow.planning.lp.Spec.effective_rhs`, so a step that
+    eats into the back-off is charged like any other violation.
+    ``PlanResult.stated_violations`` reports the stated limits alone.
 
     Args:
         specs: The specs to tighten.

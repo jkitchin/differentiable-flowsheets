@@ -1,7 +1,9 @@
 """Fisher information confidence intervals.
 
 Uses jax.hessian for exact second derivatives at the optimum to compute
-parameter covariance and confidence intervals.
+parameter covariance and confidence intervals. For the default
+sum-of-squares objective the covariance is ``s^2 (J^T J)^{-1}``, the
+textbook least-squares result (``2 s^2 H^{-1}``, since ``H = 2 J^T J``).
 
 The step from a parameter covariance matrix to a
 :class:`ConfidenceResult` -- standard errors, Student-t intervals and the
@@ -130,14 +132,25 @@ def fisher_confidence_intervals(
     experiments,
     param_names,
     alpha=0.05,
+    objective='sse',
 ):
     """Compute confidence intervals from the Fisher information matrix.
 
-    The covariance is estimated as:
-        cov = 2 * s^2 * H^{-1}
+    ``H`` is the exact Hessian of ``objective_fn`` at the optimum. How it
+    becomes a covariance depends on which objective it is the Hessian of:
 
-    where H is the Hessian of the objective at the optimum and s^2 is the
-    estimated variance of residuals.
+    - ``'sse'``, ``S = sum r_i^2``: ``H = 2 J^T J`` at a least-squares
+      optimum (exactly so for a linear model), so
+      ``cov = 2 s^2 H^{-1} = s^2 (J^T J)^{-1}``, with the residual variance
+      estimated from the fit, ``s^2 = S / (n_obs - n_params)``. For a
+      straight line this is the textbook ``s^2 (X^T X)^{-1}``.
+    - ``'wsse'``, ``S = sum r_i^2 / sigma_i^2`` with the declared 1-sigma
+      ``uncertainties`` taken as known: ``cov = 2 H^{-1} = (J^T W J)^{-1}``,
+      the same covariance :func:`difflow.estimation.predicted_covariance`
+      predicts. No ``s^2`` is estimated; the uncertainties *are* the error
+      model.
+    - ``'nll'``, the Gaussian negative log-likelihood: ``H`` is the
+      observed Fisher information, so ``cov = H^{-1}``.
 
     Args:
         objective_fn: objective(theta) -> scalar (already closed over experiments)
@@ -145,25 +158,52 @@ def fisher_confidence_intervals(
         experiments: list of Experiment objects (for degrees of freedom)
         param_names: list of parameter names
         alpha: significance level (default 0.05 for 95% CI)
+        objective: which objective ``objective_fn`` is -- 'sse' (default),
+            'wsse' or 'nll'; it fixes the scaling above.
 
     Returns:
         ConfidenceResult with covariance, std errors, and CIs.
+
+    Example:
+        >>> import jax.numpy as jnp
+        >>> x = jnp.array([0.0, 1.0, 2.0, 3.0])
+        >>> y = jnp.array([1.0, 2.9, 5.2, 6.9])
+        >>> sse = lambda th: jnp.sum((th[0] * x + th[1] - y) ** 2)
+        >>> X = jnp.stack([x, jnp.ones(4)], axis=1)
+        >>> th = jnp.linalg.lstsq(X, y)[0]
+        >>> from difflow.estimation import Experiment
+        >>> exps = [Experiment(observed={'y': float(v)}) for v in y]
+        >>> ci = fisher_confidence_intervals(sse, th, exps, ['a', 'b'])
+        >>> s2 = float(sse(th)) / 2
+        >>> bool(jnp.isclose(ci.covariance[0, 0], s2 * jnp.linalg.inv(X.T @ X)[0, 0]))
+        True
     """
+    if objective not in ('sse', 'wsse', 'nll'):
+        raise ValueError(
+            f"Unknown objective {objective!r}; expected 'sse', 'wsse' or 'nll'"
+        )
     n_params = len(param_names)
 
-    # Count total observations
-    n_obs = sum(len(exp.output_names) for exp in experiments)
+    # Count total observations: every entry of an array-valued output
+    n_obs = sum(exp.n_obs for exp in experiments)
     dof = n_obs - n_params
 
-    # Hessian at optimum
-    hessian = jax.hessian(objective_fn)(theta_opt)
+    # Hessian at optimum, compiled once rather than run op by op
+    hessian = jax.jit(jax.hessian(objective_fn))(theta_opt)
+    h_inv = jnp.linalg.inv(hessian)
 
-    # Estimated residual variance: s^2 = SSE / dof
-    sse_opt = objective_fn(theta_opt)
-    s2 = float(sse_opt) / max(dof, 1)
-
-    # Covariance = s^2 * H^{-1}  (factor of 2 cancels with 1/2 in Hessian of SSE)
-    cov = s2 * jnp.linalg.inv(hessian)
+    if objective == 'sse':
+        # S = sum r^2 carries no 1/2, so H = 2 J^T J and the factor of 2
+        # does NOT cancel: cov = s^2 (J^T J)^{-1} = 2 s^2 H^{-1}.
+        sse_opt = objective_fn(theta_opt)
+        s2 = float(sse_opt) / max(dof, 1)
+        cov = 2.0 * s2 * h_inv
+    elif objective == 'wsse':
+        # Known sigmas: H = 2 J^T W J, cov = (J^T W J)^{-1}.
+        cov = 2.0 * h_inv
+    else:
+        # Gaussian NLL already has the 1/2: H is the Fisher information.
+        cov = h_inv
 
     return confidence_result_from_covariance(
         cov, theta_opt, param_names, alpha=alpha, dof=dof

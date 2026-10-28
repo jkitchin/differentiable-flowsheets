@@ -118,6 +118,15 @@ ode_model = StateSpaceModel.from_ode(
 )
 ```
 
+A `DynamicFlowsheet` needs no hand-written right-hand side:
+`StateSpaceModel.from_flowsheet(fs, h, n_y=..., dt=..., n_u=...)` takes its
+combined state (named `"unit.state"`), hands the input `u` to the flowsheet as
+its `args` (what `(t, args)` feeds and `f(t, args)` unit inputs read; map it with
+`u_to_args=`) and `theta` as its `params`. With a mapping `theta`,
+`augment_parameters` then estimates a unit parameter such as a jacket `UA`
+directly. The same model linearizes into an MPC with
+`difflow.control.LinearMPC.from_model` (see [control](control.md)).
+
 `noise=` says how $w$ enters: `None` adds it to the state at the end of the
 interval, an array $G$ adds $G w$, and a callable `(x, w) -> x` does whatever you
 say.
@@ -341,8 +350,12 @@ print(run.summary())
 The first `horizon` grid points have no full window behind them, so they are
 filtered rather than optimised; `source` records which, so a plot never silently
 mixes the two. From then on each sampling time solves one window and rolls the
-arrival cost forward. The window solve is **traced once and reused**, so a run
-costs $N$ optimisations and one compilation, not $N$ of each; `warm_start=True`
+arrival cost forward. The window solve and the arrival-cost update are each
+**compiled once and reused** at every sampling time, so a run costs $N$
+optimisations and one compilation, not $N$ of each. Both, and `run_ekf`, are
+cached by model object and settings (`theta` and `process_std` by value), so a
+second run of the same model, or `solve_mhe` called window by window, compiles
+nothing; `warm_start=True`
 (the default) seeds each window from the previous solution, shifted one step.
 
 ## `jit`, `grad`, and feeding a planner

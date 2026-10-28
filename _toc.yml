@@ -30,6 +30,7 @@ parts:
       - file: docs/convergence
       - file: docs/dynamic-modeling
       - file: docs/moving-horizon-estimation
+      - file: docs/control
       - file: docs/solvers-and-utilities
       - file: docs/external-solvers
       - file: docs/eo-solver
