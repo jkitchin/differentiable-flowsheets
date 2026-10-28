@@ -341,7 +341,8 @@ class Estimator:
             candidates: Pool of candidate conditions, typically built with
                 ``Experiment.candidate``.
             n: Number of runs to select.
-            criterion: 'D' (default), 'A', 'E' or 'ME'.
+            criterion: 'D' (default), 'A', 'E', 'ME' or 'C' (with
+                ``quantity=``, see :func:`difflow.estimation.design_experiments`).
             **kwargs: Passed through to
                 :func:`difflow.estimation.design_experiments`.
 

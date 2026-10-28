@@ -117,12 +117,17 @@ class DynamicUnitEntry:
     def output_dependencies(self) -> dict[str, set[str]] | None:
         """``{outlet port: inlet ports it reads}``, or None if unknown.
 
-        Read from the unit's ``output_dependencies`` (port names). Only used
+        Read from the unit's ``output_dependencies`` (port names; or a
+        method ``output_dependencies(inlet_ports)`` returning them). Only used
         when the outlet ports are known and the unit can evaluate a subset of
         its outputs (``partial_outputs``); otherwise every output is taken to
         depend on every input.
         """
         deps = getattr(self.unit, "output_dependencies", None)
+        if callable(deps):
+            # A unit whose dependencies follow its configuration (which
+            # inlet ports carry signals) computes them from its ports.
+            deps = deps(tuple(self.inlet_ports))
         if (deps is None or self.outlet_ports is None
                 or not hasattr(self.unit, "partial_outputs")):
             return None
@@ -213,6 +218,35 @@ class DynamicFlowsheetResult:
         state = self.trajectory.y[idx, entry.state_slice]
         spec = entry.unit.state_spec()
         return {name: state[i] for i, name in enumerate(spec.names)}
+
+    def stream_history(
+        self, name: str, params: Params | None = None, args: Any = None
+    ) -> Stream:
+        """A stream over the trajectory: each key an array over time.
+
+        The streams are not stored during integration; this re-evaluates the
+        flowsheet at every saved time (one ``vmap``). Pass the ``params`` and
+        ``args`` the simulation used, so a stream that depends on them (a
+        controller output, say) comes back as simulated.
+
+        Args:
+            name: Stream name (a feed or a unit outlet).
+            params: The ``params`` given to ``simulate``.
+            args: The ``args`` given to ``simulate``.
+
+        Returns:
+            ``{key: array of shape (n_times,)}`` for the stream's numeric keys.
+        """
+        import jax
+
+        def at(t, y):
+            stream = self.flowsheet.outputs(t, y, params, args)[name]
+            return {k: v for k, v in stream.items() if not isinstance(v, str)}
+
+        if name not in self.flowsheet.outputs(
+                self.trajectory.t[0], self.trajectory.y[0], params, args):
+            raise KeyError(f"no stream {name!r} in the flowsheet")
+        return jax.vmap(at)(self.trajectory.t, self.trajectory.y)
 
 
 class DynamicFlowsheet:

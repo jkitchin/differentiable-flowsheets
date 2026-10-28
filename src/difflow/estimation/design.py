@@ -36,7 +36,15 @@ name         value                       geometry of the confidence ellipsoid
 ``'E'``      ``lambda_min(FIM)`` (max)   shrink its longest axis
 ``'ME'``     ``lambda_max/lambda_min``   round it out (conditioning)
              (min)
+``'C'``      ``c^T FIM^-1 c`` (min)      shrink it along one direction ``c``
 ===========  ==========================  =====================================
+
+``'C'`` (c-optimality) is the variance of one derived quantity
+``g(theta)``, with ``c = dg/dtheta``: a reactor volume, a conversion at
+the production conditions. :func:`design_experiments` takes ``g`` as
+``quantity=`` and differentiates it at ``theta``. Choosing runs between
+rival *models* rather than within one is
+:func:`difflow.estimation.design_discrimination`.
 
 D-optimality is the usual default: it is invariant to rescaling the
 parameters, which A- and E-optimality are not, so it does not silently
@@ -133,11 +141,12 @@ __all__ = [
     "predicted_covariance",
 ]
 
-#: Supported design criteria.
-CRITERIA = ("D", "A", "E", "ME")
+#: Supported design criteria. ``'C'`` needs the direction ``c`` (the
+#: gradient of the quantity of interest), see :func:`design_criterion`.
+CRITERIA = ("D", "A", "E", "ME", "C")
 
 #: Criteria whose conventional value is better when smaller.
-_MINIMIZE = ("A", "ME")
+_MINIMIZE = ("A", "ME", "C")
 
 #: Machine epsilon, the relative threshold below which a FIM *eigenvalue*
 #: counts as zero.
@@ -298,11 +307,14 @@ def fisher_information(
     return 0.5 * (fim + fim.T)
 
 
-def design_criterion(fim: Array, criterion: str = "D") -> Array:
+def design_criterion(
+    fim: Array, criterion: str = "D", c: Array | Sequence[float] | None = None
+) -> Array:
     """Value of a design criterion for a Fisher information matrix.
 
     Conventional (not sign-flipped) values, so ``'D'`` and ``'E'`` are
-    better when larger and ``'A'`` and ``'ME'`` better when smaller:
+    better when larger and ``'A'``, ``'ME'`` and ``'C'`` better when
+    smaller:
 
     - ``'D'``: ``log det FIM``, via Cholesky. Maximize. Proportional to
       minus the log volume of the confidence ellipsoid, and invariant to
@@ -313,13 +325,21 @@ def design_criterion(fim: Array, criterion: str = "D") -> Array:
       direction. Maximize.
     - ``'ME'``: modified E, ``lambda_max/lambda_min`` -- the condition
       number, i.e. the aspect ratio of the ellipsoid. Minimize.
+    - ``'C'``: ``c^T FIM^-1 c``, the predicted variance of the linear
+      combination ``c^T theta`` -- to first order, of any quantity
+      ``g(theta)`` with gradient ``c``. Minimize.
 
-    A singular FIM gives ``-inf``, ``+inf``, ``0`` and ``+inf``
-    respectively, which are the correct limits, not errors.
+    A singular FIM gives ``-inf``, ``+inf``, ``0``, ``+inf`` and ``+inf``
+    respectively, which are the correct limits, not errors. (For ``'C'``
+    that is conservative: ``c^T theta`` can be estimable from a singular
+    FIM, but the value is only reported once the FIM is nonsingular.)
 
     Args:
         fim: Fisher information matrix, shape ``(n, n)``.
-        criterion: One of ``'D'``, ``'A'``, ``'E'``, ``'ME'``.
+        criterion: One of ``'D'``, ``'A'``, ``'E'``, ``'ME'``, ``'C'``.
+        c: The direction for ``'C'``, shape ``(n,)``: the gradient of the
+            quantity of interest with respect to the parameters, in FIM
+            order. Required for ``'C'`` and refused for the others.
 
     Returns:
         Scalar criterion value.
@@ -331,10 +351,13 @@ def design_criterion(fim: Array, criterion: str = "D") -> Array:
         1.25
         >>> float(design_criterion(fim, 'ME'))      # 4 / 1
         4.0
+        >>> float(design_criterion(fim, 'C', c=[1.0, 2.0]))   # 1/4 + 4/1
+        4.25
     """
-    c = _check_criterion(criterion)
+    crit = _check_criterion(criterion)
     fim = jnp.asarray(fim, dtype=float)
-    if c == "D":
+    c_vec = _check_c(crit, c, fim.shape[0])
+    if crit == "D":
         return log_det(fim)
 
     w = jnp.linalg.eigvalsh(fim)
@@ -342,9 +365,19 @@ def design_criterion(fim: Array, criterion: str = "D") -> Array:
     w_min = w[0]
     singular = w_min <= _fim_rank_tol(w)
 
-    if c == "E":
+    if crit == "C":
+        # c^T FIM^-1 c without forming the inverse, on the matrix
+        # equilibrated by its diagonal (as in log_det): FIM = D M D gives
+        # c^T FIM^-1 c = (c/d)^T M^-1 (c/d), and M is well scaled.
+        d = jnp.sqrt(jnp.diagonal(fim))
+        d = jnp.where(jnp.isfinite(d) & (d > 0), d, 1.0)
+        ws, vs = jnp.linalg.eigh(fim / jnp.outer(d, d))
+        ok = ~singular & (ws[0] > 0)
+        proj = vs.T @ (c_vec / d)
+        return jnp.where(ok, jnp.sum(proj ** 2 / jnp.where(ok, ws, 1.0)), jnp.inf)
+    if crit == "E":
         return jnp.where(singular, 0.0, w_min)
-    if c == "ME":
+    if crit == "ME":
         return jnp.where(singular, jnp.inf, w_max / jnp.where(singular, 1.0, w_min))
     # A-optimality: sum of 1/lambda, which is trace(FIM^-1) without forming
     # the inverse.
@@ -352,7 +385,23 @@ def design_criterion(fim: Array, criterion: str = "D") -> Array:
     return jnp.where(singular, jnp.inf, jnp.sum(1.0 / safe))
 
 
-def _pseudo_score(fim: np.ndarray, criterion: str) -> tuple[int, float]:
+def _check_c(criterion: str, c, n: int):
+    """Validate the direction ``c``: required for ``'C'``, refused otherwise."""
+    if criterion != "C":
+        if c is not None:
+            raise ValueError(f"c is only used with criterion 'C', not {criterion!r}")
+        return None
+    if c is None:
+        raise ValueError("criterion 'C' needs c, the gradient of the quantity of interest")
+    c_vec = jnp.ravel(jnp.asarray(c, dtype=float))
+    if c_vec.shape != (n,):
+        raise ValueError(f"c has {c_vec.shape[0]} entries, expected {n} (one per parameter)")
+    return c_vec
+
+
+def _pseudo_score(
+    fim: np.ndarray, criterion: str, c: np.ndarray | None = None
+) -> tuple[int, float]:
     """Rank-then-criterion score used for selection; larger is better.
 
     Returns ``(rank, value)`` compared lexicographically. ``value`` applies
@@ -363,14 +412,22 @@ def _pseudo_score(fim: np.ndarray, criterion: str) -> tuple[int, float]:
     singular it prefers whichever candidate opens a new information
     direction, which is what actually distinguishes the early picks.
     """
-    w = np.linalg.eigvalsh(np.asarray(fim, dtype=float))
+    fim = np.asarray(fim, dtype=float)
+    if criterion == "C":
+        w, v = np.linalg.eigh(fim)
+    else:
+        w = np.linalg.eigvalsh(fim)
     if not w.size:
         return 0, -np.inf
-    pos = w[w > w.size * _EPS * max(float(w[-1]), 0.0)]
+    keep = w > w.size * _EPS * max(float(w[-1]), 0.0)
+    pos = w[keep]
     rank = int(pos.size)
     if rank == 0:
         return 0, -np.inf
-    if criterion == "D":
+    if criterion == "C":
+        # c^T F^+ c over the informative directions only.
+        value = -float(np.sum((v[:, keep].T @ c) ** 2 / pos))
+    elif criterion == "D":
         value = float(np.sum(np.log(pos)))
     elif criterion == "A":
         value = -float(np.sum(1.0 / pos))
@@ -404,6 +461,10 @@ class DesignResult(ParamsMixin):
         method: ``'greedy'`` or ``'exchange'``.
         n_candidates: Size of the candidate pool.
         n_exchanges: Number of accepted swaps (exchange method only).
+        c: For the ``'C'`` criterion, the gradient of the quantity of
+            interest at ``theta`` (in ``param_names`` order); ``None``
+            otherwise. ``sqrt(criterion_value)`` is then the quantity's
+            predicted standard deviation.
     """
 
     selected: list[Any]
@@ -420,6 +481,7 @@ class DesignResult(ParamsMixin):
     method: str = "greedy"
     n_candidates: int = 0
     n_exchanges: int = 0
+    c: Array | None = None
 
     def summary(self) -> str:
         """Human-readable table of the design and what it buys."""
@@ -431,6 +493,10 @@ class DesignResult(ParamsMixin):
             f"selected {len(self.selected)} of {self.n_candidates} candidates",
             f"criterion value: {self.criterion_value:.6g}",
         ]
+        if self.criterion == "C":
+            lines.append(
+                f"predicted std of the quantity: {np.sqrt(self.criterion_value):.6g}"
+            )
         if self.n_exchanges:
             lines.append(f"accepted exchanges: {self.n_exchanges}")
         lines += ["", f"  {'#':>3} {'candidate':>9}  inputs", "  " + "-" * 56]
@@ -592,6 +658,7 @@ def design_experiments(
     require_identifiable: bool = True,
     rank_tol: float | None = None,
     max_exchange_sweeps: int = 20,
+    quantity: Callable | Array | Sequence[float] | None = None,
 ) -> DesignResult:
     """Choose the ``n`` candidate experiments that most reduce uncertainty.
 
@@ -619,7 +686,8 @@ def design_experiments(
         candidates: Pool of conditions to choose from, typically built with
             :meth:`difflow.estimation.Experiment.candidate`.
         n: Number of runs to select.
-        criterion: ``'D'`` (default), ``'A'``, ``'E'`` or ``'ME'``.
+        criterion: ``'D'`` (default), ``'A'``, ``'E'``, ``'ME'`` or ``'C'``
+            (c-optimal: minimize the predicted variance of ``quantity``).
         param_names: Parameter order; defaults to the ``theta`` dict order.
         method: ``'greedy'`` or ``'exchange'``.
         replace: Allow a candidate to be chosen more than once, i.e.
@@ -634,6 +702,11 @@ def design_experiments(
             of a degenerate problem.
         rank_tol: Override for the rank test threshold.
         max_exchange_sweeps: Cap on exchange sweeps.
+        quantity: For ``criterion='C'`` only: the quantity whose variance
+            ``c^T FIM^-1 c`` is minimized. Either a function
+            ``g(theta_dict) -> scalar`` (a reactor volume, say), which is
+            differentiated by :func:`jax.grad` at ``theta`` to give ``c``,
+            or ``c`` itself, an array with one entry per parameter.
 
     Returns:
         A :class:`DesignResult` with the selected experiments, the final
@@ -642,8 +715,10 @@ def design_experiments(
 
     Raises:
         IdentifiabilityError: When the pool cannot identify the parameters.
-        ValueError: For an empty pool, ``n <= 0``, or ``n`` larger than the
-            pool with ``replace=False``.
+        ValueError: For an empty pool, ``n <= 0``, ``n`` larger than the
+            pool with ``replace=False``, ``criterion='C'`` without
+            ``quantity`` (or ``quantity`` with another criterion), or a
+            ``quantity`` gradient that is not finite.
 
     Example:
         >>> from difflow.estimation import Experiment, design_experiments
@@ -654,6 +729,15 @@ def design_experiments(
         >>> res = design_experiments(model, {'a': 1.0, 'b': 0.0}, pool, n=2)
         >>> sorted(e.inputs['x'] for e in res.selected)
         [0.0, 4.0]
+
+        c-optimal: the variance of the prediction at ``x = 4`` is smallest
+        when the runs are there (the existing run at 0 fixes the line):
+
+        >>> res = design_experiments(
+        ...     model, {'a': 1.0, 'b': 0.0}, pool, n=2, criterion='C',
+        ...     existing=pool[:1], quantity=lambda th: th['a'] * 4.0 + th['b'])
+        >>> [e.inputs['x'] for e in res.selected]
+        [4.0, 4.0]
     """
     c = _check_criterion(criterion)
     if method not in ("greedy", "exchange"):
@@ -671,6 +755,7 @@ def design_experiments(
 
     theta_arr, names = _as_theta_array(theta, param_names)
     n_p = len(names)
+    c_vec = _quantity_gradient(c, quantity, theta_arr, names)
 
     report = None
     if require_identifiable:
@@ -701,6 +786,7 @@ def design_experiments(
             fisher_information(model_fn, theta_arr, list(existing), names), dtype=float
         )
 
+    c_np = None if c_vec is None else np.asarray(c_vec, dtype=float)
     chosen: list[int] = []
     history: list[float] = []
     current = base.copy()
@@ -711,7 +797,7 @@ def design_experiments(
         for i, contrib in enumerate(contributions):
             if not replace and i in chosen:
                 continue
-            score = _pseudo_score(current + contrib, c)
+            score = _pseudo_score(current + contrib, c, c_np)
             if score > best_score:
                 best_score = score
                 best_idx = i
@@ -719,13 +805,13 @@ def design_experiments(
             break
         chosen.append(best_idx)
         current = current + contributions[best_idx]
-        history.append(float(design_criterion(jnp.asarray(current), c)))
+        history.append(float(design_criterion(jnp.asarray(current), c, c_vec)))
 
     n_exchanges = 0
     if method == "exchange":
         for _ in range(max_exchange_sweeps):
             best_swap = None
-            best_score = _pseudo_score(current, c)
+            best_score = _pseudo_score(current, c, c_np)
             for pos, out_idx in enumerate(chosen):
                 reduced = current - contributions[out_idx]
                 for i, contrib in enumerate(contributions):
@@ -733,7 +819,7 @@ def design_experiments(
                         continue
                     if not replace and i in chosen:
                         continue
-                    score = _pseudo_score(reduced + contrib, c)
+                    score = _pseudo_score(reduced + contrib, c, c_np)
                     if score > best_score:
                         best_score = score
                         best_swap = (pos, out_idx, i)
@@ -743,7 +829,7 @@ def design_experiments(
             current = current - contributions[out_idx] + contributions[in_idx]
             chosen[pos] = in_idx
             n_exchanges += 1
-            history.append(float(design_criterion(jnp.asarray(current), c)))
+            history.append(float(design_criterion(jnp.asarray(current), c, c_vec)))
 
     fim = jnp.asarray(0.5 * (current + current.T))
     cov, std_errors = _covariance_and_errors(fim, names)
@@ -752,7 +838,7 @@ def design_experiments(
         selected=[candidates[i] for i in chosen],
         indices=chosen,
         criterion=c,
-        criterion_value=float(design_criterion(fim, c)),
+        criterion_value=float(design_criterion(fim, c, c_vec)),
         fim=fim,
         covariance=cov,
         std_errors=std_errors,
@@ -763,4 +849,30 @@ def design_experiments(
         method=method,
         n_candidates=len(candidates),
         n_exchanges=n_exchanges,
+        c=c_vec,
     )
+
+
+def _quantity_gradient(criterion, quantity, theta_arr, names):
+    """``c`` for the c-optimal criterion: ``grad g(theta)``, or ``quantity`` itself."""
+    if criterion != "C":
+        if quantity is not None:
+            raise ValueError(
+                f"quantity is only used with criterion='C', not {criterion!r}"
+            )
+        return None
+    if quantity is None:
+        raise ValueError(
+            "criterion='C' needs quantity=: a function g(theta_dict) -> scalar, "
+            "or its gradient with one entry per parameter"
+        )
+    if callable(quantity):
+        def g(t):
+            return jnp.asarray(quantity({n: t[i] for i, n in enumerate(names)}),
+                               dtype=float).reshape(())
+        c_vec = jax.grad(g)(theta_arr)
+    else:
+        c_vec = _check_c("C", quantity, len(names))
+    if not bool(jnp.all(jnp.isfinite(c_vec))):
+        raise ValueError(f"the gradient of quantity is not finite at theta: {c_vec}")
+    return c_vec

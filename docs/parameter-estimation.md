@@ -103,11 +103,14 @@ Key capabilities:
    - Reuses the SVD rank machinery of `difflow.reconciliation.structure`
 
 10. **Experiment Design** (`design.py`)
-    - `design_experiments` — which runs to do next (D/A/E/modified-E optimal)
+    - `design_experiments` — which runs to do next (D/A/E/modified-E optimal,
+      or c-optimal for one derived quantity)
     - `predicted_covariance` — the confidence intervals a campaign would buy
+    - `design_discrimination` (`discrimination.py`) — runs that tell rival
+      models apart (Hunter–Reiner, Buzzi-Ferraris)
     - Selects from a *candidate list*, for any model JAX can differentiate.
-      Continuous design optimization, profile likelihood, model discrimination
-      and classical designs are in the separate `discopt-doe` plugin
+      Continuous design optimization, profile likelihood, sequential model
+      discrimination and classical designs are in the separate `discopt-doe` plugin
       (`discopt.doe`), which needs a `discopt.modeling` model rather than a JAX
       one.
     - See [Experiment Design and Identifiability](experiment-design.md)
@@ -279,7 +282,8 @@ to be aware of:
 - Identifiability diagnostics are local and rank-based (`check_identifiability`,
   see [Experiment Design and Identifiability](experiment-design.md)); there is
   no profile likelihood and no global symbolic identifiability analysis.
-- There is no model discrimination, no estimability ranking, no classical or
+- Model discrimination is a design from a candidate list
+  (`design_discrimination`); there is no estimability ranking, no classical or
   screening design, and no continuous optimization of experimental conditions.
   Those live in the `discopt-doe` plugin; see
   [what is here and what is in `discopt-doe`](experiment-design.md#related-tools-discopt-doe-and-sensor-placement)

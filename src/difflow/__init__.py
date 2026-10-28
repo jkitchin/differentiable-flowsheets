@@ -530,6 +530,9 @@ except ImportError:
 
 # Dynamic modeling submodule
 from difflow import dynamic
+
+# Feedback control: PI(D) in a dynamic flowsheet, linear MPC (#520)
+from difflow import control
 from difflow.dynamic import (
     # State management
     StateVar,
@@ -977,6 +980,8 @@ __all__ = [
     "mhe",
     # Operability screening
     "operability",
+    # Feedback control
+    "control",
     # Flexibility analysis
     "flexibility",
     # Stochastic programming

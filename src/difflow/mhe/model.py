@@ -299,6 +299,58 @@ class StateSpaceModel(ParamsMixin):
                    x_names=list(x_names), y_names=list(y_names),
                    u_names=list(u_names), lb=lb, ub=ub)
 
+    @classmethod
+    def from_flowsheet(
+        cls,
+        fs: Any,
+        h: Callable[..., Array],
+        *,
+        n_y: int,
+        dt: float,
+        n_u: int = 0,
+        u_to_args: Callable[[Array], Any] | None = None,
+        **kwargs: Any,
+    ) -> "StateSpaceModel":
+        """A :class:`~difflow.dynamic.DynamicFlowsheet` as a discrete model.
+
+        The state is the flowsheet's combined state (names from
+        ``fs.combined_state_spec()``). The input ``u`` reaches the flowsheet
+        as the ``args`` of its right-hand side -- what ``(t, args)`` feeds,
+        ``f(t, args)`` unit inputs and controller setpoints read -- and
+        ``theta`` as its ``params``, so :func:`augment_parameters` (whose
+        default ``inject`` writes ``theta[name]``) estimates a unit
+        parameter such as a jacket ``UA`` directly. Discretised by
+        :meth:`from_ode`.
+
+        Args:
+            fs: The dynamic flowsheet.
+            h: Measurement map ``h(x, u, theta) -> (n_y,)`` on the combined
+                state.
+            n_y: Number of measurement channels.
+            dt: Sampling interval.
+            n_u: Number of inputs.
+            u_to_args: Maps ``u`` to the flowsheet's ``args`` pytree
+                (default: ``u`` itself).
+            **kwargs: Forwarded to :meth:`from_ode` (``method``,
+                ``n_substeps``, ``y_names``, ``u_names``, ``lb``, ``ub``...).
+
+        Returns:
+            A :class:`StateSpaceModel`.
+
+        Example:
+            >>> model = StateSpaceModel.from_flowsheet(      # doctest: +SKIP
+            ...     fs, lambda x, u, th: x[3:4], n_y=1, dt=60.0, n_u=1,
+            ...     u_to_args=lambda u: {"Tc": u[0]})
+        """
+        to_args = u_to_args or (lambda u: u)
+
+        def rhs(t, x, u, theta):
+            return fs.derivatives(t, x, theta, to_args(u))
+
+        kwargs.setdefault("x_names", fs.combined_state_spec().names)
+        return cls.from_ode(rhs, h, n_x=fs.n_states, n_y=n_y, dt=dt, n_u=n_u,
+                            **kwargs)
+
 
 def augment_parameters(
     model: StateSpaceModel,

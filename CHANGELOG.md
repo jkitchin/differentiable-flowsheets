@@ -6,6 +6,34 @@ All notable changes to difflow are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Model-discrimination and c-optimal experiment design (issue 520).**
+  `difflow.estimation.design_discrimination(models, thetas, candidates, n, criterion='HR')` chooses the
+  candidate runs that best tell rival models apart, each model at its own fitted parameters: `'HR'`
+  (Hunter-Reiner, the squared prediction differences over the model pairs weighted by `1/sigma^2`; additive,
+  so the best run replicated) or `'BF'` (Buzzi-Ferraris, the difference against the measurement and both
+  models' prediction variances, from `covariances=` or the `existing=` runs; greedy on the set). It returns a
+  `DiscriminationResult` with every candidate's score, per model pair, and each model's predictions over the
+  pool (one `vmap` per model). `design_experiments(..., criterion='C', quantity=g)` is c-optimal design: it
+  minimizes `c^T FIM^-1 c`, the predicted variance of a derived quantity `g(theta)` (`c = jax.grad(g)` at
+  `theta`, or `quantity=c` directly); `design_criterion(fim, 'C', c=...)` gives the value and
+  `DesignResult.c` the gradient. `CRITERIA` now includes `'C'`.
+- **Feedback control: PI(D) and linear MPC (issue 520).** New `difflow.control` (docs/control.md).
+  `PIDController` (also in `difflow.dynamic`) is a dynamic unit for a `DynamicFlowsheet`: parallel PI(D) with
+  derivative on the filtered measurement, output limits and back-calculation anti-windup (tracking time
+  constant `tau_T`, `inf` for none), reverse/direct action; gains, setpoint and limits are constants, `f(t)`,
+  `f(t, args)` or (setpoint) a port, read per call from `params`, so `jax.grad` through `simulate` tunes the
+  loop. Its output is a signal stream whose `T` carries `u`; `DynamicCSTR` now takes `duty`, `UA` or `Tc` from
+  such a port and declares that its outlet does not read it (`output_dependencies`/`partial_outputs`), so a
+  controller measuring the outlet closes the loop without an algebraic loop (`DynamicFlowsheet` accepts
+  `output_dependencies(inlet_ports)` as a method). `LinearMPC` (`from_model` linearizes a `StateSpaceModel` by
+  autodiff) solves the input-bounded receding-horizon QP exactly with `box_qp` (primal-dual active set, JAX),
+  offset-free through an output bias; `run_mpc` runs the closed loop against any JAX plant as one `lax.scan`.
+  `StateSpaceModel.from_flowsheet` makes a `DynamicFlowsheet` a model for `difflow.mhe` and the MPC (input as
+  the flowsheet's `args`, `theta` as its `params`), and `DynamicFlowsheetResult.stream_history` returns a
+  stream over the trajectory.
+
 ### Fixed
 
 - **Fisher confidence intervals were too narrow by sqrt(2) (issue 512).**

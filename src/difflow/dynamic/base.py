@@ -346,8 +346,12 @@ class DynamicCSTR(DynamicUnitBase):
     ``duty``, ``UA`` and ``Tc`` may each be a constant (float or JAX array),
     a function of time ``f(t)``, or ``f(t, args)`` reading the ``args`` passed
     to ``DynamicFlowsheet.simulate`` (the disturbance channel ``add_feed``
-    uses). ``Tc`` may also be the name of an inlet port, whose stream
-    temperature is then the coolant temperature. They are stored under the
+    uses). Each may also be the name of an inlet port, whose stream
+    temperature ``T`` is then the value: a coolant stream for ``Tc``, or the
+    signal of a :class:`~difflow.dynamic.controller.PIDController` for any
+    of the three. The outlet does not read those ports, so a controller that
+    measures the outlet and drives one of them closes the loop without an
+    algebraic loop. They are stored under the
     same keys in ``params``, so ``simulate(params={"UA": ua})`` overrides
     them, differentiably. Cp = 75 J/(mol K) and the liquid molar density
     55 500 mol/m^3 are fixed (water-like).
@@ -421,12 +425,15 @@ class DynamicCSTR(DynamicUnitBase):
                 flow matches the inlet (constant volume; backward compatible).
             name: Unit name
             duty: Heat added (W, positive heats) in ``"specified_duty"``
-                mode: a constant, ``f(t)`` or ``f(t, args)``.
+                mode: a constant, ``f(t)``, ``f(t, args)`` or an inlet port
+                name whose stream ``T`` carries it (a controller's signal).
             UA: Jacket overall conductance (W/K) in ``"jacket"`` mode: a
-                constant, ``f(t)`` or ``f(t, args)`` (fouling, say).
+                constant, ``f(t)`` or ``f(t, args)`` (fouling, say), or an
+                inlet port name whose stream ``T`` carries it.
             Tc: Coolant temperature (K) in ``"jacket"`` mode: a constant,
                 ``f(t)``, ``f(t, args)``, or an inlet port name whose stream
-                temperature is the coolant temperature.
+                temperature is the coolant temperature (a coolant stream, or
+                a controller's output signal).
 
         Raises:
             ValueError: unknown ``mode``; ``"specified_duty"`` without
@@ -489,14 +496,32 @@ class DynamicCSTR(DynamicUnitBase):
             return UA * (Tc - T)
         return jnp.asarray(0.0)
 
+    #: Output port names.
+    output_ports = ("outlet",)
+
+    def _signal_ports(self) -> set[str]:
+        """Inlet ports named by ``duty``, ``UA`` or ``Tc``: signals, not feed."""
+        return {v for v in (self.params.get(k) for k in ("duty", "UA", "Tc"))
+                if isinstance(v, str)}
+
+    def output_dependencies(self, inlet_ports) -> dict[str, set[str]]:
+        """The outlet reads the state and the process feed, not the ports
+        that carry ``duty``, ``UA`` or ``Tc``. That is what lets a controller
+        that measures the outlet drive the jacket in one
+        ``DynamicFlowsheet`` without an algebraic loop."""
+        return {"outlet": set(inlet_ports) - self._signal_ports()}
+
+    def partial_outputs(self, t, state, inputs, params=None) -> dict[str, Stream]:
+        """The outlet from the process feed alone (see ``output_dependencies``)."""
+        return self.outputs(t, state, inputs, params)
+
     def _process_inlet(self, inputs: dict[str, Stream]) -> Stream:
         """The process feed: port ``"inlet"``, else the first stream that is
-        not the coolant port named by ``Tc``."""
+        not a port named by ``duty``, ``UA`` or ``Tc``."""
         if "inlet" in inputs:
             return inputs["inlet"]
-        coolant = self.params.get("Tc")
-        return next(v for k, v in inputs.items()
-                    if not (isinstance(coolant, str) and k == coolant))
+        signals = self._signal_ports()
+        return next(v for k, v in inputs.items() if k not in signals)
 
     def _build_state_spec(self) -> StateSpec:
         """Build state spec for moles, optionally volume and temperature."""

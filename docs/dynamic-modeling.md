@@ -191,9 +191,12 @@ reactor runs at the inlet temperature), `"adiabatic"` (Q = 0),
 `"specified_duty"` (Q = `duty`, W, positive heats the reactor) and `"jacket"`
 (Q = `UA * (Tc - T)`, with `UA` in W/K and coolant temperature `Tc` in K).
 `duty`, `UA` and `Tc` are each a constant, a function of time `f(t)`, or
-`f(t, args)` reading the `args` passed to `DynamicFlowsheet.simulate`; `Tc`
-may also name an inlet port, whose stream temperature is then the coolant
-temperature. They live in the unit's params under the same keys, so
+`f(t, args)` reading the `args` passed to `DynamicFlowsheet.simulate`. Each
+may also name an inlet port, whose stream temperature `T` is then the value: a
+coolant stream for `Tc`, or the output signal of a
+[`PIDController`](control.md) for any of the three. The outlet does not read
+those ports, so a controller that measures the outlet and drives the jacket
+closes the loop in one `DynamicFlowsheet` without an algebraic loop. They live in the unit's params under the same keys, so
 `fs.simulate(..., params={"UA": ua})` overrides them for that call and
 `jax.grad` goes through them. The heat capacity is fixed at 75 J/(mol K) and
 the molar density at 55 500 mol/m³ (a water-like liquid).
@@ -798,6 +801,7 @@ dy_final_dy0 = grad_fn(jnp.ones_like(result.y_final))
 | `DynamicUnitBase` | Base class with utilities |
 | `DynamicCSTR` | Dynamic CSTR reactor |
 | `DynamicTank` | Storage tank with holdup |
+| `PIDController` | PI(D) controller with limits and anti-windup ([control](control.md)) |
 | `DynamicFlowsheet` | Multi-unit flowsheet |
 | `DAEUnit` | Protocol for DAE units |
 | `DAEUnitBase` | Base class for DAE units |

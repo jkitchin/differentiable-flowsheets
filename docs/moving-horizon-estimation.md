@@ -118,6 +118,15 @@ ode_model = StateSpaceModel.from_ode(
 )
 ```
 
+A `DynamicFlowsheet` needs no hand-written right-hand side:
+`StateSpaceModel.from_flowsheet(fs, h, n_y=..., dt=..., n_u=...)` takes its
+combined state (named `"unit.state"`), hands the input `u` to the flowsheet as
+its `args` (what `(t, args)` feeds and `f(t, args)` unit inputs read; map it with
+`u_to_args=`) and `theta` as its `params`. With a mapping `theta`,
+`augment_parameters` then estimates a unit parameter such as a jacket `UA`
+directly. The same model linearizes into an MPC with
+`difflow.control.LinearMPC.from_model` (see [control](control.md)).
+
 `noise=` says how $w$ enters: `None` adds it to the state at the end of the
 interval, an array $G$ adds $G w$, and a callable `(x, w) -> x` does whatever you
 say.

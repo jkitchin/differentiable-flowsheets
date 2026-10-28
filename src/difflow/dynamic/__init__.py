@@ -18,6 +18,9 @@ Key Components
 - DynamicCSTR: Example dynamic CSTR implementation
 - DynamicTank: Example storage tank with holdup
 
+**Control** (controller.py):
+- PIDController: PI(D) with output limits and back-calculation anti-windup
+
 **Integration** (integrators.py):
 - integrate(): Unified ODE integration interface
 - integrate_rk4(): Fixed-step 4th order Runge-Kutta
@@ -180,6 +183,9 @@ from difflow.dynamic.flash import DynamicEOSFlash
 # Stateless units in a dynamic flowsheet
 from difflow.dynamic.instantaneous import InstantaneousUnit
 
+# Feedback control
+from difflow.dynamic.controller import PIDController
+
 # Diffrax backend (optional)
 try:
     from difflow.dynamic.diffrax_backend import (
@@ -236,6 +242,7 @@ from difflow.dynamic.dae import (
 
 __all__ = [
     "InstantaneousUnit",
+    "PIDController",
     # State
     "StateVar",
     "StateSpec",
