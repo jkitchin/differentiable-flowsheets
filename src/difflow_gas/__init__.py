@@ -45,7 +45,7 @@ accuracy comparisons) live in the ``gaslib`` repository; see this
 package's README for the findings that shaped the defaults here.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 # =============================================================================
 # Physics

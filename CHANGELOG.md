@@ -6,6 +6,11 @@ All notable changes to difflow are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-28
+
+The first release on PyPI since 0.2.2: 0.3.0 was prepared but never tagged or published, so
+0.4.0 also carries everything listed under 0.3.0 below.
+
 ### Added
 
 - **Unit-ops book Part VI gaps (issue 451).**
@@ -1369,7 +1374,10 @@ All notable changes to difflow are recorded here. The format follows
 - The missing-dependency message names the PyPI distribution only as
   different from the import name when it is (`asdex`, #394).
 
-## [0.3.0] - 2026-10-06
+## [0.3.0] - 2026-10-06 (not published)
+
+The version was bumped on `main` but never tagged, released or uploaded to PyPI; these changes
+shipped in 0.4.0.
 
 ### Breaking
 
@@ -1568,7 +1576,8 @@ All notable changes to difflow are recorded here. The format follows
 
 First public release.
 
-[Unreleased]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.2.2...v0.4.0
 [0.2.2]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.1.0...v0.2.0
