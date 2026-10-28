@@ -40,6 +40,12 @@ candidate is feasible, and which multi-start wins, is a fresh evaluation of
 the model at that point.  This is the same rule :mod:`difflow.planning` states
 for its LP slacks, for the same reason.
 
+**Warm restarts, not one fixed budget.**  When the recourse holds a spec
+exactly, every scenario sits on a kink of the model and the optimum is a
+kinked valley no coordinate follows; one cosine schedule stops Adam wherever
+its budget runs out.  Each round therefore restarts Adam until the point stops
+moving (``SAAOptions.max_cycles``), shrinking the step as progress slows.
+
 **The sample never changes.**  Not between iterations, not between rounds, not
 between multi-starts.  See :mod:`difflow.stochastic.scenarios`.
 
@@ -66,13 +72,8 @@ from difflow.flexibility.inner import box_adam
 from difflow.flexibility.sets import ControlSpec
 from difflow.params_mixin import ParamsMixin
 from difflow.stochastic.problem import TwoStageProblem
-from difflow.stochastic.risk import Chance
+from difflow.stochastic.risk import FEASIBILITY_TOL, Chance
 from difflow.stochastic.scenarios import ScenarioSet
-
-#: A constraint counts as satisfied when its residual is at or below this,
-#: taken relative to the size of the constraint's own right-hand side so it is
-#: a tolerance and not a hidden unit.
-FEASIBILITY_TOL = 1e-6
 
 
 def _satisfied(residual: float, bound: float) -> bool:
@@ -100,6 +101,21 @@ class SAAOptions(ParamsMixin):
             of the scaled residual range.  Annealed to
             ``tau * tau_decay`` within each round.
         tau_decay: Annealing factor over a round.
+        max_cycles: Warm restarts of the step schedule within each round.
+            Each cycle restarts Adam (fresh moments) from the previous
+            cycle's point at the final smoothing; the step is multiplied by
+            ``cycle_decay`` whenever a cycle gains less than half what the
+            previous one did, and the round stops early once a cycle changes
+            the augmented objective by less than ``tol`` *and* moves the
+            first stage by less than ``tol`` of its box.  One cycle is a
+            fixed budget of ``steps`` iterations, which is not enough when
+            the model has a kink the recourse sits on (a ``max``/``clip`` on
+            a spec the operator holds exactly): projected Adam then walks the
+            kinked valley slowly, and a single cosine schedule stops it
+            wherever the budget runs out.
+        cycle_decay: Step multiplier from one cycle to the next.
+        tol: Convergence tolerance for the cycles, on the scaled augmented
+            objective and as a fraction of each first-stage box width.
         n_starts: Deterministic multi-starts.  The SAA problem is convex only
             when the model is, which a flowsheet is not.
         seed: Unused by the search itself, which is deterministic; carried so
@@ -117,6 +133,9 @@ class SAAOptions(ParamsMixin):
     penalty_growth: float = 4.0
     tau: float = 0.05
     tau_decay: float = 1e-3
+    max_cycles: int = 12
+    cycle_decay: float = 0.5
+    tol: float = 1e-5
     n_starts: int = 3
     seed: int = 0
 
@@ -460,6 +479,59 @@ def _scales(problem, scenarios, x0, U0):
     return z_ref, z_scale, np.asarray(c_scales, dtype=float)
 
 
+def _cycles(run, merit, v, rho, lam, options, x_lo, x_hi, n_x, lr,
+            anneal_first):
+    """Projected Adam with warm restarts until the point stops moving.
+
+    A single cosine schedule is a fixed budget: on a smooth problem it is
+    plenty, but when the recourse sits on a kink of the model (the operator
+    holds a spec exactly, so the cost has a ``max`` there) the joint
+    ``(x, U)`` iterate has to walk a kinked valley that is not aligned with
+    any axis, and Adam does that slowly.  Each restart clears the second
+    moment, which the steep side of the kink had inflated, and shrinks the
+    step whenever a cycle gains less than half what the one before did, so
+    the iterate keeps moving while there is somewhere to go and the dither
+    across the kink shrinks geometrically.  Warm restarts stay at the final
+    smoothing: re-annealing ``tau`` from its starting value would push a
+    point that is already close further away than a shrunken step can bring
+    it back.  (Each cycle's end point is taken as is, not screened against
+    the start: the Rockafellar--Uryasev auxiliaries are frozen at their
+    unsmoothed optimum, so the descent direction is exact for the problem
+    but not for the smoothed merit, and screening by that merit rejects
+    real progress toward feasibility.)
+
+    Returns:
+        ``(point, step)``: the last cycle's point, and the step it ended on,
+        so the next round can start from a step sized for where it is.
+    """
+    lam_j = jnp.asarray(lam)
+    span = np.where(np.isfinite(x_hi - x_lo) & (x_hi > x_lo), x_hi - x_lo,
+                    1.0)
+    cur_v = np.asarray(v)
+    cur_f = float(merit(jnp.asarray(cur_v), rho, lam_j))
+    prev_gain = np.inf
+    for k in range(max(int(options.max_cycles), 1)):
+        anneal = 1.0 if (anneal_first and k == 0) else 0.0
+        cand = np.asarray(run(jnp.asarray(cur_v), rho, lam_j, lr, anneal))
+        f = float(merit(jnp.asarray(cand), rho, lam_j))
+        moved = float(np.max(np.abs(cand[:n_x] - cur_v[:n_x]) / span)) \
+            if n_x else 0.0
+        if not np.isfinite(f):
+            break
+        change = abs(f - cur_f) if np.isfinite(cur_f) else np.inf
+        gain = cur_f - f if np.isfinite(cur_f) else np.inf
+        cur_v, cur_f = cand, f
+        if change <= float(options.tol) * (1.0 + abs(cur_f)) and \
+                moved <= float(options.tol):
+            break
+        # Still travelling (this cycle gained at least half what the last
+        # did): keep the step.  Slowing down, or worse: shrink it.
+        if not (k > 0 and gain > 0.5 * prev_gain):
+            lr *= float(options.cycle_decay)
+        prev_gain = gain
+    return cur_v, lr
+
+
 def solve_saa(problem: TwoStageProblem, scenarios: ScenarioSet, *,
               options: SAAOptions = DEFAULT_SAA_OPTIONS,
               first_stage_start=None, verbose: bool = False) -> SAAResult:
@@ -569,12 +641,24 @@ def solve_saa(problem: TwoStageProblem, scenarios: ScenarioSet, *,
         rho = float(options.penalty)
         lam = np.zeros(len(problem.constraints))
         prev_violation = np.inf
-        run = jax.jit(lambda v0, r, l: box_adam(
-            lambda vv, pr: augmented(vv, pr, r, l),
+        # ``anneal`` is 1 for the very first cycle, which anneals the
+        # smoothing from ``tau`` down; every later cycle (anneal 0) is a warm
+        # start and stays at the final smoothing --- re-smoothing a point that
+        # is already close would move it further than a shrunken step can
+        # bring it back.
+        run = jax.jit(lambda v0, r, l, lr, anneal: box_adam(
+            lambda vv, pr: augmented(vv, 1.0 - anneal * (1.0 - pr), r, l),
             v0, jnp.asarray(lo), jnp.asarray(hi),
-            int(options.steps), float(options.learning_rate)))
-        for _ in range(max(int(options.rounds), 1)):
-            v = np.asarray(run(jnp.asarray(v), rho, jnp.asarray(lam)))
+            int(options.steps), lr))
+        merit = jax.jit(lambda vv, r, l: augmented(vv, 1.0, r, l))
+        lr = float(options.learning_rate)
+        for rnd in range(max(int(options.rounds), 1)):
+            v, lr = _cycles(run, merit, v, rho, lam, options, x_lo, x_hi,
+                            n_x, lr, anneal_first=rnd == 0)
+            # The next round starts near this one's answer: begin it at the
+            # step this round ended on (doubled), not at a step sized for
+            # crossing the whole box.
+            lr = min(2.0 * lr, float(options.learning_rate))
             if not problem.constraints:
                 break
             xv, Uv = unpack(jnp.asarray(v))

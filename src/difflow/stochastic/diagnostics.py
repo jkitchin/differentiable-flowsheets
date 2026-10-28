@@ -66,7 +66,7 @@ Reference:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -85,6 +85,18 @@ MIN_TAIL_SCENARIOS = 20
 #: Above this fraction of scenarios at a bound, a recourse variable is not
 #: really providing recourse.
 SATURATION_WARN = 0.5
+
+#: A decision is flagged as not stationary when a trial move of it alone
+#: finds a point whose risk is lower by more than this fraction of the
+#: objective's scale (``|risk|`` plus the scenario standard deviation).
+STATIONARITY_TOL = 1e-4
+
+#: Trial step lengths for the stationarity probe, as fractions of each box
+#: width, tried in both directions: first-stage moves, and the finer grid
+#: each scenario's recourse is re-chosen from.
+STATIONARITY_STEPS = (1e-4, 1e-3, 1e-2, 1e-1)
+STATIONARITY_RECOURSE_STEPS = tuple(float(t) for t in
+                                    np.geomspace(1e-4, 1e-1, 10))
 
 
 # =============================================================================
@@ -339,7 +351,11 @@ class HealthReport:
     Attributes:
         n_scenarios: Sample size.
         dead_levers: First-stage variables whose SAA gradient is exactly zero.
-        gradients: ``{name: dRisk/dx}`` at the solution.
+        gradients: ``{name: dRisk/dx}`` at the solution, by autodiff with the
+            recourse held where the result left it.  Where the recourse sits
+            on a kink of the model (a ``max`` or ``clip`` on a spec the
+            operator holds exactly) this is one side of a jump and need not
+            be small at a true optimum; :attr:`stationarity` is the test.
         tail_scenarios: Scenarios in the CVaR tail, or ``None`` if the risk
             measure has no tail.
         saturated: ``{name: fraction at a bound}`` for recourse variables at a
@@ -350,6 +366,23 @@ class HealthReport:
         standard_error: Bootstrap standard error of the risk value at the
             solution --- the sampling noise, not the optimality gap.
         warnings: Human-readable findings, most important first.
+        stationarity: ``{name: improvement}``, for every first-stage and
+            recourse variable: the largest drop in the risk value (in the
+            objective's units, ``>= 0``) that a trial move of that variable
+            found --- a first-stage lever moved with the recourse held, and
+            again with each scenario's recourse re-chosen from a grid of
+            trial steps (the joint move a kink the recourse holds calls for);
+            a recourse variable scenario by scenario with the design held.
+            Every trial is scored by calling the model, stays in its box, and
+            is discarded if it pushes a constraint that is met (or active)
+            past its bound, so a point at a bound or on an active constraint
+            is not flagged for pushing against it, and a kink the optimum
+            sits on does not read as a slope.  A positive number is a
+            *certificate*: a better point exists.  Zero is not a proof of
+            optimality --- the trials are a finite grid --- and for one or two
+            levers a scan is the check.
+        not_stationary: Variables whose :attr:`stationarity` exceeds
+            :data:`STATIONARITY_TOL` of the objective's scale.
     """
 
     n_scenarios: int
@@ -361,6 +394,8 @@ class HealthReport:
     risk_value: float
     standard_error: float
     warnings: list[str]
+    stationarity: dict[str, float] = field(default_factory=dict)
+    not_stationary: list[str] = field(default_factory=list)
 
     @property
     def healthy(self) -> bool:
@@ -376,10 +411,20 @@ class HealthReport:
         if self.tail_scenarios is not None:
             lines.append(f"  CVaR tail         {self.tail_scenarios:14.6g}"
                          f"  scenarios")
-        lines.append(f"  {'first-stage lever':<24s}{'dRisk/dx':>14s}")
+        stat = self.stationarity
+        lines.append(f"  {'first-stage lever':<24s}{'dRisk/dx':>14s}"
+                     f"{'better by':>14s}")
         for n, g in self.gradients.items():
             mark = "  dead" if n in self.dead_levers else ""
-            lines.append(f"  {n:<24s}{g:14.6g}{mark}")
+            if n in self.not_stationary:
+                mark += "  not stationary"
+            lines.append(f"  {n:<24s}{g:14.6g}"
+                         f"{stat.get(n, float('nan')):14.6g}{mark}")
+        for n, v in stat.items():
+            if n not in self.gradients:
+                mark = "  not stationary" if n in self.not_stationary else ""
+                lines.append(f"  {'recourse ' + n:<24s}{'':>14s}{v:14.6g}"
+                             f"{mark}")
         if self.warnings:
             lines.append("  findings:")
             lines.extend(f"    - {w}" for w in self.warnings)
@@ -426,6 +471,9 @@ def check_scenario_health(problem: TwoStageProblem, scenarios: ScenarioSet,
                  for i, n in enumerate(problem.first_stage.names)}
     dead = [n for n, g in gradients.items() if g == 0.0]
 
+    stationarity, not_stationary = _stationarity(problem, scenarios, result,
+                                                 x0, U)
+
     # Bootstrap the risk value at the fixed design: sampling noise only.
     z = problem.objective_values(problem.outputs(x0, U, scenarios))
     key = jax.random.PRNGKey(int(seed))
@@ -452,6 +500,15 @@ def check_scenario_health(problem: TwoStageProblem, scenarios: ScenarioSet,
            if v > SATURATION_WARN}
 
     warnings = []
+    if not_stationary:
+        found = ", ".join(f"{n} (risk {stationarity[n]:.4g} better)"
+                          for n in not_stationary)
+        warnings.append(
+            f"not stationary: moving {found} alone finds a feasible point "
+            f"with a lower risk, so the solve stopped short. Raise "
+            f"SAAOptions.steps or max_cycles, try another learning_rate or "
+            f"start, and check one or two levers with a scan."
+        )
     if dead:
         warnings.append(
             f"dead levers {dead}: the SAA gradient is exactly zero, so the "
@@ -491,7 +548,112 @@ def check_scenario_health(problem: TwoStageProblem, scenarios: ScenarioSet,
         n_scenarios=S, dead_levers=dead, gradients=gradients,
         tail_scenarios=tail, saturated=sat, half_sample_risk=half_risk,
         risk_value=result.risk_value, standard_error=se, warnings=warnings,
+        stationarity=stationarity, not_stationary=not_stationary,
     )
+
+
+def _stationarity(problem, scenarios, result, x0, U):
+    """Probe each decision for a feasible, better point nearby.
+
+    Returns:
+        ``({name: improvement >= 0}, [names flagged])``.  See
+        :attr:`HealthReport.stationarity`.
+    """
+    from difflow.stochastic.saa import FEASIBILITY_TOL
+
+    w = scenarios.weights
+    fs, rc = problem.first_stage, problem.recourse
+    outputs = jax.jit(lambda x, UU: problem.outputs(x, UU, scenarios))
+
+    def pieces(x, UU):
+        out = outputs(jnp.asarray(x), jnp.asarray(UU))
+        z = problem.objective_values(out)
+        signed = [np.asarray(c.signed(g)) for c, g
+                  in zip(problem.constraints, problem.constraint_values(out))]
+        return np.asarray(z), signed, out
+
+    def score(z, out):
+        zj = jnp.asarray(z)
+        risk = float(problem.risk.value(zj, w, problem.risk.exact_aux(zj, w)))
+        res = np.asarray([float(c.residual(g, w, c.exact_aux(g, w)))
+                          for c, g in zip(problem.constraints,
+                                          problem.constraint_values(out))])
+        return risk, res
+
+    x0 = np.asarray(x0, float)
+    U0 = np.asarray(U, float)
+    z0, s0, out0 = pieces(x0, U0)
+    r0, c0 = score(z0, out0)
+    tols = np.asarray([FEASIBILITY_TOL * (abs(c.bound) + 1.0)
+                       for c in problem.constraints])
+
+    def admissible(c1):
+        # A constraint that is met (or active) must stay met; a violated one
+        # may not get worse.
+        return not (c1.size and np.any(c1 > np.maximum(c0, -tols)))
+
+    def rechoose(x, z_base, s_base, j):
+        """Each scenario's best recourse ``j`` among the trial steps, at ``x``.
+
+        Risk measures and constraint forms are monotone in each scenario's
+        value, so a scenario that is better on its objective and not pushed
+        past any constraint it met makes the whole sample no worse; the
+        caller still scores the result as a whole.
+        """
+        lo, hi = float(rc.lower[j]), float(rc.upper[j])
+        span = hi - lo
+        zb, Ub = z_base.copy(), U0.copy()
+        if not (np.isfinite(span) and span > 0.0):
+            return zb, Ub
+        for t in STATIONARITY_RECOURSE_STEPS:
+            for sgn in (1.0, -1.0):
+                UU = U0.copy()
+                UU[:, j] = np.clip(U0[:, j] + sgn * t * span, lo, hi)
+                z1, s1, _ = pieces(x, UU)
+                ok = z1 < zb
+                for a, b in zip(s1, s_base):
+                    ok &= a <= np.maximum(b, 0.0)
+                zb = np.where(ok, z1, zb)
+                Ub[ok, j] = UU[ok, j]
+        return zb, Ub
+
+    def improvement(x, UU):
+        z1, _, out1 = pieces(x, UU)
+        r1, c1 = score(z1, out1)
+        return r0 - r1 if admissible(c1) else 0.0
+
+    found = {}
+    for i, n in enumerate(fs.names):
+        lo, hi = float(fs.lower[i]), float(fs.upper[i])
+        span = hi - lo
+        best = 0.0
+        if np.isfinite(span) and span > 0.0:
+            for t in STATIONARITY_STEPS:
+                for sgn in (1.0, -1.0):
+                    x = x0.copy()
+                    x[i] = np.clip(x0[i] + sgn * t * span, lo, hi)
+                    if x[i] == x0[i]:
+                        continue                 # at a bound: projected away
+                    best = max(best, improvement(x, U0))
+                    # The same move with each scenario's recourse re-chosen:
+                    # when the recourse holds a spec exactly, the way down is
+                    # along the kink, design and recourse together.
+                    z1, s1, _ = pieces(x, U0)
+                    for j in range(rc.n):
+                        zb, Ub = rechoose(x, z1, s1, j)
+                        if np.any(zb < z1):
+                            best = max(best, improvement(x, Ub))
+        found[n] = float(best)
+
+    for j, n in enumerate(rc.names):
+        zb, Ub = rechoose(x0, z0, s0, j)
+        found[n] = float(max(improvement(x0, Ub), 0.0)) \
+            if np.any(zb < z0) else 0.0
+
+    scale = abs(float(r0)) + float(np.std(z0))
+    flagged = [n for n, v in found.items()
+               if scale > 0.0 and v > STATIONARITY_TOL * scale]
+    return found, flagged
 
 
 @dataclass

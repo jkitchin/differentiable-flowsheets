@@ -58,6 +58,25 @@ Invariants encoded in the module (do not weaken them):
   every later step shrinks to nothing — the iterate freezes and reports itself
   feasible. No test checks this any more; check it by hand before changing
   the constraint handler.
+- Each AL round runs WARM RESTARTS of projected Adam until the point stops
+  moving (`SAAOptions.max_cycles`), not one fixed cosine budget. With a
+  recourse that holds a spec exactly (a `max`/`clip` kink every scenario sits
+  on) one schedule stopped a 128-scenario CSTR anywhere from 7 to 12.6 m^3
+  against 5.68 (issue 517). Warm restarts and later rounds stay at the FINAL
+  smoothing and start from the step the last round ended on: re-annealing tau
+  from its start, or restarting at a box-crossing step, walks a point that is
+  already right back off it (the mean-value solve wandered from 4.98 to
+  7.6 m^3 that way). Cycle end points are taken as they are, NOT screened by the
+  merit: the R-U auxiliaries are frozen at the unsmoothed optimum, so the
+  descent direction and the smoothed merit disagree (10x on a one-scenario
+  chance constraint), and screening rejected the progress toward
+  feasibility.
+- `check_scenario_health` judges stationarity by TRIAL MOVES scored from the
+  model (a certificate that a better point exists), never by the autodiff
+  `dRisk/dx`: at a kink the recourse sits on, that is one side of a jump and
+  reads 2-3 at a true optimum.
+- `violation_rate` and `feasible` share `FEASIBILITY_TOL`; an output the
+  recourse holds exactly at its bound must not be counted by round-off.
 - Objective and constraint residuals are rescaled, and the rescaling is EXACT:
   every risk measure is translation-equivariant and positively homogeneous, and
   every constraint form is positively homogeneous in its residual.

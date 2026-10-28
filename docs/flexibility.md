@@ -351,7 +351,9 @@ problem from one that fails 4% of the time spread over six constraints.
 
 `distribution="normal"` draws a two-piece normal whose one-sigma half-widths
 are the box deviations, so an asymmetric envelope stays asymmetric and about
-68% of draws land inside the $\delta = 1$ box.
+68% of draws land inside the $\delta = 1$ box. The box half-width *is* the
+standard deviation: a box written as ±2σ for `flexibility_index` samples at
+2σ here. To sample the real distribution, halve it (or pass `scale=0.5`).
 
 This is a Monte Carlo estimate and is exposed with its standard error rather
 than as a bare probability. Use it to relax an over-conservative worst case,

@@ -69,6 +69,27 @@ All notable changes to difflow are recorded here. The format follows
   per week of exchanger data). `parameter_measurement`'s augmented residual gets the same treatment.
   Notebook 29 re-run: the default-gate leak of its section 7 (eta dragged to 1.131 by a meter bias) is gone.
 
+- **`solve_saa` with a per-scenario recourse converged poorly, and `check_scenario_health` missed it (issue 517).**
+  When the recourse holds a spec exactly (the temperature turned until conversion is 0.90, so the cost has a
+  kink each scenario sits on), one cosine schedule of projected Adam ran out of budget partway along the kinked
+  valley: a 128-scenario CSTR came back at 7.1-12.6 m^3 against a 5.68 m^3 scan optimum depending on
+  `SAAOptions`, and `bounds()` broke `WS <= SP <= EEV`. Each augmented-Lagrangian round now runs warm
+  restarts (`SAAOptions.max_cycles`, `cycle_decay`, `tol`): fresh Adam moments, the step halved once progress
+  slows, stopping when the point stops moving; warm restarts and later rounds keep the final smoothing and
+  start from the step the previous round ended on instead of re-crossing the box (which also let a later
+  round wander off a mean-value optimum it had already found). Every setting of that problem now gives
+  5.679 m^3. `check_scenario_health` reports `stationarity` (the best risk improvement a feasible, bounded
+  trial move of each first-stage or recourse variable finds) and flags `not_stationary`; the autodiff
+  gradient it already printed is one side of a jump at a kink and can be 2-3 at a true optimum.
+  `StochasticConstraint.violation_rate` counts a scenario as violated only past `FEASIBILITY_TOL`, the
+  tolerance `SAAResult.feasible` uses, so an output the recourse holds exactly at its bound is not decided by
+  round-off (`FEASIBILITY_TOL` now lives in `difflow.stochastic.risk`; `saa` re-exports it). Results of every
+  `solve_saa` change slightly; solves take up to `max_cycles` times longer when they need it
+  (`max_cycles=1` for one cycle per round). `expected_feasibility(distribution="normal")`'s docstring now says
+  in so many words that the box half-widths are one standard deviation. `examples/32_stochastic_ree_separation`
+  is re-executed: every solve there now finds a better CVaR (the mean-value and stochastic designs move to the
+  solvent lower bound; SP 241.0 -> 242.6, VSS 3.9 -> 4.1, EVPI 0.21 -> 0.02 $M/yr), and its prose follows.
+
 ## [0.4.0] - 2026-10-28
 
 The first release on PyPI since 0.2.2: 0.3.0 was prepared but never tagged or published, so
