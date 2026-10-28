@@ -191,6 +191,16 @@ HEAT_EXCHANGER_COSTS = {
         base_year=2001, form="log_quadratic",
         source=TURTON + ': air cooler',
     ),
+    "spiral_plate": CostParams(
+        a=4.6561, b=-0.2947, n=0.2207, S_min=1.0, S_max=100.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': spiral plate',
+    ),
+    "kettle_reboiler": CostParams(
+        a=29000.0, b=400.0, n=0.9, S_min=10.0, S_max=500.0, S_units="m²",
+        base_year=2010,
+        source=TOWLER + ': U-tube kettle reboiler',
+    ),
 }
 
 COLUMN_COSTS = {

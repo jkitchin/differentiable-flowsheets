@@ -1055,6 +1055,36 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- **`difflow_cc.absorber_cost` sized the shell by the wrong quantity (#509).** It used Towler & Sinnott's
+  vertical 304-SS pressure-vessel row (`17400 + 79 S^0.85`, S = shell mass in kg) with S = shell surface area
+  in m², then multiplied by a stainless material factor again, and called the January 2010 result 2020 USD.
+  It now takes the carbon-steel row (`11600 + 34 S^0.85`) on the shell mass `pi rho D (H + 0.8 D) t`, applies
+  the material factor once and escalates 2010 -> 2020 by CEPCI. New `wall_thickness` argument (default 10 mm).
+  A 3 m x 20 m carbon-steel shell goes from about $24k to $155k. The core `difflow.economics` tables the issue
+  quotes were already re-sourced in #420, after 0.3.0.
+- **The other `difflow_cc` purchased costs were unsourced and scaled too weakly (#509).** `heat_exchanger_cost`
+  (`10000 + 88 A^0.68`: x1.46 from 10 to 400 m²), the stripper's reboiler and condenser (`15000 A^0.65`,
+  `10000 A^0.65`), `compressor_cost` (`580000 (kW/1000 + 0.1)^0.82`, a garbled Towler row) and
+  `adsorber_vessel_cost` (`17000 (W/1000)^0.62`) now call the sourced `difflow.economics.capital` correlations,
+  escalated to the module's 2020 basis: Turton floating head / flat plate / spiral plate, Towler kettle
+  reboiler, Towler and Turton compressors, and the Towler vertical vessel on shell mass. A size above a
+  correlation's range is costed as parallel units (linear in size, still differentiable). An unknown `hx_type`
+  or `comp_type` now raises `ValueError` instead of silently costing a default; `SCALING_EXPONENTS` follows the
+  new correlations. New core `HEAT_EXCHANGER_COSTS` entries `spiral_plate` (Turton) and `kettle_reboiler`
+  (Towler & Sinnott).
+- **`difflow_cc` packing, membrane, blower, material and driver costs now cite a source (#509).** Packing is
+  `COLUMN_COSTS` (Turton loose packing; Seider structured packing, an installed and "very approximate" cost
+  that is about 3x the old $3000/m³; Turton sieve trays per tray). `blower_cost` is Seider's backward-curved fan
+  with motor on the inlet flow, with Seider's head factor for `pressure_rise` (interpolated across the gaps
+  between bins) and `CostRangeWarning` above 40 in H2O. Material factors are Towler & Sinnott 3e
+  (`MATERIAL_FACTORS`; stainless 1.3, was 1.7-2.1), driver factors Seider's (`DRIVER_FACTORS`; 1.15 steam,
+  1.25 gas turbine, were 1.4 and 1.6). `membrane_module_cost` is a purchased skid cost per m² (modules,
+  housings, frame, valves, piping): polymeric $50/m², Merkel et al. 2010 Table 2 and Zhai & Rubin 2019
+  Table 1 (was $50 x 1.3), with a new `price_per_m2` override ($200/m² for Zhai & Rubin's first-of-a-kind
+  plant). **Breaking:** the unsourced options are gone and raise `ValueError` -- materials `alloy_20` and
+  `titanium`, membrane types `ceramic`, `facilitated` and `mixed_matrix` (pass `price_per_m2` instead) --
+  as do unknown `material`, `packing`, `driver` or `membrane_type` values, which used to cost a silent
+  default. The adsorber's 15% internals allowance is still unsourced.
 - **Drying-rate tables in R/R_c units were silently misread (#451).** `drying_rate_curve`, `drying_periods` and
   `drying_time` take `rate_basis="absolute"|"relative"` and raise `RateTableWarning` when a table's scale
   contradicts its basis. A relative (R/R_c) table passed to them gave a falling time about 1/R_c times too short

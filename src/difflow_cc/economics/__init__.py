@@ -20,6 +20,9 @@ from difflow_cc.economics.capex import (
     installed_cost,
     CapexParams,
     SCALING_EXPONENTS,
+    MATERIAL_FACTORS,
+    DRIVER_FACTORS,
+    MEMBRANE_PRICES,
     VALID_EXPONENT_RANGE,
     validate_scaling_exponent,
 )
@@ -59,6 +62,9 @@ __all__ = [
     "installed_cost",
     "CapexParams",
     "SCALING_EXPONENTS",
+    "MATERIAL_FACTORS",
+    "DRIVER_FACTORS",
+    "MEMBRANE_PRICES",
     "VALID_EXPONENT_RANGE",
     "validate_scaling_exponent",
     # OPEX

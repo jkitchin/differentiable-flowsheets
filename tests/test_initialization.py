@@ -158,8 +158,9 @@ def _loop(operation):
 def test_tear_guess_comes_from_the_source_end():
     """#247: the guess used to be the default stream on every flowsheet."""
     fs = _loop(lambda inlet: inlet)
-    guess = get_flows(fs._initialize_tear_stream("recycle_source"))
-    assert guess != pytest.approx(get_flows(fs._make_zero_stream()))
+    guess = {k: float(v) for k, v in get_flows(fs._initialize_tear_stream("recycle_source")).items()}
+    zero = {k: float(v) for k, v in get_flows(fs._make_zero_stream()).items()}
+    assert guess != pytest.approx(zero)
 
 
 def test_tear_initialize_stands_in_for_a_unit_that_raised():
