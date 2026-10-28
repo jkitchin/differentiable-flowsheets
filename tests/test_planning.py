@@ -180,6 +180,22 @@ def test_constraint_backoff_smoke_and_validation():
         constraint_backoff(bare, bare.network.decision_start(), np.eye(1))
 
 
+def test_backed_off_plan_keeps_its_margin():
+    # Regression (issue 513): the acceptance test scored steps against the
+    # stated rhs, so a convex spec output overshot into the back-off.
+    blk = Block(name="c", fn=lambda u: jnp.array([100.0 * u[0] + 100.0 * u[0] ** 2, u[0]]),
+                u_names=["a"], y_names=["T", "f"], lb=[0.0], ub=[1.0], u0=[0.1])
+    planner = DeltaBasePlanner(Network([blk]), prices={"c.f": 1.0},
+                               specs=[("c.T", "<=", 120.0)], radius=0.3,
+                               vertex_seeding=False)
+    planner.specs = apply_backoff(planner.specs, {"c.T": 20.0})
+    res = planner.solve()
+    assert res.converged
+    assert res.values["c.T"] <= 120.0 - 20.0 + 1e-6
+    assert res.violations == {"c.T": 0.0}
+    assert res.stated_violations == {"c.T": 0.0}
+
+
 def test_piecewise_smoke_and_unbounded():
     blk = Block(name="w", fn=lambda u: jnp.array([jnp.sin(3 * u[0]) - 0.3 * u[0]]),
                 u_names=["a"], y_names=["f"], lb=[0.0], ub=[3.0], u0=[2.6])

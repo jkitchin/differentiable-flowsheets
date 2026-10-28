@@ -95,18 +95,34 @@ class Spec:
         """Evaluate the left-hand side from a variable dict."""
         return sum(c * float(values[k]) for k, c in self.coeffs.items())
 
-    def violation(self, values: Mapping[str, float]) -> float:
-        """Non-negative violation of the *stated* bound (back-off excluded).
+    def violation(self, values: Mapping[str, float],
+                  stated: bool = False) -> float:
+        """Non-negative violation of the bound the planner works to.
 
-        Back-off is a safety margin the planner chooses, not a promise made to
-        anyone downstream, so violating it is not a violation of the spec.
+        By default this is measured against :attr:`effective_rhs`, the
+        right-hand side less the back-off: the LP rows, the trust-region
+        acceptance test, the merit function and ``PlanResult.violations``
+        all judge a plan against the same limit, so an accepted step cannot
+        eat into the margin.  (Scoring against the stated limit while the LP
+        held the backed-off one let the loop drift back to the nominal
+        constraint; difflow issue 513.)
+
+        Args:
+            values: Variable dict.
+            stated: Measure against the stated ``rhs`` instead, ignoring the
+                back-off -- the promise made downstream, as
+                ``PlanResult.stated_violations`` reports it.
+
+        Returns:
+            The violation, ``>= 0``.
         """
         v = self.value(values)
+        rhs = self.rhs if stated else self.effective_rhs
         if self.op == "<=":
-            return max(0.0, v - self.rhs)
+            return max(0.0, v - rhs)
         if self.op == ">=":
-            return max(0.0, self.rhs - v)
-        return abs(v - self.rhs)
+            return max(0.0, rhs - v)
+        return abs(v - rhs)
 
     def __repr__(self) -> str:
         lhs = (next(iter(self.coeffs)) if len(self.coeffs) == 1

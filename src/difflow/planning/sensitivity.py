@@ -130,12 +130,14 @@ def _spec_value(spec, values):
 
 
 def _spec_violation(spec, values):
+    # Against the backed-off limit, as the planner scores it (issue 513).
     v = _spec_value(spec, values)
+    rhs = spec.effective_rhs
     if spec.op == "<=":
-        return _relu(v - spec.rhs)
+        return _relu(v - rhs)
     if spec.op == ">=":
-        return _relu(spec.rhs - v)
-    return jnp.abs(v - spec.rhs)
+        return _relu(rhs - v)
+    return jnp.abs(v - rhs)
 
 
 def _flatten_theta(theta: Mapping[str, Mapping[str, Any]]

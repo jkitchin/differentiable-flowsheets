@@ -18,6 +18,14 @@ All notable changes to difflow are recorded here. The format follows
   and intervals from earlier versions grow by sqrt(2) on `'sse'`; on `'wsse'` and `'nll'` by `sqrt(2/s^2)` and
   `sqrt(1/s^2)`.
 
+- **`apply_backoff` margins were not kept by the planner (issue 513).** The LP rows used
+  `Spec.effective_rhs`, but the trust-region acceptance test, the merit and `PlanResult.violations` scored
+  each step against the stated `rhs`, so accepted steps ate into the back-off and the plan drifted back to
+  the nominal constraint. All of them now measure against `effective_rhs` (as does the merit that
+  `plan_sensitivity` differentiates). `Spec.violation(values, stated=True)`,
+  `DeltaBasePlanner.violations(values, stated=True)` and the new `PlanResult.stated_violations` report the
+  stated limits.
+
 ## [0.4.0] - 2026-10-28
 
 The first release on PyPI since 0.2.2: 0.3.0 was prepared but never tagged or published, so

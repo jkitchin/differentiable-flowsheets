@@ -302,9 +302,13 @@ running off-spec — it predicts feasibility it does not achieve, and is never
 charged for the difference. In the prototype this let a static planner beat a
 provably optimal oracle.
 
-Back-off (below) is treated as a margin, not a promise: `Spec.violation`
-measures against the stated right-hand side, so eating into the margin is not
-scored as a violation.
+Back-off (below) is kept, not just asked for: the LP rows, the acceptance
+test, the merit and `res.violations` all measure against
+`Spec.effective_rhs`, the limit less the back-off, so a step that eats into
+the margin is charged like any other violation. Scoring against the stated
+limit while the LP held the tightened one let accepted steps drift back to
+the nominal constraint (issue 513). `res.stated_violations` (and
+`Spec.violation(values, stated=True)`) report the stated limits alone.
 
 ### A block that cannot be evaluated
 
@@ -721,6 +725,10 @@ found = constraint_backoff(chain_planner, problem.network.decision_start(),
 print(found.summary())
 chain_planner.specs = apply_backoff(chain_planner.specs, found)
 ```
+
+The re-solved plan satisfies `value <= rhs - backoff` (`>= rhs + backoff` for a
+lower bound) at convergence; `res.violations` measures against that, and
+`res.stated_violations` against `rhs`.
 
 This is a thin layer over `difflow.uncertainty.propagate_covariance`. No
 commercial planning system does it.

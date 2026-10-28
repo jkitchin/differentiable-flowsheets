@@ -287,9 +287,17 @@ class DeltaBasePlanner:
         return float(sum(float(p) * float(values[v])
                          for v, p in self.prices.items()))
 
-    def violations(self, values: Mapping[str, Any]) -> dict[str, float]:
-        """Realised violation of each spec, from a variable dict."""
-        return {s.name: float(s.violation(values)) for s in self.specs}
+    def violations(self, values: Mapping[str, Any],
+                   stated: bool = False) -> dict[str, float]:
+        """Realised violation of each spec, from a variable dict.
+
+        Measured against each spec's back-off-tightened limit
+        (:attr:`~difflow.planning.lp.Spec.effective_rhs`), the same limit
+        the LP rows hold, so the acceptance test and the merit keep the
+        margin.  ``stated=True`` measures against the stated ``rhs``.
+        """
+        return {s.name: float(s.violation(values, stated=stated))
+                for s in self.specs}
 
     def penalty_cost(self, violations: Mapping[str, float]) -> float:
         """Total charge for the given violations."""
@@ -1005,7 +1013,9 @@ class PlanResult:
         decisions: Free-decision array.
         objective: Priced objective at the plan, from the nonlinear model.
         merit: Objective less the charge for realised violations.
-        violations: Realised violation per spec.
+        violations: Realised violation per spec, against the limit less
+            any back-off (the limit the planner works to); see also
+            :attr:`stated_violations`.
         penalty: Total charge for those violations.
         linearizations: Delta vectors at the plan.
         lp_model: The final :class:`~difflow.planning.lp.LPModel`.
@@ -1096,8 +1106,19 @@ class PlanResult:
 
     @property
     def total_violation(self) -> float:
-        """Sum of realised spec violations."""
+        """Sum of realised spec violations (against the backed-off limits)."""
         return float(sum(self.violations.values()))
+
+    @property
+    def stated_violations(self) -> dict[str, float]:
+        """Realised violation of each spec's *stated* limit, back-off ignored.
+
+        :attr:`violations` is what the planner scored -- against the limit
+        less the back-off.  This is the promise made downstream: a plan that
+        uses part of its margin shows a violation there and none here.
+        """
+        return {s.name: float(s.violation(self.values, stated=True))
+                for s in self.planner.specs}
 
     @property
     def n_iterations(self) -> int:
