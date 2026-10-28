@@ -6,6 +6,18 @@ All notable changes to difflow are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Fisher confidence intervals were too narrow by sqrt(2) (issue 512).**
+  `fisher_confidence_intervals` / `Estimator.confidence_intervals` computed `s^2 H^-1` from the Hessian of the
+  sum of squares, which has no 1/2, so `H = 2 J^T J` and every standard error was 1/sqrt(2) of the textbook
+  `s^2 (J^T J)^-1`. The covariance now depends on the objective: `'sse'` gives `s^2 (J^T J)^-1` (`2 s^2 H^-1`),
+  `'wsse'` treats the declared uncertainties as known and gives `(J^T W J)^-1` (no `s^2`; the same covariance
+  `predicted_covariance` predicts), and `'nll'` gives `H^-1`. `fisher_confidence_intervals` takes a new
+  `objective='sse'` argument; `Estimator.confidence_intervals` and `summary` pass theirs through. Standard errors
+  and intervals from earlier versions grow by sqrt(2) on `'sse'`; on `'wsse'` and `'nll'` by `sqrt(2/s^2)` and
+  `sqrt(1/s^2)`.
+
 ## [0.4.0] - 2026-10-28
 
 The first release on PyPI since 0.2.2: 0.3.0 was prepared but never tagged or published, so

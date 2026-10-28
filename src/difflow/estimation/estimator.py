@@ -189,7 +189,12 @@ class Estimator:
             result: EstimationResult from fit()
             experiments: list of Experiment objects
             alpha: significance level (0.05 = 95% CI)
-            objective: which objective to use for Hessian ('sse', 'wsse', 'nll')
+            objective: which objective to use for Hessian ('sse', 'wsse', 'nll').
+                'sse' estimates the residual variance from the fit,
+                ``cov = s^2 (J^T J)^{-1}``; 'wsse' takes the declared
+                uncertainties as known, ``cov = (J^T W J)^{-1}``; 'nll'
+                inverts the Hessian of the Gaussian negative
+                log-likelihood. See :func:`fisher_confidence_intervals`.
 
         Returns:
             ConfidenceResult
@@ -200,7 +205,8 @@ class Estimator:
             return obj_fn(self.model_fn, theta, experiments, self.param_names)
 
         return fisher_confidence_intervals(
-            closed_obj, result.theta_array, experiments, self.param_names, alpha
+            closed_obj, result.theta_array, experiments, self.param_names, alpha,
+            objective=objective,
         )
 
     def bootstrap(

@@ -161,8 +161,15 @@ unweighted Hessian over a weighted fit reports the standard errors of numbers
 nobody computed. The bootstrap is worse than that: it *refits*, so on the default
 it returns the sampling distribution of a different estimator. In
 `examples/22_ree_parameter_estimation.ipynb`, where the measured concentrations
-span four decades, the mismatch inflates the bootstrap standard errors five-fold
+span four decades, the mismatch inflates the bootstrap standard errors several-fold
 and reads as a failed linearization.
+
+The objective also fixes how the Hessian $H$ becomes
+a covariance: `'sse'` gives the textbook $s^2 (J^T J)^{-1} = 2 s^2 H^{-1}$ with
+$s^2 = \mathrm{SSE}/(n_\mathrm{obs} - n_p)$ (the sum of squares has no ½, so
+$H = 2 J^T J$); `'wsse'` takes the declared `uncertainties` as known and gives
+$(J^T W J)^{-1} = 2 H^{-1}$, with no $s^2$ -- the same covariance
+`predicted_covariance` predicts; `'nll'` gives $H^{-1}$.
 
 ## Uncertainty Quantification
 
