@@ -294,7 +294,7 @@ class DeltaVectorSet:
             A :class:`DeltaVectorSet`.
         """
         net = result.network
-        planner = result.planner
+        planner = result.solved_with   # the problem as it was solved
         radius = float(result.radius)
 
         vectors = [

@@ -586,6 +586,14 @@ $$\frac{\mathrm{d}\phi^*}{\mathrm{d}\theta}
 which is exact even at a vertex where $\mathrm{d}u/\mathrm{d}\theta$ is zero.
 Every derivative in that system comes from AD on your own blocks.
 
+The KKT system is built from the problem the plan was solved against. A
+`PlanResult` keeps a snapshot of its planner (`res.solved_with`, with
+`res.specs`, `res.prices` and `res.theta`), taken at the solve, so a planner
+that is changed and re-solved afterwards -- `planner.specs =
+apply_backoff(...)`, say -- leaves the earlier result's sensitivities as they
+were. (Before issue 514 they were silently recomputed against the planner's
+new specs.) `res.planner` is still the live planner.
+
 Rows for decisions pinned at a bound are exactly zero, and the result says so
 in `s.note` rather than letting you read a vertex as if it were an interior
 solution. A rank-deficient KKT matrix is reported through `s.degenerate`, and a

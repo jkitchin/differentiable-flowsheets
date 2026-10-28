@@ -193,7 +193,9 @@ def plan_sensitivity(result, wrt: str = "prices",
         >>> s.objective_sensitivity()["power.Power"]   # = the power sold
         1832.4...
     """
-    planner = result.planner
+    # The problem as it was solved, not the planner as it is now: a planner
+    # is shared, and its specs may have been changed since (issue 514).
+    planner = getattr(result, "solved_with", None) or result.planner
     network = result.network
     sign = planner._merit_sign
     u_star = jnp.asarray(result.decisions, dtype=float)

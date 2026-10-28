@@ -44,6 +44,7 @@ Two further traps are encoded rather than left to the caller:
 
 from __future__ import annotations
 
+import copy
 import itertools
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
@@ -279,6 +280,25 @@ class DeltaBasePlanner:
                           else replace(b, fn=_corrected_fn(b, mod)))
         return Network(blocks,
                        [(l.source, l.target) for l in self.network.links])
+
+    def snapshot(self) -> DeltaBasePlanner:
+        """A copy of this planner that later changes to it do not reach.
+
+        ``specs``, ``prices``, ``theta``, ``modifiers``, ``penalty``,
+        ``sense`` and ``options`` are copied, so reassigning or mutating them
+        on this planner leaves the copy as it was.  The network and its
+        blocks are shared.  :class:`PlanResult` keeps one, taken when it is
+        made, so its sensitivities describe the problem that was solved.
+        """
+        snap = copy.copy(self)
+        snap.specs = [copy.copy(s) for s in self.specs]
+        snap.prices = dict(self.prices)
+        snap.theta = ({k: dict(v) for k, v in self.theta.items()}
+                      if self.theta is not None else None)
+        snap.modifiers = dict(self.modifiers)
+        snap.piecewise = list(self.piecewise)
+        snap.options = copy.copy(self.options)
+        return snap
 
     # -- scoring ---------------------------------------------------------
 
@@ -1029,6 +1049,11 @@ class PlanResult:
         start: The starting point this run used.
         attempts: One :class:`PlanResult` per seeded start (best-run only).
         n_starts: Number of starts tried.
+        solved_with: A :meth:`DeltaBasePlanner.snapshot` of the planner
+            taken when the result was made.  :meth:`plan_sensitivity`,
+            :attr:`stated_violations` and :meth:`score` read the specs,
+            prices, theta and modifiers from it, never from :attr:`planner`,
+            which may have been changed and re-solved since.
     """
 
     planner: DeltaBasePlanner
@@ -1049,6 +1074,34 @@ class PlanResult:
     start: np.ndarray | None = None
     attempts: list["PlanResult"] = field(default_factory=list)
     n_starts: int = 1
+    solved_with: DeltaBasePlanner | None = None
+
+    def __post_init__(self):
+        if self.solved_with is None:
+            self.solved_with = self.planner.snapshot()
+
+    @property
+    def specs(self) -> list:
+        """The specs this plan was solved against (back-offs included)."""
+        return self.solved_with.specs
+
+    @property
+    def prices(self) -> dict[str, float]:
+        """The prices this plan was solved at."""
+        return self.solved_with.prices
+
+    @property
+    def theta(self) -> dict[str, dict[str, Any]] | None:
+        """The ``theta`` override this plan was solved with, if any."""
+        return self.solved_with.theta
+
+    def score(self, decisions) -> dict[str, Any]:
+        """Score decisions against the problem this plan solved.
+
+        Like :meth:`DeltaBasePlanner.score`, but with the specs, prices,
+        theta and modifiers as they were at the solve.
+        """
+        return self.solved_with.score(decisions)
 
     @property
     def plan(self) -> dict[str, float]:
@@ -1118,7 +1171,7 @@ class PlanResult:
         uses part of its margin shows a violation there and none here.
         """
         return {s.name: float(s.violation(self.values, stated=True))
-                for s in self.planner.specs}
+                for s in self.specs}
 
     @property
     def n_iterations(self) -> int:
@@ -1142,7 +1195,10 @@ class PlanResult:
     def plan_sensitivity(self, wrt: str = "prices", **kwargs):
         """Sensitivity of the *plan* — not just the plan.
 
-        See :func:`difflow.planning.sensitivity.plan_sensitivity`.
+        See :func:`difflow.planning.sensitivity.plan_sensitivity`.  The
+        active set and optimality conditions are built from the specs,
+        prices and theta this plan was solved with (:attr:`solved_with`),
+        so changing the planner afterwards does not change the answer.
 
         Args:
             wrt: ``"prices"`` for ``d(plan)/d(price)``, or ``"theta"`` for

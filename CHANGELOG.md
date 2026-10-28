@@ -26,6 +26,15 @@ All notable changes to difflow are recorded here. The format follows
   `DeltaBasePlanner.violations(values, stated=True)` and the new `PlanResult.stated_violations` report the
   stated limits.
 
+- **`PlanResult.plan_sensitivity` read the planner's current specs (issue 514).** The active set and KKT
+  system were built from `result.planner` at call time; a planner is shared, so after
+  `planner.specs = apply_backoff(...)` and a re-solve, an earlier result's sensitivities were silently
+  taken against the new specs (Ch 28 of the unit-ops book: d(profit*)/d ln k1 5180 instead of 2819). A
+  `PlanResult` now keeps `solved_with`, a `DeltaBasePlanner.snapshot()` taken at the solve (specs,
+  prices, theta, modifiers, penalty, options), with `specs`, `prices`, `theta` and `score()` on the
+  result; `plan_sensitivity`, `stated_violations`, `DeltaVectorSet.from_result` and `draw_trust_region`
+  read it.
+
 ## [0.4.0] - 2026-10-28
 
 The first release on PyPI since 0.2.2: 0.3.0 was prepared but never tagged or published, so
