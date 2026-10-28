@@ -1070,7 +1070,16 @@ captured.
 
 **Location**: `difflow_cc/economics/`
 
-Comprehensive economic analysis:
+Comprehensive economic analysis. Purchased costs come from the sourced
+correlations of `difflow.economics.capital` (Towler & Sinnott, Turton et al.,
+Seider et al.), escalated to 2020; a unit larger than its correlation's range
+is costed as parallel units. Fans are Seider's backward-curved fan with its
+head factor, material factors Towler & Sinnott's (`MATERIAL_FACTORS`), driver
+factors Seider's (`DRIVER_FACTORS`), and the polymeric membrane price the
+mature-plant $50/m² of Zhai & Rubin (2019) (`MEMBRANE_PRICES`; pass
+`price_per_m2=200` for a first-of-a-kind plant). Structured packing is
+Seider's installed, "very approximate" price. Entries with no cited source
+(`alloy_20`, `titanium`, non-polymeric membranes) are marked in the code.
 
 ```python
 from difflow_cc import (
