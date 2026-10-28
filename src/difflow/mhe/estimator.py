@@ -67,6 +67,7 @@ from scipy import stats
 from difflow.params_mixin import ParamsMixin
 from difflow.reconciliation import GlobalTestResult, Scaling, measured_mask
 
+from difflow.mhe._compiled import cached, value_key
 from difflow.mhe.arrival import ArrivalCost, advance_arrival_cost
 from difflow.mhe.ekf import EKFRunResult, run_ekf
 from difflow.mhe.measurements import MeasurementWindow, slice_window
@@ -454,6 +455,24 @@ def _make_core(problem: MHEProblem, horizon: int) -> Callable:
     return core
 
 
+def _compiled_core(problem: MHEProblem, horizon: int) -> Callable:
+    """The jitted window solve, shared by every call with the same settings.
+
+    Keyed on the model object and, by value, on everything the core
+    closes over (horizon, ``theta``, ``process_std``, the penalty weight
+    and the solver settings) -- not on the arrival cost or the data,
+    which are arguments. So the windows of a run, a second run, and a
+    loop of :func:`solve_mhe` calls all reuse one compilation.
+    """
+    settings = (
+        int(horizon), float(problem.constraint_weight), float(problem.rtol),
+        float(problem.atol), int(problem.max_steps),
+        value_key(problem.theta), value_key(problem.process_std),
+    )
+    return cached("core", problem.model, settings,
+                  lambda: jax.jit(_make_core(problem, horizon)))
+
+
 def _initial_z(
     problem: MHEProblem,
     horizon: int,
@@ -544,8 +563,9 @@ def solve_mhe(
             :func:`~difflow.mhe.build_window`.
         x_guess: initial guess for ``x_0``; defaults to the arrival mean.
         w_guess: initial guess for the noise sequence; defaults to zero.
-        _core: a pre-built solve closure, used by :func:`run_mhe` to
-            avoid re-tracing at every sampling time.
+        _core: a pre-built solve closure. Not needed for speed: the
+            jitted solve is cached by model and settings, so calling
+            ``solve_mhe`` window after window compiles once.
 
     Returns:
         An :class:`MHEResult`.
@@ -556,7 +576,7 @@ def solve_mhe(
     """
     k = window.horizon
     sc = problem.scaling(k)
-    core = _make_core(problem, k) if _core is None else _core
+    core = _compiled_core(problem, k) if _core is None else _core
     z0 = _initial_z(problem, k, sc.d, x_guess, w_guess)
     xs, w, blocks, covariance, success, status, n_steps = core(
         problem.arrival.x_bar, problem.arrival.factor, window.y,
@@ -698,8 +718,10 @@ def run_mhe(
     run over the whole record anyway and returned, because "MHE was
     better" is only a claim if the alternative was computed.
 
-    The window solve is traced once and reused, so the cost of a run is
-    ``N`` optimisations and one compilation, not ``N`` of each.
+    The window solve and the arrival-cost update are each compiled once
+    and reused at every sampling time, and cached by model and settings,
+    so a second run with the same model compiles nothing: the cost of a
+    run is ``N`` optimisations, not ``N`` compilations.
 
     Args:
         model: the plant model.
@@ -740,9 +762,10 @@ def run_mhe(
         constraint_weight=constraint_weight, rtol=rtol, atol=atol,
         max_steps=max_steps,
     )
-    # One trace for the whole run: the scale is an argument, not a
-    # constant, so a changing arrival covariance cannot force a retrace.
-    core = jax.jit(_make_core(problem, horizon))
+    # One trace for the whole run (and for later runs of the same model):
+    # the scale is an argument, not a constant, so a changing arrival
+    # covariance cannot force a retrace.
+    core = _compiled_core(problem, horizon)
 
     estimates = [np.asarray(ekf.x[j], dtype=float) for j in range(horizon)]
     source = ["ekf"] * horizon

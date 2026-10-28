@@ -36,6 +36,7 @@ from jax import Array
 from difflow.params_mixin import ParamsMixin
 from difflow.reconciliation import measured_mask
 
+from difflow.mhe._compiled import cached, value_key
 from difflow.mhe.measurements import MeasurementWindow
 from difflow.mhe.model import StateSpaceModel
 
@@ -245,20 +246,11 @@ def run_ekf(
         axis=0,
     )
 
-    def body(carry, inputs):
-        x, p = carry
-        y_k, sigma_k, u_k = inputs
-        x_up, p_up, innov = ekf_update(
-            model, x, p, y_k, sigma_k, u_k, theta, clip=clip
-        )
-        x_next, p_next = ekf_predict(
-            model, x_up, p_up, u_k, process_std, theta
-        )
-        return (x_next, p_next), (x_up, p_up, innov)
-
-    _, (xs, ps, innovations) = jax.lax.scan(
-        body, (x0, p0), (window.y, window.sigma, u)
-    )
+    # Compiled once per model, theta (by value) and clip, and reused by
+    # later calls: the record and the prior are arguments.
+    scan = cached("ekf", model, (value_key(theta), bool(clip)),
+                  lambda: jax.jit(_make_ekf_scan(model, theta, clip)))
+    xs, ps, innovations = scan(x0, p0, process_std, window.y, window.sigma, u)
     return EKFRunResult(
         times=window.times,
         x=xs,
@@ -266,6 +258,27 @@ def run_ekf(
         innovations=innovations,
         x_names=list(model.x_names),
     )
+
+
+def _make_ekf_scan(model: StateSpaceModel, theta: Any, clip: bool):
+    """``scan(x0, p0, process_std, y, sigma, u) -> (xs, ps, innovations)``."""
+
+    def scan(x0, p0, process_std, y, sigma, u):
+        def body(carry, inputs):
+            x, p = carry
+            y_k, sigma_k, u_k = inputs
+            x_up, p_up, innov = ekf_update(
+                model, x, p, y_k, sigma_k, u_k, theta, clip=clip
+            )
+            x_next, p_next = ekf_predict(
+                model, x_up, p_up, u_k, process_std, theta
+            )
+            return (x_next, p_next), (x_up, p_up, innov)
+
+        _, out = jax.lax.scan(body, (x0, p0), (y, sigma, u))
+        return out
+
+    return scan
 
 
 def _symmetrize(p: Array) -> Array:

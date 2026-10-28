@@ -118,6 +118,7 @@ from difflow.estimation.confidence import (
 from difflow.estimation.identifiability import (
     IdentifiabilityReport,
     _as_theta_array,
+    _sensitivity_blocks,
     check_identifiability,
     sensitivity_matrix,
 )
@@ -681,12 +682,13 @@ def design_experiments(
     # Per-candidate information contributions, computed once. Each is
     # S_i.T @ inv(Sigma_i) @ S_i, so the FIM of any subset is just their
     # sum -- which is what makes greedy and exchange cheap.
-    contributions = [
-        np.asarray(
-            fisher_information(model_fn, theta_arr, [exp], names), dtype=float
-        )
-        for exp in candidates
-    ]
+    # One compiled, vectorized Jacobian over the whole pool when the
+    # candidates can be stacked (see sensitivity_matrix).
+    contributions = []
+    for blk in _sensitivity_blocks(model_fn, theta_arr, candidates, names, True):
+        b = np.asarray(blk, dtype=float)
+        f = b.T @ b
+        contributions.append(0.5 * (f + f.T))
 
     base = np.zeros((n_p, n_p))
     if prior_fim is not None:

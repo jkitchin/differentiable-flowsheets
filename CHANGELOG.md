@@ -103,6 +103,28 @@ All notable changes to difflow are recorded here. The format follows
   the override holds for that call only. They also take the integrator `args` (`wants_args`), which
   `DynamicFlowsheet` now hands to a unit's `derivatives` as it already did to `outputs`.
 
+- **`Estimator`, `sensitivity_matrix`, `design_experiments` and `run_mhe` compiled per experiment or per
+  window (issue 519).** The estimation objectives looped over the experiments in Python, so one `jit` traced
+  a copy of the model per `Experiment`. They now stack experiments that share their structure (same input
+  keys and observed outputs, numeric inputs of equal shape) and `jax.vmap` the model over them: one trace
+  however many runs. The model still receives an `Experiment` (its `inputs` hold one run's traced values);
+  runs that cannot be stacked, or a model that cannot be traced that way (Python `if` on an input), fall back
+  to the loop. `Estimator(..., vectorize=False)` forces it. Sensitivities, `check_identifiability` and
+  `design_experiments` take one compiled, vmapped Jacobian over the pool. With a difflow `CSTR` written
+  naively as `model(theta, exp)` on the unit-ops book's 15 runs: fit 7.1 s -> 0.8 s, confidence intervals
+  28 s -> 3.3 s; a 72-candidate design 100 s -> 2.4 s. The bootstrap and cross-validation refit one compiled
+  objective (a resample is a vector of per-experiment counts, a residual resample new observations, both
+  arguments): 1.5 s -> about 0.1 s per refit. `fit` uses one `value_and_grad`.
+  `Experiment` observations may be arrays: `Experiment.n_obs` counts entries, `observed_array` ravels them,
+  the objectives sum every entry, and `diagnostics` and the Fisher degrees of freedom count entries (they
+  called `float()` on each value, and counted keys). The "parametric" bootstrap resamples the fitted residuals
+  and assumes no distribution; it is now `method="residual"` / `residual_bootstrap`, documented as such
+  (variance `S/n`, not `S/(n-p)`); `"parametric"` and `parametric_bootstrap` remain as aliases.
+  `run_mhe` jits the arrival-cost update (it ran `ekf_predict` and the model Jacobians eagerly, one
+  compilation per window), and the window solve, the arrival update and `run_ekf` are cached by model and
+  settings (`theta` and `process_std` by value), so a second run, and `solve_mhe` called window by window,
+  compile nothing. The book's 67-window Ch 30 run: 56 s -> 7 s, a second run 51 s -> 1.4 s.
+
 ## [0.4.0] - 2026-10-28
 
 The first release on PyPI since 0.2.2: 0.3.0 was prepared but never tagged or published, so

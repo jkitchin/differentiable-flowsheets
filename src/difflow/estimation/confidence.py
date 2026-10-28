@@ -184,12 +184,12 @@ def fisher_confidence_intervals(
         )
     n_params = len(param_names)
 
-    # Count total observations
-    n_obs = sum(len(exp.output_names) for exp in experiments)
+    # Count total observations: every entry of an array-valued output
+    n_obs = sum(exp.n_obs for exp in experiments)
     dof = n_obs - n_params
 
-    # Hessian at optimum
-    hessian = jax.hessian(objective_fn)(theta_opt)
+    # Hessian at optimum, compiled once rather than run op by op
+    hessian = jax.jit(jax.hessian(objective_fn))(theta_opt)
     h_inv = jnp.linalg.inv(hessian)
 
     if objective == 'sse':

@@ -1,10 +1,22 @@
 """Objective functions for parameter estimation.
 
 Pure functions compatible with jax.grad and jax.jit.
+
+Each is a sum over experiments, but the model is not called once per
+experiment: when the experiments share their structure (the same input
+keys and observed outputs, numeric inputs of equal shape) the model is
+``jax.vmap``-ed over the stacked inputs, so ``jit`` traces and compiles it
+once however many experiments there are. Otherwise -- or when the model
+cannot be vectorized, e.g. it branches in Python on an input value -- they
+fall back to calling it one experiment at a time. See
+:mod:`difflow.estimation._batch`.
+
+An observed value may be an array (a profile, a composition); every entry
+is a residual, and its uncertainty -- a scalar or an array of the same
+shape -- applies entry by entry.
 """
 
-import jax.numpy as jnp
-from jax import Array
+from difflow.estimation._batch import Batch
 
 
 def sum_squared_errors(model_fn, theta, experiments, param_names):
@@ -19,13 +31,7 @@ def sum_squared_errors(model_fn, theta, experiments, param_names):
     Returns:
         Scalar SSE value.
     """
-    theta_dict = {name: theta[i] for i, name in enumerate(param_names)}
-    sse = 0.0
-    for exp in experiments:
-        preds = model_fn(theta_dict, exp)
-        for key in exp.output_names:
-            sse = sse + (preds[key] - exp.observed[key]) ** 2
-    return sse
+    return Batch(model_fn, experiments, param_names).objective('sse')(theta)
 
 
 def weighted_sum_squared_errors(model_fn, theta, experiments, param_names):
@@ -38,16 +44,10 @@ def weighted_sum_squared_errors(model_fn, theta, experiments, param_names):
         param_names: list of parameter names
 
     Returns:
-        Scalar weighted SSE value.
+        Scalar weighted SSE value, ``sum (r / sigma)^2`` with sigma = 1
+        where no uncertainty is given.
     """
-    theta_dict = {name: theta[i] for i, name in enumerate(param_names)}
-    wsse = 0.0
-    for exp in experiments:
-        preds = model_fn(theta_dict, exp)
-        weights = exp.weights
-        for j, key in enumerate(exp.output_names):
-            wsse = wsse + weights[j] * (preds[key] - exp.observed[key]) ** 2
-    return wsse
+    return Batch(model_fn, experiments, param_names).objective('wsse')(theta)
 
 
 def negative_log_likelihood(model_fn, theta, experiments, param_names):
@@ -66,18 +66,7 @@ def negative_log_likelihood(model_fn, theta, experiments, param_names):
     Returns:
         Scalar NLL value.
     """
-    theta_dict = {name: theta[i] for i, name in enumerate(param_names)}
-    nll = 0.0
-    for exp in experiments:
-        preds = model_fn(theta_dict, exp)
-        for key in exp.output_names:
-            residual = preds[key] - exp.observed[key]
-            if exp.uncertainties is not None and key in exp.uncertainties:
-                sigma = exp.uncertainties[key]
-            else:
-                sigma = 1.0
-            nll = nll + 0.5 * ((residual / sigma) ** 2 + jnp.log(2 * jnp.pi * sigma ** 2))
-    return nll
+    return Batch(model_fn, experiments, param_names).objective('nll')(theta)
 
 
 #: The objective names :meth:`Estimator.fit`, ``confidence_intervals``,

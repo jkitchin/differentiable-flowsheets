@@ -84,3 +84,25 @@ def test_estimator_delegates():
     assert est.check_identifiability(THETA, pool).identifiable
     design = est.design_experiments(THETA, pool, n=2)
     assert est.predicted_covariance(THETA, design.selected).std_errors["a"] > 0
+
+
+def test_design_traces_model_independent_of_pool_size():
+    # Regression (#519): sensitivities were one jax.jacobian per candidate.
+    counts = []
+    for n in (4, 12):
+        traces = []
+
+        def model(theta, exp, traces=traces):
+            traces.append(1)                  # runs once per trace
+            return linear_model(theta, exp)
+
+        design_experiments(model, THETA, line_pool(np.linspace(0, 1, n)), n=2)
+        counts.append(len(traces))
+    assert counts[0] == counts[1]
+
+
+def test_vectorized_sensitivities_match_per_experiment():
+    pool = line_pool([0.5, 1.0, 3.0]) + [Experiment.candidate({"x": 2.0}, ["y"], {"y": 0.1})]
+    s = np.asarray(sensitivity_matrix(linear_model, THETA, pool))
+    rows = [np.asarray(sensitivity_matrix(linear_model, THETA, [e])) for e in pool]
+    np.testing.assert_allclose(s, np.concatenate(rows), rtol=1e-12)

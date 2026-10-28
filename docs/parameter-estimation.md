@@ -33,7 +33,7 @@ Key capabilities:
 
 - Parameter estimation with box bounds and multiple objective functions
 - Fisher-information confidence intervals from the exact Hessian
-- Parametric and nonparametric bootstrap uncertainty
+- Nonparametric and residual bootstrap uncertainty
 - Cross-validation for predictive performance
 - Regression diagnostics (R², RMSE, AIC, BIC)
 - Multi-output and nonlinear model support
@@ -46,13 +46,17 @@ Key capabilities:
    - Encapsulates a single experimental observation
    - Stores inputs, observed outputs, uncertainties, and metadata
    - Inherits from `ParamsMixin` for a dict-like interface
-   - Convenience properties: `observed_array`, `weights`, `output_names`
+   - Convenience properties: `observed_array`, `n_obs`, `weights`, `output_names`
+   - An observed value may be an array (a profile); every entry is one
+     observation, and `n_obs` counts entries
 
 2. **`Estimator`** (`estimator.py`)
    - Main orchestrator class
    - Wraps fitting, confidence intervals, bootstrap, cross-validation, and diagnostics
    - Uses `scipy.optimize` with exact JAX gradients
    - Supports parameter bounds and multiple objective functions
+   - Evaluates the model over all experiments in one `jax.vmap` (see
+     [One trace for all experiments](#one-trace-for-all-experiments))
 
 3. **`EstimationResult`** (`estimator.py`)
    - Returns fitted parameters (dict and array forms)
@@ -78,7 +82,12 @@ Key capabilities:
 
 7. **Bootstrap** (`bootstrap.py`)
    - Nonparametric (resample experiments)
-   - Parametric (resample residuals)
+   - Residual (`method="residual"`, formerly "parametric", still accepted):
+     fitted predictions plus fitted residuals resampled with replacement. No
+     distribution is assumed, and the residuals have variance `S/n` rather
+     than `S/(n-p)`, so its spread runs about `sqrt((n-p)/n)` below the
+     linearized standard errors
+   - Every refit reuses one compiled objective
    - Percentile confidence intervals
    - Takes an `objective`, and it must be the one `fit` minimized (see
      [Matching the objective](#matching-the-objective))
@@ -180,13 +189,42 @@ and cost:
   the objective at the optimum. Best when the model is approximately linear near
   the solution.
 - **Bootstrap** — distribution-free and robust; resamples experiments
-  (nonparametric) or residuals (parametric) and refits. More expensive but makes
+  (nonparametric) or residuals (residual bootstrap) and refits. More expensive but makes
   fewer assumptions.
 - **Cross-validation** — assesses predictive performance rather than parameter
   precision, and helps detect over-fitting.
 
 Using more than one gives complementary insight into how well the parameters are
 determined.
+
+## One trace for all experiments
+
+A model is written for one experiment, `model(theta, exp) -> dict`, and the
+objectives sum over experiments. Calling it once per experiment inside `jit`
+would trace and compile one copy of the model per run, which for a difflow unit
+(a `CSTR` with its internal Newton solve) is most of the cost of a fit. When
+the experiments share their structure -- the same input keys and observed
+outputs, numeric inputs of equal shape (a non-numeric input must be the same in
+every run) -- `Estimator`, the objective functions, `sensitivity_matrix`,
+`check_identifiability` and `design_experiments` stack the inputs and
+`jax.vmap` the model over them, so it is traced once however many runs there
+are. The model still receives an `Experiment`; its `inputs` hold one run's
+traced values.
+
+```python
+def model(theta, exp):                       # written for one run
+    return {"X": conversion(theta, exp.inputs["T"], exp.inputs["tau"])}
+
+est = Estimator(model, ["lnk", "Ea"])        # one trace of the CSTR for all runs
+```
+
+When the runs cannot be stacked, or the model cannot be traced that way (a
+Python `if` on an input value, reading `exp.name` or `exp.metadata` that
+differ between runs), they fall back to one call per experiment, so a model
+that works one run at a time keeps working. `Estimator(..., vectorize=False)`
+forces the loop. The bootstrap and cross-validation pass the resampled data as
+an argument of one compiled objective (a resample with replacement is a vector
+of per-experiment counts), so refits do not recompile either.
 
 ## Use in Chemical Engineering
 
@@ -236,7 +274,8 @@ to be aware of:
   constraints).
 - Weighting supports inverse-variance only (no robust M-estimators or correlated
   errors).
-- Bootstrap runs sequentially, so large resample counts can be slow.
+- Bootstrap refits run one after another (each reuses the compiled objective,
+  so a refit costs only its optimizer iterations).
 - Identifiability diagnostics are local and rank-based (`check_identifiability`,
   see [Experiment Design and Identifiability](experiment-design.md)); there is
   no profile likelihood and no global symbolic identifiability analysis.
