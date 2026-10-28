@@ -1060,8 +1060,19 @@ All notable changes to difflow are recorded here. The format follows
   in m², then multiplied by a stainless material factor again, and called the January 2010 result 2020 USD.
   It now takes the carbon-steel row (`11600 + 34 S^0.85`) on the shell mass `pi rho D (H + 0.8 D) t`, applies
   the material factor once and escalates 2010 -> 2020 by CEPCI. New `wall_thickness` argument (default 10 mm).
-  A 3 m x 20 m carbon-steel shell goes from about $24k to $155k; `stripper_cost` changes with it. The core
-  `difflow.economics` tables the issue quotes were already re-sourced in #420, after 0.3.0.
+  A 3 m x 20 m carbon-steel shell goes from about $24k to $155k. The core `difflow.economics` tables the issue
+  quotes were already re-sourced in #420, after 0.3.0.
+- **The other `difflow_cc` purchased costs were unsourced and scaled too weakly (#509).** `heat_exchanger_cost`
+  (`10000 + 88 A^0.68`: x1.46 from 10 to 400 m²), the stripper's reboiler and condenser (`15000 A^0.65`,
+  `10000 A^0.65`), `compressor_cost` (`580000 (kW/1000 + 0.1)^0.82`, a garbled Towler row) and
+  `adsorber_vessel_cost` (`17000 (W/1000)^0.62`) now call the sourced `difflow.economics.capital` correlations,
+  escalated to the module's 2020 basis: Turton floating head / flat plate / spiral plate, Towler kettle
+  reboiler, Towler and Turton compressors, and the Towler vertical vessel on shell mass. A size above a
+  correlation's range is costed as parallel units (linear in size, still differentiable). An unknown `hx_type`
+  or `comp_type` now raises `ValueError` instead of silently costing a default; `SCALING_EXPONENTS` follows the
+  new correlations. New core `HEAT_EXCHANGER_COSTS` entries `spiral_plate` (Turton) and `kettle_reboiler`
+  (Towler & Sinnott). Packing, membrane and blower costs and the material/driver factors are unchanged and
+  still unsourced.
 - **Drying-rate tables in R/R_c units were silently misread (#451).** `drying_rate_curve`, `drying_periods` and
   `drying_time` take `rate_basis="absolute"|"relative"` and raise `RateTableWarning` when a table's scale
   contradicts its basis. A relative (R/R_c) table passed to them gave a falling time about 1/R_c times too short

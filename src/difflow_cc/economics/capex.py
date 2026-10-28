@@ -1,7 +1,11 @@
 """Capital cost correlations for carbon capture equipment.
 
-Equipment cost correlations are based on literature data and
-scaled using the six-tenths rule where applicable.
+Column shells, adsorber vessels, heat exchangers, reboilers and
+compressors use the sourced purchased-cost correlations of
+:mod:`difflow.economics.capital` (Towler & Sinnott; Turton et al.). A unit
+larger than its correlation's range is costed as equal units in parallel.
+Packing, membrane, blower and the material/driver factors are rough
+estimates without a cited source.
 
 All costs are in USD (2020 basis). Use CEPCI indices for
 year-to-year adjustments.
@@ -31,6 +35,12 @@ __all__ = [
 ]
 
 from dataclasses import dataclass
+from difflow.economics.capital import (
+    COMPRESSOR_COSTS,
+    HEAT_EXCHANGER_COSTS,
+    CostParams,
+    equipment_cost,
+)
 from difflow.params_mixin import ParamsMixin
 from typing import Literal
 
@@ -43,21 +53,59 @@ CEPCI_2020 = 596.2
 CEPCI_2015 = 556.8
 CEPCI_2010 = 550.8
 
+# Cost basis year of this module's results.
+_BASIS_YEAR = 2020
 
-# Type-specific power-law scaling exponents used by the correlations below.
-# These are equipment-specific (not a single six-tenths default) and follow
-# Towler & Sinnott, Chemical Engineering Design, 2e, 2013 (Table 7.2) and
-# Rubin et al., Int. J. Greenh. Gas Control 40, 378 (2015). Exposed so callers
-# can validate them, mirroring difflow.economics.capital.validate_cost_params.
+# Towler & Sinnott 2e Table 7.2, vertical carbon-steel pressure vessel, with S
+# the shell mass in kg (openpytea: vertical_cs_press_vessel_towler_2010).
+_VERTICAL_VESSEL = CostParams(
+    a=11600.0, b=34.0, n=0.85, S_min=160.0, S_max=250000.0,
+    S_units="kg (shell mass)", base_year=2010,
+    source="Towler & Sinnott 2e Table 7.2: vertical carbon-steel pressure vessel",
+)
+_STEEL_DENSITY = 7850.0  # kg/m³, carbon steel
+
+# hx_type -> entry of difflow.economics.capital.HEAT_EXCHANGER_COSTS
+_HX_TYPES = {
+    "shell_tube": "shell_tube_floating",
+    "plate": "plate_frame",
+    "spiral": "spiral_plate",
+}
+
+
+def _shell_mass(diameter: Array, length: Array, thickness: Array) -> Array:
+    """Steel mass (kg) of a cylindrical shell and two heads, pi rho D (L + 0.8 D) t."""
+    return jnp.pi * _STEEL_DENSITY * diameter * (length + 0.8 * diameter) * thickness
+
+
+def _parallel_units_cost(size: Array, params: CostParams) -> Array:
+    """Purchased cost (2020 USD) of ``size``, split into parallel units above ``S_max``.
+
+    The unit count ``size / S_max`` is not rounded up, so the cost stays
+    differentiable; above ``S_max`` it is linear in ``size``. A zero size
+    costs nothing.
+    """
+    present = size > 0
+    safe = jnp.where(present, size, params.S_max)  # keeps 0/0 out of the gradient
+    per_unit = jnp.minimum(safe, params.S_max)
+    cost = safe / per_unit * equipment_cost(per_unit, params, target_year=_BASIS_YEAR)
+    return jnp.where(present, cost, 0.0)
+
+
+# Scaling exponents of the correlations below: ``n`` of a Towler & Sinnott
+# power law, or the local exponent at 100 m² of a Turton log-quadratic (which
+# varies with size). Above a correlation's range, parallel units make the cost
+# linear (exponent 1). Exposed so callers can validate them, mirroring
+# difflow.economics.capital.validate_cost_params.
 SCALING_EXPONENTS = {
     "absorber": 0.85,            # column shell vs. shell mass
-    "stripper_reboiler": 0.65,   # kettle reboiler vs. area
-    "stripper_condenser": 0.65,  # shell-and-tube condenser vs. area
-    "heat_exchanger_shell_tube": 0.68,
-    "heat_exchanger_plate": 0.60,
-    "compressor": 0.82,          # centrifugal compressor vs. power
+    "stripper_reboiler": 0.9,    # kettle reboiler vs. area
+    "stripper_condenser": 0.42,  # floating-head exchanger vs. area, at 100 m²
+    "heat_exchanger_shell_tube": 0.42,  # floating head, at 100 m²
+    "heat_exchanger_plate": 0.46,       # flat plate, at 100 m²
+    "compressor": 0.6,           # centrifugal compressor vs. driver power
     "membrane_module": 1.0,      # linear in area (modular)
-    "adsorber_vessel": 0.62,
+    "adsorber_vessel": 0.85,     # vessel vs. shell mass
     "blower": 0.6,
 }
 
@@ -153,8 +201,7 @@ def absorber_cost(
     # Column volume
     volume = jnp.pi * (diameter / 2) ** 2 * height
 
-    # Shell mass (kg), carbon steel at 7850 kg/m³; the 0.8 D adds two heads
-    shell_mass = jnp.pi * 7850.0 * diameter * (height + 0.8 * diameter) * wall_thickness
+    shell_mass = _shell_mass(diameter, height, wall_thickness)
 
     # Material factors
     material_factors = {
@@ -165,8 +212,8 @@ def absorber_cost(
     }
     fm = material_factors.get(material, 1.0)
 
-    # Shell cost: Towler & Sinnott vertical CS vessel (2010 USD) -> 2020 USD
-    shell_cost = fm * (11600 + 34 * shell_mass ** 0.85) * (CEPCI_2020 / CEPCI_2010)
+    # Shell cost: Towler & Sinnott vertical CS vessel, escalated to 2020
+    shell_cost = fm * equipment_cost(shell_mass, _VERTICAL_VESSEL, target_year=_BASIS_YEAR)
 
     # Packing cost
     packing_costs = {
@@ -196,6 +243,11 @@ def stripper_cost(
 ) -> Array:
     """Stripper column with reboiler and condenser.
 
+    The column is :func:`absorber_cost`. The reboiler is Towler & Sinnott's
+    U-tube kettle reboiler and the condenser Turton's floating-head
+    exchanger, on areas from fixed U and LMTD; an area above the
+    correlation's range is costed as parallel units.
+
     Args:
         diameter: Column diameter (m)
         height: Packing height (m)
@@ -219,13 +271,13 @@ def stripper_cost(
     U_reb = 1000.0
     LMTD_reb = 30.0
     A_reb = reboiler_duty / (U_reb * LMTD_reb)
-    reboiler_cost = 15000 * jnp.power(A_reb, 0.65)
+    reboiler_cost = _parallel_units_cost(A_reb, HEAT_EXCHANGER_COSTS["kettle_reboiler"])
 
     # Condenser cost (shell and tube)
     U_cond = 800.0
     LMTD_cond = 20.0
     A_cond = condenser_duty / (U_cond * LMTD_cond)
-    condenser_cost = 10000 * jnp.power(A_cond, 0.65)
+    condenser_cost = _parallel_units_cost(A_cond, HEAT_EXCHANGER_COSTS["shell_tube_floating"])
 
     total = column_cost + reboiler_cost + condenser_cost
     return total
@@ -239,6 +291,12 @@ def heat_exchanger_cost(
 ) -> Array:
     """Heat exchanger capital cost.
 
+    The base cost is Turton et al.'s floating-head (``shell_tube``), flat
+    plate (``plate``) or spiral plate (``spiral``) correlation from
+    :data:`difflow.economics.capital.HEAT_EXCHANGER_COSTS`, escalated to
+    2020. An area above the correlation's range (1000 m², or 100 m² for
+    spiral) is costed as parallel units.
+
     Args:
         area: Heat transfer area (m²)
         hx_type: 'shell_tube', 'plate', 'spiral'
@@ -247,16 +305,13 @@ def heat_exchanger_cost(
 
     Returns:
         Equipment cost (USD)
+
+    Raises:
+        ValueError: Unknown ``hx_type``.
     """
     area = jnp.asarray(area)
-
-    # Base cost by type
-    base_costs = {
-        "shell_tube": (10000, 88, 0.68),  # (a, b, n) in C = a + b*A^n
-        "plate": (5000, 150, 0.60),
-        "spiral": (12000, 95, 0.70),
-    }
-    a, b, n = base_costs.get(hx_type, (10000, 88, 0.68))
+    if hx_type not in _HX_TYPES:
+        raise ValueError(f"Unknown hx_type {hx_type!r}. Available: {sorted(_HX_TYPES)}")
 
     # Material factor
     material_factors = {
@@ -271,7 +326,7 @@ def heat_exchanger_cost(
     P_barg = pressure / 100000 - 1
     fp = jnp.where(P_barg > 10, 0.9 + 0.1 * P_barg / 10, 1.0)
 
-    cost = fm * fp * (a + b * jnp.power(area, n))
+    cost = fm * fp * _parallel_units_cost(area, HEAT_EXCHANGER_COSTS[_HX_TYPES[hx_type]])
     return cost
 
 
@@ -282,6 +337,12 @@ def compressor_cost(
 ) -> Array:
     """Compressor capital cost.
 
+    The base cost is :data:`difflow.economics.capital.COMPRESSOR_COSTS`
+    (Towler & Sinnott centrifugal and reciprocating, on driver power; Turton
+    rotary for ``screw``, on fluid power; the shaft power is used for
+    both), escalated to 2020. A power above the correlation's range is
+    costed as parallel machines.
+
     Args:
         power: Shaft power (W)
         comp_type: 'centrifugal', 'reciprocating', 'screw'
@@ -289,17 +350,16 @@ def compressor_cost(
 
     Returns:
         Equipment cost (USD)
+
+    Raises:
+        ValueError: Unknown ``comp_type``.
     """
     power = jnp.asarray(power)
     power_kW = power / 1000
-
-    # Base cost by type
-    type_factors = {
-        "centrifugal": 1.0,
-        "reciprocating": 1.3,
-        "screw": 0.9,
-    }
-    ft = type_factors.get(comp_type, 1.0)
+    if comp_type not in COMPRESSOR_COSTS:
+        raise ValueError(
+            f"Unknown comp_type {comp_type!r}. Available: {sorted(COMPRESSOR_COSTS)}"
+        )
 
     # Driver cost multiplier
     driver_factors = {
@@ -309,9 +369,7 @@ def compressor_cost(
     }
     fd = driver_factors.get(driver, 1.0)
 
-    # Cost correlation
-    # C = 580000 * (kW / 1000)^0.82 for centrifugal
-    cost = ft * fd * 580000 * jnp.power(power_kW / 1000 + 0.1, 0.82)
+    cost = fd * _parallel_units_cost(power_kW, COMPRESSOR_COSTS[comp_type])
 
     return cost
 
@@ -356,6 +414,9 @@ def adsorber_vessel_cost(
 ) -> Array:
     """Adsorption vessel capital cost.
 
+    Each bed is Towler & Sinnott's vertical carbon-steel pressure vessel on
+    its shell mass (wall 1% of the diameter, two heads), escalated to 2020.
+
     Args:
         diameter: Vessel diameter (m)
         length: Vessel length (m)
@@ -370,12 +431,11 @@ def adsorber_vessel_cost(
     length = jnp.asarray(length)
     adsorbent_mass = jnp.asarray(adsorbent_mass)
 
-    # Pressure vessel cost
-    # Based on weight correlation
+    # Pressure vessel: Towler & Sinnott vertical CS vessel on shell mass
     thickness = 0.01 * diameter  # Approximate wall thickness
-    weight = jnp.pi * diameter * length * thickness * 7800  # kg steel
+    weight = _shell_mass(diameter, length, thickness)
 
-    vessel_cost = 17000 * jnp.power(weight / 1000, 0.62)
+    vessel_cost = equipment_cost(weight, _VERTICAL_VESSEL, target_year=_BASIS_YEAR)
 
     # Internals (bed supports, distributors)
     internals_cost = 0.15 * vessel_cost

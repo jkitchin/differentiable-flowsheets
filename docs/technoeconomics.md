@@ -129,6 +129,8 @@ An area optimizer working below about 22 m² will move toward the minimum, and
 | `HEAT_EXCHANGER_COSTS` | `double_pipe` | log_quadratic | 3.3444, 0.2745, -0.0472 | 1–10 m² | 2001 | Turton et al. 5e Table A.1: double pipe |
 | `HEAT_EXCHANGER_COSTS` | `plate_frame` | log_quadratic | 4.6656, -0.1557, 0.1547 | 10–1000 m² | 2001 | Turton et al. 5e Table A.1: flat plate |
 | `HEAT_EXCHANGER_COSTS` | `air_cooler` | log_quadratic | 4.0336, 0.2341, 0.0497 | 10–10000 m² | 2001 | Turton et al. 5e Table A.1: air cooler |
+| `HEAT_EXCHANGER_COSTS` | `spiral_plate` | log_quadratic | 4.6561, -0.2947, 0.2207 | 1–100 m² | 2001 | Turton et al. 5e Table A.1: spiral plate |
+| `HEAT_EXCHANGER_COSTS` | `kettle_reboiler` | power_law | 29000, 400, 0.9 | 10–500 m² | 2010 | Towler & Sinnott 2e Table 7.2: U-tube kettle reboiler |
 | `COLUMN_COSTS` | `tray_column_shell` | log_quadratic | 3.4974, 0.4485, 0.1074 | 0.3–520 m³ | 2001 | Turton et al. 5e Table A.1: tower (tray and packed) |
 | `COLUMN_COSTS` | `packed_column_shell` | log_quadratic | 3.4974, 0.4485, 0.1074 | 0.3–520 m³ | 2001 | Turton et al. 5e Table A.1: tower (tray and packed) |
 | `COLUMN_COSTS` | `sieve_tray` | log_quadratic | 2.9949, 0.4465, 0.3961 | 0.07–12.3 m² (per tray) | 2001 | Turton et al. 5e Table A.1: sieve trays |
