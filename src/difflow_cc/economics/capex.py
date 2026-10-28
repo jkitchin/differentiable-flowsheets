@@ -50,7 +50,7 @@ CEPCI_2010 = 550.8
 # Rubin et al., Int. J. Greenh. Gas Control 40, 378 (2015). Exposed so callers
 # can validate them, mirroring difflow.economics.capital.validate_cost_params.
 SCALING_EXPONENTS = {
-    "absorber": 0.85,            # column shell vs. surface area
+    "absorber": 0.85,            # column shell vs. shell mass
     "stripper_reboiler": 0.65,   # kettle reboiler vs. area
     "stripper_condenser": 0.65,  # shell-and-tube condenser vs. area
     "heat_exchanger_shell_tube": 0.68,
@@ -124,16 +124,25 @@ def absorber_cost(
     height: Array | float,
     material: str = "carbon_steel",
     packing: str = "structured",
+    wall_thickness: Array | float = 0.01,
 ) -> Array:
     """Absorber column capital cost.
 
-    Based on column shell + packing/internals.
+    Based on column shell + packing/internals. The shell is Towler &
+    Sinnott's vertical carbon-steel pressure vessel (Table 7.2, January 2010
+    basis), ``C = 11600 + 34 S**0.85`` with ``S`` the shell mass in kg
+    (valid 160-250,000 kg), times the material factor and escalated to 2020
+    by CEPCI. The shell mass, heads included, is
+    ``pi rho D (H + 0.8 D) t`` (the usual vessel-weight estimate).
 
     Args:
         diameter: Column diameter (m)
         height: Packing height (m)
         material: Construction material
         packing: Packing type ('structured', 'random', 'trays')
+        wall_thickness: Shell wall thickness (m), including the corrosion
+            allowance. The 10 mm default suits a near-ambient-pressure column
+            a few metres across; set it from the mechanical design otherwise.
 
     Returns:
         Equipment cost (USD)
@@ -144,9 +153,8 @@ def absorber_cost(
     # Column volume
     volume = jnp.pi * (diameter / 2) ** 2 * height
 
-    # Base cost correlation (from Towler & Sinnott)
-    # Shell cost: C = a + b * S^n where S is surface area
-    surface_area = jnp.pi * diameter * height  # m²
+    # Shell mass (kg), carbon steel at 7850 kg/m³; the 0.8 D adds two heads
+    shell_mass = jnp.pi * 7850.0 * diameter * (height + 0.8 * diameter) * wall_thickness
 
     # Material factors
     material_factors = {
@@ -157,8 +165,8 @@ def absorber_cost(
     }
     fm = material_factors.get(material, 1.0)
 
-    # Shell cost (2020 USD)
-    shell_cost = fm * (17400 + 79 * surface_area ** 0.85)
+    # Shell cost: Towler & Sinnott vertical CS vessel (2010 USD) -> 2020 USD
+    shell_cost = fm * (11600 + 34 * shell_mass ** 0.85) * (CEPCI_2020 / CEPCI_2010)
 
     # Packing cost
     packing_costs = {

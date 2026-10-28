@@ -1055,6 +1055,13 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- **`difflow_cc.absorber_cost` sized the shell by the wrong quantity (#509).** It used Towler & Sinnott's
+  vertical 304-SS pressure-vessel row (`17400 + 79 S^0.85`, S = shell mass in kg) with S = shell surface area
+  in m², then multiplied by a stainless material factor again, and called the January 2010 result 2020 USD.
+  It now takes the carbon-steel row (`11600 + 34 S^0.85`) on the shell mass `pi rho D (H + 0.8 D) t`, applies
+  the material factor once and escalates 2010 -> 2020 by CEPCI. New `wall_thickness` argument (default 10 mm).
+  A 3 m x 20 m carbon-steel shell goes from about $24k to $155k; `stripper_cost` changes with it. The core
+  `difflow.economics` tables the issue quotes were already re-sourced in #420, after 0.3.0.
 - **Drying-rate tables in R/R_c units were silently misread (#451).** `drying_rate_curve`, `drying_periods` and
   `drying_time` take `rate_basis="absolute"|"relative"` and raise `RateTableWarning` when a table's scale
   contradicts its basis. A relative (R/R_c) table passed to them gave a falling time about 1/R_c times too short
