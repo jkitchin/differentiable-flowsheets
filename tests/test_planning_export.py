@@ -146,6 +146,16 @@ def test_block_from_flowsheet_smoke():
     assert blk.metadata["source"] == "flowsheet"
 
 
+def test_block_from_flowsheet_call_keyword_lever_default_u0():
+    # #515: a key of Unit.params (a call keyword, not a Params field) is a
+    # lever _apply_params can set, so u0 must default from it too.
+    blk = Block.from_flowsheet(_flowsheet(), u=["reactor.T_spec", "reactor.V"],
+                               y=["product.F_B"])
+    assert blk.u0 == pytest.approx([350.0, 1.0])
+    with pytest.raises(KeyError, match="no parameter 'nope'"):
+        Block.from_flowsheet(_flowsheet(), u=["reactor.nope"], y=["product.F_B"])
+
+
 def test_block_from_flowsheet_validation():
     fs = _flowsheet()
     with pytest.raises(ValueError, match="at least one lever"):

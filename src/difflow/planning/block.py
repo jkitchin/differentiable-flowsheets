@@ -152,17 +152,9 @@ def _current_value(flowsheet, key: str) -> float:
                 f"Available feeds: {list(flowsheet.feeds.keys())}")
         return float(_stream_quantity(flowsheet.feeds[feed_name], field_name))
 
-    unit_name, _, param_name = key.partition(".")
-    for unit in flowsheet.units:
-        if unit.name == unit_name:
-            params = getattr(unit.operation, "params", None)
-            if params is None or not hasattr(params, param_name):
-                raise KeyError(
-                    f"Unit {unit_name!r} has no parameter {param_name!r}")
-            return float(jnp.asarray(getattr(params, param_name)))
-    raise KeyError(
-        f"No unit named {unit_name!r} in flowsheet. "
-        f"Available units: {[u.name for u in flowsheet.units]}")
+    # Same lookup as the write side (_apply_params): Unit.params call
+    # keywords first, then the operation's Params fields.
+    return float(jnp.asarray(flowsheet._param_value(key)))
 
 
 @dataclass
@@ -412,7 +404,11 @@ class Block(ParamsMixin):
                 planning LP wants real ones.
             ub: Upper bounds on the levers.
             u0: Linearisation point.  Defaults to the flowsheet's *current*
-                values, which is almost always the base case you want.
+                values, which is almost always the base case you want, read
+                with the lookup of
+                :meth:`~difflow.flowsheet.Flowsheet._apply_params` (a key of the unit's
+                ``Unit.params`` call keywords first, then an operation
+                ``Params`` field).
             u_names: Override the derived bare names for the levers.
             y_names: Override the derived bare names for the outputs.
             solve_kwargs: Passed through to :meth:`Flowsheet.solve`.

@@ -13,7 +13,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from difflow.planning.linearize import Linearization
-from difflow.planning.lp import LPModel, as_spec
+from difflow.planning.lp import LPModel, as_spec, unique_spec_names
 from difflow.planning.network import Network
 from difflow.planning.piecewise import PiecewiseData
 
@@ -142,7 +142,7 @@ def build_lp(network: Network,
         for name in b.qualified_y():
             add_col(name, -np.inf, np.inf)
 
-    spec_objs = [as_spec(s, penalty) for s in specs]
+    spec_objs = unique_spec_names([as_spec(s, penalty) for s in specs])
     slack_cols: dict[str, int] = {}
     for s in spec_objs:
         if s.elastic:

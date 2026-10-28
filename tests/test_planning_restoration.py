@@ -140,3 +140,33 @@ def test_a_model_with_no_spec_rows_is_returned_without_artificials():
         planner.linearize(state), state, 0.1))
     assert not [c for c in phase1.columns if c.startswith("artificial[")]
     assert np.all(phase1.c == 0.0)
+
+
+# -- 2. two hard specs on one variable (difflow issue 515) ----------------
+
+def test_two_specs_on_one_variable_both_score_and_restore():
+    """A >= and a <= on one variable share the default name; keyed by it,
+    the violated >= vanished, restoration judged the start feasible and the
+    loop ran to max_iter reporting zero violation."""
+    blk = Block(name="t", fn=lambda u: jnp.array([u[0] - u[1]]),
+                u_names=["made", "sold"], y_names=["level"],
+                lb=[0.0, 0.0], ub=[1.0, 2.0], u0=[1.0, 1.9])
+    specs = [Spec("t.level", ">=", 0.0, elastic=False),
+             Spec("t.level", "<=", 0.5, elastic=False)]
+    planner = _planner(Network([blk]), {"t.sold": 1.0}, specs)
+    assert planner.violations({"t.level": -0.9}) == pytest.approx(
+        {"t.level>=0": 0.9, "t.level<=0.5": 0.0})
+    assert [s.name for s in specs] == ["t.level", "t.level"]  # not renamed in place
+
+    res = planner.solve()
+    assert res.reason != "max_iter"
+    level = float(res.values["t.level"])
+    assert res.violations["t.level>=0"] == pytest.approx(max(0.0, -level))
+    assert res.converged and level >= -1e-6
+
+
+def test_duplicate_chosen_spec_names_are_refused():
+    net = Network([infeasible_block()])
+    with pytest.raises(ValueError, match="two specs are named"):
+        _planner(net, {"b.y": 1.0}, [Spec("b.y", ">=", 0.0, name="cap"),
+                                     Spec("b.y", "<=", 1.0, name="cap")])

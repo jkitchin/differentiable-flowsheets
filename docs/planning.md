@@ -310,6 +310,14 @@ limit while the LP held the tightened one let accepted steps drift back to
 the nominal constraint (issue 513). `res.stated_violations` (and
 `Spec.violation(values, stated=True)`) report the stated limits alone.
 
+Violations are keyed by `Spec.name`, which defaults to the variable name. Two
+specs on one variable -- a `>=` and a `<=` bracketing a tank level -- would share
+that key, so the planner extends each colliding default with its operator and
+limit (`"tank.level>=0"`, `"tank.level<=4"`); a duplicate name you chose raises
+`ValueError`. Keyed by the bare name, the second spec hid the first: a violated
+lower bound scored zero, restoration judged an infeasible start feasible, and
+the loop ran to `max_iter` reporting no violation (issue 515).
+
 ### A block that cannot be evaluated
 
 A block with an inner solve has operating points where the solve has no answer.
@@ -1097,7 +1105,8 @@ check_delta_vectors(blk)["passed"]             # AD vs central differences
 ```
 
 Lever keys are `Flowsheet._apply_params` notation: `"<unit>.<param>"` for a unit
-parameter, and `"feed:<stream>.<field>"` for a feed, where the field is `T`,
+parameter (a key of the unit's call keywords, `Unit.params`, such as a CSTR's
+`T_spec`, first, then a field of the operation's `Params`), and `"feed:<stream>.<field>"` for a feed, where the field is `T`,
 `P`, `total_flow`, `F_<species>` or `x_<species>`. Feed rate and composition are
 the most common planning levers there are, so they are first-class: `total_flow`
 scales the stream at constant composition, `x_<species>` moves a mole fraction

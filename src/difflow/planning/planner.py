@@ -58,7 +58,9 @@ from difflow.planning.assemble import build_lp
 from difflow.planning.linearize import (
     Linearization, check_phase_transition, linearize_block,
 )
-from difflow.planning.lp import LPModel, LPSolution, as_spec
+from difflow.planning.lp import (
+    LPModel, LPSolution, as_spec, unique_spec_names,
+)
 from difflow.planning.network import Network, NetworkState
 from difflow.planning.restoration import (
     restoration_model, restoration_violation,
@@ -220,7 +222,7 @@ class DeltaBasePlanner:
             raise ValueError(f"sense must be 'max' or 'min', got {sense!r}")
         self.network = network
         self.prices = dict(prices)
-        self.specs = [as_spec(s, penalty) for s in specs]
+        self.specs = unique_spec_names([as_spec(s, penalty) for s in specs])
         self.penalty = float(penalty)
         self.sense = sense
         self.accept_test = bool(accept_test)

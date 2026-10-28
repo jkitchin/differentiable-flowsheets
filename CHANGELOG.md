@@ -35,6 +35,20 @@ All notable changes to difflow are recorded here. The format follows
   result; `plan_sensitivity`, `stated_violations`, `DeltaVectorSet.from_result` and `draw_trust_region`
   read it.
 
+- **`Block.from_flowsheet` without `u0` refused call-keyword levers (issue 515).** A lever that is a key
+  of the unit's `Unit.params` (e.g. a CSTR's `T_spec`) can be set by `_apply_params`, but the default `u0`
+  was looked up only among the operation's `Params` fields and raised `KeyError`. It now reads the value
+  through the new `Flowsheet._param_value`, the read side of `_apply_params` with the same lookup order.
+
+- **Two specs on one variable hid each other's violation (issue 515).** `Spec.name` defaults to the
+  variable name, and violations, the penalty charge and the LP's elastic slack columns are keyed by it, so
+  with a `>=` and a `<=` on one variable (hard tank-level bounds) only the last survived. From a start
+  below the lower bound, `res.violations` read 0, restoration judged the start feasible, and the loop ran
+  to `max_iter`. The planner (and `build_lp`) now extend colliding default names with the operator and
+  limit (`"tank.level>=0"`), via `difflow.planning.lp.unique_spec_names`; duplicate names chosen by the
+  caller raise `ValueError`. Such a run now restores, or ends `restoration_failed` with the violation
+  reported.
+
 ## [0.4.0] - 2026-10-28
 
 The first release on PyPI since 0.2.2: 0.3.0 was prepared but never tagged or published, so
