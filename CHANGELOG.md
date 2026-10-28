@@ -90,6 +90,19 @@ All notable changes to difflow are recorded here. The format follows
   is re-executed: every solve there now finds a better CVaR (the mean-value and stochastic designs move to the
   solvent lower bound; SP 241.0 -> 242.6, VSS 3.9 -> 4.1, EVPI 0.21 -> 0.02 $M/yr), and its prose follows.
 
+- **`DynamicCSTR(mode="specified_duty")` could not set a duty, and there was no jacket (issue 518).** The energy
+  balance read `params["Q_spec"]`, which nothing stored, so a specified-duty reactor always ran adiabatic.
+  `DynamicCSTR` now takes keyword-only `duty=` (W) for `"specified_duty"` and a new `mode="jacket"` with `UA=`
+  (W/K) and `Tc=` (K), Q = UA (Tc - T). Each is a constant, `f(t)`, or `f(t, args)` reading
+  `DynamicFlowsheet.simulate(args=...)`; `Tc` may also name an inlet port whose stream temperature is the
+  coolant's. They are params keys, so `simulate(params={"UA": ua})` overrides them and `jax.grad` goes through
+  them (`"Q_spec"` is still read as a duty override). New `DynamicCSTR.heat_input(t, T, inputs)`. Building a
+  `"specified_duty"` CSTR without `duty`, a `"jacket"` one without `UA` or `Tc`, passing them to a mode that does
+  not use them, or an unknown mode now raises `ValueError`. `DynamicUnitBase.derivatives`/`outputs` no longer
+  write a call's `params` into the unit (a traced value from `jax.grad` stayed behind and broke the next call);
+  the override holds for that call only. They also take the integrator `args` (`wants_args`), which
+  `DynamicFlowsheet` now hands to a unit's `derivatives` as it already did to `outputs`.
+
 ## [0.4.0] - 2026-10-28
 
 The first release on PyPI since 0.2.2: 0.3.0 was prepared but never tagged or published, so

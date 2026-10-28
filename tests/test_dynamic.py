@@ -76,3 +76,77 @@ def test_dynamic_cstr_and_tank():
         assert "outlet" in unit.outputs(0.0, y0, inputs)
     result = integrate_unit(cstr, inputs=inputs, t_span=(0.0, 10.0), method="RK4", n_steps=10)
     assert result.info.success
+
+
+# --- DynamicCSTR heat input: specified duty and jacket (#518) ---------------
+
+def _no_rxn_cstr(**kw):
+    return DynamicCSTR(volume=0.01, rate_fn=lambda C, T, p: jnp.array([0.0]),
+                       stoich=jnp.array([[-1.0], [1.0]]), species_order=["A", "B"], **kw)
+
+
+_FEED = {"inlet": make_stream({"A": 1.0, "B": 0.0}, T=300.0, P=1e5)}
+
+
+def _T_final(unit, inputs=_FEED, t_end=3000.0):
+    return integrate_unit(unit, inputs, (0.0, t_end), method="RK4", n_steps=300).y_final[-1]
+
+
+def test_dynamic_cstr_specified_duty_heats():
+    # Steady energy balance with no reaction: F Cp (T - T_in) = Q, Cp = 75 J/(mol K).
+    T = _T_final(_no_rxn_cstr(mode="specified_duty", duty=750.0))
+    assert abs(float(T) - (300.0 + 750.0 / (1.0 * 75.0))) < 1e-6
+    T_t = _T_final(_no_rxn_cstr(mode="specified_duty", duty=lambda t: 750.0))
+    assert abs(float(T_t) - float(T)) < 1e-9
+
+
+def test_dynamic_cstr_jacket_runs_and_grad_UA_finite():
+    import jax
+
+    T = _T_final(_no_rxn_cstr(mode="jacket", UA=75.0, Tc=320.0))
+    assert jnp.isfinite(T) and float(T) > 300.0
+    g = jax.grad(lambda ua: _T_final(_no_rxn_cstr(mode="jacket", UA=ua, Tc=320.0), t_end=600.0))(75.0)
+    assert jnp.isfinite(g)
+
+
+def test_dynamic_cstr_jacket_inputs_through_flowsheet():
+    import jax
+
+    from difflow.dynamic import DynamicFlowsheet
+
+    fs = DynamicFlowsheet(["A", "B"])
+    fs.add_feed("feed", _FEED["inlet"])
+    fs.add_feed("cw", make_stream({"A": 0.0, "B": 0.0}, T=320.0, P=1e5))
+    fs.add_unit(_no_rxn_cstr(mode="jacket", UA=75.0, Tc="coolant"),
+                inlets={"inlet": "feed", "coolant": "cw"}, outlets={"outlet": "out"}, name="r")
+
+    def T_end(ua):
+        return fs.simulate((0.0, 600.0), method="RK4", n_steps=60, params={"UA": ua}).y_final[-1]
+
+    assert jnp.isfinite(jax.grad(T_end)(75.0))
+    # A params override is per call: no tracer is left in the unit after grad.
+    assert jnp.isfinite(fs.simulate((0.0, 600.0), method="RK4", n_steps=60).y_final[-1])
+
+    fs2 = DynamicFlowsheet(["A", "B"])
+    fs2.add_feed("feed", _FEED["inlet"])
+    fs2.add_unit(_no_rxn_cstr(mode="jacket", UA=75.0, Tc=lambda t, args: args["Tc"]),
+                 inlets={"inlet": "feed"}, outlets={"outlet": "out"}, name="r")
+    res = fs2.simulate((0.0, 600.0), method="RK4", n_steps=60, args={"Tc": jnp.array(340.0)})
+    assert jnp.isfinite(res.y_final[-1])
+
+
+def test_dynamic_cstr_heat_input_validation():
+    import pytest
+
+    with pytest.raises(ValueError, match="needs duty"):
+        _no_rxn_cstr(mode="specified_duty")
+    with pytest.raises(ValueError, match="needs UA"):
+        _no_rxn_cstr(mode="jacket", Tc=300.0)
+    with pytest.raises(ValueError, match="needs Tc"):
+        _no_rxn_cstr(mode="jacket", UA=1.0)
+    with pytest.raises(ValueError, match="only by mode='jacket'"):
+        _no_rxn_cstr(mode="adiabatic", UA=1.0)
+    with pytest.raises(ValueError, match="only by mode='specified_duty'"):
+        _no_rxn_cstr(mode="jacket", UA=1.0, Tc=300.0, duty=5.0)
+    with pytest.raises(ValueError, match="mode must be one of"):
+        _no_rxn_cstr(mode="cooled")

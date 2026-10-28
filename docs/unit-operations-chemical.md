@@ -68,6 +68,10 @@ The mode is chosen when the unit is built (`CSTR(params, thermo, mode=...)`):
 2. **Adiabatic** (`mode='adiabatic'`): Q = 0, outlet temperature calculated
 3. **Specified Duty** (`mode='specified_duty'`, `Q_spec` given at call time): Heat duty fixed, outlet temperature calculated
 
+The dynamic `difflow.dynamic.DynamicCSTR` is different: its duty is set when it is built
+(`mode='specified_duty', duty=...`), and it also has a cooling jacket (`mode='jacket', UA=..., Tc=...`,
+Q = UA (Tc − T)); see [Dynamic modeling](dynamic-modeling.md#dynamiccstr).
+
 #### Governing Equations
 
 **Material Balance** (steady-state):

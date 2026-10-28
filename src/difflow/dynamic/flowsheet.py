@@ -68,7 +68,7 @@ from jax import Array
 
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.dynamic.state import StateSpec, StateVar
-from difflow.dynamic.base import DynamicUnit, Params
+from difflow.dynamic.base import DynamicUnit, Params, _takes_args
 from difflow.dynamic.integrators import (
     integrate,
     IntegrationResult,
@@ -79,26 +79,6 @@ from difflow.dynamic.integrators import (
     EventResult,
     detect_events,
 )
-
-
-def _takes_args(fn) -> bool:
-    """True for a feed written ``(t, args)``: a second positional parameter
-    that is required or is named ``args`` (or a ``*args``)."""
-    import inspect
-    try:
-        prms = list(inspect.signature(fn).parameters.values())
-    except (TypeError, ValueError):
-        return False
-    positional = []
-    for prm in prms:
-        if prm.kind is prm.VAR_POSITIONAL:
-            return len(positional) <= 1
-        if prm.kind in (prm.POSITIONAL_ONLY, prm.POSITIONAL_OR_KEYWORD):
-            positional.append(prm)
-    if len(positional) < 2:
-        return False
-    second = positional[1]
-    return second.default is second.empty or second.name == "args"
 
 
 @dataclass
@@ -677,9 +657,11 @@ class DynamicFlowsheet:
             if entry.n_states == 0:
                 continue
             inputs = self._unit_inputs(entry, streams)
-            derivs.append(jnp.atleast_1d(
-                entry.unit.derivatives(t, unit_states[entry.name], inputs, params)
-            ))
+            if getattr(entry.unit, "wants_args", False):
+                d = entry.unit.derivatives(t, unit_states[entry.name], inputs, params, args)
+            else:
+                d = entry.unit.derivatives(t, unit_states[entry.name], inputs, params)
+            derivs.append(jnp.atleast_1d(d))
         return jnp.concatenate(derivs)
 
     def outputs(
@@ -741,7 +723,8 @@ class DynamicFlowsheet:
                 ``DynamicFlowsheetResult.events`` (#130).
             args: Optional pytree handed to every ``(t, args)`` feed and to
                 every :class:`InstantaneousUnit` whose function or
-                ``call_params`` take it: the one place for time-varying
+                ``call_params`` take it, and to a ``DynamicCSTR`` duty or
+                coolant temperature given as ``f(t, args)``: the one place for time-varying
                 disturbances (``params`` is for design parameters). It and
                 ``params`` are passed to the integrator as its ``args``
                 rather than closed over, so with a diffrax method one compiled
