@@ -394,7 +394,7 @@ def reconcile_multi(
     sigmas = _per_set_sigma(sigma, n, k_sets)
     shared_idx = _shared_indices(shared, names)
     private_idx = [i for i in range(n) if i not in set(shared_idx)]
-    n_priv, n_sh = len(private_idx), len(shared_idx)
+    n_priv = len(private_idx)
 
     for j in shared_idx:
         col = jnp.array([s[j] for s in sigmas])
@@ -408,17 +408,9 @@ def reconcile_multi(
     params_per_set = _per_set_params(params, k_sets)
     priv = jnp.asarray(private_idx, dtype=int)
     sh = jnp.asarray(shared_idx, dtype=int)
-
-    def expand(z: Array, k: int) -> Array:
-        """Rebuild data set ``k``'s full state from the stacked vector."""
-        block = z[k * n_priv:(k + 1) * n_priv]
-        x = jnp.zeros(n, dtype=z.dtype)
-        return x.at[priv].set(block).at[sh].set(z[k_sets * n_priv:])
-
-    def stacked_residual(z: Array, ps: Any) -> Array:
-        return jnp.concatenate(
-            [residual_fn(expand(z, k), ps[k]) for k in range(k_sets)]
-        )
+    stacked_residual = _StackedResidual(
+        residual_fn, n, k_sets, tuple(private_idx), tuple(shared_idx)
+    )
 
     def stack(per_set: Sequence[Array], shared_row: Array) -> Array:
         return jnp.concatenate(
@@ -473,6 +465,53 @@ def reconcile_multi(
         n_datasets=k_sets,
         names=names,
     )
+
+
+class _StackedResidual:
+    """The stacked residual of :func:`reconcile_multi`, as a hashable object.
+
+    :func:`~difflow.reconciliation.solve_reconciliation` is jitted with
+    the residual function static. A closure built inside
+    :func:`reconcile_multi` is a new object on every call, so each new
+    window of data retraced and recompiled the whole Gauss-Newton sweep
+    (about 17 s for a week of a two-equation exchanger). Equal by
+    structure, this reuses the compiled solve whenever the model, the
+    number of data sets and the shared variables are unchanged.
+    """
+
+    def __init__(self, residual_fn: Callable, n: int, k_sets: int,
+                 private: tuple[int, ...], shared: tuple[int, ...]):
+        self.residual_fn = residual_fn
+        self.n = n
+        self.k_sets = k_sets
+        self.private = private
+        self.shared = shared
+
+    def _key(self) -> tuple:
+        return (self.residual_fn, self.n, self.k_sets, self.private,
+                self.shared)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _StackedResidual) and other._key() == self._key()
+
+    def __hash__(self) -> int:
+        return hash((_StackedResidual,) + self._key())
+
+    def expand(self, z: Array, k: int) -> Array:
+        """Rebuild data set ``k``'s full state from the stacked vector."""
+        n_priv = len(self.private)
+        where = [0] * self.n
+        for j, i in enumerate(self.private):
+            where[i] = k * n_priv + j
+        for j, i in enumerate(self.shared):
+            where[i] = self.k_sets * n_priv + j
+        return z[np.asarray(where, dtype=int)]
+
+    def __call__(self, z: Array, ps: Any) -> Array:
+        return jnp.concatenate(
+            [self.residual_fn(self.expand(z, k), ps[k])
+             for k in range(self.k_sets)]
+        )
 
 
 def _same_sigma(a: Array, b: Array) -> Array:

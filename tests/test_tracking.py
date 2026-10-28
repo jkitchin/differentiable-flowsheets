@@ -133,3 +133,13 @@ def test_track_parameters_smoke():
     with pytest.raises(ValueError, match="times for"):
         track_parameters(parallel_pipes, data, SIGMA, state=start(), names=NAMES,
                          drift_std=DRIFT, times=[0.0, 1.0])
+
+
+def test_a_new_meter_fault_does_not_move_the_parameter():
+    # Regression (#516): while a fault was young, blame concentration over the
+    # window was low, the verdict read "model drift" and the bias went into eta.
+    data = campaign(np.ones(8), seed=2, bias=np.zeros(5))
+    data = data[:4] + [y.at[2].add(8.0) for y in data[4:]]   # q2 reads 8 high from period 4
+    run = track_parameters(parallel_pipes, data, SIGMA, state=start(), names=NAMES,
+                           drift_std=DRIFT, window=4)
+    assert run.n_updates == 0

@@ -47,9 +47,11 @@ Over time the same computation becomes an operating discipline. Run it
 routinely with the parameters *fixed* --- :func:`monitor` --- and the
 global test is a genuine instrument-health monitor, because the model
 has no freedom to hide a fault; :meth:`MonitorResult.diagnose` then
-reads the statistic series and where the blame lands to say whether a
-sensor or the model is at fault, which is the question the global test
-alone cannot answer. Re-estimate parameters only as a deliberate
+says whether a sensor or the model is at fault, which is the question
+the global test alone cannot answer. It reads a second test against the
+constraints that contain no model parameter (true whatever the
+parameters are, so a pure instrument check) and, where there is none,
+where the blame lands. Re-estimate parameters only as a deliberate
 campaign, and pool the window with :func:`reconcile_multi`, which
 holds a parameter common across data sets so every one of them
 constrains the same unknown.
@@ -85,6 +87,8 @@ from difflow.reconciliation.gross_error import (
     serial_elimination,
 )
 from difflow.reconciliation.monitoring import (
+    BASIS_BLAME,
+    BASIS_PARAMETER_FREE,
     CONCENTRATION_THRESHOLD,
     MONITOR_CONSISTENT,
     MONITOR_INSTRUMENT_FAULT,
@@ -94,8 +98,10 @@ from difflow.reconciliation.monitoring import (
     MonitorDiagnosis,
     MonitorResult,
     MonitorStep,
+    balance_test,
     blame_concentration,
     monitor,
+    parameter_free_rows,
 )
 from difflow.reconciliation.reconcile import (
     MultiReconcileResult,
@@ -171,6 +177,10 @@ __all__ = [
     "MonitorStep",
     "MonitorDiagnosis",
     "blame_concentration",
+    "parameter_free_rows",
+    "balance_test",
+    "BASIS_PARAMETER_FREE",
+    "BASIS_BLAME",
     "MONITOR_CONSISTENT",
     "MONITOR_INSTRUMENT_FAULT",
     "MONITOR_MODEL_DRIFT",

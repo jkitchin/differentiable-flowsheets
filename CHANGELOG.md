@@ -49,6 +49,26 @@ All notable changes to difflow are recorded here. The format follows
   caller raise `ValueError`. Such a run now restores, or ends `restoration_failed` with the violation
   reported.
 
+- **`MonitorResult.diagnose` read fouling as an instrument fault; `track_parameters` leaked a meter bias
+  into the parameter (issue 516).** With two equations (an exchanger's energy balance and its `UA` rate
+  equation) fouling moves both outlet temperatures together and the measurement test blames the same
+  sensor every day, so drift was diagnosed "instrument fault ... on Th_out". `monitor` and
+  `track_parameters` now also reconcile each period against the constraints with no model parameter
+  (rows where `dF/dparams` is identically zero; new `parameter_free_rows`, `balance_test`, and a
+  `parameter_free=` override) and record `balance_statistic`, `balance_detected` and `balance_checks` on
+  each `MonitorStep`. `diagnose` decides on that test where it can (passes: model drift; rejects:
+  instrument fault or undiagnosed) and falls back on the blame pattern otherwise; `MonitorDiagnosis`
+  gains `balance_rejection_rate` and `basis`. `update_gate(..., step=)` also holds a `model drift` verdict on
+  a period whose own parameter-free test rejects, which stops the first days of a new fault moving the parameter (a +4 K
+  thermocouple bias gave `UA` 62.7 +/- 0.4 kW/K against 60; it now holds at 60). `track_parameters`
+  passes the step.
+
+- **`reconcile_multi` recompiled for every new data set (issues 516, 519).** The stacked residual was a
+  fresh closure per call and `solve_reconciliation` takes the residual as a static argument; it is now a
+  structurally hashable object, so a sliding window re-uses the compiled solve (about 17 s to about 1.5 s
+  per week of exchanger data). `parameter_measurement`'s augmented residual gets the same treatment.
+  Notebook 29 re-run: the default-gate leak of its section 7 (eta dragged to 1.131 by a meter bias) is gone.
+
 ## [0.4.0] - 2026-10-28
 
 The first release on PyPI since 0.2.2: 0.3.0 was prepared but never tagged or published, so
