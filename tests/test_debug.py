@@ -463,3 +463,61 @@ def test_stopping_a_paused_live_solve_ends_it():
     session.debug_stop()
     assert runner.finished and runner.state == "finished"
     assert "start one" in session.debug_wait()["error"]
+
+
+# ---------------------------------------------------------------------
+# Reading traces: summarize, state_at, compare
+# ---------------------------------------------------------------------
+
+
+def snap(feed, tear):
+    """A loop with two stable steady states: x = 0 and x = 1 (0.5 is unstable)."""
+    x = tear["F_A"]
+    return make_stream({"A": 3 * x**2 - 2 * x**3}, feed["T"], feed["P"])
+
+
+def bistable() -> Flowsheet:
+    fs = Flowsheet(species_order=["A"])
+    fs.add_feed("feed", make_stream({"A": 1.0}, 300.0, 1e5))
+    fs.add_unit(Unit("snap", snap, ["feed", "tear"], ["out"]))
+    fs.add_recycle("out", "tear")
+    return fs
+
+
+def test_a_summary_has_a_row_per_iteration_and_no_frames():
+    from difflow.debug.record import summarize
+
+    trace = debug.record(loop())
+    summary = summarize(trace)
+    assert summary["frames"] == len(trace["frames"])
+    rows = summary["iterations"]
+    assert rows and all(trace["frames"][r["frame"]]["checkpoint"] == "iteration"
+                        for r in rows)
+    assert rows[0]["largest"].startswith("recycle.")
+    assert summary["regime"] == "converged"
+    json.dumps(summary)
+
+
+def test_state_at_replays_the_frames():
+    from difflow.debug.record import state_at
+
+    trace = debug.record(loop())
+    assert set(state_at(trace, 0)) == {"feed"}
+    assert {"mixed", "reacted", "product"} <= set(state_at(trace, len(trace["frames"]) - 1))
+
+
+def test_compare_names_a_second_steady_state():
+    from difflow.debug.record import compare
+
+    fs = bistable()
+    kw = {"use_initialization": False}
+    base = debug.record(fs, kw)
+    k = next(i for i, f in enumerate(base["frames"]) if f["checkpoint"] == "iteration")
+    up = debug.record(fs, kw, edits=[{"frame": k, "stream": "tear", "field": "F_A",
+                                      "value": 0.8}], baseline=base["frames"])
+    same = debug.record(fs, kw, edits=[{"frame": k, "stream": "tear", "field": "F_A",
+                                        "value": 0.1}], baseline=base["frames"])
+    assert compare(base, same)["same_answer"] is True
+    other = compare(base, up)
+    assert other["same_answer"] is False
+    assert other["largest_difference"]["where"] == "out.F_A"

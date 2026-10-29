@@ -236,3 +236,45 @@ class TestLiveDebugger:
         assert not wb.debug_start(session="nowhere")["ok"]
         assert "start one" in wb.debug_command("step")["error"]
         assert json.loads(json.dumps(wb.debug_state()))["state"] == "idle"
+
+    def test_record_frame_and_what_if(self):
+        wb = self.bench()
+        recorded = wb.debug_record()
+        assert recorded["ok"], recorded
+        summary = recorded["summary"]
+        k = summary["iterations"][0]["frame"]
+        assert wb.sessions["main"].flowsheet.last_solve_history is None   # a copy was solved
+
+        shown = wb.debug_trace_frame(k, streams=["recycle"])
+        assert shown["frame"]["checkpoint"] == "iteration"
+        assert set(shown["streams"]) == {"recycle"}
+
+        replay = wb.debug_whatif(k, "recycle", "F_A", 5.0)
+        assert replay["ok"], replay
+        comparison = replay["comparison"]
+        assert comparison["diverged_at"] is None and comparison["same_answer"]
+        assert [e["value"] for e in comparison["edits"]] == [5.0]
+        assert wb.debug_trace_frame(k, which="whatif")["frame"]["edits"]
+        json.dumps(replay)
+
+    def test_a_what_if_can_find_another_steady_state(self):
+        from difflow.gui.session import FlowsheetSession
+        from tests.test_debug import bistable
+
+        wb = Workbench()
+        wb.sessions["main"] = FlowsheetSession(bistable())
+        wb.sessions["main"].set_solver_options({"use_initialization": False})
+        k = wb.debug_record()["summary"]["iterations"][0]["frame"]
+        comparison = wb.debug_whatif(k, "tear", "F_A", 0.8)["comparison"]
+        assert comparison["same_answer"] is False
+        assert comparison["largest_difference"]["where"] == "out.F_A"
+
+    def test_record_and_replay_refusals(self):
+        wb = self.bench()
+        assert "debug_record" in wb.debug_trace_frame(0)["error"]
+        assert "record a solve first" in wb.debug_whatif(0, "recycle", "F_A", 1.0)["error"]
+        wb.debug_record()
+        assert "debug_whatif" in wb.debug_trace_frame(0, which="whatif")["error"]
+        assert not wb.debug_trace_frame(10_000)["ok"]
+        assert "known:" in wb.debug_trace_frame(0, streams=["nope"])["error"]
+        assert not wb.debug_whatif(0, "recycle", "F_A", 1.0)["ok"]      # not an iteration

@@ -311,7 +311,11 @@ An agent connected over MCP (`difflow mcp`) gets the same debugger as
 tools: `debug_start`, `debug_command`, `debug_wait`, `debug_pause`,
 `debug_state`, `debug_stop`, and `debug_guide` for the contract (see
 [agents](agents.md)). They are the editor's Debug-panel calls, on the
-agent's session.
+agent's session. The Trace panel's record and what-if are there too:
+`debug_record` (a summary, not every frame), `debug_trace_frame` (one frame
+in full) and `debug_whatif` (the replay, compared with the recording,
+including whether it reached the same answer). In Python the summary and the
+comparison are `difflow.debug.record.summarize`, `state_at` and `compare`.
 
 ## What it does not change
 

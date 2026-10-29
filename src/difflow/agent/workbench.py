@@ -43,6 +43,12 @@ DEBUG_CONTRACT = """\
    debug_stop. The solve runs on a copy: nothing is changed in the session's
    flowsheet, and its answer is not adopted (run solve for that).
 
+Without a live session: debug_record solves once and summarizes it frame
+by frame (each tear iteration's frame number and residual, the events);
+debug_trace_frame shows one frame in full; debug_whatif replays the recorded
+solve with one tear value changed at a frame and says whether it reached the
+same answer.
+
 A good first session on a failing loop: break on nonfinite, break on
 residual_rise, continue; at the stop, print tear (which stream and field the
 residual is made of), print history, diagnose; for the unit at fault, print
@@ -726,6 +732,95 @@ class Workbench:
     def debug_stop(self, session: str = "main") -> dict:
         """Stop the live debugger and its solve. Always succeeds."""
         return self._call(session, "debug_stop")
+
+    # Record and replay: one solve kept frame by frame, then "what if the
+    # tear had been X here" answered by replaying it with that one change.
+
+    def debug_record(self, session: str = "main", timeout: float | None = None) -> dict:
+        """Solve once (on a copy) keeping every checkpoint, and summarize it:
+        the verdict, one row per tear iteration (frame number, residual, and
+        the tear entry the residual is mostly made of), the events (a NaN
+        born, a unit error, the residual rising) and how the history reads.
+        Use a row's frame with debug_trace_frame to see every stream there,
+        or with debug_whatif to replay from it with a different tear value.
+        """
+        from difflow.debug.record import summarize
+
+        s, err = self._get(session)
+        if err:
+            return err
+
+        def run():
+            answer = s.debug_record()
+            if not answer.get("ok"):
+                return answer
+            return {"ok": True, "summary": summarize(answer["trace"]),
+                    "warnings": answer.get("warnings", [])}
+
+        return self._timed(session, run, timeout)
+
+    def debug_trace_frame(self, frame: int, which: str = "recorded",
+                          streams: list[str] | None = None,
+                          session: str = "main") -> dict:
+        """One frame of the last recording (which="recorded") or what-if
+        (which="whatif") in full: where the solve was, what that step wrote,
+        the tear table at an iteration, and every stream's values as of that
+        frame (only the named ones if streams is given).
+        """
+        from difflow.debug.record import state_at
+
+        s, err = self._get(session)
+        if err:
+            return err
+        trace = s.debug_trace(which)
+        if trace is None:
+            return {"ok": False, "error": (
+                "record a solve first (debug_record)" if which != "whatif"
+                else "no what-if yet (debug_whatif)")}
+        frames = trace["frames"]
+        if not 0 <= int(frame) < len(frames):
+            return {"ok": False, "error": f"frame must be 0 to {len(frames) - 1}"}
+        state = state_at(trace, int(frame))
+        if streams:
+            missing = [n for n in streams if n not in state]
+            if missing:
+                return {"ok": False, "error": f"no stream {', '.join(missing)} by "
+                        f"frame {frame}; known: {', '.join(sorted(state))}"}
+            state = {n: state[n] for n in streams}
+        return jsonable({"ok": True, "frame": frames[int(frame)], "streams": state})
+
+    def debug_whatif(self, frame: int, stream: str, field: str, value: float,
+                     session: str = "main", timeout: float | None = None) -> dict:
+        """Replay the recorded solve with one tear value changed at a frame
+        (a tear-iteration frame from debug_record), and compare: both
+        residual histories, iterations, convergence, and whether the two
+        reached the same answer (a different answer from a different guess
+        means more than one steady state). It is a replay, not a fresh solve:
+        everything before the frame is the recording (diverged_at says if
+        not), so the accelerator keeps its history and only the edit differs.
+
+        Args:
+            frame: A tear-iteration (or accelerated-guess) frame number.
+            stream: A tear stream, e.g. "recycle".
+            field: F_<species>, T or P.
+            value: The value the next pass runs on.
+        """
+        from difflow.debug.record import compare, summarize
+
+        s, err = self._get(session)
+        if err:
+            return err
+
+        def run():
+            answer = s.debug_whatif(frame, stream, field, value)
+            if not answer.get("ok"):
+                return answer
+            recorded = s.debug_trace("recorded")
+            return {"ok": True, "summary": summarize(answer["trace"]),
+                    "comparison": compare(recorded, answer["trace"]),
+                    "warnings": answer.get("warnings", [])}
+
+        return self._timed(session, run, timeout)
 
     def _with(self, session: str, fn) -> dict:
         s, err = self._get(session)

@@ -378,6 +378,8 @@ class FlowsheetSession:
         #: the last solve recorded for the trace panel, which a what-if
         #: replays: its frames, the solve options and the model it was of
         self._recorded_trace: dict | None = None
+        #: the last what-if replay of it
+        self._whatif_trace: dict | None = None
         #: the live debugger, if one is running (difflow.debug.runner)
         self._debugger = None
         #: the document as it was last read or written, to say whether
@@ -1924,17 +1926,31 @@ class FlowsheetSession:
         unit on the canvas does not make a recording stale, and the solver
         options left in, since the recording was made with them.
         """
+        import json
+
         if self.flowsheet is None:
             return None
         try:
-            import json
-
             from difflow import serialize
 
             model = serialize.to_dict(self.flowsheet, refs=self.bindings)
+            model.pop("view", None)
         except Exception:
-            return None
-        model.pop("view", None)
+            # A flowsheet that will not write (a unit that is a plain
+            # function, say) still has a structure to compare: the units in
+            # order with their operations and parameters, the feeds and the
+            # recycles. Coarser than the document, and enough to notice an
+            # edit made through the session.
+            fs = self.flowsheet
+            model = {
+                "units": [[u.name, id(u.operation), list(u.inlet_names),
+                           list(u.outlet_names), repr(u.params),
+                           repr(getattr(u.operation, "params", None))]
+                          for u in fs.units],
+                "feeds": {n: {k: str(v) for k, v in f.items()}
+                          for n, f in fs.feeds.items()},
+                "recycles": dict(fs.recycles),
+            }
         return json.dumps([model, self._solve_kw()], default=str)
 
     def debug_record(self) -> dict:
@@ -1945,6 +1961,10 @@ class FlowsheetSession:
         the canvas stay those of the last plain solve, and a solve that
         fails is a trace that ends where it failed, not an error. The
         recording is kept, for :meth:`debug_whatif` to replay.
+
+        It runs on a copy, like the live debugger, so that what the
+        flowsheet says about its last solve (``last_solve_*``, which
+        diagnosis reads) still describes the last plain solve.
         """
         refused = self._cannot_solve()
         if refused is not None:
@@ -1954,9 +1974,10 @@ class FlowsheetSession:
         kw = {"on_nonconvergence": "ignore", **self._solve_kw()}
         with self._lock, warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            trace = record(self.flowsheet, kw)
+            trace = record(self._debug_copy(), kw)
         self._recorded_trace = {"key": self._model_key(), "kw": kw,
-                                "frames": trace["frames"]}
+                                "frames": trace["frames"], "trace": trace}
+        self._whatif_trace = None
         return {"ok": True, "trace": trace, "warnings": _recorded(caught)}
 
     def debug_whatif(self, frame, stream, field, value) -> dict:
@@ -1996,12 +2017,19 @@ class FlowsheetSession:
                 "value": value}
         with self._lock, warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            trace = record(self.flowsheet, kept["kw"], edits=[edit],
+            trace = record(self._debug_copy(), kept["kw"], edits=[edit],
                            baseline=frames)
         if trace["result"]["refused"]:
             return {"ok": False,
                     "error": trace["result"]["refused"][0]["detail"]}
+        self._whatif_trace = trace
         return {"ok": True, "trace": trace, "warnings": _recorded(caught)}
+
+    def debug_trace(self, which: str = "recorded") -> dict | None:
+        """The last recording (``"recorded"``) or what-if (``"whatif"``), or None."""
+        if which == "whatif":
+            return self._whatif_trace
+        return (self._recorded_trace or {}).get("trace")
 
     # -- the live debugger ------------------------------------------------
     #

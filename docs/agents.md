@@ -125,7 +125,7 @@ each package's `__all__`.
 | Building | `set_species`, `set_code_context`, `add_unit`, `update_unit`, `remove_unit`, `connect`, `disconnect`, `set_feed`, `remove_feed` |
 | Running | `set_solver_options`, `solve`, `get_streams` |
 | Diagnosis | `diagnose`, `converge`, `tear_analysis`, `trace_solve`, `get_unit_info` |
-| Debugging | `debug_guide`, `debug_start`, `debug_command`, `debug_wait`, `debug_pause`, `debug_state`, `debug_stop` |
+| Debugging | `debug_guide`, `debug_start`, `debug_command`, `debug_wait`, `debug_pause`, `debug_state`, `debug_stop`, `debug_record`, `debug_trace_frame`, `debug_whatif` |
 | Analysis | `levers`, `define_quantity`, `remove_quantity`, `list_quantities`, `evaluate`, `sensitivity`, `sweep`, `optimize`, `uncertainty`, `linearize`, `tea`, `report` |
 | Python | `run_python` |
 
@@ -145,6 +145,17 @@ reply in state `"running"` means call `debug_wait`. `debug_guide` returns the
 whole contract and the protocol handshake. The solve runs on a copy, so
 debugging never changes the session's flowsheet. `fix_convergence` reaches
 for these when the findings alone do not say why a loop fails.
+
+Without a live session, `debug_record` solves once (on a copy) and returns a
+summary rather than every frame: the verdict, one row per tear iteration
+(frame number, residual, the tear entry the residual is mostly made of), the
+events and how the history reads. `debug_trace_frame` shows one frame in
+full, with every stream's values at that point. `debug_whatif` replays the
+recording with one tear value changed at a frame --- a replay, so everything
+before it is the recording --- and compares the two runs: residual histories,
+iterations, convergence, and `same_answer`. Two converged runs that disagree
+(`same_answer: false`, with the stream that differs most) are two steady
+states.
 
 `open_in_editor` saves the flowsheet and opens it in the browser editor, so a
 person can see what an agent built. The editor runs on the saved file in its

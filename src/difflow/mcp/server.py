@@ -44,7 +44,9 @@ it. debug_guide gives the contract; debug_start pauses before the first pass,
 debug_command steps it (step, next, continue), sets breakpoints (break UNIT,
 break on nonfinite) and inspects (print STREAM, print tear, diagnose); a
 reply in state "running" means call debug_wait. It runs on a copy, so it
-never changes the flowsheet; debug_stop when done.
+never changes the flowsheet; debug_stop when done. debug_record keeps one
+solve frame by frame; debug_whatif replays it with one tear value changed
+and says whether the answer is the same (if not: two steady states).
 
 Libraries that are not unit operations (planning, stochastic, estimation,
 economics, the refinery reformer and FCC) are found with list_api and
@@ -136,7 +138,9 @@ def _register_prompts(server) -> None:
             "residual_rise' and 'continue'; at the stop read 'print tear', "
             "'print history' and 'diagnose', and 'print' the unit at fault "
             "and its inlets. Name the unit and the stream in your report, and "
-            "debug_stop when done.")
+            "debug_stop when done. To ask whether a different starting point "
+            "changes the answer, debug_record and then debug_whatif at an "
+            "early iteration frame: same_answer false means two steady states.")
 
     @server.prompt(name="sensitivity_study",
                    description="Rank what an output responds to, and by how much")

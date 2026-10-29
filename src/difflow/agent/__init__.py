@@ -64,6 +64,9 @@ TOOLS: dict[str, str] = {
     "debug_wait": "read",
     "debug_pause": "edit",
     "debug_stop": "edit",
+    "debug_record": "read",
+    "debug_trace_frame": "read",
+    "debug_whatif": "read",
     # analysis
     "levers": "read",
     "define_quantity": "edit",

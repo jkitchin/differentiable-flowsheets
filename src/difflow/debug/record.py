@@ -36,6 +36,7 @@ something else.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from . import attach
@@ -203,4 +204,98 @@ def record(flowsheet, solve_kwargs: dict | None = None, *,
         "frames": recorder.frames,
         "truncated": recorder.truncated,
         "result": result,
+    }
+
+
+# ---------------------------------------------------------------------
+# Reading a trace: what an agent gets instead of every frame
+# ---------------------------------------------------------------------
+
+#: Rows of the per-iteration table before it is cut short.
+SUMMARY_ROWS = 200
+
+
+def state_at(trace: dict, i: int) -> dict:
+    """Every stream's values as of frame ``i``: the frames up to ``i`` replayed."""
+    state: dict[str, dict] = {}
+    for f in trace["frames"][:max(int(i), -1) + 1]:
+        for name, values in (f.get("set") or {}).items():
+            state.setdefault(name, {}).update(values)
+    return state
+
+
+def _largest(f: dict) -> str | None:
+    rows = f.get("tear") or []
+    if not rows:
+        return None
+    r = rows[0]
+    return f"{r['stream']}.{r['field']} |g-x|={r['delta']:.3g}" \
+        if r.get("delta") is not None else f"{r['stream']}.{r['field']}"
+
+
+def summarize(trace: dict) -> dict:
+    """A trace without its frames: the verdict, one row per tear iteration
+    (its frame, residual, and the tear entry the residual is mostly made
+    of), the events, and how the residual history reads. Frame numbers are
+    what :func:`state_at` and a what-if take."""
+    from difflow.diagnostics import classify_history
+
+    frames = trace["frames"]
+    iterations = [
+        {"frame": k, "iteration": f["iteration"], "phase": f["phase"],
+         "residual": f["residual"], "largest": _largest(f)}
+        for k, f in enumerate(frames) if f["checkpoint"] == "iteration"]
+    events = [
+        {"frame": k, "checkpoint": f["checkpoint"], "unit": f["unit"],
+         "phase": f["phase"], "iteration": f["iteration"],
+         "trigger": f.get("trigger"), "error": f.get("error")}
+        for k, f in enumerate(frames) if f.get("trigger") or f.get("error")]
+    residuals = [r["residual"] for r in iterations if r["residual"] is not None]
+    out = {
+        "protocol": trace["protocol"], "units": trace["units"],
+        "tears": trace["tears"], "frames": len(frames),
+        "truncated": trace["truncated"], "result": trace["result"],
+        "regime": classify_history(residuals, trace["result"].get("converged")),
+        "iterations": iterations[:SUMMARY_ROWS], "events": events[:SUMMARY_ROWS],
+    }
+    if len(iterations) > SUMMARY_ROWS:
+        out["iterations_omitted"] = len(iterations) - SUMMARY_ROWS
+    return out
+
+
+def compare(recorded: dict, whatif: dict, rtol: float = 1e-6) -> dict:
+    """How a what-if replay differs from the recording it replays.
+
+    The residual histories side by side, and whether the two ended at the
+    same answer: every stream field at the last frame of each, compared
+    relatively. A different answer from a different next guess is the
+    signature of more than one steady state.
+    """
+    def run(trace):
+        rows = [f["residual"] for f in trace["frames"] if f["checkpoint"] == "iteration"]
+        r = trace["result"]
+        return {"converged": r.get("converged"), "iterations": r.get("iterations"),
+                "residuals": rows[:SUMMARY_ROWS]}
+
+    a = state_at(recorded, len(recorded["frames"]) - 1)
+    b = state_at(whatif, len(whatif["frames"]) - 1)
+    worst, where = 0.0, None
+    for name in sorted(set(a) & set(b)):
+        for field in sorted(set(a[name]) & set(b[name])):
+            x, y = a[name][field], b[name][field]
+            if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                continue
+            if not (math.isfinite(x) and math.isfinite(y)):
+                gap = 0.0 if (x == y or (math.isnan(x) and math.isnan(y))) else math.inf
+            else:
+                gap = abs(x - y) / max(abs(x), abs(y), 1e-12)
+            if gap > worst:
+                worst, where = gap, f"{name}.{field}"
+    both = recorded["result"].get("converged") and whatif["result"].get("converged")
+    return {
+        "recorded": run(recorded), "whatif": run(whatif),
+        "edits": whatif["result"].get("edits", []),
+        "diverged_at": whatif["result"].get("diverged_at"),
+        "same_answer": bool(both) and worst <= rtol,
+        "largest_difference": {"where": where, "relative": worst} if where else None,
     }

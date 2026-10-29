@@ -293,6 +293,11 @@ What pounce has and difflow does not yet, in the order worth building.
   take =timeout= and so get the server's progress heartbeats. Inspection
   tools are "read"; start/command/pause/stop are "edit" (they change the
   session's debugger, never the flowsheet). =fix_convergence= reaches for
-  them when the findings do not say why.
+  them when the findings do not say why. Then record and replay:
+  =debug_record= (a summary from =record.summarize=, not every frame),
+  =debug_trace_frame= (one frame and =state_at= it) and =debug_whatif= (the
+  replay and =record.compare=, whose =same_answer= flags a second steady
+  state). Recording and replay moved onto a copy too, so =last_solve_*= on
+  the session's flowsheet still describes its last plain solve.
 - What-ifs on a what-if (more than one edit, chained): =record= already
   takes a list of edits; the panel offers one, against the recording.
