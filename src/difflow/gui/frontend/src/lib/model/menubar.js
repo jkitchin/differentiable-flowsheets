@@ -204,6 +204,12 @@ export function menuBar({
           run: actions.console,
         },
         {
+          label: 'Trace',
+          on: !!panels.trace,
+          hint: 'record a solve and scrub through it, unit by unit',
+          run: actions.trace,
+        },
+        {
           label: 'Planning',
           on: !!panels.planning,
           hint: 'delta-base planning over this flowsheet',

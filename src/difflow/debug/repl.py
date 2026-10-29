@@ -56,6 +56,9 @@ def banner(ctx: "DebugContext") -> str:
         line += f"\n   ↳ {reason}"
     if ctx.error is not None:
         line += f"\n   ✗ {type(ctx.error).__name__}: {ctx.error}"
+    edits = getattr(ctx.flowsheet, "last_solve_debug_edits", None)
+    if ctx.checkpoint is Checkpoint.TERMINATED and edits:
+        line += f"\n   ✎ the debugger set {len(edits)} tear value(s) on the way"
     return line
 
 

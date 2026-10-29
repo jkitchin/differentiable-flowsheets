@@ -1870,17 +1870,8 @@ class FlowsheetSession:
             self.streams = self.solve_error = None
         return {"ok": True, "solver": self.solver_options()}
 
-    def solve(self) -> dict:
-        """Solve, and report a failure rather than raising at the socket.
-
-        The diagnostics matter as much as the streams. ``Flowsheet``
-        records how it solved, how far the tear residual came down,
-        against what tolerance and on which streams; every one of those
-        was already there and none of them was ever shown. A recycle
-        that stopped at ``max_iter`` with a residual of 1e-3 returns
-        numbers that look like an answer, and the only thing that says
-        otherwise is ``converged``.
-        """
+    def _cannot_solve(self) -> dict | None:
+        """Why the flowsheet cannot be solved yet, as a reply; None if it can."""
         if self.flowsheet is None:
             return {"ok": False, "error": "no flowsheet loaded"}
         # An unfinished unit is on the flowsheet so that it can be wired,
@@ -1909,6 +1900,41 @@ class FlowsheetSession:
                 f"{unit} needs {', '.join(names)}" for unit, names in missing.items()
             ) + ". Set them as the unit's call parameters."
             return {"ok": False, "error": self.solve_error}
+        return None
+
+    def debug_record(self) -> dict:
+        """Solve once under the debugger, keeping every checkpoint.
+
+        The editor's trace panel scrubs the result (see
+        :mod:`difflow.debug.record`). Nothing is adopted: the streams on
+        the canvas stay those of the last plain solve, and a solve that
+        fails is a trace that ends where it failed, not an error.
+        """
+        refused = self._cannot_solve()
+        if refused is not None:
+            return refused
+        from difflow.debug.record import record
+
+        with self._lock, warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            trace = record(self.flowsheet, {"on_nonconvergence": "ignore",
+                                            **self._solve_kw()})
+        return {"ok": True, "trace": trace, "warnings": _recorded(caught)}
+
+    def solve(self) -> dict:
+        """Solve, and report a failure rather than raising at the socket.
+
+        The diagnostics matter as much as the streams. ``Flowsheet``
+        records how it solved, how far the tear residual came down,
+        against what tolerance and on which streams; every one of those
+        was already there and none of them was ever shown. A recycle
+        that stopped at ``max_iter`` with a residual of 1e-3 returns
+        numbers that look like an answer, and the only thing that says
+        otherwise is ``converged``.
+        """
+        refused = self._cannot_solve()
+        if refused is not None:
+            return refused
         caught = []
         try:
             with self._lock, warnings.catch_warnings(record=True) as caught:

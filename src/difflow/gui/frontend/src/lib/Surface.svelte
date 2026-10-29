@@ -53,6 +53,8 @@
     onmenu = () => {},
     onrefuse = () => {},
     readonly = false,
+    // A unit to outline: where a scrubbed trace has the solve.
+    focus = null,
   } = $props()
 
   const nodeTypes = { unit: UnitNode, stream: StreamNode }
@@ -80,9 +82,10 @@
     // Solved, a port's native tooltip ("leaves the flowsheet as a
     // product") would open on top of the stream card, which says more.
     // `flows` too, for the label beside each product's ring.
-    nodes = solve
+    nodes = (solve
       ? graph.nodes.map((n) => ({ ...n, data: { ...n.data, solved: true, flows } }))
       : graph.nodes
+    ).map((n) => (n.id === focus ? { ...n, data: { ...n.data, focus: true } } : n))
     edges = decorate(graph.edges, {
       flows, tints, widths: sized?.widths ?? null, colors: scale?.colors ?? null,
     })

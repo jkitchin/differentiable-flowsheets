@@ -656,6 +656,11 @@ class Flowsheet:
         #: the solution, or the final iteration). A unit returning no info
         #: is absent; nothing is recorded while tracing.
         self.last_solve_unit_info: dict[str, dict] = {}
+        #: tear values the debugger set during the last solve (``set tear``
+        #: in :mod:`difflow.debug`), one dict per edit. Empty for a solve
+        #: nobody edited. An edit changes the route, not the fixed point,
+        #: but a solve that took one is not the plain solve, and says so.
+        self.last_solve_debug_edits: list[dict] = []
 
     @property
     def default_T(self) -> float:
@@ -965,6 +970,7 @@ class Flowsheet:
 
         self.last_solve_history = []
         self.last_solve_unit_info = {}
+        self.last_solve_debug_edits = []
 
         if tears != "declared" and not self.recycles:
             return self._solve_auto_torn(
@@ -2151,27 +2157,34 @@ class Flowsheet:
                 # step is 0/0 once the iterates agree: a silent NaN.
                 # solve() catches this and reruns on the fixed-point path.
                 raise _UndetectedTracer
-            self._debug_iteration(iteration, x_prev, g_curr, res, tear_names,
-                                  "wegstein")
-            if res < tol:
+            edit = self._debug_iteration(iteration, x_prev, g_curr, res,
+                                         tear_names, "wegstein")
+            if edit is not None:
+                # `set tear` in the debugger: the next pass runs on the
+                # edited guess, in place of this iteration's step. The
+                # secant pairs Wegstein keeps are still real evaluations.
+                self.last_solve_converged = False
+                x_curr = edit
+            elif res < tol:
                 self.last_solve_iterations = iteration
                 self.last_solve_converged = True
                 break
             else:
                 self.last_solve_converged = False
-
-            if g_prev is None:
-                # Second iteration: can't use Wegstein yet
-                x_curr = g_curr
-            else:
-                # Apply Wegstein acceleration
-                x_curr = wegstein_acceleration(x_old, x_prev, g_prev, g_curr)
-                if clip_negative_flows:
-                    x_curr, clip_hits = self._clip_and_count(
-                        x_curr, flow_mask, clip_hits
-                    )
-                self._debug_accel(iteration, x_prev, g_curr, x_curr,
-                                  tear_names, "wegstein")
+                if g_prev is None:
+                    # Second iteration: can't use Wegstein yet
+                    x_curr = g_curr
+                else:
+                    # Apply Wegstein acceleration
+                    x_curr = wegstein_acceleration(x_old, x_prev, g_prev, g_curr)
+                    if clip_negative_flows:
+                        x_curr, clip_hits = self._clip_and_count(
+                            x_curr, flow_mask, clip_hits
+                        )
+                    edit = self._debug_accel(iteration, x_prev, g_curr, x_curr,
+                                             tear_names, "wegstein")
+                    if edit is not None:
+                        x_curr = edit
 
             # Update history
             g_prev = g_curr
@@ -2249,8 +2262,14 @@ class Flowsheet:
                 self.last_solve_history.append(res)
             if res is None:
                 raise _UndetectedTracer       # see _solve_with_wegstein
-            self._debug_iteration(iteration, x_curr, g_curr, res, tear_names,
-                                  "anderson")
+            edit = self._debug_iteration(iteration, x_curr, g_curr, res,
+                                         tear_names, "anderson")
+            if edit is not None:
+                # `set tear` in the debugger: the next pass runs on the
+                # edited guess (see _solve_with_wegstein).
+                self.last_solve_converged = False
+                x_curr = edit
+                continue
             if res < tol:
                 self.last_solve_iterations = iteration
                 self.last_solve_converged = True
@@ -2264,9 +2283,9 @@ class Flowsheet:
                 x_next, clip_hits = self._clip_and_count(
                     x_next, flow_mask, clip_hits
                 )
-            self._debug_accel(iteration, x_curr, g_curr, x_next, tear_names,
-                              "anderson")
-            x_curr = x_next
+            edit = self._debug_accel(iteration, x_curr, g_curr, x_next,
+                                     tear_names, "anderson")
+            x_curr = x_next if edit is None else edit
 
         self._record_clip_activity(clip_hits)
 
@@ -2614,22 +2633,35 @@ class Flowsheet:
         return streams
 
     def _debug_iteration(self, iteration, x, g, residual, tear_names, method):
-        """Fire the ``iteration`` checkpoint: the tear map and its residual."""
+        """Fire the ``iteration`` checkpoint: the tear map and its residual.
+
+        Returns the next tear guess if the debugger set one (``set tear``),
+        else None.
+        """
         session = _debug_hook(self)
-        if session is not None:
-            session.fire(_DebugContext(
-                _Checkpoint.ITERATION, self, iteration=iteration, x=x, g=g,
-                residual=residual, history=list(self.last_solve_history or []),
-                tear_names=sorted(tear_names), method=method))
+        if session is None:
+            return None
+        context = _DebugContext(
+            _Checkpoint.ITERATION, self, iteration=iteration, x=x, g=g,
+            residual=residual, history=list(self.last_solve_history or []),
+            tear_names=sorted(tear_names), method=method)
+        session.fire(context)
+        return context.tear_edit
 
     def _debug_accel(self, iteration, x, g, x_next, tear_names, method):
-        """Fire ``after_accel``: the accelerated guess the next pass runs on."""
+        """Fire ``after_accel``: the accelerated guess the next pass runs on.
+
+        Returns the guess the debugger put in its place, if any.
+        """
         session = _debug_hook(self)
-        if session is not None:
-            session.fire(_DebugContext(
-                _Checkpoint.AFTER_ACCEL, self, iteration=iteration, x=x, g=g,
-                x_next=x_next, history=list(self.last_solve_history or []),
-                tear_names=sorted(tear_names), method=method))
+        if session is None:
+            return None
+        context = _DebugContext(
+            _Checkpoint.AFTER_ACCEL, self, iteration=iteration, x=x, g=g,
+            x_next=x_next, history=list(self.last_solve_history or []),
+            tear_names=sorted(tear_names), method=method)
+        session.fire(context)
+        return context.tear_edit
 
     def _record_unit_info(self, result: Any, unit: "Unit") -> None:
         """Keep the info dict a unit returned, when it holds numbers.

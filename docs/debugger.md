@@ -20,6 +20,8 @@ streams, units and tears.
 - [Commands](#commands)
 - [Breakpoints](#breakpoints)
 - [Post mortem: `on_error`](#post-mortem-on-error)
+- [Editing the tear: `set tear`](#editing-the-tear-set-tear)
+- [Recording a solve: the Trace panel](#recording-a-solve-the-trace-panel)
 - [Driving it from a program](#driving-it-from-a-program)
 - [What it does not change](#what-it-does-not-change)
 - [Limits](#limits)
@@ -125,6 +127,7 @@ Stepping:
 | `watch TARGET` | print a target at every stop (`watch del T`, `watch clear`) |
 | `diagnose` | the history's regime, the worst tear entries, non-finite streams; at `terminated` the full `solve_findings` with remedies |
 | `save [PATH]` | the current streams, history and tear table as JSON |
+| `set tear STREAM.FIELD VALUE` | the guess the next pass runs on (see below) |
 | `interact` | a Python prompt with `ctx`, `fs`, `streams`, `unit`, `inlets`, `outlets`, `x`, `g` in scope (REPL only) |
 
 ## Breakpoints
@@ -160,6 +163,68 @@ never stops. It is the quickest way to answer "which unit broke it?",
 including when it broke during the tear-guessing pass before the iteration
 began.
 
+## Editing the tear: `set tear`
+
+The one thing the debugger changes is the guess the next pass runs on:
+
+```text
+difflow-dbg> stop-at iteration
+difflow-dbg> continue
+── difflow-dbg ── @iteration  iter 3  phase=solve  residual=4.120e-01
+difflow-dbg> p tear
+difflow-dbg> set tear recycle.F_A 0.5
+next pass: recycle.F_A = 0.5 (was 0.4909)
+difflow-dbg> continue
+```
+
+At an `after_accel` pause it edits the accelerated guess. At an
+`iteration` pause it replaces that iteration's step: the edit starts from
+`g(x)` (what plain substitution would run next), and the convergence test
+for that iteration is skipped, because the next pass is not the one that
+was tested. `p next` shows the guess as edited. Wegstein's secant pairs
+and Anderson's history are kept: every pair in them is still a real
+evaluation of the tear map.
+
+An edit changes the route to the fixed point, not the fixed point: a
+solve that converges after one converges to the same answer. It is still
+not the plain solve, so it says so. Every edit is listed in the
+`terminated` event's `edits` and in `Flowsheet.last_solve_debug_edits`
+(empty for a solve nobody edited), and the REPL's last banner counts
+them. Unit parameters are not editable: that would be a different
+flowsheet, not a different route.
+
+## Recording a solve: the Trace panel
+
+`debug.record(fs, solve_kwargs)` solves once with nobody at the prompt,
+stepping through every checkpoint, and returns a `difflow-trace/1` dict:
+the unit order, the tears, one frame per checkpoint holding only what that
+checkpoint wrote (the feeds, a unit's outlets, the tear iterate, the next
+guess), and the solve's verdict. Replaying the frames up to `i` gives
+every stream at frame `i`. A solve that raises is recorded up to the
+raise, with the error in `result`, rather than raised.
+
+```python
+trace = debug.record(fs, {"acceleration": "wegstein"})
+[f["residual"] for f in trace["frames"] if f["checkpoint"] == "iteration"]
+```
+
+In the editor, **View → Trace** does this through `/api/debug/record` and
+lets you scrub the trace:
+
+- a slider and step buttons that move by frame, by unit, by tear
+  iteration, or straight from event to event (← and → work too), with
+  play;
+- the unit the solve is at outlined on the canvas;
+- the residual by iteration on a log axis (a NaN marked in red on the
+  top edge; click a point to jump to it) and the list of events;
+- at each step, what it changed (before and after), and at a tear
+  iteration the tear table, largest `|g - x|` first; every stream at that
+  step on request.
+
+The trace is the record of one solve, read in the browser: scrubbing
+never re-solves. The live, blocking debugger in the editor is the next
+step (see `plans/debugger.org`).
+
 ## Driving it from a program
 
 `difflow debug --json` speaks `difflow-dbg/1`: newline-delimited JSON,
@@ -186,8 +251,9 @@ runner.close()
 ## What it does not change
 
 Detached, a solve is exactly what it was: each checkpoint costs one
-thread-local read. Attached, the debugger only reads: the same units run
-in the same order on the same values, and the answer is the same. `quit`
+thread-local read. Attached, the debugger only reads unless you `set
+tear`: the same units run in the same order on the same values, and the
+answer is the same. `quit`
 raises `DebugQuit` instead of returning a partial answer, because a
 stopped solve has none.
 
@@ -208,5 +274,5 @@ per point (`--all-solves` changes that).
   iteration, a flash's Rachford-Rice) runs inside JAX and is not stepped;
   what it reports in its `info` dict is shown, and `inner_unconverged`
   stops on it.
-- **It reads, it does not write.** Changing a tear value or a parameter
-  mid-solve is not supported yet.
+- **It edits tear values only** (`set tear`), never parameters, and has no
+  rewind yet.

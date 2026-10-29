@@ -265,3 +265,84 @@ def test_cli_debugs_a_script(tmp_path, monkeypatch):
     commands.write_text("# run it\nwhere\ncontinue\ncontinue\n")
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
     assert cli.main([str(model), "--script", str(commands)]) == 0
+
+
+# ---------------------------------------------------------------------
+# Editing the tear
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("acceleration", ["anderson", "wegstein"])
+@pytest.mark.parametrize("where", ["iteration", "accel"])
+def test_set_tear_runs_the_next_pass_on_it_and_is_recorded(acceleration, where):
+    fs = loop()
+    runner = DebugRunner(fs, {"acceleration": acceleration, "max_iter": 200})
+    runner.start()
+    runner.command(f"stop-at {where}")
+    runner.command("continue")
+    edit = runner.command("set tear recycle.F_A 5")
+    assert edit["ok"], edit["output"]
+    assert runner.command("p next")["data"]["x_next"][0] == 5.0
+    runner.command("stop-at clear")
+    end = runner.command("continue")["next"]
+    assert end["checkpoint"] == "terminated"
+    assert [e["value"] for e in end["edits"]] == [5.0]
+    runner.command("continue")
+    assert fs.last_solve_converged
+    assert len(fs.last_solve_debug_edits) == 1
+    fs.solve()
+    assert fs.last_solve_debug_edits == []
+
+
+@pytest.mark.parametrize("command", [
+    "set tear recycle.F_A",          # no value
+    "set param R1.k 2",              # only tears are editable
+    "set tear nowhere.F_A 1",
+    "set tear recycle.F_Z 1",
+])
+def test_set_refuses_what_it_cannot_do(command):
+    runner = DebugRunner(loop())
+    runner.start()
+    runner.command("stop-at iteration")
+    runner.command("continue")
+    assert runner.command(command)["ok"] is False
+    runner.close()
+
+
+def test_set_tear_needs_an_iteration_pause():
+    runner = DebugRunner(loop())
+    runner.start()                                    # at solve_start
+    assert runner.command("set tear recycle.F_A 1")["ok"] is False
+    runner.close()
+
+
+# ---------------------------------------------------------------------
+# Recording
+# ---------------------------------------------------------------------
+
+
+def test_record_keeps_every_checkpoint_and_the_answer():
+    fs = loop()
+    trace = debug.record(fs, {"acceleration": "wegstein"})
+    assert trace["protocol"] == "difflow-trace/1"
+    assert trace["units"] == ["M1", "R1", "S1"]
+    assert trace["tears"] == ["recycle"]
+    kinds = {f["checkpoint"] for f in trace["frames"]}
+    assert {"solve_start", "after_unit", "iteration", "terminated"} <= kinds
+    assert trace["result"]["ok"] and trace["result"]["converged"]
+    json.dumps(trace)                                 # it crosses a wire
+    assert debug.current() is None
+
+
+def test_record_reports_a_raising_solve_instead_of_raising():
+    trace = debug.record(loop(broken))
+    assert trace["result"]["ok"] is False
+    assert "unit blew up" in trace["result"]["error"]
+    assert any(f["checkpoint"] == "unit_error" for f in trace["frames"])
+
+
+def test_record_stops_recording_not_solving_at_its_limit():
+    fs = loop()
+    trace = debug.record(fs, max_frames=3)
+    assert len(trace["frames"]) == 3 and trace["truncated"]
+    assert trace["result"]["converged"]

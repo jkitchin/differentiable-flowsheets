@@ -72,7 +72,8 @@
   }
 </script>
 
-<div class="unit" class:pending={!!data.pending} title={data.pending?.hint ?? ''}>
+<div class="unit" class:pending={!!data.pending} class:focus={!!data.focus}
+     title={data.pending?.hint ?? ''}>
   <div class="art">
     <UnitSymbol operation={data.operation} category={data.category} size={38} />
   </div>
@@ -144,6 +145,12 @@
     box-shadow: none;
   }
   .unit.pending .art { color: var(--bad); opacity: 0.75; }
+  /* Where a scrubbed trace has the solve: a ring, not a fill, so the
+     unit still reads as itself. */
+  .unit.focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+  }
   .unit.pending .name { color: var(--bad); }
   .needs {
     font-size: 0.62rem;

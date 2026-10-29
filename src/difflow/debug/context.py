@@ -63,6 +63,8 @@ class DebugContext:
         x: Packed tear iterate (sorted tear names, ``[F..., T, P]`` each).
         g: The tear map at ``x``.
         x_next: The accelerated next guess, at ``after_accel``.
+        tear_edit: The next guess as ``set tear`` left it, or None. The
+            solve reads it back after the checkpoint.
         residual: ``max |g - x|``.
         history: Residuals so far.
         tear_names: Tear streams, in packing order.
@@ -84,6 +86,7 @@ class DebugContext:
     x: Any = None
     g: Any = None
     x_next: Any = None
+    tear_edit: Any = None
     residual: float | None = None
     history: list[float] = field(default_factory=list)
     tear_names: list[str] = field(default_factory=list)
@@ -119,6 +122,11 @@ class DebugContext:
         for pool in (self.streams, self.inlets, self.outlets):
             names.update(pool or {})
         return sorted(names)
+
+    def tear_fields(self) -> list[tuple[str, str]]:
+        """``(stream, field)`` for each entry of a packed tear array, in order."""
+        fields = [f"F_{s}" for s in self.flowsheet.species_order] + ["T", "P"]
+        return [(name, f) for name in sorted(self.tear_names) for f in fields]
 
     def tear_breakdown(self) -> list[dict]:
         """Every packed tear entry with x, g(x) and |g - x|, largest first.
@@ -167,4 +175,5 @@ class DebugContext:
             fs = self.flowsheet
             event["converged"] = getattr(fs, "last_solve_converged", None)
             event["iterations"] = getattr(fs, "last_solve_iterations", None)
+            event["edits"] = list(getattr(fs, "last_solve_debug_edits", None) or [])
         return event

@@ -59,7 +59,7 @@ test('the examples menu is disabled while busy, and says when it is empty', () =
 function recorder() {
   const seen = []
   const names = ['undo', 'redo', 'save', 'saveAs', 'newFile', 'openFile', 'reload', 'export', 'quit', 'results', 'context',
-                 'console', 'planning', 'assistant', 'portLabels', 'dark',
+                 'console', 'trace', 'planning', 'assistant', 'portLabels', 'dark',
                  'open', 'classic', 'example', 'widthByFlow', 'colorBy', 'script']
   const actions = Object.fromEntries(
     names.map((n) => [n, (...args) => seen.push([n, ...args])]))
@@ -83,7 +83,8 @@ test('each row runs the action it is named for', () => {
     ['file', 'Save', 'save'], ['file', 'Save as…', 'saveAs'],
     ['file', 'New', 'newFile'], ['file', 'Open…', 'openFile'], ['file', 'Reload', 'reload'], ['file', 'Quit', 'quit'],
     ['view', 'Results', 'results'], ['view', 'Code context', 'context'],
-    ['view', 'Script', 'script'], ['view', 'Console', 'console'], ['view', 'Planning', 'planning'],
+    ['view', 'Script', 'script'], ['view', 'Console', 'console'], ['view', 'Trace', 'trace'],
+    ['view', 'Planning', 'planning'],
     ['view', 'Ask difflow', 'assistant'], ['view', 'Port names', 'portLabels'],
     ['view', 'Dark theme', 'dark'], ['help', 'Classic editor', 'classic'],
   ]) {

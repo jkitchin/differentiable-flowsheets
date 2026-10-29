@@ -10,6 +10,7 @@
   import Palette from './lib/Palette.svelte'
   import Planning from './lib/Planning.svelte'
   import Results from './lib/Results.svelte'
+  import Trace from './lib/Trace.svelte'
   import { solverOptions } from './lib/model/solver.js'
   import Species from './lib/Species.svelte'
   import { del, get, patch, post, send } from './lib/api.js'
@@ -83,6 +84,9 @@
   let showAssistant = $state(false)
   let showPlanning = $state(false)
   let showConsole = $state(false)
+  let showTrace = $state(false)
+  // The unit a scrubbed trace is at, outlined on the canvas.
+  let traceFocus = $state(null)
   // The right-click menu: `{x, y, title, items}` while it is open. The
   // items are built when it opens rather than derived, because they are
   // about the node that was clicked and that is not state anything else
@@ -752,6 +756,7 @@
       context: showContext,
       script: showScript,
       console: showConsole,
+      trace: showTrace,
       planning: showPlanning,
       assistant: showAssistant,
     },
@@ -776,6 +781,7 @@
       context: () => (showContext = !showContext),
       script: () => (showScript = !showScript),
       console: () => (showConsole = !showConsole),
+      trace: () => (showTrace = !showTrace),
       planning: () => (showPlanning = !showPlanning),
       assistant: () => (showAssistant = !showAssistant),
       portLabels: () => (portLabels = !portLabels),
@@ -887,6 +893,7 @@
         onselect={(node) => (selected = node)}
         onmenu={openMenu}
         onrefuse={(why) => (note = why)}
+        focus={showTrace ? traceFocus : null}
       />
     {/if}
   </div>
@@ -934,6 +941,13 @@
   <Console
     onchanged={() => edit(async () => ({ ok: true }))}
     onclose={() => (showConsole = false)}
+  />
+{/if}
+
+{#if showTrace}
+  <Trace
+    onfocus={(unit) => (traceFocus = unit)}
+    onclose={() => (showTrace = false)}
   />
 {/if}
 

@@ -80,6 +80,8 @@ class DebugSession:
         self._detached = False
         self._stop_requested = False
         self._post_mortem_done = False
+        #: tear values set with ``set tear`` during the current solve
+        self.edits: list[dict] = []
 
     # -- lifecycle -------------------------------------------------------
 
@@ -94,6 +96,7 @@ class DebugSession:
         self.flowsheet = fs
         self.solves += 1
         self._post_mortem_done = False
+        self.edits = []
 
     def end(self) -> None:
         self.flowsheet = None

@@ -138,6 +138,21 @@ Built and tested; documented in =docs/debugger.md=.
   =residual_rise=, =unit_error=.
 - Read-only. =capabilities.mutate= is =false=.
 
+* Decided (2026-10-29)
+
+- Entry points stay =debug.attach()= and =difflow debug=; =Flowsheet.solve=
+  gets no =debug== argument.
+- The editor gets record-and-scrub first; live stepping in the editor is the
+  eventual goal, built on =DebugRunner= as described below.
+- Writes stop at tear values (=set tear=). Unit parameters are not editable
+  from the debugger.
+
+Done on this branch since phase 1: =set tear= (both accelerations, at
+=iteration= and =after_accel=, recorded in =last_solve_debug_edits= and the
+=terminated= event), =difflow.debug.record= (=difflow-trace/1=),
+=/api/debug/record=, and the editor's /View → Trace/ panel
+(=Trace.svelte=, =model/trace.js=).
+
 * Phase 2: the editor
 
 The editor is the front end this was asked for, and the runner is the seam:
@@ -184,7 +199,7 @@ the CLI prints.
   the assistant as context (=gui/context.py= already builds briefs). This is
   pounce's =ask=, with a flowsheet-shaped brief.
 
-** Record and scrub, as the cheap first version
+** Record and scrub, as the cheap first version (built)
 
 A live, blocking debugger in a browser has moving parts (a parked thread, a
 long poll, a tab that closes). A /recorded/ run has none: solve once with a
@@ -208,9 +223,10 @@ pounce.
 
 What pounce has and difflow does not yet, in the order worth building.
 
-- *What-if on the tear.* =set tear recycle.F_A 0.5= at an =iteration= pause;
-  the loops read =x= back from the context. Restarts Anderson's history (it is
-  a statement about old iterates) and says so.
+- *What-if on the tear* (built). =set tear recycle.F_A 0.5= at an
+  =iteration= or =after_accel= pause; the loops read the guess back from the
+  context. The accelerators keep their history: every pair in it is still a
+  real evaluation of the tear map.
 - *Rewind.* Tear iterates are small; snapshot one per iteration and =goto N=
   restarts the iteration there. Soft, as pounce's is: the accelerator's
   history is not restored.
@@ -218,7 +234,7 @@ What pounce has and difflow does not yet, in the order worth building.
   re-runs from the current tear: the "what if I had used Wegstein from here"
   question, answered without editing a script.
 - *Change the problem.* =set param R1.V 2.0= is a different flowsheet, not a
-  different route to the same answer, so it is flagged as such.
+  different route to the same answer. Decided against for now.
 - The rule from both reference designs: every write is explicit and recorded,
   and =terminated= says "modified by the debugger", so a debugged answer is
   never mistaken for a plain one.
@@ -250,9 +266,7 @@ What pounce has and difflow does not yet, in the order worth building.
 
 * Open questions
 
-- Should =Flowsheet.solve= take =debug=True | "json" | "on-error"= as discopt's
-  =Model.solve= does? It is the most discoverable entry point, and it adds a
-  parameter to the busiest signature in the package. Phase 1 uses
-  =debug.attach()= and =difflow debug= instead.
-- Editor: live stepping first, or record-and-scrub first?
-- How far should mutation go: tear values only, or parameters too?
+- Live stepping in the editor: block a request on a pause and long-poll, or
+  poll =/api/debug/state=? (The stdlib server has no websockets.)
+- Should the Trace panel offer =set tear= from a recorded frame ("re-solve
+  from here with this value"), which is a re-solve, not a scrub?

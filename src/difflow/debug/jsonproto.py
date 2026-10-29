@@ -45,7 +45,7 @@ def capabilities() -> dict[str, Any]:
         "conditional_breakpoints": "and",
         "watches": True,
         "request_ids": True,
-        "mutate": False,
+        "mutate": "tear",
         "rewind": False,
         "traced_solves": False,
         "steppable_accelerations": ["anderson", "wegstein"],

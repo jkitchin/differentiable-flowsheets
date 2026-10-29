@@ -45,7 +45,7 @@ __all__ = [
     "Checkpoint", "CommandResult", "Control", "DebugCommandEngine",
     "DebugContext", "DebugQuit", "DebugSession", "EVENTS", "METRICS",
     "attach", "current", "debugged_solve", "detach", "hook", "make_session",
-    "starts_debugged_solve",
+    "record", "starts_debugged_solve",
 ]
 
 #: The attached session, per thread: a solve on another thread never
@@ -149,7 +149,10 @@ def debugged_solve(fs, kwargs: dict):
             method=str(kwargs.get("acceleration")),
             tear_names=sorted(fs.recycles.values())))
         try:
-            streams = fs.solve(**kwargs)
+            try:
+                streams = fs.solve(**kwargs)
+            finally:
+                fs.last_solve_debug_edits = list(session.edits)
         except DebugQuit:
             raise
         except Exception as exc:
@@ -167,3 +170,6 @@ def debugged_solve(fs, kwargs: dict):
         return streams
     finally:
         session.end()
+
+
+from .record import record  # noqa: E402 -- needs attach, above

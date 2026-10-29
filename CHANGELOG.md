@@ -21,6 +21,11 @@ All notable changes to difflow are recorded here. The format follows
   runs the solve on a worker thread for a server or an agent. Detached it costs one thread-local read per
   checkpoint; attached it only reads, and `quit` raises `DebugQuit`. Design and the editor/agent phases in
   plans/debugger.org, after pounce's and discopt's debuggers.
+  `set tear STREAM.FIELD VALUE` (at an `iteration` or `after_accel` pause) changes the guess the next pass
+  runs on; edits are listed in the `terminated` event and `Flowsheet.last_solve_debug_edits`.
+  `debug.record(fs, solve_kwargs)` solves once through every checkpoint and returns a `difflow-trace/1`
+  trace; the editor's **View → Trace** panel (`/api/debug/record`) scrubs it by frame, unit, iteration or
+  event, outlines the current unit on the canvas, plots the residual and shows what each step changed.
 - **Model-discrimination and c-optimal experiment design (issue 520).**
   `difflow.estimation.design_discrimination(models, thetas, candidates, n, criterion='HR')` chooses the
   candidate runs that best tell rival models apart, each model at its own fitted parameters: `'HR'`

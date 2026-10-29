@@ -667,6 +667,14 @@ class TestAnEmptyEditor:
         assert answer["ok"] is False and "already has units" in answer["error"]
         assert list(empty.session.flowsheet.species_order) == SPECIES
 
+    def test_a_solve_can_be_recorded_for_the_trace_panel(self, client):
+        status, answer = client.post("/api/debug/record", {})
+        assert status == 200 and answer["ok"]
+        trace = answer["trace"]
+        assert trace["protocol"] == "difflow-trace/1"
+        assert trace["frames"][0]["checkpoint"] == "solve_start"
+        assert trace["frames"][-1]["checkpoint"] == "terminated"
+
     def test_a_flowsheet_built_from_nothing_can_be_fed_and_solved(self, empty):
         """Drop, wire, feed, solve --- the whole reported defect, over HTTP.
 

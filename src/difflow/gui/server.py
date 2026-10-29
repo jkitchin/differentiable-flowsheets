@@ -572,6 +572,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return answer if answer.get("ok") else {**answer, "_status": 400}
             if path == "/api/solve":
                 return session.solve()
+            if path == "/api/debug/record":
+                return session.debug_record()
             if path == "/api/sensitivity":
                 return session.sensitivity(lever=payload.get("lever"),
                                            target=payload.get("target"))

@@ -1,5 +1,5 @@
 {
- "n_sections": 1279,
+ "n_sections": 1281,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -663,7 +663,7 @@
    "path": "The Flowsheet Debugger > Table of Contents",
    "source": "debugger.md",
    "targets": [],
-   "text": "- [Quick start](#quick-start)\n- [Where it stops](#where-it-stops)\n- [Commands](#commands)\n- [Breakpoints](#breakpoints)\n- [Post mortem: `on_error`](#post-mortem-on-error)\n- [Driving it from a program](#driving-it-from-a-program)\n- [What it does not change](#what-it-does-not-change)\n- [Limits](#limits)"
+   "text": "- [Quick start](#quick-start)\n- [Where it stops](#where-it-stops)\n- [Commands](#commands)\n- [Breakpoints](#breakpoints)\n- [Post mortem: `on_error`](#post-mortem-on-error)\n- [Editing the tear: `set tear`](#editing-the-tear-set-tear)\n- [Recording a solve: the Trace panel](#recording-a-solve-the-trace-panel)\n- [Driving it from a program](#driving-it-from-a-program)\n- [What it does not change](#what-it-does-not-change)\n- [Limits](#limits)"
   },
   {
    "anchor": "quick-start",
@@ -687,7 +687,7 @@
    "path": "The Flowsheet Debugger > Commands",
    "source": "debugger.md",
    "targets": [],
-   "text": "| Command | Shows |\n|---|---|\n| `info` / `i` | where the solve is: checkpoint, phase, iteration, unit, residual |\n| `where` / `w` | the calculation order, `->` at the current unit, `*` on tears, `[b]` on breakpoints |\n| `p STREAM` | every field of a stream |\n| `p STREAM.FIELD` | one value |\n| `p UNIT` (or `p unit:NAME`) | the unit's ports, parameters and its last `info` |\n| `p tear [all]` | every tear entry with `x`, `g(x)` and `|g - x|`, largest first: *which* field the residual is made of |\n| `p history` | the residual history, and what `classify_history` reads in it |\n| `p next` | the accelerated next guess, at `after_accel` |\n| `p residual`, `p ratio`, ... | a metric |\n| `watch TARGET` | print a target at every stop (`watch del T`, `watch clear`) |\n| `diagnose` | the history's regime, the worst tear entries, non-finite streams; at `terminated` the full `solve_findings` with remedies |\n| `save [PATH]` | the current streams, history and tear table as JSON |\n| `interact` | a Python prompt with `ctx`, `fs`, `streams`, `unit`, `inlets`, `outlets`, `x`, `g` in scope (REPL only) |"
+   "text": "| Command | Shows |\n|---|---|\n| `info` / `i` | where the solve is: checkpoint, phase, iteration, unit, residual |\n| `where` / `w` | the calculation order, `->` at the current unit, `*` on tears, `[b]` on breakpoints |\n| `p STREAM` | every field of a stream |\n| `p STREAM.FIELD` | one value |\n| `p UNIT` (or `p unit:NAME`) | the unit's ports, parameters and its last `info` |\n| `p tear [all]` | every tear entry with `x`, `g(x)` and `|g - x|`, largest first: *which* field the residual is made of |\n| `p history` | the residual history, and what `classify_history` reads in it |\n| `p next` | the accelerated next guess, at `after_accel` |\n| `p residual`, `p ratio`, ... | a metric |\n| `watch TARGET` | print a target at every stop (`watch del T`, `watch clear`) |\n| `diagnose` | the history's regime, the worst tear entries, non-finite streams; at `terminated` the full `solve_findings` with remedies |\n| `save [PATH]` | the current streams, history and tear table as JSON |\n| `set tear STREAM.FIELD VALUE` | the guess the next pass runs on (see below) |\n| `interact` | a Python prompt with `ctx`, `fs`, `streams`, `unit`, `inlets`, `outlets`, `x`, `g` in scope (REPL only) |"
   },
   {
    "anchor": "breakpoints",
@@ -706,6 +706,22 @@
    "text": "`--on-error` (`debug.attach(on_error=True)`) runs the solve freely and\nstops once, at the first of: a unit that raises, a unit that produces a\nNaN from finite inlets, or a solve that ends unconverged. A clean solve\nnever stops. It is the quickest way to answer \"which unit broke it?\",\nincluding when it broke during the tear-guessing pass before the iteration\nbegan."
   },
   {
+   "anchor": "editing-the-tear-set-tear",
+   "heading": "Editing the tear: `set tear`",
+   "path": "The Flowsheet Debugger > Editing the tear: `set tear`",
+   "source": "debugger.md",
+   "targets": [],
+   "text": "The one thing the debugger changes is the guess the next pass runs on:\n\n```text\ndifflow-dbg> stop-at iteration\ndifflow-dbg> continue\n\u2500\u2500 difflow-dbg \u2500\u2500 @iteration  iter 3  phase=solve  residual=4.120e-01\ndifflow-dbg> p tear\ndifflow-dbg> set tear recycle.F_A 0.5\nnext pass: recycle.F_A = 0.5 (was 0.4909)\ndifflow-dbg> continue\n```\n\nAt an `after_accel` pause it edits the accelerated guess. At an\n`iteration` pause it replaces that iteration's step: the edit starts from\n`g(x)` (what plain substitution would run next), and the convergence test\nfor that iteration is skipped, because the next pass is not the one that\nwas tested. `p next` shows the guess as edited. Wegstein's secant pairs\nand Anderson's history are kept: every pair in them is still a real\nevaluation of the tear map.\n\nAn edit changes the route to the fixed point, not the fixed point: a\nsolve that converges after one converges to the same answer. It is still\nnot the plain solve, so it says so. Every edit is listed in the\n`terminated` event's `edits` and in `Flowsheet.last_solve_debug_edits`\n(empty for a solve nobody edited), and the REPL's last banner counts\nthem. Unit parameters are not editable: that would be a different\nflowsheet, not a different route."
+  },
+  {
+   "anchor": "recording-a-solve-the-trace-panel",
+   "heading": "Recording a solve: the Trace panel",
+   "path": "The Flowsheet Debugger > Recording a solve: the Trace panel",
+   "source": "debugger.md",
+   "targets": [],
+   "text": "`debug.record(fs, solve_kwargs)` solves once with nobody at the prompt,\nstepping through every checkpoint, and returns a `difflow-trace/1` dict:\nthe unit order, the tears, one frame per checkpoint holding only what that\ncheckpoint wrote (the feeds, a unit's outlets, the tear iterate, the next\nguess), and the solve's verdict. Replaying the frames up to `i` gives\nevery stream at frame `i`. A solve that raises is recorded up to the\nraise, with the error in `result`, rather than raised.\n\n```python\ntrace = debug.record(fs, {\"acceleration\": \"wegstein\"})\n[f[\"residual\"] for f in trace[\"frames\"] if f[\"checkpoint\"] == \"iteration\"]\n```\n\nIn the editor, **View \u2192 Trace** does this through `/api/debug/record` and\nlets you scrub the trace:\n\n- a slider and step buttons that move by frame, by unit, by tear\n  iteration, or straight from event to event (\u2190 and \u2192 work too), with\n  play;\n- the unit the solve is at outlined on the canvas;\n- the residual by iteration on a log axis (a NaN marked in red on the\n  top edge; click a point to jump to it) and the list of events;\n- at each step, what it changed (before and after), and at a tear\n  iteration the tear table, largest `|g - x|` first; every stream at that\n  step on request.\n\nThe trace is the record of one solve, read in the browser: scrubbing\nnever re-solves. The live, blocking debugger in the editor is the next\nstep (see `plans/debugger.org`)."
+  },
+  {
    "anchor": "driving-it-from-a-program",
    "heading": "Driving it from a program",
    "path": "The Flowsheet Debugger > Driving it from a program",
@@ -719,7 +735,7 @@
    "path": "The Flowsheet Debugger > What it does not change",
    "source": "debugger.md",
    "targets": [],
-   "text": "Detached, a solve is exactly what it was: each checkpoint costs one\nthread-local read. Attached, the debugger only reads: the same units run\nin the same order on the same values, and the answer is the same. `quit`\nraises `DebugQuit` instead of returning a partial answer, because a\nstopped solve has none.\n\nOnly the outermost solve is debugged. A flowsheet solved inside a unit of\nthe one being debugged stays silent, and by default only the first solve\non the thread is debugged, so a script that sweeps does not stop you once\nper point (`--all-solves` changes that)."
+   "text": "Detached, a solve is exactly what it was: each checkpoint costs one\nthread-local read. Attached, the debugger only reads unless you `set\ntear`: the same units run in the same order on the same values, and the\nanswer is the same. `quit`\nraises `DebugQuit` instead of returning a partial answer, because a\nstopped solve has none.\n\nOnly the outermost solve is debugged. A flowsheet solved inside a unit of\nthe one being debugged stays silent, and by default only the first solve\non the thread is debugged, so a script that sweeps does not stop you once\nper point (`--all-solves` changes that)."
   },
   {
    "anchor": "limits",
@@ -727,7 +743,7 @@
    "path": "The Flowsheet Debugger > Limits",
    "source": "debugger.md",
    "targets": [],
-   "text": "- **What it can step** is the eager tear iteration: `acceleration=\"anderson\"`\n  (the default) and `\"wegstein\"`. `acceleration=\"none\"` iterates inside\n  optimistix, where there is no Python loop to stop in; the debugger sees\n  that solve's start and end only.\n- **Nothing fires under `jax.grad` or `jit`.** A traced solve is traced\n  once, not run, and a tracer is not a number anyone can inspect.\n- **A unit is one step.** A unit's own inner solve (a CSTR's Newton\n  iteration, a flash's Rachford-Rice) runs inside JAX and is not stepped;\n  what it reports in its `info` dict is shown, and `inner_unconverged`\n  stops on it.\n- **It reads, it does not write.** Changing a tear value or a parameter\n  mid-solve is not supported yet."
+   "text": "- **What it can step** is the eager tear iteration: `acceleration=\"anderson\"`\n  (the default) and `\"wegstein\"`. `acceleration=\"none\"` iterates inside\n  optimistix, where there is no Python loop to stop in; the debugger sees\n  that solve's start and end only.\n- **Nothing fires under `jax.grad` or `jit`.** A traced solve is traced\n  once, not run, and a tracer is not a number anyone can inspect.\n- **A unit is one step.** A unit's own inner solve (a CSTR's Newton\n  iteration, a flash's Rachford-Rice) runs inside JAX and is not stepped;\n  what it reports in its `info` dict is shown, and `inner_unconverged`\n  stops on it.\n- **It edits tear values only** (`set tear`), never parameters, and has no\n  rewind yet."
   },
   {
    "anchor": "dynamic-modeling",

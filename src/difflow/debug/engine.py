@@ -262,8 +262,10 @@ def _stop_at(engine, args, ctx, session):
         names = sorted(c.value for c in session.stop_checkpoints)
         return CommandResult([", ".join(names) or "none"], data={"stop_at": names})
     if args == "clear":
-        session.stop_checkpoints.clear()
-        return CommandResult(["stop-at cleared"])
+        from .session import DEFAULT_STOP
+        session.stop_checkpoints = set(DEFAULT_STOP)
+        return CommandResult(["stop-at back to the defaults: "
+                              + ", ".join(sorted(c.value for c in DEFAULT_STOP))])
     cp = resolve_checkpoint(args)
     session.stop_checkpoints.add(cp)
     return CommandResult([f"will stop at every {cp.value}"])
@@ -375,9 +377,11 @@ def _print(engine, args, ctx, session):
         lines.append(f"reads as: {regime}")
         return CommandResult(lines, data={"history": hist, "regime": regime})
     if head == "next":
-        if ctx.x_next is None:
-            return fail("no accelerated guess here (only at after_accel)")
-        values = [_num(v) for v in ctx.x_next]
+        guess = ctx.tear_edit if ctx.tear_edit is not None else ctx.x_next
+        if guess is None:
+            return fail("no next guess here (only at after_accel, or after "
+                        "'set tear' at an iteration)")
+        values = [_num(v) for v in guess]
         return CommandResult([", ".join(_fmt(v) for v in values)],
                              data={"x_next": values})
     metrics = ctx.metrics()
@@ -403,6 +407,42 @@ def _print(engine, args, ctx, session):
                              data={"value": _num(stream[fname])})
     return CommandResult(_stream_lines(name, stream),
                          data={"stream": name, "values": plain_stream(stream)})
+
+
+def _set(engine, args, ctx, session):
+    """``set tear STREAM.FIELD VALUE``: the guess the next pass runs on.
+
+    At ``after_accel`` it edits the accelerated guess; at ``iteration`` it
+    replaces the step entirely (the convergence test is skipped, since the
+    next pass is not the one that was tested), starting from ``g(x)``,
+    which is what plain substitution would run next.
+    """
+    words = args.split()
+    if len(words) != 3 or words[0] != "tear":
+        return fail("usage: set tear STREAM.FIELD VALUE "
+                    "(tear values are the only thing the debugger edits)")
+    _, target, text = words
+    if ctx.checkpoint not in (Checkpoint.ITERATION, Checkpoint.AFTER_ACCEL):
+        return fail("set tear works at an iteration or after_accel pause "
+                    "('stop-at iteration' to get one)")
+    stream, _, fname = target.partition(".")
+    slots = ctx.tear_fields()
+    if (stream, fname) not in slots:
+        tears = ", ".join(sorted(ctx.tear_names))
+        return fail(f"{target!r} is not a tear entry; tears: {tears}, fields "
+                    f"F_<species>, T, P")
+    value = float(text)
+    base = ctx.tear_edit
+    if base is None:
+        base = ctx.x_next if ctx.checkpoint is Checkpoint.AFTER_ACCEL else ctx.g
+    k = slots.index((stream, fname))
+    was = _num(base[k])
+    ctx.tear_edit = base.at[k].set(value)
+    edit = {"iteration": ctx.iteration, "checkpoint": ctx.checkpoint.value,
+            "stream": stream, "field": fname, "was": was, "value": value}
+    session.edits.append(edit)
+    return CommandResult([f"next pass: {stream}.{fname} = {_fmt(value)} "
+                          f"(was {_fmt(was)})"], data=edit)
 
 
 def _watch(engine, args, ctx, session):
@@ -474,6 +514,7 @@ break      break [N | UNIT | unit UNIT | if COND | on EVENT | del X | clear]
            tbreak N   stop-at [CHECKPOINT | clear]
 inspect    info|i  where|w  units  streams  print|p TARGET  watch [TARGET|del X|clear]
            diagnose  save [PATH]
+edit       set tear STREAM.FIELD VALUE   (at iteration / after_accel)
 targets    a stream, stream.field, a unit (or unit:NAME), tear [all], history,
            next (the accelerated guess), or a metric
 """
@@ -513,10 +554,11 @@ _DISPATCH: dict[str, Callable] = {
     "watch": _watch, "display": _watch,
     "diagnose": _diagnose,
     "save": _save,
+    "set": _set,
     "help": _help, "h": _help, "?": _help,
 }
 
 #: Canonical verbs, as the JSON hello advertises them.
 COMMANDS = ["step", "next", "stepi", "continue", "run", "detach", "quit",
             "break", "tbreak", "stop-at", "info", "where", "units", "streams",
-            "print", "watch", "diagnose", "save", "help"]
+            "print", "watch", "diagnose", "save", "set", "help"]
