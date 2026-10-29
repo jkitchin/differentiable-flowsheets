@@ -125,6 +125,7 @@ each package's `__all__`.
 | Building | `set_species`, `set_code_context`, `add_unit`, `update_unit`, `remove_unit`, `connect`, `disconnect`, `set_feed`, `remove_feed` |
 | Running | `set_solver_options`, `solve`, `get_streams` |
 | Diagnosis | `diagnose`, `converge`, `tear_analysis`, `trace_solve`, `get_unit_info` |
+| Debugging | `debug_guide`, `debug_start`, `debug_command`, `debug_wait`, `debug_pause`, `debug_state`, `debug_stop` |
 | Analysis | `levers`, `define_quantity`, `remove_quantity`, `list_quantities`, `evaluate`, `sensitivity`, `sweep`, `optimize`, `uncertainty`, `linearize`, `tea`, `report` |
 | Python | `run_python` |
 
@@ -134,6 +135,16 @@ sends a progress notification every few seconds while it works, so a client
 waiting on a first compile knows the call is alive. The server also offers
 three prompts, `design_flowsheet`, `fix_convergence` and `sensitivity_study`,
 as starting points for those workflows.
+
+The debugging tools are the [flowsheet debugger](debugger.md) itself, as a
+long poll: `debug_start` stops before the first pass (or, with
+`on_error=true`, at the first failure), `debug_command` runs any debugger
+command at a pause (`step`, `next`, `continue`, `break on nonfinite`,
+`print tear`, `set tear ...`) and returns where a resume stopped next, and a
+reply in state `"running"` means call `debug_wait`. `debug_guide` returns the
+whole contract and the protocol handshake. The solve runs on a copy, so
+debugging never changes the session's flowsheet. `fix_convergence` reaches
+for these when the findings alone do not say why a loop fails.
 
 `open_in_editor` saves the flowsheet and opens it in the browser editor, so a
 person can see what an agent built. The editor runs on the saved file in its

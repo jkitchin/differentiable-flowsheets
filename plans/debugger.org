@@ -286,7 +286,13 @@ What pounce has and difflow does not yet, in the order worth building.
   and refuses commands while running. The session runs it on a copy and
   =serve= stops it on shutdown. The page shows /running/ the moment a
   resume is sent, so Pause is pressable during the long poll.
-- Agents: the MCP =debug_start= / =debug_command= / ... tools (phase 2b) can
-  now sit on the same =FlowsheetSession= methods the routes do.
+- Agents: *built*. =debug_guide=, =debug_start=, =debug_command=,
+  =debug_wait=, =debug_pause=, =debug_state=, =debug_stop= on the Workbench,
+  thin over the same =FlowsheetSession.debug_*= methods the editor's routes
+  use (one implementation for the page and for agents). The waiting tools
+  take =timeout= and so get the server's progress heartbeats. Inspection
+  tools are "read"; start/command/pause/stop are "edit" (they change the
+  session's debugger, never the flowsheet). =fix_convergence= reaches for
+  them when the findings do not say why.
 - What-ifs on a what-if (more than one edit, chained): =record= already
   takes a list of edits; the panel offers one, against the recording.

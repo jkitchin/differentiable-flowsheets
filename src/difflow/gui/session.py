@@ -130,6 +130,11 @@ def _solver_option(key: str, value):
 #: half-minute after which a browser or proxy may give up on a request.
 LIVE_WAIT = 20.0
 
+
+def _wait(seconds) -> float:
+    """A caller's wait in seconds, or :data:`LIVE_WAIT`; never negative."""
+    return LIVE_WAIT if seconds is None else max(float(seconds), 0.0)
+
 #: What `set_species` accepts as a species name.
 _SPECIES_NAME = re.compile(r"[A-Za-z0-9_]+")
 
@@ -2027,11 +2032,13 @@ class FlowsheetSession:
     def _debugger_reply(self, event: dict) -> dict:
         return {"ok": True, "event": event, "state": self._debugger.state}
 
-    def debug_start(self, on_error: bool = False) -> dict:
+    def debug_start(self, on_error: bool = False,
+                    wait: float | None = None) -> dict:
         """Start a live debugged solve; stop any that is running.
 
         Returns the first event: the pause at ``solve_start``, or with
         ``on_error`` the first failure (or ``finished`` if there is none).
+        ``wait`` is how long to wait for it (default :data:`LIVE_WAIT`).
         """
         refused = self._cannot_solve()
         if refused is not None:
@@ -2046,23 +2053,29 @@ class FlowsheetSession:
                 return {"ok": False, "error": f"could not copy the flowsheet to "
                         f"debug it: {type(exc).__name__}: {exc}"}
         self._debugger = DebugRunner(flowsheet, {"on_nonconvergence": "ignore",
-                                             **self._solve_kw()},
-                                 on_error=bool(on_error))
-        event = self._debugger.start(timeout=LIVE_WAIT)
+                                                 **self._solve_kw()},
+                                     on_error=bool(on_error))
+        event = self._debugger.start(timeout=_wait(wait))
         return {**self._debugger_reply(event), "hello": self._debugger.hello}
 
-    def debug_command(self, command: str) -> dict:
+    def debug_command(self, command: str, wait: float | None = None) -> dict:
         """One debugger command at the current pause (see docs/debugger.md)."""
         if self._debugger is None:
             return {"ok": False, "error": "no live debugger: start one"}
-        return self._debugger_reply(self._debugger.command(str(command or ""),
-                                                   timeout=LIVE_WAIT))
+        return self._debugger_reply(self._debugger.command(
+            str(command or ""), timeout=_wait(wait)))
 
-    def debug_wait(self) -> dict:
+    def debug_wait(self, wait: float | None = None) -> dict:
         """The next pause or the end, for a page whose last call said running."""
         if self._debugger is None:
             return {"ok": False, "error": "no live debugger: start one"}
-        return self._debugger_reply(self._debugger.wait(LIVE_WAIT))
+        return self._debugger_reply(self._debugger.wait(_wait(wait)))
+
+    def debug_state(self) -> dict:
+        """Where the live debugger is, without waiting: its state and last event."""
+        if self._debugger is None:
+            return {"ok": True, "state": "idle", "event": None}
+        return self._debugger_reply(self._debugger.last_event)
 
     def debug_pause(self) -> dict:
         """Stop a running solve at its next checkpoint (it arrives via wait)."""

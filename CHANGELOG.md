@@ -35,6 +35,9 @@ All notable changes to difflow are recorded here. The format follows
   breakpoints, the current unit outlined, the tear table at iterations, and a command line taking every
   debugger command. A long poll (`/api/debug/start|command|wait|pause|stop`, 20 s per request) over
   `DebugRunner`, which gained `state` and `pause()`; the solve runs on a copy of the flowsheet.
+  For agents, `difflow mcp` serves the same debugger: `debug_guide` (the contract and the handshake),
+  `debug_start`, `debug_command`, `debug_wait`, `debug_pause`, `debug_state`, `debug_stop`, over the
+  editor's `FlowsheetSession.debug_*` methods; the `fix_convergence` prompt uses them.
 - **Model-discrimination and c-optimal experiment design (issue 520).**
   `difflow.estimation.design_discrimination(models, thetas, candidates, n, criterion='HR')` chooses the
   candidate runs that best tell rival models apart, each model at its own fitted parameters: `'HR'`

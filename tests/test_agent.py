@@ -179,3 +179,60 @@ class TestGuardRails:
             assert kind in ("read", "edit", "exec")
             method = getattr(Workbench, name)
             assert (method.__doc__ or "").strip(), name
+
+
+class TestLiveDebugger:
+    """The debug_* tools: the session's live debugger, as an agent drives it."""
+
+    @staticmethod
+    def bench(middle=None):
+        from difflow.gui.session import FlowsheetSession
+        from tests.test_debug import loop
+
+        wb = Workbench()
+        wb.sessions["main"] = FlowsheetSession(loop(middle) if middle else loop())
+        return wb
+
+    def test_the_guide_is_the_contract_and_the_handshake(self):
+        guide = Workbench().debug_guide()
+        assert guide["hello"]["protocol"] == "difflow-dbg/1"
+        assert "debug_wait" in guide["contract"]
+
+    def test_start_step_and_finish(self):
+        wb = self.bench()
+        assert wb.debug_state()["state"] == "idle"
+        first = wb.debug_start()
+        assert (first["state"], first["event"]["checkpoint"]) == ("paused", "solve_start")
+        stepped = wb.debug_command("step")
+        assert stepped["event"]["next"]["checkpoint"] == "iteration"
+        assert wb.debug_state()["event"]["checkpoint"] == "iteration"
+        wb.debug_command("continue")
+        end = wb.debug_command("continue")
+        assert end["state"] == "finished" and end["event"]["next"]["ok"]
+        assert wb.debug_stop() == {"ok": True, "state": "idle"}
+
+    def test_on_error_stops_where_the_nan_is_born(self):
+        from tests.test_debug import poisoned
+
+        wb = self.bench(poisoned)
+        stop = wb.debug_start(on_error=True)
+        assert (stop["event"]["unit"], stop["event"]["trigger"]) == ("R1", "nonfinite")
+        wb.debug_stop()
+
+    def test_a_short_wait_says_running_and_wait_picks_it_up(self):
+        from tests.test_debug import slow
+
+        wb = self.bench(slow)
+        wb.debug_start()
+        running = wb.debug_command("continue", timeout=0.01)
+        assert running["state"] == "running"
+        assert wb.debug_pause()["event"]["ok"]
+        paused = wb.debug_wait(timeout=60)
+        assert paused["state"] == "paused" and paused["event"]["reason"] == "paused"
+        wb.debug_stop()
+
+    def test_a_missing_session_and_a_missing_debugger_are_refused(self):
+        wb = Workbench()
+        assert not wb.debug_start(session="nowhere")["ok"]
+        assert "start one" in wb.debug_command("step")["error"]
+        assert json.loads(json.dumps(wb.debug_state()))["state"] == "idle"

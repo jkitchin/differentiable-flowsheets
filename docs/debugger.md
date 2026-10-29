@@ -307,6 +307,12 @@ runner.command("continue")["next"]      # the next pause, or {'event': 'finished
 runner.close()
 ```
 
+An agent connected over MCP (`difflow mcp`) gets the same debugger as
+tools: `debug_start`, `debug_command`, `debug_wait`, `debug_pause`,
+`debug_state`, `debug_stop`, and `debug_guide` for the contract (see
+[agents](agents.md)). They are the editor's Debug-panel calls, on the
+agent's session.
+
 ## What it does not change
 
 Detached, a solve is exactly what it was: each checkpoint costs one

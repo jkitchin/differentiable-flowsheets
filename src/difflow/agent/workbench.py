@@ -25,6 +25,31 @@ from difflow.agent import discovery
 #: call returns and leaves it running in the background
 DEFAULT_TIMEOUT = 300.0
 
+#: What an agent needs to drive the live debugger, returned by debug_guide.
+DEBUG_CONTRACT = """\
+1. debug_start pauses before the first pass (state "paused", event.checkpoint
+   "solve_start"). With on_error=true it runs until something fails instead.
+2. At a pause, debug_command runs one command. Inspection (print, where,
+   diagnose, break, watch, set tear) answers at once and stays paused. A resume
+   (step = next tear iteration, next = next unit, stepi, continue, run N)
+   returns its result with the next stop under event.next.
+3. state "running" means the solve has not stopped yet: call debug_wait
+   (or debug_pause to stop it at the next checkpoint). Commands are refused
+   while it runs.
+4. Every pause carries checkpoint, phase, iteration, unit, residual, reason
+   and trigger (the event that fired, e.g. "nonfinite"). Feature-detect from
+   hello, not from versions.
+5. Finish with debug_command("continue") to the end (event "finished"), or
+   debug_stop. The solve runs on a copy: nothing is changed in the session's
+   flowsheet, and its answer is not adopted (run solve for that).
+
+A good first session on a failing loop: break on nonfinite, break on
+residual_rise, continue; at the stop, print tear (which stream and field the
+residual is made of), print history, diagnose; for the unit at fault, print
+UNIT and print its inlet streams. set tear STREAM.FIELD VALUE at an iteration
+pause tries a different next guess without changing the problem.
+"""
+
 
 def jsonable(value):
     """``value`` with non-finite floats, arrays and paths made JSON-safe."""
@@ -633,6 +658,74 @@ class Workbench:
         from difflow.agent import doctor
 
         return self._with(session, lambda s: doctor.unit_info(s, name))
+
+    # -- the live debugger ---------------------------------------------------------------
+    #
+    # The same debugger as `difflow debug` and the editor's Debug panel, on
+    # the session's FlowsheetSession.debug_* methods. Each solve runs on a
+    # copy of the flowsheet, so nothing here changes the flowsheet itself.
+
+    def debug_guide(self) -> dict:
+        """How to drive the live debugger: the whole contract, plus the
+        handshake listing every checkpoint, event, metric and command.
+        Read it once before debug_start."""
+        from difflow.debug.jsonproto import hello
+
+        return jsonable({"ok": True, "contract": DEBUG_CONTRACT, "hello": hello()})
+
+    def debug_start(self, on_error: bool = False, session: str = "main",
+                    timeout: float | None = None) -> dict:
+        """Start a debugged solve of the session's flowsheet (on a copy) and
+        return where it first stops: before the first pass, or with
+        on_error=True at the first failure (a unit that raises, a NaN born
+        in a unit, an unconverged end) or `finished` if nothing failed.
+
+        Args:
+            on_error: Run freely and stop only post mortem.
+            timeout: Seconds to wait for the first stop (default 20); past
+                it the reply says state "running": call debug_wait.
+        """
+        return self._call(session, "debug_start", on_error=on_error, wait=timeout)
+
+    def debug_command(self, command: str, session: str = "main",
+                      timeout: float | None = None) -> dict:
+        """Run one debugger command at the current pause and return its
+        result; a command that resumes the solve also returns, under
+        event.next, where it stopped next (or state "running" if it has not
+        yet: call debug_wait). Commands: step (next tear iteration), next
+        (next unit), stepi, continue, run N, break N | UNIT | if COND | on
+        EVENT, print STREAM | STREAM.FIELD | UNIT | tear | history, watch,
+        diagnose, set tear STREAM.FIELD VALUE, quit, help. See debug_guide.
+
+        Args:
+            command: The command, as typed at the difflow-dbg prompt.
+            timeout: Seconds to wait for the next stop after a resume.
+        """
+        return self._call(session, "debug_command", command, wait=timeout)
+
+    def debug_wait(self, session: str = "main", timeout: float | None = None) -> dict:
+        """Wait for a running debugged solve to stop (a breakpoint, a pause,
+        the end) and return that event; at a pause, return it at once.
+
+        Args:
+            timeout: Seconds to wait (default 20); the reply says state
+                "running" if it is still going.
+        """
+        return self._call(session, "debug_wait", wait=timeout)
+
+    def debug_pause(self, session: str = "main") -> dict:
+        """Ask a running debugged solve to stop at its next checkpoint; the
+        pause itself arrives through debug_wait."""
+        return self._call(session, "debug_pause")
+
+    def debug_state(self, session: str = "main") -> dict:
+        """Where the live debugger is, without waiting: idle, paused (with the
+        pause), running or finished."""
+        return self._call(session, "debug_state")
+
+    def debug_stop(self, session: str = "main") -> dict:
+        """Stop the live debugger and its solve. Always succeeds."""
+        return self._call(session, "debug_stop")
 
     def _with(self, session: str, fn) -> dict:
         s, err = self._get(session)

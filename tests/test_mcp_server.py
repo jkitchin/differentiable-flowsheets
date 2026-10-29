@@ -65,3 +65,36 @@ def test_a_missing_sdk_names_the_extra(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", no_mcp)
     with pytest.raises(ImportError, match=r"difflow\[mcp\]"):
         build_server()
+
+
+def test_an_agent_can_step_a_solve_through_the_debug_tools():
+    import json
+
+    from difflow.agent import Workbench
+    from difflow.gui.session import FlowsheetSession
+    from tests.test_debug import loop, poisoned
+
+    wb = Workbench()
+    wb.sessions["main"] = FlowsheetSession(loop(poisoned))
+
+    async def session():
+        async with Client(build_server(wb)) as client:
+            async def call(name, **kw):
+                result = await client.call_tool(name, kw)
+                return json.loads(result.content[0].text)
+
+            assert (await call("debug_start"))["state"] == "paused"
+            await call("debug_command", command="break on nonfinite")
+            stop = (await call("debug_command", command="continue"))["event"]["next"]
+            shown = await call("debug_command", command="print R1")
+            await call("debug_stop")
+            return stop, shown
+
+    stop, shown = run(session())
+    assert (stop["unit"], stop["trigger"]) == ("R1", "nonfinite")
+    assert shown["event"]["ok"]
+
+
+def test_the_debug_command_schema_requires_the_command():
+    schema = run(tools_of(build_server()))["debug_command"].input_schema
+    assert schema["required"] == ["command"]
