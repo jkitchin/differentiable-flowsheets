@@ -204,6 +204,12 @@ export function menuBar({
           run: actions.console,
         },
         {
+          label: 'Debug',
+          on: !!panels.debug,
+          hint: 'step through a solve, unit by unit, with breakpoints',
+          run: actions.debug,
+        },
+        {
           label: 'Trace',
           on: !!panels.trace,
           hint: 'record a solve and scrub through it, unit by unit',

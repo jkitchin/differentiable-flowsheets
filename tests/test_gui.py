@@ -699,6 +699,16 @@ class TestAnEmptyEditor:
         stale = session.debug_whatif(k, "recycle", "T", 361.0)
         assert not stale["ok"] and "changed since" in stale["error"]
 
+    def test_the_live_debugger_routes(self, client):
+        status, started = client.post("/api/debug/start", {})
+        assert status == 200 and started["state"] == "paused"
+        _, stepped = client.post("/api/debug/command", {"cmd": "next"})
+        assert stepped["event"]["next"]["checkpoint"] == "after_unit"
+        _, waited = client.post("/api/debug/wait", {})
+        assert waited["state"] == "paused"                # nothing to wait for
+        assert client.post("/api/debug/pause", {})[1]["event"]["ok"] is False
+        assert client.post("/api/debug/stop", {})[1] == {"ok": True, "state": "idle"}
+
     def test_a_flowsheet_built_from_nothing_can_be_fed_and_solved(self, empty):
         """Drop, wire, feed, solve --- the whole reported defect, over HTTP.
 

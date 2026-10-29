@@ -1,5 +1,5 @@
 {
- "n_sections": 1282,
+ "n_sections": 1283,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -663,7 +663,7 @@
    "path": "The Flowsheet Debugger > Table of Contents",
    "source": "debugger.md",
    "targets": [],
-   "text": "- [Quick start](#quick-start)\n- [Where it stops](#where-it-stops)\n- [Commands](#commands)\n- [Breakpoints](#breakpoints)\n- [Post mortem: `on_error`](#post-mortem-on-error)\n- [Editing the tear: `set tear`](#editing-the-tear-set-tear)\n- [Recording a solve: the Trace panel](#recording-a-solve-the-trace-panel)\n- [Driving it from a program](#driving-it-from-a-program)\n- [What it does not change](#what-it-does-not-change)\n- [Limits](#limits)"
+   "text": "- [Quick start](#quick-start)\n- [Where it stops](#where-it-stops)\n- [Commands](#commands)\n- [Breakpoints](#breakpoints)\n- [Post mortem: `on_error`](#post-mortem-on-error)\n- [Editing the tear: `set tear`](#editing-the-tear-set-tear)\n- [Recording a solve: the Trace panel](#recording-a-solve-the-trace-panel)\n- [Live in the editor: the Debug panel](#live-in-the-editor-the-debug-panel)\n- [Driving it from a program](#driving-it-from-a-program)\n- [What it does not change](#what-it-does-not-change)\n- [Limits](#limits)"
   },
   {
    "anchor": "quick-start",
@@ -727,7 +727,15 @@
    "path": "The Flowsheet Debugger > Recording a solve: the Trace panel > What if",
    "source": "debugger.md",
    "targets": [],
-   "text": "At a tear iteration (or an accelerated guess) the panel offers **What if\nthe next pass ran on \u2026**: pick a tear entry, give it a value, and *Replay\nfrom here*. That is the one thing in the panel that solves again, and it\nis a **replay**: the solve runs from the start with the same options and\nthe edit lands at exactly that frame, so everything before it is the\nrecording, and the accelerator still has the history it had there. A\nfresh solve seeded with the edited value is not the same thing --- it\nforgets Anderson's or Wegstein's history and takes a different path ---\nwhich is why the panel does not offer that.\n\nThe what-if comes back as a second trace: switch between *Recorded* and\n*What if*, with the other run's residual drawn faintly on the same axes\nand a dashed line where the edit landed. The recording is kept as it was,\nso each what-if starts from it. Two guards keep it honest:\n\n- every frame before the edit is checked against the recording, and if\n  one differs the panel says the replay *left the recording* at that\n  frame --- it is then not the same solve, and its answer is about\n  something else;\n- a recording of a flowsheet that has changed since (a unit, a feed, the\n  solver options; not the layout) is refused rather than replayed:\n  record again.\n\nFrom Python it is `debug.record(fs, kw, edits=[{\"frame\": k, \"stream\":\n\"recycle\", \"field\": \"F_A\", \"value\": 0.5}], baseline=trace[\"frames\"])`;\n`result[\"diverged_at\"]` and `result[\"refused\"]` carry the two checks.\n\nThe live, blocking debugger in the editor is the next step (see\n`plans/debugger.org`)."
+   "text": "At a tear iteration (or an accelerated guess) the panel offers **What if\nthe next pass ran on \u2026**: pick a tear entry, give it a value, and *Replay\nfrom here*. That is the one thing in the panel that solves again, and it\nis a **replay**: the solve runs from the start with the same options and\nthe edit lands at exactly that frame, so everything before it is the\nrecording, and the accelerator still has the history it had there. A\nfresh solve seeded with the edited value is not the same thing --- it\nforgets Anderson's or Wegstein's history and takes a different path ---\nwhich is why the panel does not offer that.\n\nThe what-if comes back as a second trace: switch between *Recorded* and\n*What if*, with the other run's residual drawn faintly on the same axes\nand a dashed line where the edit landed. The recording is kept as it was,\nso each what-if starts from it. Two guards keep it honest:\n\n- every frame before the edit is checked against the recording, and if\n  one differs the panel says the replay *left the recording* at that\n  frame --- it is then not the same solve, and its answer is about\n  something else;\n- a recording of a flowsheet that has changed since (a unit, a feed, the\n  solver options; not the layout) is refused rather than replayed:\n  record again.\n\nFrom Python it is `debug.record(fs, kw, edits=[{\"frame\": k, \"stream\":\n\"recycle\", \"field\": \"F_A\", \"value\": 0.5}], baseline=trace[\"frames\"])`;\n`result[\"diverged_at\"]` and `result[\"refused\"]` carry the two checks."
+  },
+  {
+   "anchor": "live-in-the-editor-the-debug-panel",
+   "heading": "Live in the editor: the Debug panel",
+   "path": "The Flowsheet Debugger > Live in the editor: the Debug panel",
+   "source": "debugger.md",
+   "targets": [],
+   "text": "**View \u2192 Debug** is the debugger itself, in the editor. *Start* solves a\ncopy of the flowsheet and stops before the first pass; *Run to error*\nruns it freely and stops only post mortem (as `--on-error`). Then:\n\n- *Step iteration*, *Next unit*, *Step in* and *Continue* are `step`,\n  `next`, `stepi` and `continue`; *Pause* stops a running solve at its\n  next checkpoint (a unit in the middle of its own calculation finishes\n  it first); *Stop* ends the solve.\n- The unit the solve is at is outlined on the canvas. Select a unit and\n  the breakpoint row offers *before UNIT*; the event checkboxes are\n  `break on nonfinite`, `unit_error`, `residual_rise` and\n  `inner_unconverged`.\n- At a tear iteration the tear table is shown without asking.\n- The command line under the transcript takes every command in this page\n  (`p STREAM`, `break if ...`, `set tear ...`, `help`), with \u2191/\u2193 history.\n\nThe solve runs on a copy, so editing the canvas while it is paused\nchanges nothing in it; a copy is also why its answer is not put on the\ncanvas when it finishes (press *Solve* for that). Closing the panel, or\nthe editor, stops it.\n\nUnderneath it is a long poll on `/api/debug/start`, `command`, `wait`,\n`pause` and `stop`: each request returns as soon as the solve pauses or\nends, or after 20 s with `state: \"running\"`, and the page asks `wait`\nagain. The editor's server gives each request a thread of its own, so a\nparked request holds nothing else up. The replies carry the JSON\nprotocol's events, so an agent can drive the same routes."
   },
   {
    "anchor": "driving-it-from-a-program",

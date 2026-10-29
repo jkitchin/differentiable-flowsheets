@@ -82,11 +82,23 @@ class DebugSession:
         self._post_mortem_done = False
         #: tear values set with ``set tear`` during the current solve
         self.edits: list[dict] = []
+        self._pause_requested = False
 
     # -- lifecycle -------------------------------------------------------
 
     def detach(self) -> None:
         self._detached = True
+
+    def request_pause(self) -> None:
+        """Stop at the next checkpoint, whatever the step mode.
+
+        Safe to call from another thread while the solve runs: it only
+        sets a flag that the solve's own thread reads at its next
+        checkpoint. That is the soonest a pause can happen --- a unit is
+        one step, and it is not interrupted --- and pounce's asynchronous
+        pause works the same way.
+        """
+        self._pause_requested = True
 
     @property
     def detached(self) -> bool:
@@ -119,6 +131,10 @@ class DebugSession:
 
     def _should_pause(self, ctx: "DebugContext") -> bool:
         cp = ctx.checkpoint
+        if self._pause_requested:
+            self._pause_requested = False
+            ctx.extra["reason"] = "paused"
+            return True
         if self.on_error:
             failed = (
                 cp is Checkpoint.UNIT_ERROR

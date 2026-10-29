@@ -11,6 +11,7 @@
   import Planning from './lib/Planning.svelte'
   import Results from './lib/Results.svelte'
   import Trace from './lib/Trace.svelte'
+  import Debugger from './lib/Debugger.svelte'
   import { solverOptions } from './lib/model/solver.js'
   import Species from './lib/Species.svelte'
   import { del, get, patch, post, send } from './lib/api.js'
@@ -85,6 +86,9 @@
   let showPlanning = $state(false)
   let showConsole = $state(false)
   let showTrace = $state(false)
+  let showDebug = $state(false)
+  // The unit a paused live solve is at, outlined on the canvas.
+  let debugFocus = $state(null)
   // The unit a scrubbed trace is at, outlined on the canvas.
   let traceFocus = $state(null)
   // The right-click menu: `{x, y, title, items}` while it is open. The
@@ -757,6 +761,7 @@
       script: showScript,
       console: showConsole,
       trace: showTrace,
+      debug: showDebug,
       planning: showPlanning,
       assistant: showAssistant,
     },
@@ -782,6 +787,7 @@
       script: () => (showScript = !showScript),
       console: () => (showConsole = !showConsole),
       trace: () => (showTrace = !showTrace),
+      debug: () => (showDebug = !showDebug),
       planning: () => (showPlanning = !showPlanning),
       assistant: () => (showAssistant = !showAssistant),
       portLabels: () => (portLabels = !portLabels),
@@ -893,7 +899,7 @@
         onselect={(node) => (selected = node)}
         onmenu={openMenu}
         onrefuse={(why) => (note = why)}
-        focus={showTrace ? traceFocus : null}
+        focus={showDebug && debugFocus ? debugFocus : showTrace ? traceFocus : null}
       />
     {/if}
   </div>
@@ -941,6 +947,14 @@
   <Console
     onchanged={() => edit(async () => ({ ok: true }))}
     onclose={() => (showConsole = false)}
+  />
+{/if}
+
+{#if showDebug}
+  <Debugger
+    unit={selectedUnit?.name ?? null}
+    onfocus={(u) => (debugFocus = u)}
+    onclose={() => (showDebug = false)}
   />
 {/if}
 

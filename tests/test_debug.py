@@ -392,3 +392,74 @@ def test_a_replay_lists_the_edits_it_could_not_make():
     ], baseline=base["frames"])
     assert len(replay["result"]["refused"]) == 2
     assert replay["result"]["edits"] == []
+
+
+def test_every_stream_can_be_printed_at_an_iteration():
+    runner = DebugRunner(loop())
+    runner.start()
+    runner.command("stop-at iteration")
+    runner.command("continue")
+    answer = runner.command("p mixed.F_A")
+    assert answer["ok"], answer["output"]
+    runner.close()
+
+
+# ---------------------------------------------------------------------
+# The editor's live debugger (FlowsheetSession.debug_*)
+# ---------------------------------------------------------------------
+
+
+def slow(s):
+    """``halve``, a little slowly, so that a solve is still running when asked."""
+    import time
+    time.sleep(0.05)
+    return halve(s)
+
+
+def test_the_session_steps_a_live_solve_on_a_copy():
+    from difflow.gui.session import FlowsheetSession
+
+    fs = loop()
+    session = FlowsheetSession(fs)
+    assert "start one" in session.debug_command("step")["error"]
+    first = session.debug_start()
+    assert first["ok"] and first["state"] == "paused"
+    assert first["event"]["checkpoint"] == "solve_start"
+    assert first["hello"]["protocol"] == "difflow-dbg/1"
+    nxt = session.debug_command("next")
+    assert nxt["event"]["next"]["checkpoint"] == "after_unit"
+    assert session.debug_pause()["event"]["ok"] is False      # paused already
+    session.debug_command("continue")
+    end = session.debug_command("continue")
+    assert end["state"] == "finished"
+    assert fs.last_solve_debug_edits == []            # the copy was solved, not fs
+    assert session.debug_stop() == {"ok": True, "state": "idle"}
+
+
+def test_a_running_live_solve_can_be_paused(monkeypatch):
+    from difflow.gui import session as session_module
+    from difflow.gui.session import FlowsheetSession
+
+    session = FlowsheetSession(loop(slow))
+    session.debug_start()
+    monkeypatch.setattr(session_module, "LIVE_WAIT", 0.01)
+    running = session.debug_command("continue")
+    assert running["state"] == "running"
+    assert session.debug_command("p feed")["event"]["ok"] is False   # not paused
+    assert session.debug_pause()["event"]["ok"]
+    monkeypatch.setattr(session_module, "LIVE_WAIT", 30.0)
+    paused = session.debug_wait()
+    assert paused["state"] == "paused"
+    assert paused["event"]["reason"] == "paused"
+    session.debug_stop()
+
+
+def test_stopping_a_paused_live_solve_ends_it():
+    from difflow.gui.session import FlowsheetSession
+
+    session = FlowsheetSession(loop())
+    session.debug_start()
+    runner = session._debugger
+    session.debug_stop()
+    assert runner.finished and runner.state == "finished"
+    assert "start one" in session.debug_wait()["error"]

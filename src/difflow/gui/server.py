@@ -574,6 +574,16 @@ class _Handler(BaseHTTPRequestHandler):
                 return session.solve()
             if path == "/api/debug/record":
                 return session.debug_record()
+            if path == "/api/debug/start":
+                return session.debug_start(on_error=bool(payload.get("on_error")))
+            if path == "/api/debug/command":
+                return session.debug_command(payload.get("cmd", ""))
+            if path == "/api/debug/wait":
+                return session.debug_wait()
+            if path == "/api/debug/pause":
+                return session.debug_pause()
+            if path == "/api/debug/stop":
+                return session.debug_stop()
             if path == "/api/debug/whatif":
                 return session.debug_whatif(
                     payload.get("frame"), payload.get("stream"),
@@ -800,6 +810,7 @@ def serve(
               else "stopped: the editor page was closed")
     finally:
         stop.set()
+        session.debug_stop()            # a solve parked at a pause, if any
         server.server_close()
 
 

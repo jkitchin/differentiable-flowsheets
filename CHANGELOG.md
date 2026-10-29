@@ -30,6 +30,11 @@ All notable changes to difflow are recorded here. The format follows
   (`record(..., edits=, baseline=)`, `/api/debug/whatif`): a replay, not a fresh solve, so the accelerator
   keeps its history; frames before the edit are checked against the recording (`diverged_at`), and a
   recording of a since-changed flowsheet is refused. Both residual curves share the plot.
+  **View → Debug** is the live debugger in the editor: Start / Run to error, Step iteration, Next unit,
+  Step in, Continue, Pause (at the next checkpoint) and Stop; a breakpoint before the selected unit, event
+  breakpoints, the current unit outlined, the tear table at iterations, and a command line taking every
+  debugger command. A long poll (`/api/debug/start|command|wait|pause|stop`, 20 s per request) over
+  `DebugRunner`, which gained `state` and `pause()`; the solve runs on a copy of the flowsheet.
 - **Model-discrimination and c-optimal experiment design (issue 520).**
   `difflow.estimation.design_discrimination(models, thetas, candidates, n, criterion='HR')` chooses the
   candidate runs that best tell rival models apart, each model at its own fitted parameters: `'HR'`

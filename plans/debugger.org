@@ -277,11 +277,16 @@ What pounce has and difflow does not yet, in the order worth building.
 
 * Open questions
 
-- Live stepping in the editor: *long-poll* (recommended, next). The server
-  is a =ThreadingHTTPServer= (a parked request costs one thread, not the
-  editor), and =DebugRunner.command(timeout)= / =wait()= is already the
-  long-poll's server half. Needs an asynchronous /Pause/ (a flag the next
-  checkpoint reads), one runner per session on a copy of the flowsheet,
-  and closing it from the =Lifetime= shutdown.
+- Live stepping in the editor: *built*, as a long poll
+  (=/api/debug/{start,command,wait,pause,stop}=, =LIVE_WAIT= 20 s). The
+  server is a =ThreadingHTTPServer=, so a parked request costs one thread.
+  =DebugRunner= gained =state= (idle/paused/running/finished), =pause()= (a
+  flag the next checkpoint reads, =DebugSession.request_pause=), an outbox
+  lock so a parked =wait= and a =command= cannot take each other's events,
+  and refuses commands while running. The session runs it on a copy and
+  =serve= stops it on shutdown. The page shows /running/ the moment a
+  resume is sent, so Pause is pressable during the long poll.
+- Agents: the MCP =debug_start= / =debug_command= / ... tools (phase 2b) can
+  now sit on the same =FlowsheetSession= methods the routes do.
 - What-ifs on a what-if (more than one edit, chained): =record= already
   takes a list of edits; the panel offers one, against the recording.

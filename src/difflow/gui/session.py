@@ -125,6 +125,11 @@ def _solver_option(key: str, value):
                      f"(the options are {', '.join(SOLVER_DEFAULTS)})")
 
 
+#: How long a live-debugger request waits for the solve to pause before
+#: answering "still running" (the page then asks again). Under the
+#: half-minute after which a browser or proxy may give up on a request.
+LIVE_WAIT = 20.0
+
 #: What `set_species` accepts as a species name.
 _SPECIES_NAME = re.compile(r"[A-Za-z0-9_]+")
 
@@ -368,6 +373,8 @@ class FlowsheetSession:
         #: the last solve recorded for the trace panel, which a what-if
         #: replays: its frames, the solve options and the model it was of
         self._recorded_trace: dict | None = None
+        #: the live debugger, if one is running (difflow.debug.runner)
+        self._debugger = None
         #: the document as it was last read or written, to say whether
         #: closing the editor now would lose anything. Compared rather
         #: than flagged by each edit: an edit made from the console goes
@@ -1990,6 +1997,85 @@ class FlowsheetSession:
             return {"ok": False,
                     "error": trace["result"]["refused"][0]["detail"]}
         return {"ok": True, "trace": trace, "warnings": _recorded(caught)}
+
+    # -- the live debugger ------------------------------------------------
+    #
+    # A long poll: each call returns as soon as the solve pauses or
+    # finishes, or after LIVE_WAIT seconds with ``state: "running"``, and
+    # the page calls `debug_wait` again. The server gives every request a
+    # thread of its own, so a parked call costs one thread and holds
+    # nothing else up --- not the heartbeat, not an edit. The solve runs
+    # on a copy, so an edit made while it is paused cannot reach into it,
+    # and the session lock is never held across a pause.
+
+    def _debug_copy(self):
+        """A copy of the flowsheet for a live solve to run on."""
+        import copy
+        import json
+
+        from difflow import serialize
+
+        state = self._state()
+        if state is not None:
+            try:
+                return serialize.from_dict(json.loads(state), refs=self.bindings,
+                                           trust=True)
+            except Exception:
+                pass
+        return copy.deepcopy(self.flowsheet)
+
+    def _debugger_reply(self, event: dict) -> dict:
+        return {"ok": True, "event": event, "state": self._debugger.state}
+
+    def debug_start(self, on_error: bool = False) -> dict:
+        """Start a live debugged solve; stop any that is running.
+
+        Returns the first event: the pause at ``solve_start``, or with
+        ``on_error`` the first failure (or ``finished`` if there is none).
+        """
+        refused = self._cannot_solve()
+        if refused is not None:
+            return refused
+        from difflow.debug.runner import DebugRunner
+
+        self.debug_stop()
+        with self._lock:
+            try:
+                flowsheet = self._debug_copy()
+            except Exception as exc:
+                return {"ok": False, "error": f"could not copy the flowsheet to "
+                        f"debug it: {type(exc).__name__}: {exc}"}
+        self._debugger = DebugRunner(flowsheet, {"on_nonconvergence": "ignore",
+                                             **self._solve_kw()},
+                                 on_error=bool(on_error))
+        event = self._debugger.start(timeout=LIVE_WAIT)
+        return {**self._debugger_reply(event), "hello": self._debugger.hello}
+
+    def debug_command(self, command: str) -> dict:
+        """One debugger command at the current pause (see docs/debugger.md)."""
+        if self._debugger is None:
+            return {"ok": False, "error": "no live debugger: start one"}
+        return self._debugger_reply(self._debugger.command(str(command or ""),
+                                                   timeout=LIVE_WAIT))
+
+    def debug_wait(self) -> dict:
+        """The next pause or the end, for a page whose last call said running."""
+        if self._debugger is None:
+            return {"ok": False, "error": "no live debugger: start one"}
+        return self._debugger_reply(self._debugger.wait(LIVE_WAIT))
+
+    def debug_pause(self) -> dict:
+        """Stop a running solve at its next checkpoint (it arrives via wait)."""
+        if self._debugger is None:
+            return {"ok": False, "error": "no live debugger: start one"}
+        return self._debugger_reply(self._debugger.pause())
+
+    def debug_stop(self) -> dict:
+        """Stop the live debugger, if there is one. Always succeeds."""
+        live, self._debugger = self._debugger, None
+        if live is not None:
+            live.close(timeout=5.0)
+        return {"ok": True, "state": "idle"}
 
     def solve(self) -> dict:
         """Solve, and report a failure rather than raising at the socket.

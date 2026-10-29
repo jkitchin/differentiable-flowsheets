@@ -22,6 +22,7 @@ streams, units and tears.
 - [Post mortem: `on_error`](#post-mortem-on-error)
 - [Editing the tear: `set tear`](#editing-the-tear-set-tear)
 - [Recording a solve: the Trace panel](#recording-a-solve-the-trace-panel)
+- [Live in the editor: the Debug panel](#live-in-the-editor-the-debug-panel)
 - [Driving it from a program](#driving-it-from-a-program)
 - [What it does not change](#what-it-does-not-change)
 - [Limits](#limits)
@@ -253,8 +254,35 @@ From Python it is `debug.record(fs, kw, edits=[{"frame": k, "stream":
 "recycle", "field": "F_A", "value": 0.5}], baseline=trace["frames"])`;
 `result["diverged_at"]` and `result["refused"]` carry the two checks.
 
-The live, blocking debugger in the editor is the next step (see
-`plans/debugger.org`).
+## Live in the editor: the Debug panel
+
+**View → Debug** is the debugger itself, in the editor. *Start* solves a
+copy of the flowsheet and stops before the first pass; *Run to error*
+runs it freely and stops only post mortem (as `--on-error`). Then:
+
+- *Step iteration*, *Next unit*, *Step in* and *Continue* are `step`,
+  `next`, `stepi` and `continue`; *Pause* stops a running solve at its
+  next checkpoint (a unit in the middle of its own calculation finishes
+  it first); *Stop* ends the solve.
+- The unit the solve is at is outlined on the canvas. Select a unit and
+  the breakpoint row offers *before UNIT*; the event checkboxes are
+  `break on nonfinite`, `unit_error`, `residual_rise` and
+  `inner_unconverged`.
+- At a tear iteration the tear table is shown without asking.
+- The command line under the transcript takes every command in this page
+  (`p STREAM`, `break if ...`, `set tear ...`, `help`), with ↑/↓ history.
+
+The solve runs on a copy, so editing the canvas while it is paused
+changes nothing in it; a copy is also why its answer is not put on the
+canvas when it finishes (press *Solve* for that). Closing the panel, or
+the editor, stops it.
+
+Underneath it is a long poll on `/api/debug/start`, `command`, `wait`,
+`pause` and `stop`: each request returns as soon as the solve pauses or
+ends, or after 20 s with `state: "running"`, and the page asks `wait`
+again. The editor's server gives each request a thread of its own, so a
+parked request holds nothing else up. The replies carry the JSON
+protocol's events, so an agent can drive the same routes.
 
 ## Driving it from a program
 

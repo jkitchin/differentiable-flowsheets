@@ -2158,7 +2158,7 @@ class Flowsheet:
                 # solve() catches this and reruns on the fixed-point path.
                 raise _UndetectedTracer
             edit = self._debug_iteration(iteration, x_prev, g_curr, res,
-                                         tear_names, "wegstein")
+                                         tear_names, "wegstein", streams)
             if edit is not None:
                 # `set tear` in the debugger: the next pass runs on the
                 # edited guess, in place of this iteration's step. The
@@ -2182,7 +2182,7 @@ class Flowsheet:
                             x_curr, flow_mask, clip_hits
                         )
                     edit = self._debug_accel(iteration, x_prev, g_curr, x_curr,
-                                             tear_names, "wegstein")
+                                             tear_names, "wegstein", streams)
                     if edit is not None:
                         x_curr = edit
 
@@ -2263,7 +2263,7 @@ class Flowsheet:
             if res is None:
                 raise _UndetectedTracer       # see _solve_with_wegstein
             edit = self._debug_iteration(iteration, x_curr, g_curr, res,
-                                         tear_names, "anderson")
+                                         tear_names, "anderson", streams)
             if edit is not None:
                 # `set tear` in the debugger: the next pass runs on the
                 # edited guess (see _solve_with_wegstein).
@@ -2284,7 +2284,7 @@ class Flowsheet:
                     x_next, flow_mask, clip_hits
                 )
             edit = self._debug_accel(iteration, x_curr, g_curr, x_next,
-                                     tear_names, "anderson")
+                                     tear_names, "anderson", streams)
             x_curr = x_next if edit is None else edit
 
         self._record_clip_activity(clip_hits)
@@ -2632,7 +2632,8 @@ class Flowsheet:
                 info=_unit_info(result, unit), **context))
         return streams
 
-    def _debug_iteration(self, iteration, x, g, residual, tear_names, method):
+    def _debug_iteration(self, iteration, x, g, residual, tear_names, method,
+                         streams=None):
         """Fire the ``iteration`` checkpoint: the tear map and its residual.
 
         Returns the next tear guess if the debugger set one (``set tear``),
@@ -2644,11 +2645,12 @@ class Flowsheet:
         context = _DebugContext(
             _Checkpoint.ITERATION, self, iteration=iteration, x=x, g=g,
             residual=residual, history=list(self.last_solve_history or []),
-            tear_names=sorted(tear_names), method=method)
+            tear_names=sorted(tear_names), method=method, streams=streams)
         session.fire(context)
         return context.tear_edit
 
-    def _debug_accel(self, iteration, x, g, x_next, tear_names, method):
+    def _debug_accel(self, iteration, x, g, x_next, tear_names, method,
+                     streams=None):
         """Fire ``after_accel``: the accelerated guess the next pass runs on.
 
         Returns the guess the debugger put in its place, if any.
@@ -2659,7 +2661,7 @@ class Flowsheet:
         context = _DebugContext(
             _Checkpoint.AFTER_ACCEL, self, iteration=iteration, x=x, g=g,
             x_next=x_next, history=list(self.last_solve_history or []),
-            tear_names=sorted(tear_names), method=method)
+            tear_names=sorted(tear_names), method=method, streams=streams)
         session.fire(context)
         return context.tear_edit
 

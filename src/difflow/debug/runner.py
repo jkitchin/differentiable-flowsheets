@@ -63,10 +63,26 @@ class DebugRunner:
         self.finished = False
         self.last_event: dict | None = None
         self._thread: threading.Thread | None = None
+        # One reader of the outbox at a time: a `wait` parked on it and a
+        # `command` arriving beside it would otherwise take each other's
+        # events. `pause` and `close` never read it, so they never queue
+        # behind a parked `wait`.
+        self._io = threading.Lock()
 
     @property
     def hello(self) -> dict:
         return hello()
+
+    @property
+    def state(self) -> str:
+        """``idle`` (not started), ``paused``, ``running`` or ``finished``."""
+        if self._thread is None:
+            return "idle"
+        if self.finished:
+            return "finished"
+        if (self.last_event or {}).get("event") == "pause":
+            return "paused"
+        return "running"
 
     def _work(self) -> None:
         fs = self.flowsheet
@@ -90,7 +106,8 @@ class DebugRunner:
             event = self.frontend.outbox.get(timeout=timeout)
         except queue.Empty:
             return {"event": "running", "detail": "no pause yet; call wait()"}
-        self.last_event = event
+        if event.get("event") != "result" or event.get("resumed"):
+            self.last_event = event        # a resume means: no longer paused
         return event
 
     def start(self, timeout: float | None = 120.0) -> dict:
@@ -100,11 +117,45 @@ class DebugRunner:
         self._thread = threading.Thread(target=self._work, daemon=True,
                                         name="difflow-debug")
         self._thread.start()
-        return self._next(timeout)
+        with self._io:
+            return self._next(timeout)
 
     def wait(self, timeout: float | None = 120.0) -> dict:
-        """The next event, for a caller whose last command returned ``running``."""
-        return self._next(timeout)
+        """The next event, for a caller whose last command returned ``running``.
+
+        At a pause, or once finished, there is nothing to wait for: the
+        current event is returned at once.
+        """
+        if self.state == "paused":
+            return self.last_event
+        if self.state == "finished":
+            return self._last_of_finished()
+        with self._io:
+            return self._next(timeout)
+
+    def _last_of_finished(self) -> dict:
+        """The ``finished`` event, past anything a stop left unread before it."""
+        with self._io:
+            while True:
+                try:
+                    event = self.frontend.outbox.get_nowait()
+                except queue.Empty:
+                    break
+                if event.get("event") == "finished":
+                    self.last_event = event
+        return self.last_event
+
+    def pause(self) -> dict:
+        """Ask a running solve to stop at its next checkpoint.
+
+        Returns at once; the pause arrives through :meth:`wait`.
+        """
+        if self.state != "running":
+            return {"event": "result", "ok": False, "command": "pause",
+                    "output": [f"nothing to pause: the solve is {self.state}"]}
+        self.session.request_pause()
+        return {"event": "result", "ok": True, "command": "pause",
+                "output": ["pausing at the next checkpoint"]}
 
     def command(self, text: str, timeout: float | None = 120.0) -> dict:
         """Run one command at the current pause.
@@ -113,13 +164,15 @@ class DebugRunner:
         carries the event it ran to under ``"next"``: the next ``pause``, or
         ``finished``.
         """
-        if self.finished or self._thread is None:
+        if self.state != "paused":
             return {"event": "result", "ok": False, "command": text,
-                    "output": ["the solve is not paused (finished or not started)"]}
-        self.frontend.inbox.put(text)
-        event = self._next(timeout)
-        if event.get("resumed"):
-            event["next"] = self._next(timeout)
+                    "output": [f"the solve is {self.state}, not paused"
+                               + ("; pause it, or wait" if self.state == "running" else "")]}
+        with self._io:
+            self.frontend.inbox.put(text)
+            event = self._next(timeout)
+            if event.get("resumed"):
+                event["next"] = self._next(timeout)
         return event
 
     def close(self, timeout: float = 30.0) -> None:
