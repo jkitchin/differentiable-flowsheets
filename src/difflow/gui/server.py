@@ -574,6 +574,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return session.solve()
             if path == "/api/debug/record":
                 return session.debug_record()
+            if path == "/api/debug/whatif":
+                return session.debug_whatif(
+                    payload.get("frame"), payload.get("stream"),
+                    payload.get("field"), payload.get("value"))
             if path == "/api/sensitivity":
                 return session.sensitivity(lever=payload.get("lever"),
                                            target=payload.get("target"))

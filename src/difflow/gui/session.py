@@ -365,6 +365,9 @@ class FlowsheetSession:
         self._undo: list[str] = []
         self._redo: list[str] = []
         self._recording = False
+        #: the last solve recorded for the trace panel, which a what-if
+        #: replays: its frames, the solve options and the model it was of
+        self._recorded_trace: dict | None = None
         #: the document as it was last read or written, to say whether
         #: closing the editor now would lose anything. Compared rather
         #: than flagged by each edit: an edit made from the console goes
@@ -1902,23 +1905,90 @@ class FlowsheetSession:
             return {"ok": False, "error": self.solve_error}
         return None
 
+    def _model_key(self) -> str | None:
+        """The model as a string, minus the layout: what a recording depends on.
+
+        :meth:`_state` with the node positions left out, so that moving a
+        unit on the canvas does not make a recording stale, and the solver
+        options left in, since the recording was made with them.
+        """
+        if self.flowsheet is None:
+            return None
+        try:
+            import json
+
+            from difflow import serialize
+
+            model = serialize.to_dict(self.flowsheet, refs=self.bindings)
+        except Exception:
+            return None
+        model.pop("view", None)
+        return json.dumps([model, self._solve_kw()], default=str)
+
     def debug_record(self) -> dict:
         """Solve once under the debugger, keeping every checkpoint.
 
         The editor's trace panel scrubs the result (see
         :mod:`difflow.debug.record`). Nothing is adopted: the streams on
         the canvas stay those of the last plain solve, and a solve that
-        fails is a trace that ends where it failed, not an error.
+        fails is a trace that ends where it failed, not an error. The
+        recording is kept, for :meth:`debug_whatif` to replay.
         """
         refused = self._cannot_solve()
         if refused is not None:
             return refused
         from difflow.debug.record import record
 
+        kw = {"on_nonconvergence": "ignore", **self._solve_kw()}
         with self._lock, warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            trace = record(self.flowsheet, {"on_nonconvergence": "ignore",
-                                            **self._solve_kw()})
+            trace = record(self.flowsheet, kw)
+        self._recorded_trace = {"key": self._model_key(), "kw": kw,
+                                "frames": trace["frames"]}
+        return {"ok": True, "trace": trace, "warnings": _recorded(caught)}
+
+    def debug_whatif(self, frame, stream, field, value) -> dict:
+        """Replay the last recording with one tear value set at ``frame``.
+
+        A replay, not a fresh solve from the edited value: the solve runs
+        again from the start and the edit lands at the same point, so the
+        accelerator still has the history it had there. Every frame before
+        the edit is checked against the recording (``diverged_at``), and a
+        recording of a flowsheet that has since changed is refused rather
+        than replayed against the wrong model. The recording itself is kept
+        as it was, so successive what-ifs all start from it.
+        """
+        kept = self._recorded_trace
+        if kept is None:
+            return {"ok": False, "error": "record a solve first"}
+        if kept["key"] is None or kept["key"] != self._model_key():
+            return {"ok": False, "error": (
+                "the flowsheet (or its solver options) changed since the solve "
+                "was recorded, so a replay would not be a replay. Record again.")}
+        try:
+            frame, value = int(frame), float(value)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "frame must be an integer and value a number"}
+        frames = kept["frames"]
+        if not 0 <= frame < len(frames) or \
+                frames[frame]["checkpoint"] not in ("iteration", "after_accel"):
+            return {"ok": False, "error": (
+                "a what-if starts at a tear iteration (or an accelerated "
+                "guess) of the recording")}
+        refused = self._cannot_solve()
+        if refused is not None:
+            return refused
+        from difflow.debug.record import record
+
+        edit = {"frame": frame, "stream": str(stream), "field": str(field),
+                "value": value}
+        with self._lock, warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            trace = record(self.flowsheet, kept["kw"], edits=[edit],
+                           baseline=frames)
+        if trace["result"]["refused"]:
+            return {"ok": False,
+                    "error": trace["result"]["refused"][0]["detail"]}
         return {"ok": True, "trace": trace, "warnings": _recorded(caught)}
 
     def solve(self) -> dict:

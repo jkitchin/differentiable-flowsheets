@@ -222,8 +222,39 @@ lets you scrub the trace:
   step on request.
 
 The trace is the record of one solve, read in the browser: scrubbing
-never re-solves. The live, blocking debugger in the editor is the next
-step (see `plans/debugger.org`).
+never re-solves.
+
+### What if
+
+At a tear iteration (or an accelerated guess) the panel offers **What if
+the next pass ran on …**: pick a tear entry, give it a value, and *Replay
+from here*. That is the one thing in the panel that solves again, and it
+is a **replay**: the solve runs from the start with the same options and
+the edit lands at exactly that frame, so everything before it is the
+recording, and the accelerator still has the history it had there. A
+fresh solve seeded with the edited value is not the same thing --- it
+forgets Anderson's or Wegstein's history and takes a different path ---
+which is why the panel does not offer that.
+
+The what-if comes back as a second trace: switch between *Recorded* and
+*What if*, with the other run's residual drawn faintly on the same axes
+and a dashed line where the edit landed. The recording is kept as it was,
+so each what-if starts from it. Two guards keep it honest:
+
+- every frame before the edit is checked against the recording, and if
+  one differs the panel says the replay *left the recording* at that
+  frame --- it is then not the same solve, and its answer is about
+  something else;
+- a recording of a flowsheet that has changed since (a unit, a feed, the
+  solver options; not the layout) is refused rather than replayed:
+  record again.
+
+From Python it is `debug.record(fs, kw, edits=[{"frame": k, "stream":
+"recycle", "field": "F_A", "value": 0.5}], baseline=trace["frames"])`;
+`result["diverged_at"]` and `result["refused"]` carry the two checks.
+
+The live, blocking debugger in the editor is the next step (see
+`plans/debugger.org`).
 
 ## Driving it from a program
 

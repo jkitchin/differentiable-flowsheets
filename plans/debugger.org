@@ -153,6 +153,17 @@ Done on this branch since phase 1: =set tear= (both accelerations, at
 =/api/debug/record=, and the editor's /View → Trace/ panel
 (=Trace.svelte=, =model/trace.js=).
 
+Then the what-if replay (=record(..., edits=, baseline=)=,
+=/api/debug/whatif=, "Replay from here" in the panel). Chosen over "solve
+afresh from the edited value" on evidence: two recordings of the same solve
+are identical frame for frame, a scripted replay of a live =set tear=
+reproduces the live run exactly, and a fresh solve seeded with the same
+value takes a different path (Anderson: 2.0e-1, 6.4e-2, 8.9e-16 after the
+edit as a replay; 2.0e-1, 1.4e-1, 1.3e-15 fresh), because it has lost the
+accelerator's history. Guards: frames before the edit are checked against
+the recording (=diverged_at=), and the server refuses to replay a recording
+of a model that has since changed (the layout aside).
+
 * Phase 2: the editor
 
 The editor is the front end this was asked for, and the runner is the seam:
@@ -266,7 +277,11 @@ What pounce has and difflow does not yet, in the order worth building.
 
 * Open questions
 
-- Live stepping in the editor: block a request on a pause and long-poll, or
-  poll =/api/debug/state=? (The stdlib server has no websockets.)
-- Should the Trace panel offer =set tear= from a recorded frame ("re-solve
-  from here with this value"), which is a re-solve, not a scrub?
+- Live stepping in the editor: *long-poll* (recommended, next). The server
+  is a =ThreadingHTTPServer= (a parked request costs one thread, not the
+  editor), and =DebugRunner.command(timeout)= / =wait()= is already the
+  long-poll's server half. Needs an asynchronous /Pause/ (a flag the next
+  checkpoint reads), one runner per session on a copy of the flowsheet,
+  and closing it from the =Lifetime= shutdown.
+- What-ifs on a what-if (more than one edit, chained): =record= already
+  takes a list of edits; the panel offers one, against the recording.

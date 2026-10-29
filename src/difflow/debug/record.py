@@ -21,10 +21,21 @@ A trace is ``difflow-trace/1``::
 the outlets at ``after_unit``, the tear iterate at ``iteration`` and the
 next guess at ``after_accel`` --- so the state at frame ``i`` is the
 frames up to ``i`` replayed in order, and the trace stays small.
+
+*What if.* A solve is deterministic, so solving again and applying
+``set tear`` when the replay reaches frame ``i`` continues the recorded
+solve exactly, with the accelerator's history intact --- which a fresh
+solve seeded with the edited value does not (it forgets the history and
+takes a different path). ``record(..., edits=[...], baseline=frames)``
+does that, and checks each frame before the first edit against the
+baseline: ``result["diverged_at"]`` names the first that differs, which
+means the replay is not the recorded solve and its "what if" is about
+something else.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from . import attach
@@ -54,6 +65,12 @@ def _packed(ctx: DebugContext, array) -> dict:
     return out
 
 
+def _same(a: dict, b: dict) -> bool:
+    """Two frames equal, NaN equal to NaN (it is the same NaN, recorded twice)."""
+    return json.dumps(a, sort_keys=True, default=str) == \
+        json.dumps(b, sort_keys=True, default=str)
+
+
 def frame(ctx: DebugContext) -> dict:
     """What one checkpoint contributes to a trace."""
     cp = ctx.checkpoint
@@ -72,37 +89,80 @@ def frame(ctx: DebugContext) -> dict:
         out["set"] = _packed(ctx, ctx.x)
         out["tear"] = ctx.tear_breakdown()
     elif cp is Checkpoint.AFTER_ACCEL and ctx.x_next is not None:
-        out["set"] = _packed(ctx, ctx.x_next)
+        guess = ctx.x_next if ctx.tear_edit is None else ctx.tear_edit
+        out["set"] = _packed(ctx, guess)
     elif cp is Checkpoint.UNIT_ERROR and ctx.inlets:
         out["inlets"] = {n: plain_stream(s) for n, s in ctx.inlets.items()}
     return out
 
 
 class _Recorder:
-    """A front end that keeps every checkpoint and never stops."""
+    """A front end that keeps every checkpoint and never stops.
 
-    def __init__(self, max_frames: int) -> None:
+    With ``edits`` it also applies ``set tear`` at the frames they name,
+    and with ``baseline`` it checks the frames before the first edit.
+    """
+
+    def __init__(self, max_frames: int, edits=(), baseline=None) -> None:
         self.frames: list[dict] = []
         self.max_frames = max_frames
         self.truncated = False
+        self.edits: dict[int, list[dict]] = {}
+        for edit in edits:
+            self.edits.setdefault(int(edit["frame"]), []).append(edit)
+        self.first_edit = min(self.edits, default=None)
+        self.baseline = baseline
+        self.diverged_at: int | None = None
+        self.applied: list[dict] = []
+        self.refused: list[dict] = []
 
     def interact(self, ctx: DebugContext, session: DebugSession) -> Control:
-        if len(self.frames) >= self.max_frames:
+        k = len(self.frames)
+        if k >= self.max_frames:
             self.truncated = True
             session.detach()
             return Control.CONTINUE
-        self.frames.append(frame(ctx))
+        for edit in self.edits.get(k, ()):
+            answer = session.engine.execute(
+                f"set tear {edit['stream']}.{edit['field']} {float(edit['value'])!r}",
+                ctx, session)
+            target = self.applied if answer.ok else self.refused
+            target.append({**edit, **(answer.data or {}),
+                           "detail": " ".join(answer.output)})
+        record = frame(ctx)
+        if k in self.edits:
+            record["edits"] = [e for e in self.applied if e["frame"] == k]
+        self._check(k, record)
+        self.frames.append(record)
         return Control.STEPI
+
+    def _check(self, k: int, record: dict) -> None:
+        """Note the first frame before the first edit that the baseline disagrees on."""
+        if (self.baseline is None or self.diverged_at is not None
+                or self.first_edit is None or k > self.first_edit):
+            return
+        theirs = self.baseline[k] if k < len(self.baseline) else None
+        mine = {key: v for key, v in record.items() if key != "edits"}
+        if theirs is None or not _same(mine, theirs):
+            self.diverged_at = k
 
 
 def record(flowsheet, solve_kwargs: dict | None = None, *,
-           max_frames: int = MAX_FRAMES) -> dict:
+           max_frames: int = MAX_FRAMES, edits: list[dict] | None = None,
+           baseline: list[dict] | None = None) -> dict:
     """Solve ``flowsheet`` once, recording every checkpoint.
 
     Args:
         flowsheet: The flowsheet to solve.
         solve_kwargs: Passed to ``flowsheet.solve``.
         max_frames: Stop recording (not solving) after this many frames.
+        edits: Tear values to set on the way, each ``{"frame", "stream",
+            "field", "value"}``: at frame index ``frame`` (an ``iteration``
+            or ``after_accel`` frame), ``set tear stream.field value``. An
+            edit the debugger refuses is listed under ``result["refused"]``.
+        baseline: The frames of the recording being replayed. Each frame
+            up to the first edit is checked against it, and the first that
+            differs is ``result["diverged_at"]`` (``None`` if none does).
 
     Returns:
         A ``difflow-trace/1`` dict (see the module docstring). A solve that
@@ -113,7 +173,7 @@ def record(flowsheet, solve_kwargs: dict | None = None, *,
         >>> trace = record(fs, {"acceleration": "wegstein"})
         >>> [f["residual"] for f in trace["frames"] if f["checkpoint"] == "iteration"]
     """
-    recorder = _Recorder(max_frames)
+    recorder = _Recorder(max_frames, edits or (), baseline)
     session = DebugSession(recorder)
     fs = flowsheet
     result: dict[str, Any] = {"ok": True, "error": None}
@@ -127,6 +187,13 @@ def record(flowsheet, solve_kwargs: dict | None = None, *,
         iterations=getattr(fs, "last_solve_iterations", None),
         residual=_float(getattr(fs, "last_solve_residual", None)),
         method=getattr(fs, "last_solve_method", None))
+    if edits:
+        reached = len(recorder.frames)
+        unreached = [{**e, "detail": f"the replay ended at frame {reached - 1}"}
+                     for e in edits if int(e["frame"]) >= reached]
+        result.update(edits=recorder.applied,
+                      refused=recorder.refused + unreached,
+                      diverged_at=recorder.diverged_at)
     return {
         "protocol": PROTOCOL,
         "species": list(fs.species_order),

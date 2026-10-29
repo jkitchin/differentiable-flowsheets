@@ -675,6 +675,30 @@ class TestAnEmptyEditor:
         assert trace["frames"][0]["checkpoint"] == "solve_start"
         assert trace["frames"][-1]["checkpoint"] == "terminated"
 
+    def test_a_what_if_replays_the_recording(self, thermo):
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_feed("feed", make_stream({"water": 1.0, "ethanol": 0.1},
+                                        T=350.0, P=101325.0))
+        fs.add_unit(Unit("mix", Mixer(SPECIES, thermo), ["feed", "recycle"], ["mixed"]))
+        fs.add_unit(Unit("heat", Heater(HeaterParams(T_out=360.0)), ["mixed"], ["hot"]))
+        fs.add_unit(Unit("flash", Flash(FlashParams(species_order=SPECIES), thermo),
+                         ["hot"], ["liq", "vap"]))
+        fs.add_recycle("vap", "recycle")
+        session = FlowsheetSession(fs)
+        assert "record a solve first" in session.debug_whatif(0, "recycle", "T", 1)["error"]
+
+        trace = session.debug_record()["trace"]
+        k = next(i for i, f in enumerate(trace["frames"]) if f["checkpoint"] == "iteration")
+        answer = session.debug_whatif(k, "recycle", "T", 361.0)
+        assert answer["ok"], answer
+        assert answer["trace"]["result"]["diverged_at"] is None
+        assert not session.debug_whatif(0, "recycle", "T", 1)["ok"]       # not an iteration
+        assert not session.debug_whatif(k, "recycle", "T", "warm")["ok"]
+
+        assert session.patch_unit("heat", {"params": {"T_out": 365.0}})["ok"]
+        stale = session.debug_whatif(k, "recycle", "T", 361.0)
+        assert not stale["ok"] and "changed since" in stale["error"]
+
     def test_a_flowsheet_built_from_nothing_can_be_fed_and_solved(self, empty):
         """Drop, wire, feed, solve --- the whole reported defect, over HTTP.
 

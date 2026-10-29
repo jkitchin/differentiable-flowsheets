@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  changesAt, describeFrame, eventFrames, formatNumber, iterationAt,
+  changesAt, describeFrame, describeWhatIf, plotScale, whatIfFields, eventFrames, formatNumber, iterationAt,
   residualPath, residualSeries, stateAt, stepFrom, unitAt,
 } from './trace.js'
 
@@ -71,4 +71,30 @@ test('numbers', () => {
   assert.equal(formatNumber(0.5), '0.5')
   assert.equal(formatNumber(1e-8), '1.000e-8')
   assert.equal(formatNumber(NaN), 'NaN')
+})
+
+test('two series share one scale', () => {
+  const a = [{ residual: 1 }, { residual: 1e-2 }]
+  const b = [{ residual: 10 }, { residual: 1 }, { residual: 1e-4 }]
+  assert.deepEqual(plotScale(a, b), { lo: -4, hi: 1, n: 2 })
+  const s = plotScale(a, b)
+  // the same residual lands at the same height in either series
+  assert.equal(residualPath(a, 100, 50, 4, s).points[0].y,
+               residualPath(b, 100, 50, 4, s).points[1].y)
+})
+
+test('a what-if starts at a tear iteration or an accelerated guess', () => {
+  assert.deepEqual(whatIfFields(TRACE, 1), null)                      // after a unit
+  const withTear = { frames: [{ checkpoint: 'iteration',
+    tear: [{ stream: 'recycle', field: 'F_A', x: 0.4, g: 0.5, delta: 0.1 }] }] }
+  assert.deepEqual(whatIfFields(withTear, 0), [{ stream: 'recycle', field: 'F_A', value: 0.5 }])
+  const accel = { frames: [{ checkpoint: 'after_accel', set: { recycle: { F_A: 0.7 } } }] }
+  assert.deepEqual(whatIfFields(accel, 0), [{ stream: 'recycle', field: 'F_A', value: 0.7 }])
+})
+
+test('a what-if says what it changed', () => {
+  const t = { result: { edits: [{ stream: 'recycle', field: 'F_A', was: 0.5, value: 3,
+                                  iteration: 2, checkpoint: 'iteration' }] } }
+  assert.equal(describeWhatIf(t), 'recycle.F_A: 0.5 → 3 at iter 2 (tear iteration)')
+  assert.equal(describeWhatIf({ result: {} }), '')
 })

@@ -153,14 +153,10 @@ export function formatNumber(x) {
  * exactly) sits on the bottom edge; a non-finite one on the top edge,
  * flagged `ok: false`, so a NaN is visible rather than missing.
  */
-export function residualPath(series, width, height, pad = 4) {
-  const finite = series.filter((p) => Number.isFinite(p.residual) && p.residual > 0)
+export function residualPath(series, width, height, pad = 4, scale = null) {
   if (!series.length) return { points: [], lo: null, hi: null }
-  const logs = finite.map((p) => Math.log10(p.residual))
-  const lo = logs.length ? Math.min(...logs) : 0
-  const hi = logs.length ? Math.max(...logs) : 1
+  const { lo, hi, n } = scale ?? plotScale(series)
   const span = hi - lo || 1
-  const n = Math.max(series.length - 1, 1)
   const points = series.map((p, k) => {
     const x = pad + (k / n) * (width - 2 * pad)
     const ok = Number.isFinite(p.residual) && p.residual >= 0
@@ -170,4 +166,52 @@ export function residualPath(series, width, height, pad = 4) {
     return { x, y, ok, frame: p.frame, iteration: p.iteration, residual: p.residual }
   })
   return { points, lo, hi }
+}
+
+/**
+ * One scale for several residual series, so a what-if and the solve it
+ * replays plot on the same axes: the log range over every finite positive
+ * residual, and the longest series' length.
+ */
+export function plotScale(...many) {
+  const logs = many.flat()
+    .filter((p) => Number.isFinite(p.residual) && p.residual > 0)
+    .map((p) => Math.log10(p.residual))
+  return {
+    lo: logs.length ? Math.min(...logs) : 0,
+    hi: logs.length ? Math.max(...logs) : 1,
+    n: Math.max(...many.map((s) => s.length - 1), 1),
+  }
+}
+
+/**
+ * The tear values a what-if can set at frame `i`, or null if it cannot
+ * start there. Only a tear iteration or an accelerated guess can be
+ * edited (that is where `set tear` works), and each value is offered as
+ * the one the next pass would otherwise run on: `g(x)` at an iteration,
+ * the accelerated guess at `after_accel`.
+ */
+export function whatIfFields(trace, i) {
+  const frame = trace?.frames?.[i]
+  if (!frame) return null
+  if (frame.checkpoint === 'iteration' && frame.tear?.length) {
+    return frame.tear.map((r) => ({ stream: r.stream, field: r.field, value: r.g }))
+  }
+  if (frame.checkpoint === 'after_accel' && frame.set) {
+    const out = []
+    for (const [stream, values] of Object.entries(frame.set)) {
+      for (const [field, value] of Object.entries(values)) out.push({ stream, field, value })
+    }
+    return out
+  }
+  return null
+}
+
+/** One line saying what a what-if changed and whether it is a true replay. */
+export function describeWhatIf(trace) {
+  const r = trace?.result
+  if (!r?.edits?.length) return ''
+  const e = r.edits[0]
+  const where = `iter ${e.iteration} (${e.checkpoint === 'after_accel' ? 'accelerated guess' : 'tear iteration'})`
+  return `${e.stream}.${e.field}: ${formatNumber(e.was)} → ${formatNumber(e.value)} at ${where}`
 }

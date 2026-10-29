@@ -346,3 +346,49 @@ def test_record_stops_recording_not_solving_at_its_limit():
     trace = debug.record(fs, max_frames=3)
     assert len(trace["frames"]) == 3 and trace["truncated"]
     assert trace["result"]["converged"]
+
+
+# ---------------------------------------------------------------------
+# What-if replays
+# ---------------------------------------------------------------------
+
+
+def _iteration_frames(trace):
+    return [i for i, f in enumerate(trace["frames"]) if f["checkpoint"] == "iteration"]
+
+
+def test_a_replay_with_an_edit_matches_the_recording_up_to_the_edit():
+    fs = loop()
+    base = debug.record(fs, {"max_iter": 200})
+    k = _iteration_frames(base)[0]
+    edit = {"frame": k, "stream": "recycle", "field": "F_A", "value": 5.0}
+    replay = debug.record(fs, {"max_iter": 200}, edits=[edit],
+                          baseline=base["frames"])
+    result = replay["result"]
+    assert result["diverged_at"] is None and result["refused"] == []
+    assert [e["value"] for e in result["edits"]] == [5.0]
+    assert replay["frames"][k]["edits"][0]["was"] is not None
+    assert result["converged"]
+    assert fs.last_solve_debug_edits                 # the replay says it was edited
+
+
+def test_a_replay_of_a_changed_flowsheet_reports_where_it_diverged():
+    fs = loop()
+    base = debug.record(fs)
+    k = _iteration_frames(base)[0]
+    fs.feeds["feed"] = make_stream({"A": 2.0}, 300.0, 1e5)
+    replay = debug.record(fs, edits=[{"frame": k, "stream": "recycle",
+                                      "field": "F_A", "value": 5.0}],
+                          baseline=base["frames"])
+    assert replay["result"]["diverged_at"] == 0
+
+
+def test_a_replay_lists_the_edits_it_could_not_make():
+    fs = loop()
+    base = debug.record(fs)
+    replay = debug.record(fs, edits=[
+        {"frame": 0, "stream": "recycle", "field": "F_A", "value": 1.0},     # solve_start
+        {"frame": 10_000, "stream": "recycle", "field": "F_A", "value": 1.0},
+    ], baseline=base["frames"])
+    assert len(replay["result"]["refused"]) == 2
+    assert replay["result"]["edits"] == []
