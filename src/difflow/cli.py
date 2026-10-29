@@ -11,6 +11,7 @@ now::
     difflow report model.py --format html -o report.html
     difflow plan-export model.py -u reactor.V --format csv -o tables/
     difflow mcp                          # tools for an agent, over stdio
+    difflow debug model.py               # step through a solve
 
 A bare ``difflow`` opens the editor rather than printing usage. It is
 the one subcommand with nothing to say on stdout, the one a new user
@@ -38,6 +39,7 @@ COMMANDS = {
     "report": ("difflow.report.cli", "main"),
     "plan-export": ("difflow.planning.cli", "main"),
     "mcp": ("difflow.mcp.server", "main"),
+    "debug": ("difflow.debug.cli", "main"),
 }
 
 USAGE = """\
@@ -50,6 +52,7 @@ commands:
   report        run a script and write its flowsheet report
   plan-export   linearize a model and write delta vectors for a planner
   mcp           serve the flowsheet tools to an agent over stdio (MCP)
+  debug         solve a flowsheet under the interactive debugger
 
   difflow <command> --help   for that command's own options
 

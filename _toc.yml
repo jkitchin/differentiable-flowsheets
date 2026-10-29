@@ -28,6 +28,7 @@ parts:
       - file: docs/stochastic
       - file: docs/streams-and-flowsheets
       - file: docs/convergence
+      - file: docs/debugger
       - file: docs/dynamic-modeling
       - file: docs/moving-horizon-estimation
       - file: docs/control

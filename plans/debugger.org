@@ -1,0 +1,258 @@
+#+title: An interactive debugger for flowsheet solves
+#+date: 2026-10-29
+
+* Goal
+
+A debugger that lets a person or an agent watch a flowsheet solve happen,
+rather than read its summary afterwards. Pause it on the flowsheet's own
+structure (before a unit, at a tear iteration, when the residual rises, where
+the first NaN appears), look at every stream, unit and residual, and in
+later phases change things and re-run from where it stopped. Three front ends
+over one engine: a terminal REPL, a JSON protocol for agents and scripts, and
+the browser editor.
+
+Not =pdb=. =pdb= stops on lines of Python, and a flowsheet solve is a
+graph of units inside a fixed-point loop; the lines are the wrong unit of
+work.
+
+* What pounce and discopt already do
+
+Both have shipped a "pdb for the solver", and the design here borrows from
+them on purpose.
+
+** pounce (=docs/src/debugger.md=, =crates/pounce-cli/src/debug_repl.rs=)
+
+The reference design, for the interior-point loop.
+
+- *Checkpoints* named after the algorithm's phases (=iter_start=, =after_mu=,
+  =after_search_dir=, =after_step=, =step_rejected=, restoration entry/exit,
+  =terminated=). By default it stops at =iter_start= and =terminated= only;
+  the rest fire every iteration and pass unless asked for (=stop-at kkt=).
+- *Stepping*: =step= (next iteration), =stepi= (next checkpoint of any kind),
+  =continue=, =run N=, =detach=, =quit=.
+- *Breakpoints*: by iteration, one-shot, watchpoints, conditional with
+  compound predicates (=break if inf_du<1e-6=), on solver events
+  (=resto_entered=, =regularized=, =tiny_step=, =nan=), and command lists that
+  run when one fires.
+- *Inspection* in the algorithm's vocabulary: iterate blocks, the last Newton
+  step, KKT inertia, numerical rank, a =diagnose= health report, names from the
+  model (=.col= / =.row=).
+- *Mutation*: =set x[2] 1.5=, =set mu=, staged options (=set opt=) that apply
+  on =resolve=.
+- *Time travel*: per-iteration snapshots, =goto N= / =restart= (a soft rewind:
+  the iterate, not the filter or quasi-Newton memory), =resolve= from the
+  current point with new options.
+- *Artifacts*: =save= / =load= / =viz= (plotly spy plots of the KKT matrix),
+  =sweep= and =multistart= for initialization sensitivity, =ask= (an LLM reads
+  the state and proposes options).
+- *Attach modes*: =--debug=, =--debug-on-error= (post mortem),
+  =--debug-on-interrupt= (Ctrl-C drops in), =--debug-script=.
+- *Two front ends, one engine*: a rustyline REPL and =--debug-json=, a
+  newline-delimited protocol with a self-describing =hello= (checkpoints,
+  events, metrics, commands, a =capabilities= map). The pounce-studio MCP
+  server wraps it as =debug_start= / =debug_command= / =debug_state= /
+  =debug_close=.
+- *The invariant it learned the hard way* (gh #892): attaching the debugger
+  must not change the solve. The conic entry point once built its own
+  iteration under the debugger and answered differently from the plain run;
+  every debug entry point is now the ordinary entry point plus a hook, and a
+  regression test records it.
+
+** discopt (=python/discopt/debug/=)
+
+A Python port of the same design to branch and bound, which is the closer
+match to difflow architecturally.
+
+- =engine.py= / =session.py= / =repl.py= / =jsonproto.py=: the same split,
+  in about 1700 lines. A =Frontend= is anything with
+  =interact(ctx, session) -> Control=.
+- *Thread-local attach*: =with debug.attach(): m.solve()=, or
+  =m.solve(debug=True | "json" | "on-error")=; a solve on another thread never
+  sees this one's debugger.
+- *Outermost solve only*: the solver recurses into =solve_model= for
+  heuristics, and those would otherwise interleave their checkpoints with the
+  user's and let =quit= kill a heuristic.
+- *Zero cost detached*: every fire-site is one =None= check; the context is
+  built only once attached.
+- *Steering is certificate-safe*: discopt's product is a proof, so it refuses
+  arbitrary mutation and offers only a validated =inject= (an incumbent checked
+  against the original problem) and a branching =hint= (reorders, never
+  prunes).
+- *Silence is reported* (#2042): a solve route that fires no checkpoints
+  warns, rather than reading as "nothing happened".
+
+** What carries over, and what does not
+
+Carries over: the engine/front-end split, =hello= with capabilities, the
+pause/result/request-id protocol, step/stepi/continue/run/detach/quit,
+iteration + condition + event breakpoints, watches, scripts, on-error,
+thread-local attach, outermost-solve-only, the "does not change the solve"
+invariant and a test that records it.
+
+Does not: the vocabulary. A sequential-modular solve is not an IPM. Its state
+is streams, its natural steps are *unit calls* and *tear iterations*, and the
+questions people ask are "which unit made this NaN", "which tear field is not
+settling", "why is the residual going up", "did R1's own Newton solve
+converge". The commands answer those.
+
+* What is different about difflow
+
+- *The solve is a graph.* Two granularities matter: the unit (=next=) and the
+  tear iteration (=step=). Unit breakpoints (=break R1=) are the analogue of a
+  line breakpoint.
+- *Several solve routes.* The eager Anderson/Wegstein loops are Python and can
+  stop anywhere. =acceleration="none"= iterates inside =optx.fixed_point=, a
+  =lax.while_loop= with no Python to stop in. =solve_eo=, =DynamicFlowsheet=,
+  planning and stochastic each have their own loops.
+- *JAX tracing.* Under =jax.grad= / =jit= a solve is traced once, not run, and
+  its values are tracers. The debugger must stay out of traced solves
+  entirely, not half-fire.
+- *The tear-guessing pass.* =_propagate_from_feeds= runs every unit once
+  before the iteration starts, catching and estimating around failures. A NaN
+  born there shows up first at the first unit of the first real pass. (Found
+  while building this: =on_error= stopped at the mixer, an innocent unit,
+  until the init pass got checkpoints of its own.)
+
+* Phase 1 (this branch): core, terminal, JSON, a threaded runner
+
+Built and tested; documented in =docs/debugger.md=.
+
+- =src/difflow/debug/=: =checkpoints= (=solve_start=, =before_unit=,
+  =after_unit=, =unit_error=, =iteration=, =after_accel=, =terminated=),
+  =context= (=DebugContext= with =tear_breakdown()= and =to_event()=), =engine=
+  (all commands), =session= (the pause decision, events, =DebugQuit=), =repl=
+  (readline, Tab completion over units and streams, =interact= drops into
+  Python with the pause in scope), =jsonproto= (=difflow-dbg/1=), =runner=
+  (=DebugRunner=: the solve on a worker thread, parked on a queue at each
+  pause), =cli= (=difflow debug=).
+- Fire-sites in =flowsheet.py=: =_run_units= (every unit, with phase and
+  iteration), =_propagate_from_feeds= (phase =init=), the Wegstein and
+  Anderson loops (=iteration=, =after_accel=), and =solve= itself (start and
+  end). =_solve_sequential= now goes through =_run_units=, which it duplicated.
+- Detached, =solve= is frame-for-frame what it was: one thread-local read at
+  the top (a decorator would have added a frame and shifted the =stacklevel=
+  of every warning solve raises), one per =_run_units= call, two per
+  iteration.
+- Events: =nonfinite= (only where a NaN is /born/: finite inlets, non-finite
+  outlet), =inner_unconverged= (a unit's =info["converged"]= is false),
+  =residual_rise=, =unit_error=.
+- Read-only. =capabilities.mutate= is =false=.
+
+* Phase 2: the editor
+
+The editor is the front end this was asked for, and the runner is the seam:
+it already speaks the JSON events, so the browser renders the same objects
+the CLI prints.
+
+** Server (=gui/session.py=, =gui/server.py=)
+
+- =FlowsheetSession.debug_start(options)= builds a =DebugRunner= on a /copy/
+  of the flowsheet (=serialize= round trip, which the session already does for
+  undo), so an edit made while paused cannot race the solve, and the session's
+  =RLock= is never held across a pause.
+- Routes, all POST behind the token like the rest:
+  =/api/debug/start= (-> the first pause), =/api/debug/command= ={cmd}= (-> a
+  result, and the next pause under =next= for a resume), =/api/debug/wait=
+  (a long poll for a =continue= that runs longer than a request should block;
+  the stdlib server has no websockets and does not need them), =/api/debug/stop=.
+- The idle shutdown (=Lifetime=) and =/api/bye= close the runner, so a closed
+  tab never leaves a solve thread parked forever.
+- On =finished=, the session adopts the result exactly as =solve()= does today,
+  so the Results panel fills in the same way.
+
+** Page (a =Debugger.svelte= panel, plus touches on the canvas)
+
+- A toolbar: /Step iteration/, /Next unit/, /Step in/, /Continue/, /Stop/, and
+  /Run to error/ (=on_error=). Keyboard: F10/F11/F5 like every IDE.
+- The canvas follows the pause: the current unit outlined, tear edges marked,
+  edges carrying a non-finite stream drawn red. Clicking a unit's gutter
+  toggles a breakpoint (=break R1= / =break del R1=), shown as a dot, as in a
+  code editor.
+- Stream cards (=StreamCard.svelte=) show values /at the pause/, with the
+  change since the previous iteration, so "what moved" is visible without a
+  command.
+- A residual sparkline on a log axis, live from =p history=, with any
+  =break if residual<...= drawn as a line; the regime from =classify_history=
+  as a caption.
+- The tear table (=p tear=), sorted by =|g - x|=, the dominant field
+  highlighted.
+- Event toggles (=nonfinite=, =residual_rise=, =inner_unconverged=) as
+  checkboxes.
+- A command line under it all (the =Console.svelte= styling) for anything the
+  buttons do not cover; the REPL's vocabulary works there unchanged.
+- /Ask about this pause/: the pause event, =diagnose= and the tear table go to
+  the assistant as context (=gui/context.py= already builds briefs). This is
+  pounce's =ask=, with a flowsheet-shaped brief.
+
+** Record and scrub, as the cheap first version
+
+A live, blocking debugger in a browser has moving parts (a parked thread, a
+long poll, a tab that closes). A /recorded/ run has none: solve once with a
+front end that steps through everything and keeps every event plus the stream
+snapshots, send the trace to the page, and let the user scrub it with a
+slider, set "breakpoints" as filters, and replay the canvas. For flowsheets of
+the size people draw in the editor the trace is small (streams x units x
+iterations of a few floats). It covers most of "why did this not converge"
+without any server state, and the live debugger then adds only what needs a
+live solve: changing things.
+
+* Phase 2b: agents
+
+=Workbench= tools mirroring pounce-studio: =debug_start=, =debug_command=,
+=debug_state=, =debug_close=, backed by =DebugRunner= (one per session id).
+The =fix_convergence= MCP prompt learns to use them: break on =nonfinite=,
+read =p tear=, read =diagnose=. The =hello= is the whole contract, as in
+pounce.
+
+* Phase 3: write, and time travel
+
+What pounce has and difflow does not yet, in the order worth building.
+
+- *What-if on the tear.* =set tear recycle.F_A 0.5= at an =iteration= pause;
+  the loops read =x= back from the context. Restarts Anderson's history (it is
+  a statement about old iterates) and says so.
+- *Rewind.* Tear iterates are small; snapshot one per iteration and =goto N=
+  restarts the iteration there. Soft, as pounce's is: the accelerator's
+  history is not restored.
+- *Resolve with other options.* =resolve acceleration=wegstein damping=0.3=
+  re-runs from the current tear: the "what if I had used Wegstein from here"
+  question, answered without editing a script.
+- *Change the problem.* =set param R1.V 2.0= is a different flowsheet, not a
+  different route to the same answer, so it is flagged as such.
+- The rule from both reference designs: every write is explicit and recorded,
+  and =terminated= says "modified by the debugger", so a debugged answer is
+  never mistaken for a plain one.
+- *Initialization sensitivity*: pounce's =sweep= / =multistart=, over tear
+  guesses; reuses =difflow.convergence= cases.
+
+* Phase 4: deeper
+
+- *Step the optimistix path.* An =io_callback= in the fixed-point body can
+  block on the host and fire an =iteration= checkpoint per step, eagerly only.
+- *Inside a unit.* A unit's own Newton solve could fire nested
+  =inner_iteration= checkpoints (=jax.debug.callback=), opt-in per unit.
+- *Other solvers.* =solve_eo= (Newton: residual by equation, Jacobian rank,
+  which is pounce's =print rank= and =diagnose= on a flowsheet), and
+  =DynamicFlowsheet= (break at a time or on an event, inspect the state).
+- *Elsewhere*: an ipywidgets front end on =DebugRunner= for notebooks, and a
+  VS Code Debug Adapter over =difflow-dbg/1=.
+
+* Invariants (keep, and keep tested)
+
+- Detached: no behaviour change, no extra frame in =solve=.
+- Attached: the same answer. =test_attached_solve_gives_the_detached_answer=
+  records it, in the spirit of pounce gh #892.
+- Traced solves never fire. Nested flowsheets never fire into the outer
+  session.
+- =quit= raises; it never returns a partial answer.
+- Every advertised checkpoint has a fire-site; the =hello= never promises a
+  pause that cannot happen.
+
+* Open questions
+
+- Should =Flowsheet.solve= take =debug=True | "json" | "on-error"= as discopt's
+  =Model.solve= does? It is the most discoverable entry point, and it adds a
+  parameter to the busiest signature in the package. Phase 1 uses
+  =debug.attach()= and =difflow debug= instead.
+- Editor: live stepping first, or record-and-scrub first?
+- How far should mutation go: tear values only, or parameters too?

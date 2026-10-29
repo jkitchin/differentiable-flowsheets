@@ -1,5 +1,5 @@
 {
- "n_sections": 1269,
+ "n_sections": 1279,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -648,6 +648,86 @@
    "source": "data-reconciliation.md",
    "targets": [],
    "text": "A filter on parameters assumes the model *form* is right. Under structural mismatch the parameter converges to something that is not the physical quantity and that shifts with operating point, so the twin's **gradients** are wrong even where its values match \u2014 which is fatal, since everything downstream of a differentiable flowsheet is a derivative. The symptom is visible in `run.monitor.statistic`: the gate opens, the parameter moves, and the statistic does not come back down, because no value of the parameter fits. The answer then is `difflow.planning.modifiers.update_modifiers`, which corrects values *and* gradients against the plant, not a faster filter.\n\n`track_parameters` is the offline driver, and it is also a backtest \u2014 run it over a recorded campaign to choose `drift_std` before trusting the loop live. The four steps are public and stateless (`update_gate`, `time_update`, `parameter_measurement`, `measurement_update`), so an online loop is the same four calls with a `TrackerState` carried between them.\n\nSection 7 of [`examples/29_model_updating.ipynb`](../examples/29_model_updating.ipynb) runs the whole loop on the gas network the notebook builds, over both campaigns. The gated loop tracks the fouling pipe to 1.260 against a truth of 1.300 and never moves at all on the biased-meter campaign; wiring the gate open buys 0.03 of that lag back and reports 1.165 \u2014 a confident 16% fouling claim \u2014 on the pipe that is clean."
+  },
+  {
+   "anchor": "the-flowsheet-debugger",
+   "heading": "The Flowsheet Debugger",
+   "path": "The Flowsheet Debugger",
+   "source": "debugger.md",
+   "targets": [],
+   "text": "A recycle that will not close usually fails somewhere specific: one unit\nreturns a NaN on the first pass, a tear field oscillates while the others\nsettle, a reactor's own Newton solve quietly gives up. The solve's summary\n(`last_solve_converged`, the residual history, `difflow.diagnostics`) tells\nyou *that* it failed. The debugger lets you watch it fail: pause the\nsequential-modular solve unit by unit and tear iteration by tear iteration,\nlook at every stream on the way, and stop on the thing you are hunting.\n\nIt is not `pdb`. `pdb` stops on lines of Python; this stops on the\nflowsheet's own structure --- *before unit R1*, *at iteration 12*, *when the\nresidual rises*, *where the first NaN is born* --- and its commands speak\nstreams, units and tears."
+  },
+  {
+   "anchor": "table-of-contents",
+   "heading": "Table of Contents",
+   "path": "The Flowsheet Debugger > Table of Contents",
+   "source": "debugger.md",
+   "targets": [],
+   "text": "- [Quick start](#quick-start)\n- [Where it stops](#where-it-stops)\n- [Commands](#commands)\n- [Breakpoints](#breakpoints)\n- [Post mortem: `on_error`](#post-mortem-on-error)\n- [Driving it from a program](#driving-it-from-a-program)\n- [What it does not change](#what-it-does-not-change)\n- [Limits](#limits)"
+  },
+  {
+   "anchor": "quick-start",
+   "heading": "Quick start",
+   "path": "The Flowsheet Debugger > Quick start",
+   "source": "debugger.md",
+   "targets": [],
+   "text": "From the shell, on a script that builds a flowsheet or on a saved\nflowsheet:\n\n```bash\ndifflow debug plant.py                      # stop before the first pass\ndifflow debug plant.py --on-error           # run; stop only if something fails\ndifflow debug plant.json --acceleration wegstein\ndifflow debug plant.py --script warmup.dbg  # run these commands first\ndifflow debug plant.py --json               # JSON protocol on stdin/stdout\n```\n\nA script runs with the debugger already attached, so the first solve it\nmakes is the one you step through, with its own arguments. From Python or\na notebook:\n\n```python\nfrom difflow import debug\n\nwith debug.attach():                    # a prompt on this terminal\n    fs.solve(acceleration=\"wegstein\")\n\nwith debug.attach(on_error=True):       # stop only post mortem\n    fs.solve()\n```\n\nA short session:\n\n```text\n\u2500\u2500 difflow-dbg \u2500\u2500 @solve_start  phase=start\n   \u21b3 start\ndifflow-dbg> where\n   M1: (feed, recycle*) -> (mixed)\n   R1: (mixed) -> (reacted)\n   S1: (reacted) -> (recycle_out, product)\ndifflow-dbg> break if residual<1e-4\ndifflow-dbg> watch recycle.F_A\ndifflow-dbg> continue\n\u2500\u2500 difflow-dbg \u2500\u2500 @iteration  iter 4  phase=solve  residual=1.110e-16\n   \u21b3 condition: residual<1e-4\n   [recycle.F_A] recycle.F_A = 0.5625\ndifflow-dbg> p tear\nstream        field                  x          g(x)       |g-x|\nrecycle       F_B               0.9375        0.9375 1.11022e-16\n...\ndifflow-dbg> p history\ndifflow-dbg> continue\n```\n\nThe prompt and everything it prints go to stderr, so a script's own output\nis left alone. Tab completes commands, unit names and stream names, and\nhistory is kept in `~/.difflow_dbg_history`."
+  },
+  {
+   "anchor": "where-it-stops",
+   "heading": "Where it stops",
+   "path": "The Flowsheet Debugger > Where it stops",
+   "source": "debugger.md",
+   "targets": [],
+   "text": "| Checkpoint | Fires | What is fresh |\n|---|---|---|\n| `solve_start` | once, before anything runs | the feeds |\n| `before_unit` | before each unit call | the unit's inlets |\n| `after_unit` | after each unit call | its outlets and its `info` dict |\n| `unit_error` | a unit raised (the solve re-raises after) | the inlets that broke it, the exception |\n| `iteration` | the tear map was evaluated | `x`, `g(x)`, the residual, the history |\n| `after_accel` | Wegstein/Anderson computed the next guess | `x_next` (`p next`) |\n| `terminated` | the solve is about to return or raise | the verdict, every stream |\n\nUnit checkpoints carry a **phase**: `init` (the pass from the feeds that\nguesses the tears), `solve` (the tear iteration), `probe` (the\nerror-probe passes after convergence, see\n[convergence](convergence.md)), `final` (the pass from the converged\ntears) and `sequential` (a flowsheet with no recycle).\n\nStepping:\n\n| Command | Runs to |\n|---|---|\n| `step` / `s` | the next `iteration` |\n| `next` / `n` | the next unit (`after_unit`) or `iteration` |\n| `stepi` / `si` | the next checkpoint of any kind |\n| `continue` / `c` | the next breakpoint, a unit error, or the end |\n| `run N` | iteration `N` |\n| `stop-at CHECKPOINT` | (not a step) always stop at that checkpoint |\n| `detach` | the end, without stopping again |\n| `quit` / `q` | nowhere: the solve raises `DebugQuit` |"
+  },
+  {
+   "anchor": "commands",
+   "heading": "Commands",
+   "path": "The Flowsheet Debugger > Commands",
+   "source": "debugger.md",
+   "targets": [],
+   "text": "| Command | Shows |\n|---|---|\n| `info` / `i` | where the solve is: checkpoint, phase, iteration, unit, residual |\n| `where` / `w` | the calculation order, `->` at the current unit, `*` on tears, `[b]` on breakpoints |\n| `p STREAM` | every field of a stream |\n| `p STREAM.FIELD` | one value |\n| `p UNIT` (or `p unit:NAME`) | the unit's ports, parameters and its last `info` |\n| `p tear [all]` | every tear entry with `x`, `g(x)` and `|g - x|`, largest first: *which* field the residual is made of |\n| `p history` | the residual history, and what `classify_history` reads in it |\n| `p next` | the accelerated next guess, at `after_accel` |\n| `p residual`, `p ratio`, ... | a metric |\n| `watch TARGET` | print a target at every stop (`watch del T`, `watch clear`) |\n| `diagnose` | the history's regime, the worst tear entries, non-finite streams; at `terminated` the full `solve_findings` with remedies |\n| `save [PATH]` | the current streams, history and tear table as JSON |\n| `interact` | a Python prompt with `ctx`, `fs`, `streams`, `unit`, `inlets`, `outlets`, `x`, `g` in scope (REPL only) |"
+  },
+  {
+   "anchor": "breakpoints",
+   "heading": "Breakpoints",
+   "path": "The Flowsheet Debugger > Breakpoints",
+   "source": "debugger.md",
+   "targets": [],
+   "text": "```text\nbreak 12                       # at iteration 12   (tbreak 12: once)\nbreak R1                       # before unit R1, every pass (or: break unit R1)\nbreak if residual>1e3 && iter>5\nbreak on residual_rise         # an event\nbreak                          # list them\nbreak del R1                   # delete one; break clear: all\n```\n\nConditions are `metric OP value` joined by `&&`, over `iter`,\n`residual`, `log_residual` and `ratio` (residual over the previous\nresidual: the observed contraction; a ratio near 1 is a loop gain near 1).\n\nEvents:\n\n| Event | When |\n|---|---|\n| `nonfinite` | a unit turned finite inlets into a NaN or inf outlet --- where the NaN is *born*, not every unit it passes through --- or the tear residual is not finite |\n| `inner_unconverged` | a unit's `info` says its own solve did not converge |\n| `residual_rise` | the tear residual went up |\n| `unit_error` | a unit raised |"
+  },
+  {
+   "anchor": "post-mortem-onerror",
+   "heading": "Post mortem: `on_error`",
+   "path": "The Flowsheet Debugger > Post mortem: `on_error`",
+   "source": "debugger.md",
+   "targets": [],
+   "text": "`--on-error` (`debug.attach(on_error=True)`) runs the solve freely and\nstops once, at the first of: a unit that raises, a unit that produces a\nNaN from finite inlets, or a solve that ends unconverged. A clean solve\nnever stops. It is the quickest way to answer \"which unit broke it?\",\nincluding when it broke during the tear-guessing pass before the iteration\nbegan."
+  },
+  {
+   "anchor": "driving-it-from-a-program",
+   "heading": "Driving it from a program",
+   "path": "The Flowsheet Debugger > Driving it from a program",
+   "source": "debugger.md",
+   "targets": [],
+   "text": "`difflow debug --json` speaks `difflow-dbg/1`: newline-delimited JSON,\none object per line. The first line is a `hello` listing every checkpoint,\nevent, metric, command and capability, so a client feature-detects off it\nrather than off a version. Then a `pause` at each stop, and a `result` for\neach command, echoing its `id` as `request_id`. A command is a bare string\n(`\"continue\"`) or an object (`{\"cmd\": \"print\", \"args\": [\"recycle\"], \"id\": 3}`).\n\nInside Python, `difflow.debug.runner.DebugRunner` runs the solve on a\nworker thread and hands back the same events one call at a time --- the\nshape a server, an editor or an agent needs:\n\n```python\nfrom difflow.debug.runner import DebugRunner\n\nrunner = DebugRunner(fs, {\"acceleration\": \"wegstein\"})\nrunner.start()                          # {'event': 'pause', 'checkpoint': 'solve_start', ...}\nrunner.command(\"break on nonfinite\")    # {'event': 'result', 'ok': True, ...}\nrunner.command(\"continue\")[\"next\"]      # the next pause, or {'event': 'finished', ...}\nrunner.close()\n```"
+  },
+  {
+   "anchor": "what-it-does-not-change",
+   "heading": "What it does not change",
+   "path": "The Flowsheet Debugger > What it does not change",
+   "source": "debugger.md",
+   "targets": [],
+   "text": "Detached, a solve is exactly what it was: each checkpoint costs one\nthread-local read. Attached, the debugger only reads: the same units run\nin the same order on the same values, and the answer is the same. `quit`\nraises `DebugQuit` instead of returning a partial answer, because a\nstopped solve has none.\n\nOnly the outermost solve is debugged. A flowsheet solved inside a unit of\nthe one being debugged stays silent, and by default only the first solve\non the thread is debugged, so a script that sweeps does not stop you once\nper point (`--all-solves` changes that)."
+  },
+  {
+   "anchor": "limits",
+   "heading": "Limits",
+   "path": "The Flowsheet Debugger > Limits",
+   "source": "debugger.md",
+   "targets": [],
+   "text": "- **What it can step** is the eager tear iteration: `acceleration=\"anderson\"`\n  (the default) and `\"wegstein\"`. `acceleration=\"none\"` iterates inside\n  optimistix, where there is no Python loop to stop in; the debugger sees\n  that solve's start and end only.\n- **Nothing fires under `jax.grad` or `jit`.** A traced solve is traced\n  once, not run, and a tracer is not a number anyone can inspect.\n- **A unit is one step.** A unit's own inner solve (a CSTR's Newton\n  iteration, a flash's Rachford-Rice) runs inside JAX and is not stepped;\n  what it reports in its `info` dict is shown, and `inner_unconverged`\n  stops on it.\n- **It reads, it does not write.** Changing a tear value or a parameter\n  mid-solve is not supported yet."
   },
   {
    "anchor": "dynamic-modeling",

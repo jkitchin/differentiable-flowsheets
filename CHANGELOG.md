@@ -8,6 +8,19 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **An interactive debugger for flowsheet solves.** New `difflow.debug` (docs/debugger.md) and `difflow debug
+  plant.py|plant.json`. Pauses a sequential-modular solve at `solve_start`, `before_unit`/`after_unit` (each
+  unit call, tagged by phase: `init`, `solve`, `probe`, `final`, `sequential`), `unit_error`, `iteration` (the
+  tear map and its residual), `after_accel` and `terminated`; steps by tear iteration (`step`), by unit
+  (`next`) or by checkpoint (`stepi`). Breakpoints by iteration, before a unit, on a condition
+  (`break if residual>1e3 && iter>5`) or on an event (`nonfinite` where a NaN is born, `inner_unconverged`,
+  `residual_rise`, `unit_error`); `print` streams, units, the tear table (`x`, `g(x)`, `|g - x|` per field)
+  and the history; `watch`, `diagnose`, `save`, and `interact` (Python with the pause in scope).
+  `on_error=True` stops only post mortem. One engine, three front ends: a readline REPL, the `difflow-dbg/1`
+  JSON protocol (a self-describing `hello`, pause/result events with request ids) and `DebugRunner`, which
+  runs the solve on a worker thread for a server or an agent. Detached it costs one thread-local read per
+  checkpoint; attached it only reads, and `quit` raises `DebugQuit`. Design and the editor/agent phases in
+  plans/debugger.org, after pounce's and discopt's debuggers.
 - **Model-discrimination and c-optimal experiment design (issue 520).**
   `difflow.estimation.design_discrimination(models, thetas, candidates, n, criterion='HR')` chooses the
   candidate runs that best tell rival models apart, each model at its own fitted parameters: `'HR'`

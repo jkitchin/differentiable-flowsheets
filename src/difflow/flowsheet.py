@@ -36,6 +36,11 @@ from difflow.initialization import (
 )
 import optimistix as optx
 
+from difflow import debug as _debug
+from difflow.debug import Checkpoint as _Checkpoint
+from difflow.debug import DebugContext as _DebugContext
+from difflow.debug import hook as _debug_hook
+
 
 FEED_PREFIX = "feed:"
 
@@ -945,6 +950,19 @@ class Flowsheet:
                 "them there is nothing to test against."
             )
 
+        if _debug.starts_debugged_solve(self):
+            # Attached debugger: run this same solve again, between its
+            # solve_start and terminated checkpoints. Arguments are already
+            # validated, so a bad one fails before the debugger shows up.
+            return _debug.debugged_solve(self, dict(
+                tear_initial=tear_initial, tol=tol, max_iter=max_iter,
+                damping=damping, acceleration=acceleration,
+                anderson_depth=anderson_depth,
+                use_initialization=use_initialization,
+                clip_negative_flows=clip_negative_flows,
+                on_nonconvergence=on_nonconvergence, tears=tears,
+                error_probe=error_probe, tol_basis=tol_basis))
+
         self.last_solve_history = []
         self.last_solve_unit_info = {}
 
@@ -1454,7 +1472,7 @@ class Flowsheet:
         """
         streams = dict(self.feeds)
         streams.update(self._array_to_streams(x, tear_names))
-        streams = self._run_units(streams)
+        streams = self._run_units(streams, phase="probe")
         return self._streams_to_array(
             {dest: streams[source] for source, dest in self.recycles.items()}
         )
@@ -1796,6 +1814,7 @@ class Flowsheet:
         streams: dict[str, Stream] = dict(self.feeds)
         default = self._make_zero_stream()
         tears = set(self.recycles.values())
+        session = _debug_hook(self)
 
         for unit in self.units:
             inlets = [
@@ -1804,6 +1823,11 @@ class Flowsheet:
                 else default
                 for name in unit.inlet_names
             ]
+            if session is not None:
+                context = dict(flowsheet=self, phase="init", unit=unit,
+                               streams=streams,
+                               inlets=dict(zip(unit.inlet_names, inlets)))
+                session.fire(_DebugContext(_Checkpoint.BEFORE_UNIT, **context))
             try:
                 result = unit.operation(*inlets, **unit.params)
             except Exception as failure:
@@ -1815,7 +1839,12 @@ class Flowsheet:
                 for name in unit.outlet_names:
                     streams[name] = guessed.get(name, default)
             else:
-                streams.update(_parse_outlets(result, unit))
+                outlets = _parse_outlets(result, unit)
+                streams.update(outlets)
+                if session is not None:
+                    session.fire(_DebugContext(
+                        _Checkpoint.AFTER_UNIT, outlets=outlets,
+                        info=_unit_info(result, unit), **context))
 
         return streams
 
@@ -1864,15 +1893,7 @@ class Flowsheet:
 
     def _solve_sequential(self) -> dict[str, Stream]:
         """Solve flowsheet without recycles."""
-        streams = dict(self.feeds)
-
-        for unit in self.units:
-            inlets = [streams[name] for name in unit.inlet_names]
-            result = unit.operation(*inlets, **unit.params)
-            streams.update(_parse_outlets(result, unit))
-            self._record_unit_info(result, unit)
-
-        return streams
+        return self._run_units(dict(self.feeds), phase="sequential")
 
     def _solve_with_recycle_damped(
         self,
@@ -2111,7 +2132,7 @@ class Flowsheet:
         # First iteration
         streams = dict(self.feeds)
         streams.update(tear_initial)
-        streams = self._run_units(streams)
+        streams = self._run_units(streams, iteration=0)
 
         new_tear = {dest: streams[source] for source, dest in self.recycles.items()}
         g_curr = self._streams_to_array(new_tear)
@@ -2130,7 +2151,9 @@ class Flowsheet:
                 # step is 0/0 once the iterates agree: a silent NaN.
                 # solve() catches this and reruns on the fixed-point path.
                 raise _UndetectedTracer
-            elif res < tol:
+            self._debug_iteration(iteration, x_prev, g_curr, res, tear_names,
+                                  "wegstein")
+            if res < tol:
                 self.last_solve_iterations = iteration
                 self.last_solve_converged = True
                 break
@@ -2147,6 +2170,8 @@ class Flowsheet:
                     x_curr, clip_hits = self._clip_and_count(
                         x_curr, flow_mask, clip_hits
                     )
+                self._debug_accel(iteration, x_prev, g_curr, x_curr,
+                                  tear_names, "wegstein")
 
             # Update history
             g_prev = g_curr
@@ -2157,7 +2182,7 @@ class Flowsheet:
             tear_streams = self._array_to_streams(x_curr, tear_names)
             streams = dict(self.feeds)
             streams.update(tear_streams)
-            streams = self._run_units(streams)
+            streams = self._run_units(streams, iteration=iteration + 1)
 
             new_tear = {dest: streams[source] for source, dest in self.recycles.items()}
             g_curr = self._streams_to_array(new_tear)
@@ -2168,7 +2193,7 @@ class Flowsheet:
         final_tear = self._array_to_streams(g_curr, tear_names)
         streams = dict(self.feeds)
         streams.update(final_tear)
-        return self._run_units(streams)
+        return self._run_units(streams, phase="final")
 
     def _solve_with_anderson(
         self,
@@ -2211,7 +2236,7 @@ class Flowsheet:
             tear_streams = self._array_to_streams(x_curr, tear_names)
             streams = dict(self.feeds)
             streams.update(tear_streams)
-            streams = self._run_units(streams)
+            streams = self._run_units(streams, iteration=iteration)
 
             new_tear = {dest: streams[source] for source, dest in self.recycles.items()}
             g_curr = self._streams_to_array(new_tear)
@@ -2224,7 +2249,9 @@ class Flowsheet:
                 self.last_solve_history.append(res)
             if res is None:
                 raise _UndetectedTracer       # see _solve_with_wegstein
-            elif res < tol:
+            self._debug_iteration(iteration, x_curr, g_curr, res, tear_names,
+                                  "anderson")
+            if res < tol:
                 self.last_solve_iterations = iteration
                 self.last_solve_converged = True
                 break
@@ -2237,6 +2264,8 @@ class Flowsheet:
                 x_next, clip_hits = self._clip_and_count(
                     x_next, flow_mask, clip_hits
                 )
+            self._debug_accel(iteration, x_curr, g_curr, x_next, tear_names,
+                              "anderson")
             x_curr = x_next
 
         self._record_clip_activity(clip_hits)
@@ -2245,7 +2274,7 @@ class Flowsheet:
         final_tear = self._array_to_streams(x_curr, tear_names)
         streams = dict(self.feeds)
         streams.update(final_tear)
-        return self._run_units(streams)
+        return self._run_units(streams, phase="final")
 
     def _apply_params(self, params: dict) -> "Flowsheet":
         """Return a copy of this flowsheet with unit params updated from a dict.
@@ -2530,15 +2559,27 @@ class Flowsheet:
             max_steps=max_steps,
         )
 
-    def _run_units(self, streams: dict[str, Stream]) -> dict[str, Stream]:
+    def _run_units(
+        self,
+        streams: dict[str, Stream],
+        *,
+        phase: str = "solve",
+        iteration: int | None = None,
+    ) -> dict[str, Stream]:
         """Run all units in sequence.
 
         Args:
             streams: Current stream values (feeds + tear streams)
+            phase: What this pass is for, as the debugger reports it
+                (``"solve"``, ``"sequential"``, ``"probe"``, ``"final"``).
+            iteration: The tear iteration this pass belongs to, if any.
 
         Returns:
             Updated streams after running all units
         """
+        session = _debug_hook(self)
+        if session is not None:
+            return self._run_units_debugged(streams, session, phase, iteration)
         for unit in self.units:
             inlets = [streams[name] for name in unit.inlet_names]
             result = unit.operation(*inlets, **unit.params)
@@ -2546,6 +2587,49 @@ class Flowsheet:
             self._record_unit_info(result, unit)
 
         return streams
+
+    def _run_units_debugged(self, streams, session, phase, iteration):
+        """:meth:`_run_units` with a checkpoint before and after each unit.
+
+        The same calls in the same order; the checkpoints only read.
+        """
+        for unit in self.units:
+            args = [streams[name] for name in unit.inlet_names]
+            inlets = dict(zip(unit.inlet_names, args))
+            context = dict(flowsheet=self, phase=phase, iteration=iteration,
+                           unit=unit, streams=streams, inlets=inlets)
+            session.fire(_DebugContext(_Checkpoint.BEFORE_UNIT, **context))
+            try:
+                result = unit.operation(*args, **unit.params)
+            except Exception as exc:
+                session.fire(_DebugContext(_Checkpoint.UNIT_ERROR, error=exc,
+                                           **context))
+                raise
+            outlets = _parse_outlets(result, unit)
+            streams.update(outlets)
+            self._record_unit_info(result, unit)
+            session.fire(_DebugContext(
+                _Checkpoint.AFTER_UNIT, outlets=outlets,
+                info=_unit_info(result, unit), **context))
+        return streams
+
+    def _debug_iteration(self, iteration, x, g, residual, tear_names, method):
+        """Fire the ``iteration`` checkpoint: the tear map and its residual."""
+        session = _debug_hook(self)
+        if session is not None:
+            session.fire(_DebugContext(
+                _Checkpoint.ITERATION, self, iteration=iteration, x=x, g=g,
+                residual=residual, history=list(self.last_solve_history or []),
+                tear_names=sorted(tear_names), method=method))
+
+    def _debug_accel(self, iteration, x, g, x_next, tear_names, method):
+        """Fire ``after_accel``: the accelerated guess the next pass runs on."""
+        session = _debug_hook(self)
+        if session is not None:
+            session.fire(_DebugContext(
+                _Checkpoint.AFTER_ACCEL, self, iteration=iteration, x=x, g=g,
+                x_next=x_next, history=list(self.last_solve_history or []),
+                tear_names=sorted(tear_names), method=method))
 
     def _record_unit_info(self, result: Any, unit: "Unit") -> None:
         """Keep the info dict a unit returned, when it holds numbers.
