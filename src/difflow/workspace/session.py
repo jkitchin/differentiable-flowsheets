@@ -1,0 +1,2548 @@
+"""The flowsheet the editor is working on, and what it can do to it.
+
+Kept apart from the HTTP layer so the interesting half --- load, edit,
+solve, emit code --- is reachable and testable without a socket::
+
+    from difflow.workspace import FlowsheetSession
+    session = FlowsheetSession(path="plant.json")
+    session.solve()
+
+Every method returns a plain dict, and a failure is a value in it
+(``{"ok": False, "error": ...}``) rather than an exception: a bad edit
+from the browser must not take the server down.
+
+The code context
+----------------
+
+Half the catalog needs a constructor object --- a ``thermo``, an
+``eos`` --- and a reactor needs a rate law. Those are objects, not data,
+and a palette cannot invent them. So the flowsheet carries a snippet of
+Python in ``view["code_context"]``; the session evaluates it and keeps
+the bindings, and anything in the flowsheet may refer to them by name
+through :func:`difflow.serialize.ref_namespace`. The same snippet is
+emitted as the preamble of :func:`difflow.codegen.to_python`, so the
+exported script is what actually ran here.
+
+So a flowsheet can carry code: its code context, a ``.py`` script that
+builds it, and functions and classes of yours that it names by import
+path (:mod:`difflow.serialize`). Running any of that is the same trust
+as running the exported script, and **a file is only allowed to after
+you say so**. Opening one that would run code opens nothing and reports
+what it would run (``needs_trust``); the editor shows it and asks.
+``open_file(path, trust=True)`` --- the editor's *Trust and open* --- or
+starting with ``difflow gui --trust`` answers yes. A file you saved in
+this session, a bundled example, and code you type into the editor
+yourself need no asking. The server also refuses requests that do not
+come from the page it served (the app's server, in the difflow book), because an
+``exec`` reachable from any web page would be something else entirely.
+"""
+
+from __future__ import annotations
+
+import functools
+import math
+import re
+import threading
+import types
+import warnings
+from pathlib import Path
+
+from difflow import scripts
+
+
+#: how many edits Undo reaches back through
+UNDO_DEPTH = 100
+
+#: Node-id prefixes the canvas uses for feeds and products.
+RESERVED_PREFIXES = ("feed:", "product:")
+
+#: The recycle solver's options a session can set, with the defaults of
+#: :meth:`Flowsheet.solve`. Kept on ``view["solver"]``, so they are saved
+#: with the file and undone like any other edit; a key that is absent
+#: means the default. Every keyword of ``solve`` is here except
+#: ``tear_initial`` (streams, not a setting) and ``on_nonconvergence``
+#: (the session reports the verdict itself).
+SOLVER_DEFAULTS = {
+    "tol": 1e-8,
+    "max_iter": 100,
+    "acceleration": "anderson",
+    "clip_negative_flows": True,
+    "damping": 1.0,
+    "anderson_depth": 5,
+    "use_initialization": True,
+    "tears": "declared",
+    "error_probe": 2,
+    "tol_basis": "step",
+}
+ACCELERATIONS = ("anderson", "wegstein", "none")
+TEAR_CHOICES = ("declared", "auto", "heuristic", "minimum")
+TOL_BASES = ("step", "error")
+
+
+def _whole(key: str, value, least: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) \
+            or not math.isfinite(value) or value != int(value) or value < least:
+        raise ValueError(f"{key} must be a whole number of at least {least}")
+    return int(value)
+
+
+def _positive(key: str, value) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) \
+            or not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{key} must be a positive number")
+    return float(value)
+
+
+def _choice(key: str, value, choices) -> str:
+    if value not in choices:
+        raise ValueError(f"{key} must be one of {', '.join(choices)}")
+    return value
+
+
+def _flag(key: str, value) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} must be true or false")
+    return value
+
+
+def _solver_option(key: str, value):
+    """`value` checked for solver option `key`, or a ``ValueError``."""
+    if key in ("tol", "damping"):
+        return _positive(key, value)
+    if key in ("max_iter", "anderson_depth"):
+        return _whole(key, value, 1)
+    if key == "error_probe":
+        return _whole(key, value, 0)
+    if key == "acceleration":
+        return _choice(key, value, ACCELERATIONS)
+    if key == "tears":
+        return _choice(key, value, TEAR_CHOICES)
+    if key == "tol_basis":
+        return _choice(key, value, TOL_BASES)
+    if key in ("clip_negative_flows", "use_initialization"):
+        return _flag(key, value)
+    raise ValueError(f"{key!r} is not a solver option "
+                     f"(the options are {', '.join(SOLVER_DEFAULTS)})")
+
+
+#: How long a live-debugger request waits for the solve to pause before
+#: answering "still running" (the page then asks again). Under the
+#: half-minute after which a browser or proxy may give up on a request.
+LIVE_WAIT = 20.0
+
+
+def _wait(seconds) -> float:
+    """A caller's wait in seconds, or :data:`LIVE_WAIT`; never negative."""
+    return LIVE_WAIT if seconds is None else max(float(seconds), 0.0)
+
+#: What `set_species` accepts as a species name.
+_SPECIES_NAME = re.compile(r"[A-Za-z0-9_]+")
+
+
+def _undoable(method):
+    """Record the model before `method`, for Undo, if `method` changed it.
+
+    By comparing the whole model before and after rather than by trusting
+    each route to say: a refused edit records nothing, and an edit that
+    lands back where it started is not a step anyone would want to undo.
+    Nested calls (an `add_unit` that runs through `_edit`) record once.
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        if self._recording:
+            return method(self, *args, **kwargs)
+        with self._lock:
+            self._recording = True
+            try:
+                before = self._state()
+                answer = method(self, *args, **kwargs)
+            finally:
+                self._recording = False
+            if before is not None and self._state() != before:
+                self._undo.append(before)
+                del self._undo[:-UNDO_DEPTH]
+                self._redo.clear()
+            return answer
+    return wrapper
+
+
+def _number(value) -> float | None:
+    """A float for the wire, or ``None`` --- including for a JAX scalar."""
+    return None if value is None else float(value)
+
+
+def _recorded(caught) -> list[dict]:
+    """Warnings recorded during a solve, once each, as ``{category, message}``."""
+    seen, out = set(), []
+    for w in caught or ():
+        item = (w.category.__name__, str(w.message))
+        if item not in seen:
+            seen.add(item)
+            out.append({"category": item[0], "message": item[1]})
+    return out
+
+
+class _BadFeed(ValueError):
+    """A feed field the browser sent that cannot be a number."""
+
+
+def _as_number(value, fallback, field: str) -> float:
+    """``value`` as a float, ``fallback`` if it was not sent at all.
+
+    A missing field means "leave this alone"; a field sent as something
+    that is not a number is a mistake worth naming, because silently
+    falling back would show the old value back in the box as though the
+    edit had been accepted.
+    """
+    if value is None or value == "":
+        return float(fallback)
+    # `float(True)` is 1.0 and `float("nan")` is a float: both used to be
+    # accepted, and a NaN feed solved "successfully" to NaN everywhere.
+    if isinstance(value, bool):
+        raise _BadFeed(f"{field} must be a number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise _BadFeed(f"{field} must be a number") from None
+    if not math.isfinite(number):
+        raise _BadFeed(f"{field} must be a finite number")
+    return number
+
+
+#: Names the code context may use for the species list, in the order the
+#: session looks for them. ``species_order`` is what the flowsheet and
+#: every ``Params`` class call it; ``SPECIES`` is what a difflow script
+#: actually opens with, and what the editor's own starter snippet writes.
+#: Accepting only the first made the starter snippet fail to unblock the
+#: palette it was there to unblock.
+SPECIES_NAMES = ("species_order", "SPECIES")
+
+
+def species_from(bindings: dict) -> list[str] | None:
+    """The species list a code context declares, or ``None``.
+
+    Only a sequence of strings counts. A binding of the right name that
+    is something else is somebody's variable, not a species list, and
+    quietly using it would produce a flowsheet whose streams are indexed
+    by nonsense.
+    """
+    for name in SPECIES_NAMES:
+        value = (bindings or {}).get(name)
+        if isinstance(value, (list, tuple)) and value and all(
+            isinstance(s, str) for s in value
+        ):
+            return list(value)
+    return None
+
+
+def _check_reserved_names(flowsheet) -> None:
+    """Refuse a unit the canvas would take for a feed or a product.
+
+    The canvas keys a feed ``feed:<stream>`` and a product
+    ``product:<stream>``, beside units under their bare names. Renaming
+    refuses such a name; a file or a script could still bring one in, and
+    then deleting the unit would delete a feed.
+    """
+    for u in flowsheet.units:
+        if str(u.name).startswith(RESERVED_PREFIXES):
+            raise ValueError(
+                f"unit {u.name!r}: a unit name cannot begin with "
+                f"{u.name.split(':')[0] + ':'!r}; the canvas uses that for "
+                "feeds and products. Rename it in the file.")
+
+
+def _empty_flowsheet(species: list[str] | None = None):
+    """A flowsheet with nothing in it, for an editor opened with no file."""
+    from difflow import Flowsheet
+
+    return Flowsheet(species_order=list(species or []))
+
+
+def evaluate_context(source: str) -> tuple[dict, str | None]:
+    """Run a code-context snippet and return ``(bindings, error)``.
+
+    Never raises: a snippet that does not compile or does not run is a
+    thing the user is in the middle of typing, and the message --- with
+    the line number, which is the only part that helps --- is the
+    answer. Modules and underscore names are dropped, so what comes back
+    is the objects the flowsheet can refer to and nothing else.
+    """
+    namespace: dict = {"__name__": "difflow_code_context"}
+    try:
+        exec(compile(source, "<code context>", "exec"), namespace)
+    except SyntaxError as exc:
+        return {}, f"line {exc.lineno}: {type(exc).__name__}: {exc.msg}"
+    except BaseException as exc:                 # user code: catch it all
+        import traceback
+
+        line = None
+        for frame in traceback.extract_tb(exc.__traceback__):
+            if frame.filename == "<code context>":
+                line = frame.lineno
+        where = f"line {line}: " if line else ""
+        return {}, f"{where}{type(exc).__name__}: {exc}"
+    return {
+        name: value for name, value in namespace.items()
+        if not name.startswith("_") and not isinstance(value, types.ModuleType)
+    }, None
+
+
+class FlowsheetSession:
+    """The flowsheet the editor is working on, plus what it can do to it.
+
+    Holds the mutable state so the request handler stays a thin shell
+    over :mod:`difflow.serialize`, :mod:`difflow.codegen` and
+    :mod:`difflow.catalog`.
+    """
+
+    def __init__(self, flowsheet=None, path: str | Path | None = None,
+                 trust: bool = False):
+        path = Path(path) if path else None
+        #: run the code of any file without asking (``difflow gui --trust``)
+        self.trust = bool(trust)
+        #: files trusted in this session: answered yes to, or saved here
+        self._trusted: set[Path] = set()
+        #: the file asked about at startup, waiting for a yes: what
+        #: :meth:`_trust_needed` reported. Nothing of it is loaded, and
+        #: `path` stays empty, so Save cannot write an empty canvas over it.
+        self.blocked: dict | None = None
+        blocked = (self._trust_needed(path) if flowsheet is None and path
+                   and path.exists() else None)
+        if blocked:
+            self.blocked, path = blocked, None
+        #: the script this was opened from, if it was opened from one.
+        #: A script is a way in and not a way back out (see
+        #: :mod:`difflow.scripts`), so it is kept apart from `path`,
+        #: which is always the file `save` writes.
+        self.source = path if scripts.is_script(path) else None
+        self.path = scripts.save_target(path) if self.source else path
+        self.flowsheet = flowsheet
+        #: names the flowsheet may refer to, from its code context
+        self.bindings: dict = {}
+        #: why the code context did not run, if it did not
+        self.context_error: str | None = None
+        #: the last solve's streams, or None if it has not been solved
+        #: here. Kept so the sensitivity picker can name real outputs.
+        self.streams: dict | None = None
+        #: why the last solve raised, if it did. The assistant's brief
+        #: about a failed solve is mostly this string plus the
+        #: diagnostics the flowsheet keeps.
+        self.solve_error: str | None = None
+        #: the last linearization, or None. Set by :meth:`linearize`.
+        self.delta_vectors = None
+        #: the console's namespace, made on first use. A session that
+        #: never opens the panel pays nothing for it.
+        self._console = None
+        #: units dropped on the canvas that cannot be built yet, by name.
+        #: Each is ``{operation, needs, hint, position}``. They are the
+        #: session's and not the flowsheet's: a `Flowsheet` holds units
+        #: that exist, and half a unit is not one --- it cannot be
+        #: solved, serialized, or drawn into a diagram. Keeping them here
+        #: means a drop that is waiting on a `thermo` stays on the canvas
+        #: in red, where it can be seen and answered, instead of being
+        #: refused into a toast that scrolls away.
+        self.pending: dict[str, dict] = {}
+        if flowsheet is None and self.source:
+            self.flowsheet = scripts.load_flowsheet(self.source)
+            self._evaluate(self._source())
+        elif flowsheet is None and self.path and self.path.exists():
+            self._load(self.path)
+        elif flowsheet is not None:
+            self._evaluate(self._source())
+        else:
+            # Nothing to open: start an empty flowsheet rather than no
+            # flowsheet. `None` used to mean "the editor is inert" --- the
+            # canvas was replaced by a line of text and every edit was
+            # refused --- which made building a flowsheet from scratch, the
+            # thing you open an editor to do, the one thing it could not
+            # do. An empty flowsheet is a flowsheet: it draws, it accepts a
+            # unit, and it serializes.
+            #
+            # With no species, though, most of the catalog is still
+            # unbuildable, and it says so on the palette row. `set_species`
+            # is how that gets answered.
+            self.flowsheet = _empty_flowsheet()
+        _check_reserved_names(self.flowsheet)
+        # A file saved with an unfinished unit in it opens with its red
+        # node, rather than with a unit that silently cannot run.
+        self._adopt(self.flowsheet, self.bindings, self.context_error)
+        # Re-entrant: a console cell runs on the request thread while
+        # `console_run` holds this lock, and `session.solve()` -- which the
+        # console advertises -- takes it again. A plain Lock deadlocked
+        # there, and every edit route after it hung until a restart.
+        self._lock = threading.RLock()
+        #: the model before each edit, newest last, and the ones undone
+        self._undo: list[str] = []
+        self._redo: list[str] = []
+        self._recording = False
+        #: the last solve recorded for the trace panel, which a what-if
+        #: replays: its frames, the solve options and the model it was of
+        self._recorded_trace: dict | None = None
+        #: the last what-if replay of it
+        self._whatif_trace: dict | None = None
+        #: the live debugger, if one is running (difflow.debug.runner)
+        self._debugger = None
+        #: the document as it was last read or written, to say whether
+        #: closing the editor now would lose anything. Compared rather
+        #: than flagged by each edit: an edit made from the console goes
+        #: around every route, and a flag set per route would miss it.
+        self._saved = self._state()
+
+    # -- the code context ---------------------------------------------
+
+    def _load(self, path: Path) -> None:
+        """Read a file, running its code context first.
+
+        Not :func:`difflow.serialize.load`: a ``$ref`` in the file needs
+        the namespace to exist *while* the flowsheet is rebuilt, and the
+        namespace comes from the file itself.
+        """
+        import json
+
+        from difflow import serialize
+
+        data = json.loads(path.read_text())
+        self._evaluate((data.get("view") or {}).get("code_context") or "")
+        # trusted: _trust_needed has already said this file may run code
+        self.flowsheet = serialize.from_dict(data, refs=self.bindings, trust=True)
+
+    def _trust_needed(self, target: Path | None, document: dict | None = None
+                      ) -> dict | None:
+        """What a file or document would run, if it is not yet trusted.
+
+        ``None`` when it runs nothing, or is trusted already: the whole
+        session was (``trust=True``), or this very file was answered yes
+        to or saved here. Otherwise ``{"path", "kind", "code", "modules"}``
+        --- the script or code context it would run, and the modules
+        outside difflow it would import --- which is what the editor shows
+        before asking.
+        """
+        import json
+
+        from difflow import serialize
+
+        if self.trust:
+            return None
+        resolved = Path(target).expanduser().resolve() if target else None
+        if resolved is not None and resolved in self._trusted:
+            return None
+        if resolved is not None and scripts.is_script(resolved):
+            return {"path": str(resolved), "kind": "script",
+                    "code": resolved.read_text(), "modules": []}
+        if document is None:
+            try:
+                document = json.loads(resolved.read_text())
+            except (OSError, ValueError, AttributeError):
+                return None          # the loader reports what is wrong
+        if not isinstance(document, dict):
+            return None
+        code = (document.get("view") or {}).get("code_context") or ""
+        modules = serialize.untrusted_modules(document)
+        if not code.strip() and not modules:
+            return None
+        return {"path": str(resolved or ""), "kind": "json",
+                "code": code, "modules": modules}
+
+    @staticmethod
+    def _trust_refusal(info: dict) -> dict:
+        """The answer for a file that would run code and is not trusted."""
+        what = ("is a script, and opening it runs it"
+                if info["kind"] == "script" else "carries code that runs on opening")
+        name = Path(info["path"]).name if info["path"] else "this flowsheet"
+        return {"ok": False, "needs_trust": info,
+                "error": f"{name} {what}. Open it only if you trust it: "
+                         "Trust and open, or open_file(path, trust=True)."}
+
+    def _source(self) -> str:
+        """The code context the flowsheet carries."""
+        view = getattr(self.flowsheet, "view", None) or {}
+        return view.get("code_context") or ""
+
+    def _evaluate(self, source: str) -> None:
+        self.bindings, self.context_error = (
+            evaluate_context(source) if source.strip() else ({}, None)
+        )
+
+    def code_context(self) -> dict:
+        """The snippet, what it defines, and why it did not run."""
+        return {
+            "source": self._source(),
+            "names": sorted(self.bindings),
+            "error": self.context_error,
+        }
+
+    @_undoable
+    def set_code_context(self, source: str) -> dict:
+        """Adopt a snippet from the browser, or say why it will not run.
+
+        A snippet that fails is not stored: the flowsheet keeps the last
+        one that worked, so a half-typed line cannot cost the bindings
+        the units already depend on.
+        """
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        if not isinstance(source, str):
+            return {"ok": False, "error": "the code context must be a string"}
+        bindings, error = evaluate_context(source) if source.strip() else ({}, None)
+        if error is not None:
+            return {"ok": False, "error": error}
+        adopted = None
+        with self._lock:
+            self.bindings, self.context_error = bindings, None
+            self.streams = self.solve_error = None      # the snippet is part of the model
+            if source.strip():
+                self.flowsheet.view["code_context"] = source
+            else:
+                self.flowsheet.view.pop("code_context", None)
+            # A flowsheet with no species blocks most of the palette, and
+            # the snippet that was just applied very likely names them --
+            # `SPECIES = [...]` is the first line of a difflow script. Take
+            # them, but only when the flowsheet has none: once it has an
+            # order, the streams are indexed by it and rewriting it under
+            # the existing units would reinterpret their arrays.
+            if not list(getattr(self.flowsheet, "species_order", None) or []):
+                found = species_from(bindings)
+                if found:
+                    self.flowsheet.species_order = found
+                    adopted = found
+        answer = {"ok": True, "names": sorted(bindings)}
+        if adopted:
+            answer["species"] = adopted
+        # Outside the lock, because this rebuilds units and `add_unit`
+        # takes it. A `thermo` defined here is exactly what the red nodes
+        # on the canvas were waiting for, and making the user drop them
+        # again would be asking twice for one answer.
+        answer.update(self._retry_pending())
+        return answer
+
+    # -- the species order --------------------------------------------
+
+    def species(self) -> dict:
+        """The species the flowsheet indexes its streams by."""
+        return {
+            "species": list(getattr(self.flowsheet, "species_order", None) or []),
+            # Renaming the order under existing units would reinterpret
+            # the arrays they hold, so the editor only offers it while
+            # nothing holds any. An unfinished unit does not: it is a
+            # stand-in with empty params, and naming the species is
+            # usually the very edit it is waiting for.
+            "editable": not (self.flowsheet is None or self._built()),
+        }
+
+    @_undoable
+    def set_species(self, names) -> dict:
+        """Name the species of a flowsheet that has no units yet.
+
+        This is what makes a new flowsheet usable. ``species_order`` is
+        the one constructor argument almost every operation needs and the
+        only one that is data rather than code, so until it is answered
+        the palette can place hardly anything -- and it cannot be guessed,
+        because it *is* the model's choice of what the streams carry.
+
+        Refused once units exist. Every stream array is indexed by this
+        order; reordering or renaming it afterwards would silently turn a
+        flow of water into a flow of ethanol.
+        """
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        if isinstance(names, str) or not isinstance(names, (list, tuple)):
+            return {"ok": False, "error": "species must be a list of names"}
+        cleaned, seen = [], set()
+        # A name the flowsheet already has is let through: one loaded from
+        # a file or built in a script may predate the rule, and refusing
+        # it would lock every later species edit on that flowsheet.
+        existing = set(getattr(self.flowsheet, "species_order", None) or [])
+        for name in names:
+            if not isinstance(name, str) or not name.strip():
+                return {"ok": False, "error": "every species needs a name"}
+            text = name.strip()
+            # Letters, digits and underscores, as the database's own names
+            # are (`1_butanol`). A species name is half of every key built
+            # on it -- `F_<species>`, `x_<species>`, `<stream>.F_<species>`
+            # -- and a dot, a space or a dash in it splits those keys in
+            # the wrong place or makes a codegen line that does not parse.
+            if text not in existing and not _SPECIES_NAME.fullmatch(text):
+                return {"ok": False,
+                        "error": f"{text!r} is not a species name: use letters, "
+                                 f"digits and underscores only"}
+            if text in seen:
+                return {"ok": False, "error": f"{text} is named twice"}
+            seen.add(text)
+            cleaned.append(text)
+        with self._lock:
+            # Unfinished units do not count. Dropping a Mixer on an empty
+            # canvas leaves one waiting on `species_order`, and refusing
+            # here because of it would block the only edit that answers
+            # it. It holds no stream arrays to reinterpret.
+            if self._built():
+                return {
+                    "ok": False,
+                    "error": "the flowsheet already has units, whose stream "
+                             "arrays are indexed by the current species; "
+                             "delete them first, or edit the file",
+                }
+            self.flowsheet.species_order = cleaned
+            self.streams = self.solve_error = None
+        # `species_order` is the need that blocks the most of the palette,
+        # so naming the species is the other edit that can promote a red
+        # node. Same reason as in `set_code_context` for doing it here
+        # rather than inside the lock.
+        return {"ok": True, "species": cleaned, **self._retry_pending()}
+
+    # -- feeds ---------------------------------------------------------
+
+    def feeds(self) -> dict:
+        """The declared feeds, and which inlets are still waiting for one.
+
+        ``unfed`` is what the canvas draws as a feed node with nothing
+        behind it. Reported rather than left to the solver, which answers
+        an unfed inlet with ``KeyError: 'mixer_in'`` --- the name of the
+        stream and no hint that a feed is the thing missing.
+        """
+        from difflow.workspace import edit
+
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        return {
+            "ok": True,
+            "feeds": sorted(self.flowsheet.feeds),
+            "unfed": edit.unfed(self.flowsheet),
+        }
+
+    @_undoable
+    def set_feed(self, name, spec: dict | None = None) -> dict:
+        """Declare or change the feed on a stream, and say what it carries.
+
+        The last thing standing between a flowsheet built on the canvas
+        and a solved one. Every other part of building can be done by
+        dropping and wiring; a feed is data --- a temperature, a pressure
+        and a flow per species --- and there was no way to type it, so a
+        flowsheet made from scratch could be drawn and never solved.
+
+        Only a stream some unit reads, and only one nothing else supplies:
+        a feed on a stream a unit already produces would be two sources
+        for one stream, and the solver would silently use one of them.
+
+        The defaults are the flowsheet's own (``default_flow`` per species
+        at ``default_T``/``default_P``) --- the same numbers
+        ``Flowsheet.solve`` invents for a tear stream, so a feed left
+        untouched is not a new guess about the model.
+        """
+        from difflow import make_stream
+        from difflow.workspace import edit
+
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        if not isinstance(name, str) or not name.strip():
+            return {"ok": False, "error": "which stream is the feed on?"}
+        name = name.strip()
+        order = list(getattr(self.flowsheet, "species_order", None) or [])
+        if not order:
+            return {"ok": False, "error": "name the species first"}
+
+        spec = spec or {}
+        with self._lock:
+            fs = self.flowsheet
+            if name not in fs.feeds:
+                if name not in edit.unfed(fs):
+                    made = edit.producers(fs).get(name)
+                    return {
+                        "ok": False,
+                        "error": (f"{name!r} is made by {made!r}, so it cannot "
+                                  "also be a feed"
+                                  if made else
+                                  f"nothing reads {name!r}; drop a unit and wire "
+                                  "its inlet first"),
+                    }
+                was = None
+            else:
+                was = fs.feeds[name]
+
+            try:
+                T = _as_number(spec.get("T"), was["T"] if was else fs.default_T,
+                               "T")
+                P = _as_number(spec.get("P"), was["P"] if was else fs.default_P,
+                               "P")
+                given = spec.get("flows") or {}
+                if not isinstance(given, dict):
+                    raise _BadFeed("flows must be a mapping of species to numbers")
+                unknown = set(given) - set(order)
+                if unknown:
+                    raise _BadFeed(
+                        f"{', '.join(sorted(unknown))} is not one of the species"
+                    )
+                # A field left out keeps what the feed already carried, so
+                # editing the temperature does not zero the flows.
+                flows = {
+                    s: _as_number(
+                        given.get(s),
+                        float(was[f"F_{s}"]) if was is not None
+                        else float(fs.default_flow),
+                        s,
+                    )
+                    for s in order
+                }
+                if any(f < 0 for f in flows.values()):
+                    raise _BadFeed("a flow cannot be negative")
+                if T <= 0 or P <= 0:
+                    raise _BadFeed("temperature and pressure are absolute")
+            except _BadFeed as bad:
+                return {"ok": False, "error": str(bad)}
+
+            fs.add_feed(name, make_stream(flows=flows, T=T, P=P))
+            self.streams = self.solve_error = None
+        return {"ok": True, "name": name, "T": T, "P": P, "flows": flows}
+
+    @_undoable
+    def remove_feed(self, name: str) -> dict:
+        """Undeclare a feed, leaving the inlet unfed again.
+
+        Which is a real state and not a broken one: an inlet about to be
+        wired to a unit's outlet has to stop being a feed first, and
+        :func:`difflow.workspace.edit.connect` refuses rather than quietly
+        dropping it.
+        """
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        with self._lock:
+            if name not in self.flowsheet.feeds:
+                known = ", ".join(sorted(self.flowsheet.feeds)) or "none"
+                return {"ok": False,
+                        "error": f"no feed called {name!r} (have: {known})"}
+            del self.flowsheet.feeds[name]
+            self.streams = self.solve_error = None
+        return {"ok": True, "name": name}
+
+    # -- reads --------------------------------------------------------
+
+    def catalog(self) -> dict:
+        """The operations, each answered against what is in scope now.
+
+        ``buildable`` on the bare schema is a property of the class: it
+        asks whether a *form* could construct one. The palette needs a
+        narrower answer --- whether a drop, right now, in this session,
+        would succeed --- and the two differ. ``AbsorberParams.solvent``
+        is a required ``str``: no callable, no constructor object, so
+        the class reads as buildable, and yet nothing can invent a
+        solvent name, so the drop fails. Serving the class's answer put
+        that disagreement in front of the user as a traceback.
+
+        Each entry also carries ``docs_url``, from
+        :func:`difflow.workspace.doclinks.url_for` --- where in the book this
+        operation is written up, so the palette and the inspector can
+        offer the link without the front end knowing anything about how
+        ``docs/`` is organised. ``None`` for an operation the prose never
+        names, which :mod:`tests.test_doclinks` does not allow to happen.
+
+        So each entry carries ``needs``, from :func:`difflow.workspace.edit.unmet`
+        --- the same function the adder refuses with, so the palette
+        cannot promise a unit that will not drop --- and ``buildable``
+        is narrowed to mean it. Because ``needs`` is computed against
+        the code context's bindings, an operation stops being flagged
+        the moment the binding it wanted appears; the page refetches
+        the catalog whenever the code context changes.
+        """
+        from difflow.catalog import _default_registry, catalog
+        from difflow.workspace import doclinks, edit
+
+        classes = {name: info.cls
+                   for name, info in _default_registry().list_operations().items()}
+        out = {}
+        for name, spec in catalog().items():
+            entry = spec.to_dict()
+            entry["docs_url"] = doclinks.url_for(name)
+            cls = classes.get(name)
+            if cls is not None:
+                needs = edit.unmet(self.flowsheet, cls, self.bindings)
+                entry["needs"] = needs
+                entry["buildable"] = not needs
+            else:
+                entry["needs"] = [] if entry.get("buildable") else ["code"]
+            # Where the book discusses this unit, or None when it does
+            # not discuss it at all. Carried on the catalog rather than
+            # asked for per unit, because the palette wants all 87 at
+            # once and the whole map costs one pass over the index.
+            entry["docs_url"] = doclinks.url_for(name)
+            out[name] = entry
+        return out
+
+    def _state(self) -> str | None:
+        """The whole model as one string, or ``None`` if it will not write.
+
+        What a save would put on disk --- units, wiring, feeds, the code
+        context and the stored layout --- and not what `document` serves,
+        which fills in positions nobody chose.
+        """
+        if self.flowsheet is None:
+            return None
+        try:
+            import json
+
+            from difflow import serialize
+
+            return json.dumps(serialize.to_dict(self.flowsheet,
+                                                refs=self.bindings),
+                              default=str)
+        except Exception:
+            return None
+
+    @property
+    def dirty(self) -> bool:
+        """Would quitting now lose an edit?
+
+        A model that stops serializing counts as changed. One that never
+        did (a script whose units hold callables) has no file to lose
+        edits from, so it is not nagged about on every quit.
+        """
+        return self._state() != self._saved
+
+    def document(self) -> dict:
+        from difflow import serialize
+
+        if self.flowsheet is None:
+            return {"flowsheet": None, "path": str(self.path or ""),
+                    "source": str(self.source or ""), "dirty": False}
+        document = serialize.to_dict(self.flowsheet, refs=self.bindings)
+        blocked = {"blocked": self.blocked} if self.blocked else {}
+        document.setdefault("view", {})
+        # Auto-layout underneath, stored positions on top. Not "one or the
+        # other": the moment the user drags one node the flowsheet has a
+        # `view.nodes` with a single entry in it, and serving only that
+        # would send every other node back to the browser unplaced.
+        document["view"]["nodes"] = {
+            **self.layout(), **(document["view"].get("nodes") or {})
+        }
+        return {
+            "flowsheet": document,
+            "path": str(self.path or ""),
+            # The script it was built by running, when it was. The header
+            # says so, because `plant.json` appearing over a flowsheet the
+            # user opened as `plant.py` is otherwise just wrong.
+            "source": str(self.source or ""),
+            # Beside the document rather than inside it: a pending unit is
+            # not part of the flowsheet, and a `pending` key in the
+            # serialized document would be exported to a file and read
+            # back as though it were.
+            "pending": self.pending_units(),
+            # Whether the header marks the file as edited, and whether the
+            # editor asks before a quit or an example throws the edit away.
+            "dirty": self.dirty,
+            **self.history(),
+            # The species control in the header reads these. Carried on the
+            # document rather than fetched separately because every edit
+            # already reloads it, and an empty flowsheet's species are the
+            # first thing the editor has to ask for.
+            **self.species(),
+            # The file given at startup that is waiting to be trusted: the
+            # editor asks about it as soon as the page loads.
+            **blocked,
+        }
+
+    def docs(self, operation: str) -> dict:
+        """The rendered documentation for one catalog operation.
+
+        Everything here is already in the catalog except the rendered
+        HTML, which is the one part that needs a library the browser
+        does not have. Served per operation rather than with the whole
+        catalog: rendering all 87 docstrings to open the palette would
+        be work done for the one the user eventually clicks.
+
+        Args:
+            operation: the registered name.
+
+        Returns:
+            ``{"ok": True, "operation": ..., "html": ..., "format": ...,
+            "symbol", "docs_url", "equations", "assumptions",
+            "references", "numerical_method"}``, or ``{"ok": False, "error": ...}``
+            for a name nothing is registered under.
+        """
+        from difflow.catalog import describe_operation
+        from difflow.workspace import doclinks
+        from difflow.workspace import docs as docs_module
+
+        try:
+            spec = describe_operation(operation)
+        except KeyError as exc:
+            return {"ok": False, "error": str(exc.args[0])}
+        html, fmt = docs_module.render(spec.doc)
+        return {
+            "ok": True,
+            "operation": spec.name,
+            # The docstring rendered below says what the arguments are;
+            # this is where the book says what the unit is for.
+            "docs_url": doclinks.url_for(spec.name),
+            "symbol": spec.symbol,
+            "description": spec.description,
+            "html": html,
+            "format": fmt,
+            "equations": list(spec.equations),
+            "assumptions": list(spec.assumptions),
+            "references": list(spec.references),
+            "numerical_method": spec.numerical_method,
+        }
+
+    def layout(self) -> dict:
+        """Canvas positions from the topology, for a flowsheet that has none.
+
+        Filled into the served document rather than into the flowsheet: a
+        file that has never been laid out should not acquire coordinates
+        merely because someone opened it. The browser owns them from there,
+        and they reach disk only when the user saves. :func:`auto_layout` is
+        stable, so re-deriving them on every load is not a shuffle.
+        """
+        from difflow.workspace.layout import auto_layout
+
+        if self.flowsheet is None:
+            return {}
+        return {name: {"x": x, "y": y}
+                for name, (x, y) in auto_layout(self.flowsheet).items()}
+
+    def code(self) -> dict:
+        from difflow import codegen
+
+        if self.flowsheet is None:
+            return {"source": "", "error": "no flowsheet loaded"}
+        try:
+            source = codegen.to_python(self.flowsheet, refs=self.bindings)
+            return {"source": source, "error": None}
+        except Exception as exc:                     # surfaced, not swallowed
+            return {"source": "", "error": str(exc)}
+
+    def diagram(self) -> dict:
+        """The flowsheet as one inline SVG, at the canvas's own layout.
+
+        Drawn by :func:`difflow.report.diagram.flowsheet_diagram`, which
+        is the drawer the HTML reports use. A picture exported from the
+        editor and a picture in a report are then the same picture ---
+        and the export honours where the user dragged the boxes, which is
+        the difference between a diagram of this flowsheet and a diagram
+        of some flowsheet with the same topology.
+        """
+        from difflow.report.diagram import flowsheet_diagram
+
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        # An empty flowsheet draws an empty string, which as a downloaded
+        # `.svg` is a file that opens onto nothing. Saying so is the only
+        # useful answer -- the fix is to put a unit on the canvas.
+        if not self.flowsheet.units:
+            return {"ok": False, "error": "nothing to draw yet"}
+        try:
+            positions = (self.flowsheet.view or {}).get("nodes") or {}
+            return {"ok": True, "svg": flowsheet_diagram(self.flowsheet, positions)}
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    def context(self, kind: str = "flowsheet", question: str = "",
+                name: str | None = None, operation: str | None = None) -> dict:
+        """The assistant's brief about this flowsheet, as data.
+
+        Assembled by :mod:`difflow.workspace.context`; see there for what each
+        ``kind`` contains. Returned whole --- prompt included --- because
+        the panel shows the brief next to the answer, and a brief the
+        user cannot read is a brief nobody can check.
+        """
+        from difflow.workspace import context as context_module
+
+        return context_module.pack(self, kind=kind, question=question,
+                                   name=name, operation=operation)
+
+    # -- writes -------------------------------------------------------
+
+    @_undoable
+    def replace(self, document: dict, trust: bool = False) -> dict:
+        """Adopt a flowsheet sent from the browser.
+
+        The document's own code context wins, since the document is the
+        whole model: loading a file through this route must behave the
+        same as opening it on the command line --- including being asked
+        about first when it would run code (see :meth:`open_file`).
+        """
+        from difflow import serialize
+
+        if not isinstance(document, dict):
+            return {"ok": False, "error": "a flowsheet must be a JSON object"}
+        info = None if trust else self._trust_needed(None, document)
+        if info:
+            return self._trust_refusal(info)
+        # Built in full before anything is replaced. Evaluating the
+        # document's code context straight into the session used to swap
+        # the bindings first, so a document that then failed to build left
+        # the old flowsheet running against the new document's names.
+        try:
+            context = (document.get("view") or {}).get("code_context") or ""
+            bindings, error = (evaluate_context(context)
+                               if context.strip() else ({}, None))
+            flowsheet = serialize.from_dict(document, refs=bindings, trust=True)
+            _check_reserved_names(flowsheet)
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        with self._lock:
+            # `_adopt` rebuilds the pending nodes from the new flowsheet's
+            # own unfinished units: the old ones belonged to a canvas that
+            # is gone.
+            self._adopt(flowsheet, bindings, error)
+        return {"ok": True}
+
+    def open_example(self, key: str) -> dict:
+        """Replace the flowsheet with one of :mod:`difflow.workspace.examples`.
+
+        The file the editor was opened on is forgotten along with its
+        flowsheet: Save would otherwise write the example over it, which
+        is not what anyone choosing an example from a menu meant. The
+        example can still be written out with File > Flowsheet JSON.
+        """
+        from difflow.workspace import examples
+
+        try:
+            document = examples.document(key)
+        except KeyError:
+            return {"ok": False, "error": f"no example named {key!r}"}
+        answer = self.replace(document, trust=True)       # bundled with difflow
+        if not answer.get("ok"):
+            # The old flowsheet is still the one open: its file, its undo
+            # history and its unsaved changes all stay with it.
+            return answer
+        self.path = self.source = None
+        self._forget_history()
+        # Nothing to lose yet: the example is one menu click from coming
+        # back exactly as it is.
+        self._saved = self._state()
+        return answer
+
+    # -- incremental edits --------------------------------------------
+    #
+    # Each one changes the flowsheet in place and rebuilds only what it
+    # touched. `replace` is still there for load-a-file; these are for
+    # the canvas, where a keystroke should not cost a reconstruction of
+    # every unit -- and where a live `thermo` must survive the edit by
+    # identity rather than by round-tripping through JSON.
+
+    @_undoable
+    def _edit(self, fn, *args, moves_only: bool = False, **kwargs) -> dict:
+        """Run one edit under the lock, reporting a refusal as a value.
+
+        Any edit that is not purely a move discards the last solve: the
+        streams on screen describe the flowsheet as it was, and leaving
+        them there after a parameter changed is the one way a results
+        panel can lie.
+        """
+        from difflow.workspace.edit import EditError
+
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        from difflow.serialize import ref_namespace
+
+        try:
+            # Every incremental edit goes through _build_operation, which
+            # decodes `$ref` tags -- so the namespace has to be active for
+            # all of them, and this is the one place they all pass.
+            with self._lock, ref_namespace(self.bindings):
+                result = fn(*args, **kwargs)
+        except EditError as exc:
+            # A refusal is raised before anything is assigned, so the
+            # flowsheet -- and the streams solved from it -- are as they were.
+            return {"ok": False, "error": str(exc)}
+        except Exception:
+            # Anything else may have left the edit half done. The streams
+            # cannot be trusted to describe what is there now.
+            if not moves_only:
+                self.streams = self.solve_error = None
+            raise
+        if not moves_only:
+            self.streams = self.solve_error = None
+        return {"ok": True, **(result or {})}
+
+    @_undoable
+    def patch_unit(self, name: str, changes: dict) -> dict:
+        """Set parameters, rename, or move one unit.
+
+        ``changes`` may carry ``params`` (a partial dict, merged over
+        what the unit has), ``call_params`` (the same, for the arguments
+        passed to the operation on every call --- ``Unit.params``; a
+        ``None`` value removes one), ``name`` (a rename) and ``position``
+        (``{"x": .., "y": ..}``), in any combination. Anything else is
+        refused by name rather than ignored: an editor that drops an
+        edit on the floor is worse than one that rejects it.
+        """
+        from difflow.workspace import edit
+
+        def apply() -> dict:
+            unknown = sorted(set(changes) - {"params", "call_params", "name",
+                                             "position"})
+            if unknown:
+                raise edit.EditError(
+                    f"cannot patch {', '.join(repr(u) for u in unknown)}; "
+                    "a unit takes 'params', 'call_params', 'name' and "
+                    "'position'."
+                )
+            u = edit.unit(self.flowsheet, name)
+            # Everything is built and checked before anything is assigned.
+            # A patch carrying a good parameter and a taken name used to
+            # change the unit and then report the whole patch as refused,
+            # so the editor showed the old value over a flowsheet that had
+            # the new one -- and kept the last solve's streams beside it.
+            operation, unit_params = u.operation, u.params
+            params = changes.get("params")
+            if params:
+                if not isinstance(params, dict):
+                    raise edit.EditError("'params' must be an object")
+                operation = edit.rebuild(u.operation, name, params)
+            call_params = changes.get("call_params")
+            if call_params:
+                unit_params = edit.call_params(
+                    u.params, call_params, name,
+                    self._schema(name).get("call_parameters", []))
+            new_name = changes.get("name")
+            renaming = new_name is not None and new_name != name
+            if renaming:
+                self._check_unit_name(new_name)
+            position = changes.get("position")
+            if position is not None:
+                position = self._position(name, position)
+            u.operation, u.params = operation, unit_params
+            if renaming:
+                self._rename_unit(u, new_name)
+            if position is not None:
+                self.flowsheet.view.setdefault("nodes", {})[
+                    new_name if renaming else name] = position
+            return {"name": new_name if renaming else name}
+
+        return self._edit(apply)
+
+    def _check_unit_name(self, new_name) -> None:
+        from difflow.workspace import edit
+
+        if not isinstance(new_name, str) or not new_name.strip():
+            raise edit.EditError("a unit name cannot be empty")
+        # The canvas keys a feed `feed:<stream>` and a product
+        # `product:<stream>`, beside units under their bare names, and the
+        # view's node positions are saved under the same keys. A unit so
+        # named would be taken for the feed: deleting it deletes the feed.
+        if new_name.startswith(RESERVED_PREFIXES):
+            raise edit.EditError(
+                f"a unit name cannot begin with {new_name.split(':')[0] + ':'!r}; "
+                "the canvas uses that for feeds and products")
+        if any(other.name == new_name for other in self.flowsheet.units):
+            raise edit.EditError(f"there is already a unit called {new_name!r}")
+
+    def _rename_unit(self, u, new_name: str) -> None:
+        self._check_unit_name(new_name)
+        nodes = (self.flowsheet.view or {}).get("nodes")
+        if isinstance(nodes, dict) and u.name in nodes:
+            nodes[new_name] = nodes.pop(u.name)
+        # An unfinished unit is indexed twice: on the flowsheet, and in
+        # `pending` under the same key. Moving only the first leaves the
+        # entry pointing at a name nothing answers to, and the node stops
+        # being red at the moment it is renamed.
+        if u.name in self.pending:
+            entry = self.pending.pop(u.name)
+            entry["name"] = new_name
+            self.pending[new_name] = entry
+        u.name = new_name
+
+    def _position(self, key: str, position) -> dict:
+        from difflow.workspace import edit
+
+        try:
+            x, y = float(position["x"]), float(position["y"])
+        except (TypeError, KeyError, ValueError) as exc:
+            raise edit.EditError(
+                f"position for {key!r} must be {{'x': number, 'y': number}}"
+            ) from exc
+        # `float("nan")` is a float. A NaN coordinate saved fine and then
+        # failed the file's own JSON (`allow_nan=False`) on the next save,
+        # or put the node nowhere on the canvas.
+        if not (math.isfinite(x) and math.isfinite(y)):
+            raise edit.EditError(f"position for {key!r} must be finite")
+        return {"x": x, "y": y}
+
+    def _place(self, key: str, position) -> None:
+        position = self._position(key, position)
+        # An unfinished unit is on the flowsheet like any other, so its
+        # position goes where every other node's does. It used to be held
+        # off the flowsheet, and the coordinate with it.
+        self.flowsheet.view.setdefault("nodes", {})[key] = position
+
+    @_undoable
+    def add_unit(self, operation: str, name: str | None = None,
+                 position=None, extras: dict | None = None) -> dict:
+        """Drop a unit from the palette onto the canvas.
+
+        It arrives unwired, with a dangling stream on every port, and
+        with whatever parameters its ``Params`` class defaults to.
+
+        The constructor objects half the catalog needs come from three
+        places, in order: ``extras`` as sent (``{"thermo": {"$ref":
+        "thermo"}}``, resolved against the code context), then whatever
+        :func:`~difflow.workspace.edit.known_extras` can find on its own, then
+        nothing --- at which point the refusal names what is missing and
+        the answer is to define it in the code context.
+        """
+        from difflow.catalog import _default_registry, describe_class
+        from difflow.workspace import edit
+        from difflow.serialize import (
+            SerializationError,
+            _build_operation,
+            _decode_value,
+        )
+
+        def apply() -> dict:
+            from difflow.flowsheet import Unit
+
+            info = _default_registry().list_operations().get(operation)
+            if info is None:
+                raise edit.EditError(f"{operation!r} is not a registered operation")
+            taken = self._taken()
+            unit_name = edit.unique(name or operation.lower(), taken)
+            if name:
+                # The same checks a rename makes: the API and the assistant
+                # can name a unit on the way in, and the canvas cannot tell
+                # a unit called feed:x from the feed.
+                self._check_unit_name(name)
+            if name and name in taken:
+                raise edit.EditError(f"there is already a unit called {name!r}")
+            override = edit.known_extras(self.flowsheet, info.cls, self.bindings)
+            try:
+                override.update({k: _decode_value(v)
+                                 for k, v in (extras or {}).items()})
+            except SerializationError as exc:
+                raise edit.EditError(str(exc)) from exc
+            from difflow.catalog import _params_class
+
+            values, placeholders, missing = edit.known_params(
+                self.flowsheet, _params_class(info.cls), self.bindings
+            )
+            # After the two real sources, never before them: a number the
+            # code context actually supplies must not be shadowed by a
+            # made-up one, and a caller's `extras` outranks both. `values`
+            # counts as supplied too -- for a unit that builds its own
+            # `Params`, the constructor argument and the field it feeds
+            # are one number, and guessing it again here would hand the
+            # builder two.
+            guessed, guessed_names = edit.placeholder_extras(
+                info.cls, {**values, **override}
+            )
+            override.update(guessed)
+            placeholders = placeholders + guessed_names
+            # Ask before building. `_build_operation` raises through the
+            # file-loading path, whose message offers "written by a
+            # different version of difflow" as the diagnosis -- true of a
+            # file, and nonsense about a unit dropped from the palette a
+            # second ago. The palette flagged this same list, by the same
+            # reckoning: `values` supplies a constructor argument just as
+            # `override` does, along the road `_build_operation` takes for
+            # a unit that builds its own `Params`.
+            unmet = [a for a in edit.constructor_extras(info.cls)
+                     if a not in override and a not in values] + missing
+            if unmet:
+                # Not a refusal any more. The drop happened -- the user
+                # aimed at a spot on the canvas and let go -- and the
+                # only thing wrong with it is that something has to exist
+                # first. So it lands, in red, saying what it is waiting
+                # for; `_retry_pending` builds it for real the moment the
+                # code context or the species answer it.
+                return self._hold(operation, unit_name, info.cls,
+                                  unmet, position)
+            try:
+                built = _build_operation(
+                    info.cls, values, unit_name, override=override,
+                )
+            except SerializationError as exc:
+                raise edit.EditError(self._missing_hint(str(exc))) from exc
+            except (ValueError, TypeError) as exc:
+                # The class refusing on its own terms. `Transformer` says
+                # "needs an off-nominal tap or a phase shift; with tap=1
+                # and shift=0 this is a line", which is worth more than
+                # anything generic written here -- so it is quoted, not
+                # replaced. Unpredictable ahead of the call, which is why
+                # `needs` being empty promises a clean answer and not a
+                # successful one.
+                raise edit.EditError(
+                    f"{operation} refused the parameters it can be given "
+                    f"without a code context: {exc}"
+                ) from exc
+            ports = describe_class(info.cls).to_dict()["ports"]
+            inlets, outlets = edit.default_ports(
+                unit_name, ports, edit.stream_names(self.flowsheet)
+            )
+            self.flowsheet.add_unit(
+                Unit(unit_name, built, inlets, outlets)
+            )
+            if position is not None:
+                self._place(unit_name, position)
+            return {"name": unit_name, "inlets": inlets, "outlets": outlets,
+                    "placeholders": placeholders}
+
+        return self._edit(apply)
+
+    # -- units that cannot be built yet --------------------------------
+
+    def _taken(self) -> set[str]:
+        """Every name a new unit may not have.
+
+        Pending nodes count. They are drawn on the same canvas and are
+        about to become units under exactly these names, so letting a
+        second drop take one would either collide at promotion or
+        silently rename the node the user is looking at.
+        """
+        return ({u.name for u in self.flowsheet.units} | set(self.pending))
+
+    def _hold(self, operation: str, unit_name: str, cls,
+              unmet: list[str], position) -> dict:
+        """Land an unbuildable drop as a unit that is not finished yet.
+
+        It goes on the flowsheet with its real ports, standing in for
+        the operation until the missing thing appears. That is the whole
+        point: a unit with no ports cannot be wired, so holding it off
+        the flowsheet meant a reactor could not be connected to
+        anything, for as long as it had no rate law --- which is to say,
+        until after the wiring was done.
+
+        What it will not do is run. :meth:`solve` refuses while one is
+        here, by name, rather than quietly returning numbers out of a
+        unit nobody finished.
+        """
+        from difflow.catalog import describe_class
+        from difflow.flowsheet import Unit
+        from difflow.workspace import edit
+        from difflow.incomplete import Incomplete
+
+        hint = self._needs_hint(operation, cls, unmet)
+        ports = describe_class(cls).to_dict()["ports"]
+        inlets, outlets = edit.default_ports(
+            unit_name, ports, edit.stream_names(self.flowsheet)
+        )
+        self.flowsheet.add_unit(Unit(
+            unit_name, Incomplete(operation, list(unmet), hint),
+            inlets, outlets,
+        ))
+        # No position here: the node is on the flowsheet, so its
+        # coordinate is in the view with everybody else's.
+        entry = {
+            "name": unit_name,
+            "operation": operation,
+            "needs": list(unmet),
+            "hint": hint,
+        }
+        self.pending[unit_name] = entry
+        if position is not None:
+            self._place(unit_name, position)
+        # `ok` is True: the editor did what was asked. `pending` says
+        # what is still missing; the ports say it is nevertheless a unit
+        # you can wire.
+        return {**entry, "pending": True,
+                "inlets": inlets, "outlets": outlets}
+
+    def pending_units(self) -> list[dict]:
+        """The unbuildable drops, as the canvas draws them."""
+        return [dict(entry) for entry in self.pending.values()]
+
+    def _built(self) -> list:
+        """The units that are actually built, unfinished ones excluded.
+
+        The distinction matters wherever a guard is really about the
+        stream arrays a unit holds: an `Incomplete` stand-in holds none.
+        """
+        if self.flowsheet is None:
+            return []
+        return [u for u in self.flowsheet.units if u.name not in self.pending]
+
+    def _retry_pending(self) -> dict:
+        """Ask every unfinished unit again, now that the context has moved.
+
+        Called after the code context or the species change --- the two
+        edits that can turn an unmet need into a met one. Each unit is
+        finished where it stands: if it builds, the stand-in operation is
+        replaced and the red node goes away, and if it does not, its
+        needs and hint are rewritten against the *new* bindings, which is
+        the useful half of re-asking.
+
+        Not called under `self._lock`: `add_unit` takes it.
+        """
+        promoted, still = [], []
+        for name, entry in list(self.pending.items()):
+            answer = self._finish(name, entry)
+            (promoted if answer else still).append(name)
+        return {"promoted": promoted, "pending": still}
+
+    def _finish(self, name: str, entry: dict) -> bool:
+        """Build an unfinished unit for real, in place. Did it work?
+
+        In place, and not by dropping it again, because by now it may be
+        wired: its ports carry the names of the streams it is joined to,
+        and a fresh drop would arrive with `unit_in` and `unit_out` and
+        quietly detach everything the user had already connected.
+        """
+        from difflow.catalog import _default_registry, _params_class
+        from difflow.workspace import edit
+        from difflow.serialize import SerializationError, _build_operation
+
+        info = _default_registry().list_operations().get(entry["operation"])
+        if info is None:
+            return False
+        override = edit.known_extras(self.flowsheet, info.cls, self.bindings)
+        values, _placeholders, missing = edit.known_params(
+            self.flowsheet, _params_class(info.cls), self.bindings
+        )
+        guessed, _names = edit.placeholder_extras(info.cls, {**values, **override})
+        override.update(guessed)
+        unmet = [a for a in edit.constructor_extras(info.cls)
+                 if a not in override and a not in values] + missing
+        if unmet:
+            # Still waiting, but perhaps for less than before: the hint
+            # is re-answered against the bindings as they are now.
+            entry["needs"] = list(unmet)
+            entry["hint"] = self._needs_hint(entry["operation"], info.cls, unmet)
+            unit = edit.unit(self.flowsheet, name)
+            unit.operation.needs = list(unmet)
+            unit.operation.hint = entry["hint"]
+            return False
+        try:
+            built = _build_operation(info.cls, values, name, override=override)
+        except (SerializationError, ValueError, TypeError):
+            return False
+        edit.unit(self.flowsheet, name).operation = built
+        del self.pending[name]
+        return True
+
+    def boilerplate(self, operation: str, name: str | None = None) -> dict:
+        """Python that would define what *operation* is waiting for.
+
+        The other half of the red node. Saying a unit needs a ``thermo``
+        answers *what*; this answers *what to write*, against this
+        flowsheet's own species, and marks every number it had to invent
+        as invented.
+
+        Args:
+            operation: the registered name.
+            name: a pending node, whose recorded needs are used instead
+                of asking the catalog again. Falls back to the catalog
+                when the node is gone or was never there.
+
+        Returns:
+            ``{"ok": True, "operation", "needs", "source", "merged"}``,
+            where ``merged`` is the snippet appended to the code context
+            as it stands --- which is what the editor applies, since a
+            snippet that replaced the context would drop whatever else
+            it defines.
+        """
+        from difflow.catalog import _default_registry
+        from difflow.workspace import boilerplate, edit
+
+        info = _default_registry().list_operations().get(operation)
+        if info is None:
+            return {"ok": False, "error": f"{operation!r} is not a registered "
+                                          "operation"}
+        entry = self.pending.get(name or "")
+        needs = (list(entry["needs"]) if entry
+                 else edit.unmet(self.flowsheet, info.cls, self.bindings))
+        source = boilerplate.snippet(
+            operation, needs, edit.species_order(self.flowsheet, self.bindings)
+        )
+        return {
+            "ok": True,
+            "operation": operation,
+            "needs": needs,
+            "source": source,
+            "merged": boilerplate.merged(self._source(), source),
+        }
+
+    def _needs_hint(self, operation: str, cls, unmet: list[str]) -> str:
+        """What a drop is waiting for, as the red node's own sentence.
+
+        The useful sentence names the thing, not the failure: a reader
+        told ``rate_fn`` knows what to write, and one told that a
+        constructor is missing arguments does not.
+
+        Two kinds get two sentences, because conflating them misleads.
+        A ``thermo`` or a ``rate_fn`` is genuinely code and no form
+        could ever hold it. ``AbsorberParams.solvent`` is a ``str``:
+        ordinary data, which the palette merely has no way to guess,
+        and calling that "code" tells the reader the wrong thing about
+        their own model. Both are answered in the code context --- a
+        bare ``solvent = "MEA"`` there is matched by field name --- so
+        the route is one sentence even though the diagnosis is two.
+        """
+        from difflow.catalog import describe_class
+        from difflow.serialize import constructor_extras
+
+        extras = set(constructor_extras(cls))
+        callables = {p["name"] for p in describe_class(cls).to_dict()["parameters"]
+                     if p.get("is_callable")}
+        code = [n for n in unmet if n in extras or n in callables]
+        data = [n for n in unmet if n not in extras and n not in callables]
+
+        if code and data:
+            what = (f"{', '.join(code)} (code rather than data) and "
+                    f"{', '.join(data)} (no value it could guess)")
+        elif code:
+            what = f"{', '.join(code)}, which is code rather than data"
+        else:
+            what = f"{', '.join(data)}, which it has no way to guess"
+        have = ", ".join(sorted(self.bindings)) or "nothing"
+        # `species_order` is the exception to "answer it in the code
+        # context": it is the flowsheet's own field, it is plain data, and
+        # on a new flowsheet it is what blocks nearly the whole palette.
+        # Sending the reader to a Python panel to write a list of names is
+        # the wrong instruction when there is a box in the header for it.
+        if "species_order" in unmet:
+            return (f"{operation} needs the species. Set the flowsheet's "
+                    f"species (in the editor, the box in its header) -- or "
+                    f"define species_order (or SPECIES) in the code context "
+                    f"-- and this unit builds itself.")
+        # Not "and drop the unit again": the node is still on the canvas,
+        # and answering what it asks for promotes it where it stands.
+        # Telling the reader to repeat a gesture they have already made
+        # would be describing an editor that no longer exists.
+        hint = (f"{operation} needs {what}. Define it in the code context "
+                f"(which currently defines {have}) and this node builds "
+                f"itself")
+        if any(n in unmet for n in ("rate_fn", "stoich", "rate_params",
+                                    "kinetic_fn", "kinetic_params")):
+            hint += (" -- mass_action_kinetics() returns the rate law, the "
+                     "stoichiometry and the rate parameters at once")
+        return hint + "."
+
+    def _missing_hint(self, message: str) -> str:
+        """Point a "requires X" refusal at the code context."""
+        if "requires" not in message:
+            return message
+        have = ", ".join(sorted(self.bindings)) or "nothing"
+        return (f"{message} Define it in the code context (which currently "
+                f"defines {have}) and drop the unit again.")
+
+    def remove_unit(self, name: str) -> dict:
+        """Delete a unit, and every wire that only existed because of it."""
+        from difflow.workspace import edit
+
+        def apply() -> dict:
+            # An unfinished unit is on the flowsheet with ports and
+            # possibly wires, so it is deleted like any other. Only the
+            # note about what it was waiting for is separate.
+            self.pending.pop(name, None)
+            u = edit.unit(self.flowsheet, name)
+            touched = set(u.inlet_names) | set(u.outlet_names)
+            self.flowsheet.units = [
+                other for other in self.flowsheet.units if other is not u
+            ]
+            # A recycle naming one of its streams has lost an end. Left in
+            # place it would tear a stream nothing produces, and the solve
+            # would fail somewhere far from here.
+            dropped = {src: dst for src, dst in self.flowsheet.recycles.items()
+                       if src in touched or dst in touched}
+            for src in dropped:
+                del self.flowsheet.recycles[src]
+            # A feed only this unit read is kept, composition and all: it
+            # is the part of the flowsheet that took typing, and the usual
+            # reason to delete a unit is to put a different one in its
+            # place. Renaming the new unit's inlet onto it attaches it.
+            still_read = {s for other in self.flowsheet.units
+                          for s in other.inlet_names}
+            feeds_unread = sorted(f for f in self.flowsheet.feeds
+                                  if f in touched and f not in still_read)
+            nodes = (self.flowsheet.view or {}).get("nodes")
+            if isinstance(nodes, dict):
+                nodes.pop(name, None)
+            return {"name": name, "recycles_dropped": dropped,
+                    "feeds_unread": feeds_unread}
+
+        return self._edit(apply)
+
+    def connect(self, source: str, outlet: str, target: str, inlet: str) -> dict:
+        """Wire an outlet to an inlet, as an arc or as a recycle."""
+        from difflow.workspace import edit
+
+        return self._edit(
+            lambda: edit.connect(self.flowsheet, source, outlet, target, inlet)
+        )
+
+    def disconnect(self, source: str, outlet: str, target: str, inlet: str) -> dict:
+        """Unwire one arc. The freed inlet keeps a port, with a fresh name."""
+        from difflow.workspace import edit
+
+        return self._edit(
+            lambda: edit.disconnect(self.flowsheet, source, outlet, target, inlet)
+        )
+
+    def _ports(self, name: str) -> dict:
+        """The port spec of the class behind an existing unit."""
+        return self._schema(name)["ports"]
+
+    def _schema(self, name: str) -> dict:
+        """The catalog schema of the class behind an existing unit.
+
+        An unfinished unit has a stand-in where its operation goes, and
+        describing *that* would report a class with no ports at all --- so
+        the question is asked of the operation it is going to be, which
+        is the one whose arity the ports were laid out from.
+        """
+        from difflow.catalog import _default_registry, describe_class
+        from difflow.workspace import edit
+        from difflow.incomplete import Incomplete
+
+        operation = edit.unit(self.flowsheet, name).operation
+        if isinstance(operation, Incomplete):
+            info = _default_registry().list_operations().get(operation.operation)
+            if info is None:
+                raise edit.EditError(
+                    f"{operation.operation!r} is not a registered operation"
+                )
+            return describe_class(info.cls).to_dict()
+        return describe_class(type(operation)).to_dict()
+
+    def rename_stream(self, old: str, new: str) -> dict:
+        """Rename one stream everywhere it appears.
+
+        A stream name is the wiring, so this moves feeds, recycle ends,
+        every port that reads or writes it and the canvas node all at
+        once. Refused if the new name is taken, because that would be a
+        connection wearing a rename's clothes --- unless it is a feed
+        nothing reads, which an unfed inlet takes over.
+        """
+        from difflow.workspace import edit
+
+        return self._edit(lambda: edit.rename(self.flowsheet, old, new))
+
+    def add_inlet(self, name: str) -> dict:
+        """One more inlet on a variadic unit, arriving unwired."""
+        from difflow.workspace import edit
+
+        return self._edit(
+            lambda: edit.add_inlet(self.flowsheet, name, self._ports(name))
+        )
+
+    def remove_inlet(self, name: str, stream: str) -> dict:
+        """Take an inlet off a variadic unit, if nothing is on it."""
+        from difflow.workspace import edit
+
+        return self._edit(
+            lambda: edit.remove_inlet(self.flowsheet, name, stream,
+                                      self._ports(name))
+        )
+
+    def set_layout(self, nodes: dict) -> dict:
+        """Adopt canvas positions. No rebuild, no solve --- coordinates only."""
+        from difflow.workspace import edit
+
+        from difflow.workspace.layout import FEED_PREFIX, PRODUCT_PREFIX
+
+        def apply() -> dict:
+            if not isinstance(nodes, dict):
+                raise edit.EditError("layout must be an object of {key: {x, y}}")
+            # Every position checked before any is kept, so a bad one
+            # leaves the layout as it was rather than half moved.
+            placed = {key: self._position(key, p) for key, p in nodes.items()}
+            # Only keys the canvas can draw. Anything else was stored and
+            # saved to the file for ever: a node deleted while its drag
+            # was in flight, or any string a caller cared to send.
+            streams = edit.stream_names(self.flowsheet)
+            known = ({u.name for u in self.flowsheet.units}
+                     | {FEED_PREFIX + s for s in streams}
+                     | {PRODUCT_PREFIX + s for s in streams})
+            ignored = sorted(key for key in placed if key not in known)
+            for key, position in placed.items():
+                if key in known:
+                    self._place(key, position)
+            answer = {"nodes": len(placed) - len(ignored)}
+            if ignored:
+                answer["ignored"] = ignored
+            return answer
+
+        return self._edit(apply, moves_only=True)
+
+    def save(self, path: str | None = None, overwrite: bool = False) -> dict:
+        """Write the flowsheet to its file, or to `path` (Save As).
+
+        A new `path` becomes the file from then on, and an existing file
+        there is only written over when `overwrite` says so: the browser
+        asks first, because a typed path is one typo from someone else's
+        flowsheet. Always JSON --- a script is a way in, not a way out.
+        """
+        from difflow import serialize
+
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        target = self.path
+        if path is not None:
+            if not isinstance(path, str) or not path.strip():
+                return {"ok": False, "error": "save it where?"}
+            target = Path(path.strip()).expanduser().resolve()
+            if target.suffix.lower() != ".json":
+                target = target.with_name(target.name + ".json")
+            if not target.parent.is_dir():
+                return {"ok": False,
+                        "error": f"there is no folder {str(target.parent)!r}"}
+            if (target.exists() and not overwrite
+                    and target != (self.path and Path(self.path).resolve())):
+                return {"ok": False, "exists": True, "path": str(target),
+                        "error": f"{target.name} already exists"}
+        if target is None:
+            return {"ok": False, "error": "no file yet; use Save As"}
+        try:
+            serialize.save(self.flowsheet, target, refs=self.bindings)
+        except serialize.SerializationError as exc:
+            return {"ok": False, "error": str(exc)}
+        if path is not None:
+            self.path, self.source = target, None
+        # what this session wrote is its own model: reopening it asks nothing
+        self._trusted.add(Path(target).resolve())
+        self._saved = self._state()
+        return {"ok": True, "path": str(target)}
+
+    def open_file(self, path, trust: bool = False) -> dict:
+        """Replace the flowsheet with one read from disk, as on startup.
+
+        Built in full before anything is replaced, so a file that will
+        not load leaves the current flowsheet exactly where it was. A
+        file that would run code is not opened unless trusted: the answer
+        is ``{"ok": False, "needs_trust": ...}`` naming the code, and
+        ``trust=True`` --- the editor's *Trust and open* --- opens it.
+        """
+        import json
+
+        from difflow import serialize
+
+        if not isinstance(path, str) or not path.strip():
+            return {"ok": False, "error": "open which file?"}
+        target = Path(path.strip()).expanduser().resolve()
+        if not target.is_file():
+            return {"ok": False, "error": f"there is no file {str(target)!r}"}
+        if not trust:
+            info = self._trust_needed(target)
+            if info:
+                return self._trust_refusal(info)
+        script = scripts.is_script(target)
+        try:
+            if script:
+                flowsheet = scripts.load_flowsheet(target)
+                context = (getattr(flowsheet, "view", None) or {}).get(
+                    "code_context") or ""
+                bindings, error = (evaluate_context(context)
+                                   if context.strip() else ({}, None))
+            else:
+                data = json.loads(target.read_text())
+                context = (data.get("view") or {}).get("code_context") or ""
+                bindings, error = (evaluate_context(context)
+                                   if context.strip() else ({}, None))
+                flowsheet = serialize.from_dict(data, refs=bindings, trust=True)
+            _check_reserved_names(flowsheet)
+        except Exception as exc:
+            return {"ok": False,
+                    "error": f"could not open {target.name}: "
+                             f"{type(exc).__name__}: {exc}"}
+        with self._lock:
+            self._adopt(flowsheet, bindings, error)
+            self.source = target if script else None
+            self.path = scripts.save_target(target) if script else target
+            self._trusted.add(target)
+            self.blocked = None
+            self._saved = self._state()
+            self._forget_history()
+        return {"ok": True, "path": str(self.path),
+                "source": str(self.source or "")}
+
+    def new(self) -> dict:
+        """Start again from an empty flowsheet, with no file behind it."""
+        with self._lock:
+            self._adopt(_empty_flowsheet(), {}, None)
+            self.path = self.source = None
+            self._saved = self._state()
+            self._forget_history()
+        return {"ok": True}
+
+    def _forget_history(self) -> None:
+        """Undo stops at a flowsheet's own beginning, not at the last one's."""
+        self._undo.clear()
+        self._redo.clear()
+
+    def undo(self) -> dict:
+        """Put the model back as it was before the last edit."""
+        return self._step(self._undo, self._redo, "undo")
+
+    def redo(self) -> dict:
+        """Make the last undone edit again."""
+        return self._step(self._redo, self._undo, "redo")
+
+    def _step(self, source: list, sink: list, verb: str) -> dict:
+        import json
+
+        from difflow import serialize
+
+        with self._lock:
+            if not source:
+                return {"ok": False, "error": f"nothing to {verb}"}
+            current = self._state()
+            data = json.loads(source[-1])
+            context = (data.get("view") or {}).get("code_context") or ""
+            try:
+                # The same snippet keeps the same objects: a live `thermo`
+                # survives an undo of a parameter edit by identity.
+                if context == self._source():
+                    bindings, error = self.bindings, self.context_error
+                else:
+                    bindings, error = (evaluate_context(context)
+                                       if context.strip() else ({}, None))
+                # the session's own earlier state: it passed the gate then
+                flowsheet = serialize.from_dict(data, refs=bindings, trust=True)
+            except Exception as exc:
+                return {"ok": False,
+                        "error": f"could not {verb}: {type(exc).__name__}: {exc}"}
+            source.pop()
+            if current is not None:
+                sink.append(current)
+            self._adopt(flowsheet, bindings, error)
+            return {"ok": True, **self.history()}
+
+    def history(self) -> dict:
+        """Whether there is anything to undo or redo, for the Edit menu."""
+        return {"undo": bool(self._undo), "redo": bool(self._redo)}
+
+    def _adopt(self, flowsheet, bindings: dict, context_error) -> None:
+        """Make `flowsheet` the model, and forget what described the last one.
+
+        The unfinished units are read back off the flowsheet: they are on
+        it as `Incomplete` stand-ins, and a file saved with one in it
+        should open with its red node, not with a unit that silently
+        cannot run.
+        """
+        from difflow.incomplete import Incomplete
+
+        self.flowsheet = flowsheet
+        self.bindings, self.context_error = bindings, context_error
+        self.streams = None
+        self.solve_error = None
+        self.delta_vectors = None
+        self.pending = {
+            u.name: {"name": u.name, "operation": u.operation.operation,
+                     "needs": list(u.operation.needs),
+                     "hint": u.operation.hint}
+            for u in flowsheet.units if isinstance(u.operation, Incomplete)
+        }
+
+    def solver_options(self) -> dict:
+        """Every solver option the editor sets, defaults filled in."""
+        stored = {} if self.flowsheet is None else \
+            self.flowsheet.view.get("solver") or {}
+        return {**SOLVER_DEFAULTS, **stored}
+
+    def _solve_kw(self) -> dict:
+        """The stored options, as keyword arguments to ``Flowsheet.solve``.
+
+        Only what was set: a default is left to ``Flowsheet.solve`` itself
+        rather than restated, and a stored value that no longer checks (a
+        file edited by hand) is dropped rather than raised from inside
+        every solve.
+        """
+        stored = {} if self.flowsheet is None else \
+            self.flowsheet.view.get("solver") or {}
+        kw = {}
+        for key, value in stored.items():
+            try:
+                kw[key] = _solver_option(key, value)
+            except ValueError:
+                continue
+        return kw
+
+    @_undoable
+    def set_solver_options(self, options) -> dict:
+        """Set the recycle solver's options; ``None`` restores a default.
+
+        The whole request is checked before any of it is kept, so a bad
+        tolerance does not land the acceleration beside it. The streams
+        are dropped: they were solved under the old options, and a looser
+        tolerance is exactly the change that leaves them looking the same.
+        """
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        if not isinstance(options, dict):
+            return {"ok": False, "error": "solver options must be an object"}
+        stored = dict(self.flowsheet.view.get("solver") or {})
+        try:
+            for key, value in options.items():
+                if value is None or value == "":
+                    if key not in SOLVER_DEFAULTS:
+                        _solver_option(key, value)   # names the bad key
+                    stored.pop(key, None)
+                else:
+                    stored[key] = _solver_option(key, value)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        merged = {**SOLVER_DEFAULTS, **stored}
+        if merged["tol_basis"] == "error" and merged["error_probe"] < 1:
+            # Flowsheet.solve refuses the pair; say so here, where it was set.
+            return {"ok": False, "error": 'tol_basis "error" needs error_probe '
+                    "of at least 1: the error is measured by those passes"}
+        with self._lock:
+            # A value equal to the default is not stored: the file then
+            # says only what someone chose. A key this version does not
+            # know (a file edited by hand, or from a newer difflow) is kept
+            # as found; `_solve_kw` already leaves it out of the solve.
+            stored = {k: v for k, v in stored.items()
+                      if k not in SOLVER_DEFAULTS or v != SOLVER_DEFAULTS[k]}
+            if stored:
+                self.flowsheet.view["solver"] = stored
+            else:
+                self.flowsheet.view.pop("solver", None)
+            self.streams = self.solve_error = None
+        return {"ok": True, "solver": self.solver_options()}
+
+    def _cannot_solve(self) -> dict | None:
+        """Why the flowsheet cannot be solved yet, as a reply; None if it can."""
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        # An unfinished unit is on the flowsheet so that it can be wired,
+        # and refusing here is the price of that: it has ports and a name
+        # but no model behind them, and running it would either raise from
+        # somewhere deep in the solve or, worse, look like it worked. Say
+        # which units and what they are waiting for, once, at the top.
+        if self.pending:
+            names = ", ".join(sorted(self.pending))
+            waiting = sorted(
+                {need for entry in self.pending.values() for need in entry["needs"]}
+            )
+            wants = ", ".join(waiting) or "something it cannot guess"
+            self.solve_error = (
+                f"{names} not finished: still waiting on {wants}. "
+                "Define it in the code context and the unit builds itself, "
+                "keeping the wiring it already has."
+            )
+            return {"ok": False, "error": self.solve_error, "pending": sorted(self.pending)}
+        # A required call argument that was never set raises "missing 1
+        # required positional argument" from inside the solve, naming
+        # neither the unit nor where to set it.
+        missing = self._missing_call_params()
+        if missing:
+            self.solve_error = "; ".join(
+                f"{unit} needs {', '.join(names)}" for unit, names in missing.items()
+            ) + ". Set them as the unit's call parameters."
+            return {"ok": False, "error": self.solve_error}
+        return None
+
+    def _model_key(self) -> str | None:
+        """The model as a string, minus the layout: what a recording depends on.
+
+        :meth:`_state` with the node positions left out, so that moving a
+        unit on the canvas does not make a recording stale, and the solver
+        options left in, since the recording was made with them.
+        """
+        import json
+
+        if self.flowsheet is None:
+            return None
+        try:
+            from difflow import serialize
+
+            model = serialize.to_dict(self.flowsheet, refs=self.bindings)
+            model.pop("view", None)
+        except Exception:
+            # A flowsheet that will not write (a unit that is a plain
+            # function, say) still has a structure to compare: the units in
+            # order with their operations and parameters, the feeds and the
+            # recycles. Coarser than the document, and enough to notice an
+            # edit made through the session.
+            fs = self.flowsheet
+            model = {
+                "units": [[u.name, id(u.operation), list(u.inlet_names),
+                           list(u.outlet_names), repr(u.params),
+                           repr(getattr(u.operation, "params", None))]
+                          for u in fs.units],
+                "feeds": {n: {k: str(v) for k, v in f.items()}
+                          for n, f in fs.feeds.items()},
+                "recycles": dict(fs.recycles),
+            }
+        return json.dumps([model, self._solve_kw()], default=str)
+
+    def debug_record(self) -> dict:
+        """Solve once under the debugger, keeping every checkpoint.
+
+        The editor's trace panel scrubs the result (see
+        :mod:`difflow.debug.record`). Nothing is adopted: the streams on
+        the canvas stay those of the last plain solve, and a solve that
+        fails is a trace that ends where it failed, not an error. The
+        recording is kept, for :meth:`debug_whatif` to replay.
+
+        It runs on a copy, like the live debugger, so that what the
+        flowsheet says about its last solve (``last_solve_*``, which
+        diagnosis reads) still describes the last plain solve.
+        """
+        refused = self._cannot_solve()
+        if refused is not None:
+            return refused
+        from difflow.debug.record import record
+
+        kw = {"on_nonconvergence": "ignore", **self._solve_kw()}
+        with self._lock, warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            trace = record(self._debug_copy(), kw)
+        self._recorded_trace = {"key": self._model_key(), "kw": kw,
+                                "frames": trace["frames"], "trace": trace}
+        self._whatif_trace = None
+        return {"ok": True, "trace": trace, "warnings": _recorded(caught)}
+
+    def debug_whatif(self, frame, stream, field, value) -> dict:
+        """Replay the last recording with one tear value set at ``frame``.
+
+        A replay, not a fresh solve from the edited value: the solve runs
+        again from the start and the edit lands at the same point, so the
+        accelerator still has the history it had there. Every frame before
+        the edit is checked against the recording (``diverged_at``), and a
+        recording of a flowsheet that has since changed is refused rather
+        than replayed against the wrong model. The recording itself is kept
+        as it was, so successive what-ifs all start from it.
+        """
+        kept = self._recorded_trace
+        if kept is None:
+            return {"ok": False, "error": "record a solve first"}
+        if kept["key"] is None or kept["key"] != self._model_key():
+            return {"ok": False, "error": (
+                "the flowsheet (or its solver options) changed since the solve "
+                "was recorded, so a replay would not be a replay. Record again.")}
+        try:
+            frame, value = int(frame), float(value)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "frame must be an integer and value a number"}
+        frames = kept["frames"]
+        if not 0 <= frame < len(frames) or \
+                frames[frame]["checkpoint"] not in ("iteration", "after_accel"):
+            return {"ok": False, "error": (
+                "a what-if starts at a tear iteration (or an accelerated "
+                "guess) of the recording")}
+        refused = self._cannot_solve()
+        if refused is not None:
+            return refused
+        from difflow.debug.record import record
+
+        edit = {"frame": frame, "stream": str(stream), "field": str(field),
+                "value": value}
+        with self._lock, warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            trace = record(self._debug_copy(), kept["kw"], edits=[edit],
+                           baseline=frames)
+        if trace["result"]["refused"]:
+            return {"ok": False,
+                    "error": trace["result"]["refused"][0]["detail"]}
+        self._whatif_trace = trace
+        return {"ok": True, "trace": trace, "warnings": _recorded(caught)}
+
+    def debug_trace(self, which: str = "recorded") -> dict | None:
+        """The last recording (``"recorded"``) or what-if (``"whatif"``), or None."""
+        if which == "whatif":
+            return self._whatif_trace
+        return (self._recorded_trace or {}).get("trace")
+
+    # -- the live debugger ------------------------------------------------
+    #
+    # A long poll: each call returns as soon as the solve pauses or
+    # finishes, or after LIVE_WAIT seconds with ``state: "running"``, and
+    # the page calls `debug_wait` again. The server gives every request a
+    # thread of its own, so a parked call costs one thread and holds
+    # nothing else up --- not the heartbeat, not an edit. The solve runs
+    # on a copy, so an edit made while it is paused cannot reach into it,
+    # and the session lock is never held across a pause.
+
+    def _debug_copy(self):
+        """A copy of the flowsheet for a live solve to run on."""
+        import copy
+        import json
+
+        from difflow import serialize
+
+        state = self._state()
+        if state is not None:
+            try:
+                return serialize.from_dict(json.loads(state), refs=self.bindings,
+                                           trust=True)
+            except Exception:
+                pass
+        return copy.deepcopy(self.flowsheet)
+
+    def _debugger_reply(self, event: dict) -> dict:
+        return {"ok": True, "event": event, "state": self._debugger.state}
+
+    def debug_start(self, on_error: bool = False,
+                    wait: float | None = None) -> dict:
+        """Start a live debugged solve; stop any that is running.
+
+        Returns the first event: the pause at ``solve_start``, or with
+        ``on_error`` the first failure (or ``finished`` if there is none).
+        ``wait`` is how long to wait for it (default :data:`LIVE_WAIT`).
+        """
+        refused = self._cannot_solve()
+        if refused is not None:
+            return refused
+        from difflow.debug.runner import DebugRunner
+
+        self.debug_stop()
+        with self._lock:
+            try:
+                flowsheet = self._debug_copy()
+            except Exception as exc:
+                return {"ok": False, "error": f"could not copy the flowsheet to "
+                        f"debug it: {type(exc).__name__}: {exc}"}
+        self._debugger = DebugRunner(flowsheet, {"on_nonconvergence": "ignore",
+                                                 **self._solve_kw()},
+                                     on_error=bool(on_error))
+        event = self._debugger.start(timeout=_wait(wait))
+        return {**self._debugger_reply(event), "hello": self._debugger.hello}
+
+    def debug_command(self, command: str, wait: float | None = None) -> dict:
+        """One debugger command at the current pause (see docs/debugger.md)."""
+        if self._debugger is None:
+            return {"ok": False, "error": "no live debugger: start one"}
+        return self._debugger_reply(self._debugger.command(
+            str(command or ""), timeout=_wait(wait)))
+
+    def debug_wait(self, wait: float | None = None) -> dict:
+        """The next pause or the end, for a page whose last call said running."""
+        if self._debugger is None:
+            return {"ok": False, "error": "no live debugger: start one"}
+        return self._debugger_reply(self._debugger.wait(_wait(wait)))
+
+    def debug_state(self) -> dict:
+        """Where the live debugger is, without waiting: its state and last event."""
+        if self._debugger is None:
+            return {"ok": True, "state": "idle", "event": None}
+        return self._debugger_reply(self._debugger.last_event)
+
+    def debug_pause(self) -> dict:
+        """Stop a running solve at its next checkpoint (it arrives via wait)."""
+        if self._debugger is None:
+            return {"ok": False, "error": "no live debugger: start one"}
+        return self._debugger_reply(self._debugger.pause())
+
+    def debug_stop(self) -> dict:
+        """Stop the live debugger, if there is one. Always succeeds."""
+        live, self._debugger = self._debugger, None
+        if live is not None:
+            live.close(timeout=5.0)
+        return {"ok": True, "state": "idle"}
+
+    def solve(self) -> dict:
+        """Solve, and report a failure rather than raising at the socket.
+
+        The diagnostics matter as much as the streams. ``Flowsheet``
+        records how it solved, how far the tear residual came down,
+        against what tolerance and on which streams; every one of those
+        was already there and none of them was ever shown. A recycle
+        that stopped at ``max_iter`` with a residual of 1e-3 returns
+        numbers that look like an answer, and the only thing that says
+        otherwise is ``converged``.
+        """
+        refused = self._cannot_solve()
+        if refused is not None:
+            return refused
+        caught = []
+        try:
+            with self._lock, warnings.catch_warnings(record=True) as caught:
+                # Recorded, not printed: a TearToleranceWarning or a
+                # CSTRDensityWarning on the server's stderr is somewhere
+                # nobody using the editor or an agent is looking. The
+                # verdict itself is the `converged` field below, which is
+                # why non-convergence is "ignore" rather than a warning.
+                warnings.simplefilter("always")
+                streams = self.flowsheet.solve(on_nonconvergence="ignore",
+                                               **self._solve_kw())
+        except Exception as exc:
+            self.solve_error = self._solve_error(exc)
+            return {"ok": False, "error": self.solve_error,
+                    "warnings": _recorded(caught)}
+        self.streams = streams
+        self.solve_error = None
+        fs = self.flowsheet
+        return {
+            "ok": True,
+            "streams": {
+                name: {
+                    k: (v if isinstance(v, str) else float(v))
+                    for k, v in stream.items()
+                }
+                for name, stream in streams.items()
+            },
+            "species": list(getattr(fs, "species_order", []) or []),
+            "converged": getattr(fs, "last_solve_converged", None),
+            "iterations": getattr(fs, "last_solve_iterations", None),
+            "method": getattr(fs, "last_solve_method", None),
+            "residual": _number(getattr(fs, "last_solve_residual", None)),
+            "tol": _number(getattr(fs, "last_solve_tol", None)),
+            "tear_streams": list(getattr(fs, "last_solve_tear_streams", []) or []),
+            # The loop gain and the error it implies: at gain g the error
+            # is about 1/(1-g) times the step that `tol` tested.
+            "gain": _number(getattr(fs, "last_solve_gain", None)),
+            "error_estimate": _number(getattr(fs, "last_solve_error_estimate", None)),
+            "clip_active": getattr(fs, "last_solve_clip_active", None),
+            "warnings": _recorded(caught),
+            "solver": self.solver_options(),
+            "audit": self._audit(streams),
+        }
+
+    #: Relative mass-balance gap above which a solve is flagged. Loose on
+    #: purpose: a recycle converged to its tolerance closes to about that
+    #: tolerance, and the case this exists for (a negative reactor volume
+    #: creating 12 % more mass) is nowhere near it.
+    MASS_GAP = 1e-4
+
+    def _audit(self, streams: dict) -> dict:
+        """What a solve that "worked" should still be checked for.
+
+        ``Flowsheet.solve`` returning is not the answer being physical: a
+        CSTR with ``V = -1`` solved to 2 mol/s in and 2.25 out and the
+        editor said "solved". Three checks, each cheap, none of which
+        changes ``ok``: streams holding NaN or infinity, negative flows,
+        and the overall mass balance --- the feeds some unit reads against
+        the streams no unit reads --- when every species has a molar mass
+        in the database. A feed nothing reads is warned about by name.
+        """
+        from difflow.database import get_species_data
+
+        fs = self.flowsheet
+        warnings = []
+        bad = sorted(name for name, stream in streams.items()
+                     if any(not isinstance(v, str) and not math.isfinite(float(v))
+                            for v in stream.values()))
+        if bad:
+            warnings.append(f"non-finite values (NaN or infinity) in "
+                            f"{', '.join(bad)}")
+        negative = sorted(
+            name for name, stream in streams.items() if name not in bad
+            and any(k.startswith("F_") and float(v) < -1e-9 for k, v in stream.items())
+        )
+        if negative:
+            warnings.append(f"negative flows in {', '.join(negative)}")
+        # A unit whose own inner solve did not close its balance returns an
+        # outlet that is not a solution of the unit, however well the
+        # recycle around it converged.
+        for unit, info in (getattr(fs, "last_solve_unit_info", None) or {}).items():
+            ok = info.get("converged") if isinstance(info, dict) else None
+            if ok is not None and not bool(ok):
+                warnings.append(f"{unit}'s own solve did not close its balance "
+                                f"(relative residual "
+                                f"{float(info.get('balance_residual', float('nan'))):.3g})")
+
+        idle = sorted(set(fs.feeds) - {n for u in fs.units for n in u.inlet_names})
+        if idle:
+            warnings.append(
+                f"{', '.join(idle)} {'is a feed' if len(idle) == 1 else 'are feeds'}"
+                " no unit reads; connect it to an inlet, or remove it")
+        order = list(getattr(fs, "species_order", None) or [])
+        mass = None
+        try:
+            mw = {s: float(get_species_data(s).MW) for s in order}
+        except Exception:  # noqa: BLE001 -- a species the database lacks
+            mw = None
+        if mw and not bad:
+            read = {n for u in fs.units for n in u.inlet_names}
+            made = {n for u in fs.units for n in u.outlet_names}
+            products = sorted(made - read - set(fs.recycles))
+
+            def kg(names):
+                return sum(float(streams[n].get(f"F_{s}", 0.0)) * mw[s]
+                           for n in names if n in streams for s in order) / 1000.0
+
+            # A feed nothing reads (kept when its unit was deleted) enters
+            # nothing, so it is not "in"; counted, it read as mass lost.
+            m_in = kg(f for f in fs.feeds if f in read)
+            m_out = kg(products)
+            gap = (m_out - m_in) / max(abs(m_in), 1e-300)
+            mass = {"in": m_in, "out": m_out, "relative_gap": gap,
+                    "products": products}
+            if m_in > 0 and abs(gap) > self.MASS_GAP:
+                warnings.append(
+                    f"mass is not conserved: {m_in:.6g} kg/s in, "
+                    f"{m_out:.6g} kg/s out ({gap:+.2%}). Check the unit "
+                    "parameters (a volume or a fraction outside its range) "
+                    "and the reaction stoichiometry."
+                )
+        return {"warnings": warnings, "mass": mass}
+
+    def _missing_call_params(self) -> dict[str, list[str]]:
+        """Required ``__call__`` arguments no unit has a value for."""
+        missing = {}
+        for u in self.flowsheet.units:
+            try:
+                specs = self._schema(u.name).get("call_parameters", [])
+            except Exception:  # noqa: BLE001 -- the solve will say what
+                continue
+            names = [p["name"] for p in specs
+                     if p["required"] and p["name"] not in (u.params or {})]
+            if names:
+                missing[u.name] = names
+        return missing
+
+    def _solve_error(self, exc: Exception) -> str:
+        """A solve failure, translated where the raw message names nothing.
+
+        An inlet with nothing on the other end comes out of
+        ``Flowsheet.solve`` as ``KeyError: 'mixer_in'``: the name of a
+        stream, with no hint that what is missing is a feed and no hint
+        that a feed is something the editor can declare. Every other
+        failure is passed through --- "Must specify duty, T_out, or (UA
+        and T_utility)" is the model being right, and rewording it would
+        only put distance between the message and the class that raised it.
+        """
+        from difflow.workspace import edit
+
+        if isinstance(exc, KeyError) and exc.args:
+            missing = exc.args[0]
+            if missing in edit.unfed(self.flowsheet):
+                return (f"nothing feeds {missing!r}. Give it a feed, or "
+                        "connect a unit's outlet to it.")
+        return f"{type(exc).__name__}: {exc}"
+
+    # -- derivatives ---------------------------------------------------
+
+    def levers(self) -> dict:
+        """What a sensitivity can be taken with respect to, and of.
+
+        The outputs need a solved flowsheet to be listed, so they come
+        from the last solve; before one, the list is empty and the panel
+        says to solve first rather than offering names that may not
+        survive it.
+        """
+        from difflow.workspace import sensitivity
+
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        return {
+            "ok": True,
+            "levers": sensitivity.levers(self.flowsheet),
+            "outputs": (sensitivity.outputs(self.streams)
+                        if self.streams is not None else []),
+            "solved": self.streams is not None,
+        }
+
+    def sensitivity(self, lever: str | None = None,
+                    target: str | None = None) -> dict:
+        """One derivative sweep, forward or reverse.
+
+        Which one is decided by which end the caller pinned: a ``lever``
+        asks how the whole flowsheet moves and is answered forward, a
+        ``target`` asks which knobs move it and is answered in reverse.
+        See :mod:`difflow.workspace.sensitivity`.
+        """
+        from difflow.workspace import sensitivity as ad
+
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        if bool(lever) == bool(target):
+            return {"ok": False,
+                    "error": "give exactly one of 'lever' (forward, every "
+                             "stream) or 'target' (reverse, every lever)"}
+        try:
+            with self._lock:
+                kw = self._solve_kw()
+                answer = (ad.forward(self.flowsheet, lever, **kw) if lever
+                          else ad.reverse(self.flowsheet, target, **kw))
+                base = self._base_point()
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": True, **answer, **base}
+
+    def _base_point(self) -> dict:
+        """Did the flowsheet converge at the point being differentiated?
+
+        The derivative is taken through a traced solve, which keeps no
+        verdict, so the answer is asked of one concrete solve beside it.
+        A Jacobian of a tear that never closed is a derivative of where
+        the iteration stopped, not of the model, and was shown without a
+        word to say so.
+        """
+        fs = self.flowsheet
+        # Unaccelerated, whatever the stored options say: a traced solve
+        # always drops to plain substitution (``Flowsheet.solve`` cannot
+        # branch on a tracer), so that is the iteration the derivative went
+        # through. Asked with Anderson, a loop it closes in ten steps and
+        # substitution does not close in max_iter read as converged.
+        kw = {**self._solve_kw(), "acceleration": "none"}
+        try:
+            fs.solve(on_nonconvergence="ignore", **kw)
+        except Exception:
+            return {"converged": None, "residual": None, "warning": None}
+        converged = fs.last_solve_converged
+        residual = _number(fs.last_solve_residual)
+        warning = None
+        if converged is False:
+            size = "unknown" if residual is None else f"{residual:.3g}"
+            warning = ("the flowsheet did not converge here (tear residual "
+                       f"{size}), so these derivatives are of where "
+                       "the iteration stopped, not of the model")
+        return {"converged": converged, "residual": residual,
+                "warning": warning}
+
+    # -- planning ------------------------------------------------------
+
+    def linearize(self, u, y, *, bounds=None, radius=None,
+                  check: bool = False) -> dict:
+        """Linearize the flowsheet into delta vectors for an LP planner.
+
+        The selection is persisted in ``view["planning"]`` on the way
+        through, so reopening the file reopens the panel with the same
+        levers and outputs. That is a *write*, and the only one here ---
+        the linearization itself changes nothing, and the flowsheet it
+        reads is the one already in memory, not a rebuilt copy.
+
+        Args:
+            u: Lever keys, as ``GET /api/levers`` offers them.
+            y: Output keys, ``"<stream>.<quantity>"``.
+            bounds: ``{lever: {"lb": float, "ub": float}}``, partial.
+            radius: Trust-region radius as a fraction of each lever's
+                range. Defaults to the module's own.
+            check: Also verify the Jacobian against central differences.
+                Costs ``2 n_u`` extra solves, so the panel asks for it
+                explicitly.
+
+        Returns:
+            The answer dict from :func:`difflow.workspace.planning.linearize`,
+            or ``{"ok": False, "error": ...}``.
+        """
+        from difflow.workspace import planning
+
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        u, y = list(u or []), list(y or [])
+        if not u or not y:
+            return {"ok": False,
+                    "error": "pick at least one lever and one output"}
+        # Refused here, by name. A NaN radius made a trust region of NaN
+        # bounds that the LP export wrote out as written, and a negative
+        # one a region with its lower bound above its upper.
+        if radius is None:
+            radius = planning.DEFAULT_RADIUS
+        else:
+            try:
+                radius = float(radius)
+            except (TypeError, ValueError):
+                radius = math.nan
+            if not (math.isfinite(radius) and radius > 0):
+                return {"ok": False,
+                        "error": "the trust-region radius must be a positive number"}
+        try:
+            with self._lock:
+                dvs, answer = planning.linearize(
+                    self.flowsheet, u, y, bounds=bounds, radius=radius,
+                    check=check, solve_kwargs=self._solve_kw())
+                #: the last linearization, which is what the assistant's
+                #: `planning` brief reads
+                self.delta_vectors = dvs
+                self.flowsheet.view["planning"] = {
+                    "u": u, "y": y, "bounds": dict(bounds or {}),
+                    "radius": radius,
+                }
+                base = self._base_point()
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {**answer, **base}
+
+    def linearization_files(self, fmt: str) -> dict:
+        """The last linearization rendered for download."""
+        from difflow.workspace import planning
+
+        dvs = getattr(self, "delta_vectors", None)
+        if dvs is None:
+            return {"ok": False, "error": "nothing linearized yet"}
+        # Not the flowsheet's own stem: `recycle.json` is the document,
+        # and a download that lands next to it under the same name is a
+        # flowsheet overwritten by a Jacobian.
+        stem = f"{self.path.stem if self.path else 'flowsheet'}_delta_vectors"
+        try:
+            return {"ok": True, "format": fmt,
+                    "files": planning.files(dvs, fmt, stem)}
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    # -- the console ---------------------------------------------------
+
+    #: names the console binds before every cell, and what they hold.
+    #: They are refreshed each time rather than bound once: `streams`
+    #: changes whenever Solve is pressed, and a console describing the
+    #: previous solve is worse than one describing none.
+    CONSOLE_NAMES = {
+        "fs": "the flowsheet on the canvas, live",
+        "streams": "the last solve's streams, or None",
+        "dvs": "the last linearization, or None",
+        "session": "this session -- session.solve() keeps the panels in step",
+    }
+
+    def _live(self) -> dict:
+        """What the console sees of the editor, plus the code context."""
+        import difflow
+
+        names = dict(self.bindings)          # the flowsheet's own snippet
+        names.update(
+            difflow=difflow,
+            jax=__import__("jax"),
+            jnp=__import__("jax.numpy", fromlist=["numpy"]),
+            fs=self.flowsheet,
+            streams=self.streams,
+            dvs=self.delta_vectors,
+            session=self,
+        )
+        return names
+
+    def _fingerprint(self) -> str | None:
+        """Enough of the document to notice a cell having changed it.
+
+        ``None`` means *assume changed*: a flowsheet that will not
+        serialize is exactly the case where the canvas most needs to
+        refetch, so an unserializable model must not read as untouched.
+        """
+        if self.flowsheet is None:
+            return "none"
+        try:
+            import json
+
+            from difflow import serialize
+
+            return json.dumps(serialize.to_dict(self.flowsheet,
+                                                refs=self.bindings),
+                              sort_keys=True, default=str)
+        except Exception:
+            return None
+
+    @_undoable
+    def console_run(self, source: str) -> dict:
+        """Run one cell against the live model.
+
+        The reply always has ``ok: True`` when the cell ran at all --- a
+        traceback is the answer to the question that was asked, not a
+        refusal of the request --- and carries it in ``error`` alongside
+        whatever the cell managed to print first.
+
+        ``changed`` says whether the cell moved the model out from under
+        the canvas. It can: ``fs`` is the flowsheet itself, not a copy,
+        and a console that cannot touch the model is a worse notebook.
+        So the page is told to redraw, and the cached streams are
+        dropped the way any other edit drops them.
+        """
+        from difflow.workspace import console as console_mod
+
+        if not source.strip():
+            return {"ok": True, "outputs": [], "error": None,
+                    "changed": False, "names": []}
+        with self._lock:
+            if self._console is None:
+                self._console = console_mod.Console()
+            before = self._fingerprint()
+            self._console.bind(**self._live())
+            answer = self._console.run(source)
+            after = self._fingerprint()
+            changed = before is None or after is None or before != after
+            if changed:
+                self.streams = self.solve_error = None
+        answer["changed"] = changed
+        return answer
+
+    def console_reset(self) -> dict:
+        """Forget what the console defined; the live names come back."""
+        with self._lock:
+            if self._console is not None:
+                self._console.reset()
+        return {"ok": True, "outputs": [], "error": None,
+                "changed": False, "names": []}
+
+    def console_names(self) -> dict:
+        """What is in scope before anything is typed."""
+        return {"ok": True,
+                "live": dict(self.CONSOLE_NAMES),
+                "bindings": sorted(self.bindings),
+                "defined": self._console.names if self._console else []}

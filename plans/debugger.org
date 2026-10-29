@@ -164,6 +164,19 @@ accelerator's history. Guards: frames before the edit are checked against
 the recording (=diverged_at=), and the server refuses to replay a recording
 of a model that has since changed (the layout aside).
 
+* Decided (2026-10-30): the editor moves to the book
+
+difflow stays the open engine (MIT); the browser editor becomes the app that
+comes with the difflow book (=difflow-book/app=, package =difflow_app=, not
+open source). The line: the debugger core (checkpoints in =flowsheet.py=,
+the engine, REPL, JSON protocol, record/replay), the session engine
+(=difflow.gui= renamed =difflow.workspace=) and the agent/MCP tools stay
+open; the HTTP server, the assistant forwarder, the Svelte frontend and its
+bundle, and the static =publish= page move. difflow finds the app through
+the =difflow.apps= entry point (=difflow.apps=), so =difflow gui= and
+=open_in_editor= keep working where it is installed. The editor sections
+below describe what is now the app.
+
 * Phase 2: the editor
 
 The editor is the front end this was asked for, and the runner is the seam:

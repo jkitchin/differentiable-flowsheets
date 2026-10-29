@@ -71,7 +71,7 @@ def test_an_agent_can_step_a_solve_through_the_debug_tools():
     import json
 
     from difflow.agent import Workbench
-    from difflow.gui.session import FlowsheetSession
+    from difflow.workspace.session import FlowsheetSession
     from tests.test_debug import loop, poisoned
 
     wb = Workbench()

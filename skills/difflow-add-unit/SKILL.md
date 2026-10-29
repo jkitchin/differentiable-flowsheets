@@ -107,6 +107,6 @@ within `DIFFLOW_TEST_BUDGET` (180 s). Run `pytest tests/test_<name>.py -v`.
 1. Document it in `docs/unit-operations-*.md` under a heading naming it
    (`###` or shallower), or a MyST label `(op-<lowercase name>)=` before its
    table row.
-2. Run `python3 src/difflow/gui/docs_index.py` to refresh the editor index.
+2. Run `python3 src/difflow/workspace/docs_index.py` (`make docs-index`) to refresh the docs index.
 3. `pytest tests/test_doclinks.py` must pass.
 4. Add an example notebook in `examples/` if the unit is user-facing.

@@ -223,8 +223,8 @@ def search_species(query: str = "", limit: int = 25) -> dict:
 
 def search_docs(query: str, limit: int = 5) -> dict:
     """Sections of the difflow book that best match a question."""
-    from difflow.gui import docs_index
-    from difflow.gui.doclinks import BASE_URL
+    from difflow.workspace import docs_index
+    from difflow.workspace.doclinks import BASE_URL
 
     index = docs_index.load()
     if index is None:
@@ -239,6 +239,6 @@ def search_docs(query: str, limit: int = 5) -> dict:
 
 def list_examples() -> dict:
     """The example flowsheets that open in a session."""
-    from difflow.gui import examples
+    from difflow.workspace import examples
 
     return {"ok": True, "examples": examples.listing()}

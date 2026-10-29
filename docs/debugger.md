@@ -21,8 +21,8 @@ streams, units and tears.
 - [Breakpoints](#breakpoints)
 - [Post mortem: `on_error`](#post-mortem-on-error)
 - [Editing the tear: `set tear`](#editing-the-tear-set-tear)
-- [Recording a solve: the Trace panel](#recording-a-solve-the-trace-panel)
-- [Live in the editor: the Debug panel](#live-in-the-editor-the-debug-panel)
+- [Recording a solve, and replaying it](#recording-a-solve-and-replaying-it)
+- [Behind a server: the session's debugger](#behind-a-server-the-session-s-debugger)
 - [Driving it from a program](#driving-it-from-a-program)
 - [What it does not change](#what-it-does-not-change)
 - [Limits](#limits)
@@ -194,95 +194,68 @@ not the plain solve, so it says so. Every edit is listed in the
 them. Unit parameters are not editable: that would be a different
 flowsheet, not a different route.
 
-## Recording a solve: the Trace panel
+## Recording a solve, and replaying it
 
 `debug.record(fs, solve_kwargs)` solves once with nobody at the prompt,
 stepping through every checkpoint, and returns a `difflow-trace/1` dict:
 the unit order, the tears, one frame per checkpoint holding only what that
 checkpoint wrote (the feeds, a unit's outlets, the tear iterate, the next
 guess), and the solve's verdict. Replaying the frames up to `i` gives
-every stream at frame `i`. A solve that raises is recorded up to the
-raise, with the error in `result`, rather than raised.
+every stream at frame `i` (`difflow.debug.record.state_at`). A solve that
+raises is recorded up to the raise, with the error in `result`, rather than
+raised. `summarize(trace)` is the same thing without the frames: one row per
+tear iteration (its frame, its residual, the tear entry the residual is
+mostly made of), the events, and how the history reads.
 
 ```python
+from difflow import debug
+from difflow.debug.record import compare, summarize
+
 trace = debug.record(fs, {"acceleration": "wegstein"})
-[f["residual"] for f in trace["frames"] if f["checkpoint"] == "iteration"]
+summarize(trace)["iterations"]
 ```
-
-In the editor, **View → Trace** does this through `/api/debug/record` and
-lets you scrub the trace:
-
-- a slider and step buttons that move by frame, by unit, by tear
-  iteration, or straight from event to event (← and → work too), with
-  play;
-- the unit the solve is at outlined on the canvas;
-- the residual by iteration on a log axis (a NaN marked in red on the
-  top edge; click a point to jump to it) and the list of events;
-- at each step, what it changed (before and after), and at a tear
-  iteration the tear table, largest `|g - x|` first; every stream at that
-  step on request.
-
-The trace is the record of one solve, read in the browser: scrubbing
-never re-solves.
 
 ### What if
 
-At a tear iteration (or an accelerated guess) the panel offers **What if
-the next pass ran on …**: pick a tear entry, give it a value, and *Replay
-from here*. That is the one thing in the panel that solves again, and it
-is a **replay**: the solve runs from the start with the same options and
-the edit lands at exactly that frame, so everything before it is the
-recording, and the accelerator still has the history it had there. A
-fresh solve seeded with the edited value is not the same thing --- it
-forgets Anderson's or Wegstein's history and takes a different path ---
-which is why the panel does not offer that.
+*What would the solve have done if the tear had been X at iteration 3?*
+The faithful answer is a **replay**: solve again from the start with the
+same options and set the tear when the replay reaches that frame, so that
+everything before it is the recording and the accelerator still has the
+history it had there. A fresh solve seeded with the edited value is not
+the same thing --- it forgets Anderson's or Wegstein's history and takes a
+different path.
 
-The what-if comes back as a second trace: switch between *Recorded* and
-*What if*, with the other run's residual drawn faintly on the same axes
-and a dashed line where the edit landed. The recording is kept as it was,
-so each what-if starts from it. Two guards keep it honest:
+```python
+k = summarize(trace)["iterations"][3]["frame"]
+replay = debug.record(fs, {"acceleration": "wegstein"},
+                      edits=[{"frame": k, "stream": "recycle", "field": "F_A", "value": 0.5}],
+                      baseline=trace["frames"])
+compare(trace, replay)                   # residuals side by side, same_answer
+```
 
-- every frame before the edit is checked against the recording, and if
-  one differs the panel says the replay *left the recording* at that
-  frame --- it is then not the same solve, and its answer is about
-  something else;
-- a recording of a flowsheet that has changed since (a unit, a feed, the
-  solver options; not the layout) is refused rather than replayed:
-  record again.
+Two checks keep it honest. Every frame before the edit is checked against
+the recording, and `result["diverged_at"]` names the first that differs:
+then the replay is not the same solve, and its answer is about something
+else. And `compare` says whether the two runs ended at the same answer
+(`same_answer`, with the stream that differs most): two converged runs
+that disagree are two steady states.
 
-From Python it is `debug.record(fs, kw, edits=[{"frame": k, "stream":
-"recycle", "field": "F_A", "value": 0.5}], baseline=trace["frames"])`;
-`result["diverged_at"]` and `result["refused"]` carry the two checks.
+## Behind a server: the session's debugger
 
-## Live in the editor: the Debug panel
+`difflow.workspace.FlowsheetSession` --- the session engine the agent
+tools run on --- carries the debugger for front ends that cannot block on
+a prompt. The live debugger is a long poll: `debug_start`,
+`debug_command`, `debug_wait`, `debug_pause` and `debug_stop` each return
+as soon as the solve pauses or ends, or after a wait (20 s by default)
+with `state: "running"`, and the caller asks `debug_wait` again. The solve
+runs on a copy of the flowsheet, so nothing done to the session while it
+is paused reaches it. `debug_record` and `debug_whatif` keep the last
+recording and replay it, refusing a recording of a flowsheet that has
+changed since (the layout aside). All of it answers in the JSON protocol's
+events.
 
-**View → Debug** is the debugger itself, in the editor. *Start* solves a
-copy of the flowsheet and stops before the first pass; *Run to error*
-runs it freely and stops only post mortem (as `--on-error`). Then:
-
-- *Step iteration*, *Next unit*, *Step in* and *Continue* are `step`,
-  `next`, `stepi` and `continue`; *Pause* stops a running solve at its
-  next checkpoint (a unit in the middle of its own calculation finishes
-  it first); *Stop* ends the solve.
-- The unit the solve is at is outlined on the canvas. Select a unit and
-  the breakpoint row offers *before UNIT*; the event checkboxes are
-  `break on nonfinite`, `unit_error`, `residual_rise` and
-  `inner_unconverged`.
-- At a tear iteration the tear table is shown without asking.
-- The command line under the transcript takes every command in this page
-  (`p STREAM`, `break if ...`, `set tear ...`, `help`), with ↑/↓ history.
-
-The solve runs on a copy, so editing the canvas while it is paused
-changes nothing in it; a copy is also why its answer is not put on the
-canvas when it finishes (press *Solve* for that). Closing the panel, or
-the editor, stops it.
-
-Underneath it is a long poll on `/api/debug/start`, `command`, `wait`,
-`pause` and `stop`: each request returns as soon as the solve pauses or
-ends, or after 20 s with `state: "running"`, and the page asks `wait`
-again. The editor's server gives each request a thread of its own, so a
-parked request holds nothing else up. The replies carry the JSON
-protocol's events, so an agent can drive the same routes.
+The difflow book's app (the browser editor) puts its **Debug** and
+**Trace** panels on exactly these calls.
 
 ## Driving it from a program
 
@@ -310,8 +283,8 @@ runner.close()
 An agent connected over MCP (`difflow mcp`) gets the same debugger as
 tools: `debug_start`, `debug_command`, `debug_wait`, `debug_pause`,
 `debug_state`, `debug_stop`, and `debug_guide` for the contract (see
-[agents](agents.md)). They are the editor's Debug-panel calls, on the
-agent's session. The Trace panel's record and what-if are there too:
+[agents](agents.md)). They are the session's debugger calls above, on the
+agent's session. Record and replay are there too:
 `debug_record` (a summary, not every frame), `debug_trace_frame` (one frame
 in full) and `debug_whatif` (the replay, compared with the recording,
 including whether it reached the same answer). In Python the summary and the

@@ -1,4 +1,4 @@
-"""Tests for the assistant's brief: difflow.gui.context and docs_index.
+"""Tests for the assistant's brief: difflow.workspace.context and docs_index.
 
 The assistant panel's value is not the model, it is what the model is
 handed. So these tests are about the brief itself --- that it contains
@@ -29,8 +29,8 @@ from difflow import (
     get_species_data,
     make_stream,
 )
-from difflow.gui import context, docs_index
-from difflow.gui.session import FlowsheetSession
+from difflow.workspace import context, docs_index
+from difflow.workspace.session import FlowsheetSession
 
 SPECIES = ["water", "ethanol"]
 
@@ -86,7 +86,7 @@ class TestDocsIndex:
         fresh = docs_index.build()
         assert committed["sections"] == fresh["sections"], (
             "docs/ has changed since the index was built; "
-            "run `make gui-build` (or python src/difflow/gui/docs_index.py)"
+            "run `make docs-index` (or python src/difflow/workspace/docs_index.py)"
         )
 
     def test_search_finds_the_chapter_that_is_about_the_question(self):

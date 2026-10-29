@@ -417,7 +417,7 @@ def slow(s):
 
 
 def test_the_session_steps_a_live_solve_on_a_copy():
-    from difflow.gui.session import FlowsheetSession
+    from difflow.workspace.session import FlowsheetSession
 
     fs = loop()
     session = FlowsheetSession(fs)
@@ -437,8 +437,8 @@ def test_the_session_steps_a_live_solve_on_a_copy():
 
 
 def test_a_running_live_solve_can_be_paused(monkeypatch):
-    from difflow.gui import session as session_module
-    from difflow.gui.session import FlowsheetSession
+    from difflow.workspace import session as session_module
+    from difflow.workspace.session import FlowsheetSession
 
     session = FlowsheetSession(loop(slow))
     session.debug_start()
@@ -455,7 +455,7 @@ def test_a_running_live_solve_can_be_paused(monkeypatch):
 
 
 def test_stopping_a_paused_live_solve_ends_it():
-    from difflow.gui.session import FlowsheetSession
+    from difflow.workspace.session import FlowsheetSession
 
     session = FlowsheetSession(loop())
     session.debug_start()

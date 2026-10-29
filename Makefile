@@ -42,7 +42,7 @@ endif
 .PHONY: all notebooks notebooks-force notebooks-bio notebooks-ree notebooks-cc \
         notebooks-bio-force notebooks-ree-force notebooks-cc-force \
         clean test test-durations book book-clean sync \
-        gui gui-build gui-test convergence ask-check
+        docs-index convergence ask-check
 
 all: notebooks
 
@@ -178,28 +178,12 @@ sync:
 	uv sync
 
 # ---------------------------------------------------------------------------
-# The editor front end.
+# The documentation index.
 #
-# Two artefacts, one rule: the JS bundle, and the assistant's retrieval
-# index over `docs/` (`static/docs-index.json`, built by a stdlib-only
-# script so CI can run it with nothing installed). Both are committed
-# and both are checked for drift, for the same reason.
-#
-# `src/difflow/gui/static/` is BUILT OUTPUT and it is committed: `pip install
-# difflow` must never need node. Only changing the UI does, and this is how.
-# CI reruns gui-build and fails if the result differs from what is committed,
-# so the bundle cannot drift away from its source.
-GUI_FRONTEND := src/difflow/gui/frontend
-
-gui-build:
-	cd $(GUI_FRONTEND) && npm ci && npm run build
-	python3 src/difflow/gui/docs_index.py
-
-# The pure model functions, under bare node. Same files tests/test_gui.py runs.
-gui-test:
-	cd $(GUI_FRONTEND) && npm test
-
-# Serve a flowsheet: `make gui FLOWSHEET=examples/whatever.json` (or bare, for
-# an empty one).
-gui:
-	$(UV_RUN) difflow gui $(FLOWSHEET)
+# `src/difflow/workspace/data/docs-index.json` is the retrieval index over
+# `docs/` that `search_docs` (and the book app's assistant) reads. It is
+# built by a stdlib-only script and committed, because `docs/` is not in the
+# wheel; rebuild it whenever the prose changes. (The browser editor that used
+# to be built here is the app that comes with the difflow book.)
+docs-index:
+	python3 src/difflow/workspace/docs_index.py

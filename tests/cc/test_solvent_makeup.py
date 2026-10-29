@@ -9,7 +9,7 @@ jax.config.update("jax_enable_x64", True)
 from difflow import Flowsheet, make_stream  # noqa: E402
 from difflow.catalog import catalog  # noqa: E402
 from difflow.flowsheet import Unit  # noqa: E402
-from difflow.gui import edit  # noqa: E402
+from difflow.workspace import edit  # noqa: E402
 from difflow_cc import (  # noqa: E402
     AbsorberParams,
     AmineAbsorber,

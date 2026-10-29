@@ -201,7 +201,7 @@ def _resolve_ref(name: str) -> Any:
             f"this flowsheet refers to {name!r}, which is defined in its code "
             "context rather than in the file. Supply it with "
             "refs={'" + name + "': ...}, or open the flowsheet in "
-            "difflow.gui, which evaluates the code context for you."
+            "difflow.workspace, which evaluates the code context for you."
         )
     return namespace[name]
 
@@ -1598,7 +1598,7 @@ def _build_operation(cls: type, encoded_params: dict, unit_name: str,
             # A Params class whose fields all carry defaults is still
             # constructible from nothing, and "no parameters written"
             # means exactly that -- which is the state a unit is in the
-            # moment difflow.gui adds it to a flowsheet.
+            # moment difflow.workspace adds it to a flowsheet.
             if params_cls is not None:
                 try:
                     return cls(params_cls(), **extras)

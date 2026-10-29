@@ -1,4 +1,4 @@
-"""Write the editor's plugin examples (src/difflow/gui/examples/*.json).
+"""Write the plugin examples (src/difflow/workspace/examples/*.json).
 
 Each example is built here with the plugin's own unit classes and saved
 through :func:`difflow.serialize.to_dict`, so the file is exactly what
@@ -26,7 +26,7 @@ from difflow.flowsheet import Unit  # noqa: E402
 from difflow.serialize import to_dict  # noqa: E402
 from difflow.units import Mixer  # noqa: E402
 
-OUT = Path(__file__).resolve().parents[1] / "src" / "difflow" / "gui" / "examples"
+OUT = Path(__file__).resolve().parents[1] / "src" / "difflow" / "workspace" / "examples"
 
 
 def write(key: str, fs: Flowsheet, title: str, description: str,

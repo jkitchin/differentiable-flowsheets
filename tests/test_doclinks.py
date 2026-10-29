@@ -1,4 +1,4 @@
-"""Tests for difflow.gui.doclinks: a documentation link per operation.
+"""Tests for difflow.workspace.doclinks: a documentation link per operation.
 
 The resolver is checked on a synthetic index; the guard asserts every
 registered operation has its own section (or labelled row) in docs/, so
@@ -6,7 +6,7 @@ adding a unit operation without writing it up fails here (#228).
 """
 
 from difflow.catalog import catalog
-from difflow.gui import doclinks, docs_index
+from difflow.workspace import doclinks, docs_index
 
 
 def _index(*sections):
@@ -51,7 +51,7 @@ def test_url_is_the_published_html_page():
 
 def test_every_operation_has_its_own_documentation():
     index = docs_index.load()
-    assert index is not None, "run `make gui-build`"
+    assert index is not None, "run `make docs-index`"
     links = {name: doclinks._resolve(name, index["sections"]) for name in catalog()}
     missing = sorted(n for n, link in links.items() if link is None)
     assert missing == [], "write a docs/ section for each of these operations"

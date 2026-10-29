@@ -10,7 +10,7 @@ finished would put an invented number into somebody's flowsheet.
 
 import pytest
 
-from difflow.gui import boilerplate
+from difflow.workspace import boilerplate
 
 SPECIES = ["water", "ethanol"]
 

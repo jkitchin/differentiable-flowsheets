@@ -1,6 +1,6 @@
 """Analysis of a solved flowsheet, driven by expressions.
 
-Every function here takes a :class:`~difflow.gui.session.FlowsheetSession`
+Every function here takes a :class:`~difflow.workspace.session.FlowsheetSession`
 and expressions in the language of :mod:`difflow.agent.expressions`, and
 solves with the session's own solver settings (not ``Flowsheet.solve``'s
 defaults, which ``make_objective_fn`` would use). Levers are the keys
@@ -46,7 +46,7 @@ def _function(session, text: str):
 
 
 def _known_levers(session) -> dict[str, dict]:
-    from difflow.gui.sensitivity import levers
+    from difflow.workspace.sensitivity import levers
 
     return {item["key"]: item for item in levers(session.flowsheet)}
 
@@ -86,7 +86,7 @@ def _float(value) -> float | None:
 
 def levers(session) -> dict:
     """Every scalar parameter a derivative or an optimizer can move."""
-    from difflow.gui.sensitivity import levers as find
+    from difflow.workspace.sensitivity import levers as find
 
     return {"ok": True, "levers": find(session.flowsheet)}
 

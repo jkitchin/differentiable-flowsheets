@@ -13,7 +13,7 @@ import pytest
 
 from difflow.agent import TOOLS, Workbench, jsonable
 
-EXAMPLES = Path(__file__).parent.parent / "src" / "difflow" / "gui" / "examples"
+EXAMPLES = Path(__file__).parent.parent / "src" / "difflow" / "workspace" / "examples"
 ESTERIFICATION = ["acetic_acid", "ethanol", "ethyl_acetate", "water"]
 
 
@@ -186,7 +186,7 @@ class TestLiveDebugger:
 
     @staticmethod
     def bench(middle=None):
-        from difflow.gui.session import FlowsheetSession
+        from difflow.workspace.session import FlowsheetSession
         from tests.test_debug import loop
 
         wb = Workbench()
@@ -258,7 +258,7 @@ class TestLiveDebugger:
         json.dumps(replay)
 
     def test_a_what_if_can_find_another_steady_state(self):
-        from difflow.gui.session import FlowsheetSession
+        from difflow.workspace.session import FlowsheetSession
         from tests.test_debug import bistable
 
         wb = Workbench()

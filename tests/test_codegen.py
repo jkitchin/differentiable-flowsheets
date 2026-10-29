@@ -334,13 +334,13 @@ class TestPluginUnits:
         assert _render(float("inf"), "x", set()) == "float('inf')"
 
     @pytest.mark.parametrize("key", [
-        e["key"] for e in __import__("difflow.gui", fromlist=["examples"])
+        e["key"] for e in __import__("difflow.workspace", fromlist=["examples"])
         .examples.listing()
     ])
     def test_every_bundled_example_rebuilds_from_its_script(self, key):
         """The editor's examples span every plugin; on main all nine
         generated scripts failed to run."""
-        from difflow.gui import FlowsheetSession
+        from difflow.workspace import FlowsheetSession
 
         session = FlowsheetSession()
         session.open_example(key)

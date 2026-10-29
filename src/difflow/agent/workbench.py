@@ -1,6 +1,6 @@
 """Named flowsheet sessions and the operations an agent runs on them.
 
-The engine is :class:`difflow.gui.session.FlowsheetSession`, the same
+The engine is :class:`difflow.workspace.session.FlowsheetSession`, the same
 object behind the browser editor: it holds a live ``Flowsheet``, keeps an
 undo history, and answers every call with a dict carrying ``ok`` instead
 of raising. A :class:`Workbench` holds several of them by name, so an
@@ -92,7 +92,7 @@ class Workbench:
     """
 
     def __init__(self, allow_exec: bool = True, timeout: float = DEFAULT_TIMEOUT):
-        from difflow.gui.session import FlowsheetSession
+        from difflow.workspace.session import FlowsheetSession
 
         self._Session = FlowsheetSession
         self.allow_exec = allow_exec
@@ -330,8 +330,9 @@ class Workbench:
 
     def open_in_editor(self, path: str | None = None, port: int | None = None,
                        browser: bool = True, session: str = "main") -> dict:
-        """Save the flowsheet and open it in difflow's browser editor, so a
-        person can see and change what was built.
+        """Save the flowsheet and open it in the browser editor, so a person
+        can see and change what was built. The editor is the app that comes
+        with the difflow book; without it installed this says so.
 
         The editor works on the saved file in its own process: edits made
         there reach this session only when the file is opened again with
@@ -346,12 +347,17 @@ class Workbench:
         import subprocess
         import sys
 
+        from difflow import apps
+
         s, err = self._get(session)
         if err:
             return err
         target = path or (None if s.path is None else str(s.path))
         if target is None:
             return {"ok": False, "error": "the flowsheet has no file yet; give a path"}
+        app = apps.module("gui")
+        if app is None:
+            return {"ok": False, "error": apps.MISSING}
         saved = jsonable(s.save(target, overwrite=path is None or
                                 (s.path is not None and str(s.path) == str(path))))
         if not saved.get("ok"):
@@ -360,7 +366,7 @@ class Workbench:
             with socket.socket() as probe:
                 probe.bind(("127.0.0.1", 0))
                 port = probe.getsockname()[1]
-        command = [sys.executable, "-m", "difflow.gui", saved["path"],
+        command = [sys.executable, "-m", app, saved["path"],
                    "--port", str(port)]
         if not browser:
             command.append("--no-browser")

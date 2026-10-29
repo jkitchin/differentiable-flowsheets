@@ -3,8 +3,9 @@
 `difflow mcp` serves difflow's flowsheet tools to an AI agent over the
 [Model Context Protocol](https://modelcontextprotocol.io). An agent connected
 to it can find unit operations, build and edit a flowsheet, solve it, read the
-streams, and run Python in the same session, with the same engine the browser
-editor uses.
+streams, step through a solve with the debugger, and run Python in the same
+session, on the same engine (`difflow.workspace`) the book's browser editor
+uses.
 
 ## Installing and connecting
 
@@ -157,8 +158,9 @@ iterations, convergence, and `same_answer`. Two converged runs that disagree
 (`same_answer: false`, with the stream that differs most) are two steady
 states.
 
-`open_in_editor` saves the flowsheet and opens it in the browser editor, so a
-person can see what an agent built. The editor runs on the saved file in its
+`open_in_editor` saves the flowsheet and opens it in the browser editor (the
+app that comes with the difflow book; without it installed the tool says so),
+so a person can see what an agent built. The editor runs on the saved file in its
 own process; its edits reach the agent's session when `open_file` reads the
 file again. A session holds one flowsheet; every tool takes a
 `session` argument (default `"main"`), so a base case and a variant can be

@@ -6,6 +6,21 @@ All notable changes to difflow are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **The browser editor moved out of difflow, to the app that comes with the difflow book.** difflow is the
+  open engine; the editor (canvas, inspector, results, planning, console, assistant, and the debugger's
+  Debug and Trace panels), its server, its frontend and the static `publish` page are now `difflow-app`,
+  which registers itself as a `difflow.apps` entry point. `difflow gui` and the agent tool
+  `open_in_editor` run it when it is installed and say where it comes from when it is not; a bare
+  `difflow` prints usage without it. The session engine stays open and is renamed `difflow.gui` ->
+  `difflow.workspace` (`FlowsheetSession`, edit, boilerplate, console, context, docs, docs_index,
+  doclinks, examples, layout, planning, sensitivity, and the new `topology`); the agent and MCP tools are
+  unchanged. `difflow.publish` is gone: `sweep`, `SweepAxis` and `SweepResult` are in `difflow.sweeps` (and
+  still exported from `difflow`); the HTML page is the app's. The docs search index is
+  `src/difflow/workspace/data/docs-index.json`, rebuilt with `make docs-index` (CI checks it); the
+  `gui-build`/`gui-test`/`gui` make targets, the editor's CI job and the `difflow-gui` script are removed.
+
 ### Added
 
 - **An interactive debugger for flowsheet solves.** New `difflow.debug` (docs/debugger.md) and `difflow debug
