@@ -25,9 +25,9 @@ The plugins register via the `difflow.plugins` entry points in `pyproject.toml`.
 
 ## Development
 
-Everything runs through **uv** (the lockfile `uv.lock` is committed; the venv lives at
-`/Users/jkitchin/Dropbox/uv/.venv`). The `VIRTUAL_ENV=` prefix in the Makefile prevents a
-different activated venv from shadowing uv's.
+Everything runs through **uv**, in the project's own `.venv` (`uv.lock` is gitignored, so
+it is local). The `VIRTUAL_ENV=` prefix in the Makefile prevents a different activated
+venv from shadowing uv's.
 
 | Task | Command | Make target |
 | --- | --- | --- |

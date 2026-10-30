@@ -8,8 +8,11 @@ UV_RUN := VIRTUAL_ENV= uv run
 # `uv run` does not install -- it would silently fall through to whatever is on
 # PATH. That matters for jupyter-book: the docs use the classic (Sphinx) config
 # in _config.yml / _toc.yml, and a stray jupyter-book 2.x on PATH cannot read it.
-# `--extra dev` pins both to the versions in uv.lock (jupyter-book <2.0).
-UV_RUN_DEV := VIRTUAL_ENV= uv run --extra dev
+# `--extra dev` pins both to jupyter-book <2.0. The other three extras are the
+# ones CI tests with (.github/workflows/test.yml): without `mcp`, `import mcp`
+# finds the repo's top-level mcp/ config directory as a namespace package, and
+# the MCP server tests fail with "cannot import name 'Client' from 'mcp'".
+UV_RUN_DEV := VIRTUAL_ENV= uv run --extra dev --extra gui --extra solvers --extra mcp
 
 # The notebooks import from the optional extras (tabulate from `examples`, asdex
 # from `solvers`, gaspype from `gaspype`), which plain `uv run` does not install,
