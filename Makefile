@@ -11,6 +11,14 @@ UV_RUN := VIRTUAL_ENV= uv run
 # `--extra dev` pins both to the versions in uv.lock (jupyter-book <2.0).
 UV_RUN_DEV := VIRTUAL_ENV= uv run --extra dev
 
+# The notebooks import from the optional extras (tabulate from `examples`, asdex
+# from `solvers`, gaspype from `gaspype`), which plain `uv run` does not install,
+# so they ran in an environment missing them and died with ModuleNotFoundError.
+# pounce, which examples/27 solves with, is in no extra (the `solvers` extra
+# leaves the back ends to the user), so it comes in with `--with`.
+UV_RUN_NB := VIRTUAL_ENV= uv run --extra examples --extra solvers --extra gaspype \
+	--with "pounce-solver[jax]"
+
 # Notebook execution command - use python -m to ensure correct kernel
 NBCONVERT := python -m jupyter nbconvert --to notebook --execute --inplace
 
@@ -55,7 +63,7 @@ $(STAMP_DIR):
 $(STAMP_DIR)/%.stamp: %.ipynb $(SRC_FILES) | $(STAMP_DIR)
 	@mkdir -p $(dir $@)
 	@echo "Executing $<..."
-	@$(JAX_ENV) $(UV_RUN) $(NBCONVERT) "$<" || exit 1
+	@$(JAX_ENV) $(UV_RUN_NB) $(NBCONVERT) "$<" || exit 1
 	@touch $@
 
 # Execute notebooks only if out of date
@@ -66,7 +74,7 @@ notebooks: $(STAMPS)
 notebooks-force:
 	@for nb in $(NOTEBOOKS); do \
 		echo "Executing $$nb..."; \
-		$(JAX_ENV) $(UV_RUN) $(NBCONVERT) "$$nb" || exit 1; \
+		$(JAX_ENV) $(UV_RUN_NB) $(NBCONVERT) "$$nb" || exit 1; \
 	done
 	@mkdir -p $(STAMP_DIR)/examples/bio $(STAMP_DIR)/examples/ree $(STAMP_DIR)/examples/cc \
 		$(STAMP_DIR)/jax-tutorials $(STAMP_DIR)/about-flowsheets
@@ -91,7 +99,7 @@ notebooks-cc: $(STAMPS_CC)
 notebooks-bio-force:
 	@for nb in $(NOTEBOOKS_BIO); do \
 		echo "Executing $$nb..."; \
-		$(JAX_ENV) $(UV_RUN) $(NBCONVERT) "$$nb" || exit 1; \
+		$(JAX_ENV) $(UV_RUN_NB) $(NBCONVERT) "$$nb" || exit 1; \
 		mkdir -p $(STAMP_DIR)/examples/bio; \
 		touch "$(STAMP_DIR)/$${nb%.ipynb}.stamp"; \
 	done
@@ -100,7 +108,7 @@ notebooks-bio-force:
 notebooks-ree-force:
 	@for nb in $(NOTEBOOKS_REE); do \
 		echo "Executing $$nb..."; \
-		$(JAX_ENV) $(UV_RUN) $(NBCONVERT) "$$nb" || exit 1; \
+		$(JAX_ENV) $(UV_RUN_NB) $(NBCONVERT) "$$nb" || exit 1; \
 		mkdir -p $(STAMP_DIR)/examples/ree; \
 		touch "$(STAMP_DIR)/$${nb%.ipynb}.stamp"; \
 	done
@@ -109,7 +117,7 @@ notebooks-ree-force:
 notebooks-cc-force:
 	@for nb in $(NOTEBOOKS_CC); do \
 		echo "Executing $$nb..."; \
-		$(JAX_ENV) $(UV_RUN) $(NBCONVERT) "$$nb" || exit 1; \
+		$(JAX_ENV) $(UV_RUN_NB) $(NBCONVERT) "$$nb" || exit 1; \
 		mkdir -p $(STAMP_DIR)/examples/cc; \
 		touch "$(STAMP_DIR)/$${nb%.ipynb}.stamp"; \
 	done
@@ -117,7 +125,7 @@ notebooks-cc-force:
 
 # Execute a single notebook (usage: make run NB=examples/01_cstr_flash_recycle.ipynb)
 run:
-	$(JAX_ENV) $(UV_RUN) $(NBCONVERT) "$(NB)"
+	$(JAX_ENV) $(UV_RUN_NB) $(NBCONVERT) "$(NB)"
 
 # The suite is compile-bound and parallelises across processes. `--dist
 # loadfile` keeps a module on one worker, so its compiled JAX graphs are

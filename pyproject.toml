@@ -55,8 +55,19 @@ dependencies = [
     # first release that does not.
     "equinox>=0.13.3",
     "pyyaml>=6.0",
-    "flax>=0.10.7",
+    # jax 0.11 removed `jax.core.get_opaque_trace_state` and `jax.core.Effect`,
+    # which flax 0.12.2 still calls (flax/core/tracers.py, flax/nnx/variablelib.py),
+    # so importing flax.nnx dies with an AttributeError. 0.12.9 is the first
+    # release built against jax 0.11.1. Both need Python 3.12, so 3.11 keeps the
+    # older jax and the older floor.
+    "flax>=0.12.9; python_version >= '3.12'",
+    "flax>=0.10.7; python_version < '3.12'",
     "gpjax>=0.12.2",
+    # Not used directly -- it arrives under gpjax. jax 0.11 removed
+    # `xla_pmap_p`, which numpyro 0.20.1 still imports in numpyro/ops/provenance.py,
+    # so `import gpjax` dies with an ImportError. 0.21.0 is the first release
+    # that does not.
+    "numpyro>=0.21.0",
     "blackjax>=1.3",
     "matplotlib>=3.10.8",
     "scipy>=1.10",
@@ -84,6 +95,8 @@ examples = [
     "jaxopt>=0.8.0",
     "optax>=0.1.0",
     "tabulate>=0.9.0",
+    # examples/22_ree_parameter_estimation and 44_particles_and_beds
+    "pandas>=2.0",
 ]
 visualization = [
     "ipycytoscape>=1.3.0",
