@@ -956,6 +956,7 @@ def bubbling_bed_expansion(
 __all__ = [
     "G_STD",
     "drag_coefficient",
+    "DRAG_METHODS",
     "archimedes_number",
     "terminal_reynolds",
     "terminal_velocity",

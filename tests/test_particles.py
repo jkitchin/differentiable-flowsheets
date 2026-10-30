@@ -36,6 +36,14 @@ def test_drag_and_terminal_velocity_smoke():
     assert np.all(np.isfinite(np.asarray(v)))
 
 
+def test_star_import_exports_method_tuples():
+    # examples/44 does `from difflow.particles import *` and loops over
+    # DRAG_METHODS, which __all__ once left out (NameError).
+    import difflow.particles as particles
+    for name in ("DRAG_METHODS", "GELDART_METHODS", "DISTRIBUTORS"):
+        assert name in particles.__all__
+
+
 def test_hindered_settling():
     assert np.isfinite(float(richardson_zaki_exponent(10.0)))
     assert np.isfinite(float(hindered_settling_velocity(1.0, 0.5, n=4.65)))
