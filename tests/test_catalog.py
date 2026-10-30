@@ -359,7 +359,7 @@ class TestParameters:
 
 
 class TestBuildability:
-    """What a form --- difflow.gui's palette --- can construct unaided."""
+    """What a form --- difflow.workspace's palette --- can construct unaided."""
 
     def test_constructor_extras_are_reported(self, cat):
         assert cat["Flash"].constructor_extras == ["thermo"]
@@ -418,7 +418,7 @@ class TestBuildability:
     def test_the_class_answer_agrees_with_the_editor_on_numbers(self):
         """Every unit the number rule makes buildable drops in the editor."""
         pytest.importorskip("difflow_gas")
-        from difflow.gui import FlowsheetSession
+        from difflow.workspace import FlowsheetSession
 
         cat = catalog()
         live = FlowsheetSession().catalog()

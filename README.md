@@ -26,8 +26,9 @@ A JAX-based framework for building and optimizing chemical process flowsheets wi
 - **Technoeconomic Analysis**: Comprehensive TEA module with equipment costs, operating costs, and profitability metrics (NPV, IRR, MSP)
 - **Bio Manufacturing**: Specialized unit operations for biopharmaceutical processes (bioreactors, chromatography, filtration)
 - **Gas Networks**: Steady-state gas transmission networks with a topology-computed sequential decomposition and differentiable tear solving
-- **Flowsheets Without Code**: A machine-readable catalog of every unit, JSON round trip, Python code generation, a browser-based editor served on `localhost`, and one-file interactive HTML for publishing a model
-- **Agent Tools (MCP)**: `difflow mcp` serves difflow to AI agents over the Model Context Protocol: build, solve, diagnose and converge flowsheets, and run sensitivity, optimization, uncertainty and cost studies from plain-language requests
+- **Flowsheets Without Code**: A machine-readable catalog of every unit, JSON round trip, Python code generation, and parameter sweeps with exact gradients (a browser editor comes with the difflow book)
+- **Agent Tools (MCP)**: `difflow mcp` serves difflow to AI agents over the Model Context Protocol: build, solve, diagnose and converge flowsheets, step through a solve with the debugger, and run sensitivity, optimization, uncertainty and cost studies from plain-language requests
+- **Flowsheet Debugger**: `difflow debug plant.py` pauses a solve unit by unit and tear iteration by tear iteration, with breakpoints on a unit, a condition or the first NaN; record a solve and replay it with a different tear guess
 
 ### Plugins
 
@@ -955,12 +956,59 @@ fs.add_recycle("recycle", "recycle")        # tear the splitter outlet
 streams = fs.solve(tol=1e-8)
 ```
 
+### Debugging a recycle solve
+
+When a loop will not close, the flowsheet debugger lets you watch it fail: it
+pauses the solve unit by unit and tear iteration by tear iteration, shows every
+stream on the way, and stops on breakpoints --- before a unit, at an iteration,
+on a condition such as `residual>1e3`, or where the first NaN is born.
+
+```bash
+difflow debug plant.py                 # a difflow-dbg> prompt, before the first pass
+difflow debug plant.py --on-error      # run; stop only at a failing unit or an unconverged end
+difflow debug plant.py --json          # the same debugger, as JSON lines for a program
+```
+
+<!-- doc-test: skip: interactive prompt -->
+```python
+from difflow import debug
+
+with debug.attach():                    # the same prompt, from a script or notebook
+    fs.solve(acceleration="wegstein")
+```
+
+```text
+difflow-dbg> break on nonfinite
+difflow-dbg> break if residual>1e3 && iter>5
+difflow-dbg> continue
+difflow-dbg> p tear                     # which stream and field the residual is made of
+difflow-dbg> set tear recycle.F_n_hexane 0.5   # a different next guess
+```
+
+A solve can also be recorded frame by frame and replayed with one tear value
+changed, which asks whether a different starting point reaches the same answer
+(if not, the loop has more than one steady state):
+
+```python
+from difflow.debug.record import compare, summarize
+
+trace = debug.record(fs)
+k = summarize(trace)["iterations"][0]["frame"]
+replay = debug.record(fs, edits=[{"frame": k, "stream": "recycle",
+                                  "field": "F_n_hexane", "value": 0.5}],
+                      baseline=trace["frames"])
+compare(trace, replay)["same_answer"]
+```
+
+Agents get the same debugger through `difflow mcp` (`debug_start`,
+`debug_command`, `debug_record`, `debug_whatif`, ...). See
+[docs/debugger.md](docs/debugger.md).
+
 ## Building Flowsheets Without Code
 
 A flowsheet is a graph with numbers on it. Writing that as Python is the flexible
-route, not the only one: difflow can also describe a model as data, edit it in a
-browser, write it back out as a script, and publish it as a page that needs
-nothing installed.
+route, not the only one: difflow can also describe a model as data, write it back
+out as a script, and sweep it over a grid of parameters with exact gradients.
 
 ### The operation catalog
 
@@ -1001,58 +1049,28 @@ Rate laws are the usual obstacle to writing a reactor down as data, because a
 callable is code. `mass_action_kinetics` builds one from plain dictionaries
 instead, so a reaction network can be stored and edited as data.
 
-### The local editor
+### Parameter sweeps
 
-`difflow` with no arguments opens a flowsheet editor in the browser, served on
-`localhost` with the installed package doing the solving:
-
-```bash
-difflow                                   # an empty canvas
-difflow gui plant.json                    # ...on a flowsheet
-difflow gui plant.py                      # ...on one a script builds (saves plant.json beside it)
-difflow gui --port 9000 --no-browser
-python -m difflow.gui plant.json          # where the console script is not on PATH
-```
-
-<!-- doc-test: skip: starts a local web server -->
-```python
-from difflow import gui
-gui.serve(fs, path="plant.json")          # on a flowsheet you already have
-```
-
-Units are dragged from a palette of everything registered and wired on the
-canvas; feeds are filled in from the inspector. Solving shows the stream table,
-the recycle solver's own diagnostics, and derivatives: pin a lever for one
-`jax.jvp` over every stream, or pin an output for one `jax.grad` over every
-lever. About a third of the registered operations (34 of 87) need something no
-form can supply, such as a `thermo` object or a rate law; their palette entries
-are dimmed with the reason, and a short Python *code context* in the editor can
-define them. It is single-user and a development tool: do not expose it to a
-network.
-
-### Publishing a model
-
-`difflow.publish` turns a flowsheet into a self-contained HTML page anyone can
-open with nothing installed, the form a model needs for supplementary material
-or a project page.
+`sweep` evaluates a flowsheet on a grid of parameter values with `jax.vmap`,
+with the exact derivative of every output with respect to every axis:
 
 ```python
-from difflow import publish, SweepAxis
+from difflow import sweep, SweepAxis
 
-publish(
+result = sweep(
     fs,
     axes=[SweepAxis("reactor.V", 0.5, 5.0, n=21, label="Reactor volume", units="m³")],
     outputs={"isomer_out": lambda streams: streams["product"]["F_2_methylpentane"]},
-    path="model.html",
 )
 ```
 
-JAX has no WebAssembly build, so the browser cannot run the real solver. Instead
-the solve is pre-computed: the flowsheet is evaluated on a grid with `jax.vmap`,
-with exact gradients from `jax.grad`, and both are baked into the page, which
-interpolates between grid points and shows local sensitivities. It is exact at
-the grid points and only as good as the grid between them, and it can vary only
-what the axes name.
+### The browser editor
+
+The browser editor (a canvas, an inspector, results and sensitivities, and
+the debugger's Debug and Trace panels) is an app that comes with the difflow
+book. With it installed, `difflow gui plant.json` opens it. Its engine,
+`difflow.workspace.FlowsheetSession`, is part of difflow, and is what the agent
+tools (`difflow mcp`) drive.
 
 See [`docs/streams-and-flowsheets.md`](docs/streams-and-flowsheets.md) for the
 full documentation.

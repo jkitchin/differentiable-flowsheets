@@ -26,7 +26,7 @@
 // the only third-party traffic is the WebLLM runtime and the model weights
 // from their CDNs, and that happens only after the explicit click.
 //
-// Unlike the editor's assistant panel (src/difflow/gui), which bundles WebLLM
+// Unlike the editor's assistant panel (the difflow book's app), which bundles WebLLM
 // because its page holds the CSRF token of a server that can exec Python,
 // this page is static and holds nothing, so the runtime is imported from a
 // CDN at the version the editor's package-lock pins.
@@ -40,7 +40,7 @@
 // hardcodes the published base path.
 (function () {
   var SELF_ID = "difflow-ask";
-  // Same version the GUI editor bundles (src/difflow/gui/frontend/package-lock.json).
+  // Same version the book app's editor bundles (its frontend package-lock.json).
   var WEBLLM_URL = "https://esm.run/@mlc-ai/web-llm@0.2.84";
 
   // Offered smallest-first: the first entry is what an undecided reader gets,

@@ -525,7 +525,7 @@ streams = fs.solve(on_nonconvergence="ignore")# silent; check last_solve_* yours
 
 The message names the tear streams, the final residual, the tolerance, the
 iteration count and the method used --- the same `last_solve_*` diagnostics the
-report layer and the editor read, which stay available whichever option is
+report layer and the agent tools read, which stay available whichever option is
 chosen:
 
 ```text
@@ -741,7 +741,7 @@ fs.view = {"nodes": {"reactor": {"x": 260.0, "y": 40.0},
            "code_context": "thermo = IdealThermo(...)"}
 ```
 
-It is where the editor keeps canvas positions, its code-context snippet and its planning selection, so a flowsheet laid out by hand opens the way it was left. Node keys follow the same vocabulary as `_apply_params`: a unit is its bare name, a feed is `feed:<stream>`. Nothing validates the contents, and `_apply_params` copies the block through, so a swept or optimized flowsheet keeps its layout.
+It is where an editor (the book's app) keeps canvas positions, its code-context snippet and its planning selection, so a flowsheet laid out by hand opens the way it was left. Node keys follow the same vocabulary as `_apply_params`: a unit is its bare name, a feed is `feed:<stream>`. Nothing validates the contents, and `_apply_params` copies the block through, so a swept or optimized flowsheet keeps its layout.
 
 ### What it writes
 
@@ -846,7 +846,7 @@ print(codegen.to_python(fs))
 codegen.save_script(fs, "plant.py")
 ```
 
-The two together close the loop. A graphical editor you can only enter is worse than none: the moment you want something the palette does not offer, you have to be able to drop into Python and keep going. Build in a GUI, export a script, edit it, and read the result back through `serialize`.
+The two together close the loop. A graphical editor you can only enter is worse than none: the moment you want something the palette does not offer, you have to be able to drop into Python and keep going. Build in an editor (the book's app), export a script, edit it, and read the result back through `serialize`.
 
 The output is laid out to be read and edited — imports, then thermodynamics, then kinetics, then the flowsheet:
 
@@ -917,7 +917,7 @@ phase -- - -- Force one phase ('liquid'/'vapor') for the thermo enthalpy. None (
 
 That text is not a second copy. `difflow.docstrings` reads it out of the `Params` class's own `Attributes:` section, which is where the project already writes it, and out of the comments beside the fields for the 35 that are documented there instead — `CSTRParams.eos` and `CSTRParams.outlet_volumetric_basis` among them. Populating `field(metadata={"description": ...})` on all 87 `Params` classes would have duplicated every description and then drifted from it.
 
-The editor gets this for free: the inspector's parameter list already rendered `spec.description` as help text under each field, and the palette already rendered `spec.units` beside its name — both written against a schema that carried neither. 470 of the 487 catalogued parameters gain help text in the inspector with no front-end change.
+The book's editor gets this for free: its inspector's parameter list already rendered `spec.description` as help text under each field, and the palette already rendered `spec.units` beside its name — both written against a schema that carried neither. 470 of the 487 catalogued parameters gain help text in the inspector with no front-end change.
 
 Units are *not* read from the prose. They come from the class's `parameter_units` table (above), which names every numeric field and is guarded by a test; a parenthetical in a sentence is a weaker signal, since `(0-1)` and `(default 10)` sit in the same position as `(Pa)`, and a formula in a description will happily offer `-1/k` as "per kelvin".
 
@@ -946,517 +946,37 @@ One name is deliberately not the class name: `difflow_gas` registers a `Compress
 
 ---
 
-## The Local Editor
+## The Browser Editor
 
-`difflow.gui` serves a single-page flowsheet editor on `localhost`, with the installed package doing the solving:
+difflow's browser editor --- a canvas to build a flowsheet from the
+operation palette, an inspector with each unit's documentation, results and
+sensitivities, planning, a Python console, an assistant, and the debugger's
+**Debug** and **Trace** panels --- is an app that comes with the difflow
+book. It installs as its own package and registers itself with difflow, so
+with it installed:
 
 ```bash
-difflow                                   # an empty canvas, in a browser
-difflow gui plant.json                    # ...on a flowsheet
-difflow gui plant.py                      # ...on one a script builds
-difflow gui --port 9000 --no-browser
-difflow gui --stay                        # ...and keep serving after the tab closes
-difflow gui --trust plant.json            # ...running its code without asking first
+difflow gui plant.json            # a saved flowsheet
+difflow gui plant.py              # one a script builds
 ```
 
-The editor is what a bare `difflow` does, because it is the one thing here that has nothing to print and everything to show. `python -m difflow.gui` is the same command for an environment where the console script is not on `PATH`.
-
-### Starting from an example
-
-The **Examples** menu opens a flowsheet that already solves: a water/ethanol flash drum, then ethyl acetate made from acetic acid and ethanol (a reversible Fischer esterification, equilibrium-limited at $K_{eq} = 4$) in a CSTR followed by a flash, and the same process with the acid-rich flash liquid recycled to the reactor and a purge. The reaction's stoichiometry and equilibrium constant are real; its forward rate constant is illustrative, and the flash uses Raoult's law, which does not know about the ethyl acetate azeotropes.
-
-Each plugin adds one, built from its own units with numbers taken from its validated studies. **Gas** is the GasLib-11 benchmark with its standard nomination (8 pipes, a valve and 2 compressor stations around one loop); its node pressures match the reference sequential solution to 10⁻⁴ bar. **Bio** is a monoclonal antibody downstream train: disc-stack centrifuge, Protein A, cation and anion exchange, ultrafiltration. **Carbon capture** is a 30 wt% MEA absorber and stripper on coal flue gas, with the lean solvent returned to the absorber through a `SolventMakeup` block. The lean loading is solved for, and agrees with `solve_amine_loop`. **Power** is a four-section 12.47 kV radial feeder solved as a ladder, whose bus voltages agree with the Newton power flow. **REE** is a Pr/Nd split on PC88A (extraction, scrubbing with the scrub liquor recycled, stripping, oxalate precipitation). **Refinery** is the crude front end: desalter, preflash drum, atmospheric column and vacuum column. The plugin examples are written by `scripts/make_gui_examples.py`, so run it again after a change to a unit's parameters.
-
-Each is an ordinary flowsheet file (`src/difflow/gui/examples/*.json`), code context included, so it is also a template for writing your own. Choosing one replaces the canvas and forgets the file the editor was opened on, so **Save** cannot write the example over it; export it with **File > Flowsheet JSON** to keep it. A new `NN_name.json` in that directory, with `view.title` and `view.description` set, joins the menu.
-
-### Seeing the solution on the canvas
-
-After a solve, every wire answers a hover with its stream: temperature, pressure, total flow, and a composition bar over a row per species with its mole fraction and flow. Hovering the wire's label works too, which matters on short wires the label mostly covers, and so does hovering a port. A product (an outlet nothing reads) has no wire, only the ring on its unit's edge, so its port is where to read it. Clicking a wire pins its card, and clicking the canvas lets it go.
-
-Hovering a unit shows what it did, read from the streams around it: each inlet and outlet with its temperature and flow, each outlet's share of what leaves (a flash's vapor fraction, a splitter's split), the change in every species from in to out (where a reactor's conversion shows), and the unit's numeric parameters. It does not show a unit's internal results such as a heater's duty, because the solve does not report them.
-
-Two views in the **View** menu draw the solve onto the wires themselves. **Wire width by flow** (or `W`) makes each wire as wide as its molar flow, linearly, so a recycle carrying twice the feed looks it. **Colour wires** shades them on a single-hue scale by temperature, pressure, total flow or any species' mole fraction; the legend in the corner picks the variable and states the range, which is the streams' own range rather than one from zero. A variable that is the same on every stream says so instead of spreading round-off across the scale. Both views wait for a solve, and an edit that clears the solve clears them from the wires until the next one. A coloured wire drops the tint from a forward sensitivity run: one colour cannot say two things.
-
-### The script
-
-**View > Script** shows the whole flowsheet as the Python that **File > Python script** writes, syntax-highlighted and read-only. It regenerates as the flowsheet changes, so it is always the script of what is on the canvas; **Copy** puts it on the clipboard. It is read-only because it is generated: an edit made there would be gone at the next change. The Python the flowsheet keeps is the code context, which is also the script's preamble, and its panel is a code editor too, with the same highlighting, `Tab` to indent, and `Cmd-Enter` (`Ctrl-Enter`) to apply.
-
-### Opening a script
-
-Most flowsheets here were written as Python, because the package was a library long before it was an editor. `difflow gui plant.py` opens one: the script is **run**, and the first `Flowsheet` it leaves at module level is what appears on the canvas. Running it is the only way to read it — a rate law is a function and a parameter is whatever arithmetic produced it, so there is nothing to parse — and the same act is what `difflow report plant.py` and `difflow plan-export plant.py` have always done. It carries the same trust: the file is executed, so the editor asks before running it (see [Opening a file that runs code](#opening-a-file-that-runs-code)) — open your own scripts with it and not a stranger's.
-
-The script runs under `__name__ == "__difflow__"`, not `"__main__"`. A script's `if __name__ == "__main__"` block is the part that solves, sweeps or plots, and opening a flowsheet in an editor should not cost an hour of optimization first. Put the flowsheet at module level, which is where it already is.
-
-A script is a way **in** only. `difflow.codegen` can write a flowsheet back out as Python, but writing it over the script it came from would delete everything in that file that is not the flowsheet — the comments, the sweep at the bottom, the `__main__` block. So the editor never saves to the `.py`: it saves the JSON beside it, `plant.py` → `plant.json`, and the header shows the script you opened with the file it will write in the tooltip. Once that JSON exists, `difflow gui plant.json` opens the edited version and the script is left alone; naming the `.py` again re-runs the script, so whichever one you name is the one you get.
-
-A script that raises, or that builds no flowsheet, is reported as one line naming the file and the cause rather than as a traceback through `runpy`:
-
-```
-difflow gui: plant.py raised while building the flowsheet: FileNotFoundError: assay.csv
-```
-
-or from Python, on a flowsheet you already have:
-
-<!-- doc-test: skip: starts the GUI server (binds a port) -->
-```python
-from difflow import gui
-
-gui.serve(fs, path="plant.json")
-```
-
-Two pages are served, and they are at different stages.
-
-`/` is the **canvas**: the flowsheet as a node graph, laid out automatically, pan and zoom, feeds banked left and products right, recycle edges dashed and orange. Drag an operation off the palette to drop a unit; drag from a unit's outlet port to another unit's inlet to wire it; drag a box to move it; select and press Delete to remove. Every gesture is one request and then a redraw from the answer, so the picture cannot drift from the model.
-
-**Right-click a node for the things you would otherwise go looking for.** On a unit the menu offers the documentation page for its operation, the assistant pointed at it, the code context, its name on the clipboard, and Delete; on a feed or product node — drawn from the topology rather than held by the flowsheet — only the last two have anything to act on, so only those are offered. Nothing in it is a new capability, and that is rather the point: the documentation link was in the palette, which is where you are *not* once the unit is on the canvas, and the code context is a menu away from the red node that is waiting for it. Arrow keys walk the menu and Escape closes it; near the edge of the window it flips rather than slides, so the item under the cursor stays the item under the cursor.
-
-**The header is three menus and one button.** It had been fifteen controls in a row, which is what a toolbar becomes when every panel earns a button: the two you want on any given day sit in a hedge of the eleven you do not. So **File** writes the flowsheet out — save, reload, the four exports below, and quit — **View** lists the five drawers and the two drawing preferences with a tick beside whichever are on, **Help** is the links that leave the editor, and **Solve** stays a button because it is the verb the whole editor exists for. Nothing moved into a menu gained or lost a capability; the menus are only where the capabilities went, which is why the whole arrangement is one list in `model/menubar.js` with no behaviour in it and the header is a `<nav>` of three words.
-
-They are the same component as the right-click menu, which is the part worth insisting on: one placement rule, one keyboard, one look. A menu hanging from a button flips about the *button* rather than about the point when it would run off the edge, so it stays attached to the thing that opened it; left and right walk the bar carrying the open menu with them, down opens, Escape closes and hands the focus back to the word it came from. Two accelerators are advertised on the rows that have them — `⌘S` saves, `⌘↵` solves — because a control that moved into a menu should say how to reach it without one, and because the browser's own answer to `⌘S`, offering to save the page, has never once been what anyone wanted here.
-
-Two things about wiring are worth knowing before you use it, because both are properties of difflow rather than of the editor. A **stream name is the wiring**: connecting an outlet to an inlet renames the inlet, it does not add an arc, so the downstream unit's port is called whatever the upstream unit's outlet is called. And a **loop is a tear, never an arc**: if the wire you draw would close a cycle, the editor records a recycle instead — the same thing `add_recycle` does — and the edge draws dashed with both stream names on it, because the two ends carry different names.
-
-**A stream can be renamed, and it is not a label edit.** Select a feed or
-product node and type a new name: the server moves the feed, both ends of
-any recycle, every port that reads or writes it and the canvas node
-together, because a name that moved in some places and not others splits
-the flowsheet into two graphs that each look fine on their own. Two
-renames are refused rather than performed — a name another stream already
-has, which would *join* the two and is a connection wearing a rename's
-clothes, and a name that is not a Python identifier, which would survive
-the edit and fail later in `codegen` or on reload, a long way from the
-typing. `gui.edit.rename` is that checked door; `rename_stream` is the
-unchecked mechanism underneath, and both stay, because `connect` uses the
-unchecked one *to* rewire.
-
-**A mixer's inlet count belongs to the flowsheet, not to the class.** A
-`Mixer` mixes however many streams it is handed, and so do `Junction`,
-`BusNode` and `AffineFlow` — the four operations the catalog reports as
-`ports.variadic`. So the inspector offers `Add inlet` on those and a `−`
-per row, and until now the only way to get a third inlet on a mixer was
-to edit the JSON by hand. A variadic unit also arrives from the palette
-with **two** inlets rather than one, because one is what it means to not
-be there: a mixer mixing a single stream is a piece of pipe.
-
-A new port arrives unwired, which is what a unit dropped from the palette
-does too. Removing one is refused rather than cascaded when something is
-on it — a feed, an upstream unit, a recycle destination — because
-deleting the port and deleting the feed behind it are two edits, and
-undoing the first does not bring back the second: the composition,
-temperature and pressure are gone. The refusal names what is in the way.
-The front end draws the button from the catalog's own `variadic` flag and
-the server refuses against the same one, so the button cannot offer
-something the server will turn down.
-
-**A port with nothing attached is a red dot, not a box.** A feed node is drawn for a stream the flowsheet declares as a feed, and for nothing else; the one other stream node left is the destination of a recycle no unit reads, which exists because an edge whose target is not a node is dropped by the canvas without a word. Everything else that used to get a box — every unwired inlet, every outlet nobody consumes — is marked on the unit that owns the port instead.
-
-The boxes were drawn from the topology, and the effect was that a unit dropped from the palette arrived already joined to a stub on every port. It looked wired. It was not, and there was nothing on the canvas to say which of those attachments was a stream someone had declared and which was a name the drawing had just invented. A red dot on the port says the one thing that was missing: *nothing is connected here yet*.
-
-Declaring a feed therefore moves to the port. Select the unit and the inspector lists its inlets and outlets, marking the open ones; **feed it** on an open inlet declares a feed on that stream at the flowsheet's own defaults, and the box appears with a form behind it. The numbers come after the declaration rather than before it, because they are the part you edit and re-edit.
-
-**Code context** opens the Python the flowsheet carries (see below). Parameter editing, the docstring inspector and the results panel are being built onto the canvas; until they land, `/classic` is where you change a number.
-
-`/classic` is the **form editor**, and it is the one that can currently change a model: a palette of every registered operation with its port arity, an SVG of the topology, editable parameter fields per unit, and a panel that switches between solved stream values and the generated Python. **Solve** re-solves the edited model; **Save** writes the JSON; **Python** shows what `codegen.to_python` would produce. It stays until the canvas covers what it does; each page links to the other in its header.
-
-Everything on both pages is derived from `catalog()`, so plugin units appear with no extra work, and a field the catalog reports as holding code is listed as *set in code* rather than given a text box that could only reject what you type.
-
-**The palette says what each unit is waiting for.** Over half the catalog cannot be dropped as it stands — a `Flash` wants a `thermo`, a `CSTR` wants a rate law, an `AmineAbsorber` wants the name of a solvent — and those entries are dimmed with the missing *field names* on the row: `needs thermo`, `needs rate_fn, stoich, rate_params`. The names are the point. "Unbuildable" tells you nothing you can act on, whereas `rate_fn` is the thing you go and write, and it is the same list the node carries if you drag the unit anyway. They stay visible because a palette that cannot show a CSTR is not a palette; a filter hides them for anyone who would rather it did.
-
-What each row needs is answered **against the code context as it stands**, not against the class, so a row un-dims the moment its binding appears — one `thermo = IdealThermo(...)` clears the flag on every unit that was waiting for one, and the page refetches the catalog when you apply the snippet. A bare value counts too: `solvent = "MEA"` is matched by field name, which is why the message can honestly tell you to go and write one.
-
-That the flag and what the adder does are the same computation (`gui.edit.unmet`) is the part worth insisting on. When they were two, the catalog answered a question about the *class* — could a form construct one — and the adder answered a question about this session. `AbsorberParams.solvent` is a required `str`: no callable, no constructor object, so the class read as buildable, and nothing on earth can invent a solvent name. The palette offered it, the drop failed, and the error came from the file-loading path, which offered *"the file may have been written by a different version of difflow"* as the diagnosis of a unit dropped one second earlier. A test now walks every operation and asserts the two agree.
-
-A flag that is empty promises a clean *answer*, not a success. A class may still refuse on its own terms — `Transformer` rejects a unity tap with no phase shift, because that is a line and not a transformer — and nothing short of constructing one can know that in advance, so the class's own sentence is quoted rather than replaced.
-
-**A unit that cannot be built yet is dropped anyway, in red.** Refusing the drop threw away the only thing you actually said — *I want a `Flash`, here* — and left you to say it again after writing the `thermo`. So the drop lands as a **pending node**: dashed, red, carrying `needs thermo` on the box and the full sentence in its tooltip. It is a node rather than a toast because a toast scrolls away and the drop does not; the red box is both the record of what you asked for and the place to find out what it is waiting for.
-
-**It goes on the flowsheet, with its real ports, and can be wired at once.** That is the whole design. Held off the flowsheet it had no ports, and a unit with no ports cannot be connected to anything: dropping a compressor and a reactor and trying to wire them simply did not work, for as long as the reactor had no rate law — which is to say until after the wiring was done. Wiring first and writing the rate law afterwards is the order people work in, so the unit exists from the moment it is dropped and `difflow.incomplete.Incomplete` stands in for the operation it does not have yet. Ports are laid out from the class's declared arity, so they are the ports the finished unit will have.
-
-What it will not do is run. `Incomplete.__call__` raises `IncompleteUnitError`, and `solve` refuses before it starts, by name and saying what each unit is still waiting for — better than raising from the middle of a recycle loop, and much better than returning numbers out of a unit nobody finished. `serialize` round-trips it as what it is, under an `incomplete` key, so a file saved mid-build reopens mid-build rather than refusing to load.
-
-The two edits that can turn an unmet need into a met one — applying the code context, naming the species — finish every unfinished unit afterwards, **in place**. One that builds has its stand-in replaced by the real operation and the red goes away; one that still cannot has its hint re-answered against the *new* bindings, so a node that needed `species_order, thermo` and got the species now says `thermo`. In place and not by dropping it again, because by now it may be wired: its ports carry the names of the streams it is joined to, and a fresh drop would arrive with default port names and quietly detach everything already connected. Deleting one is the ordinary delete, and renaming one is the ordinary rename.
-
-**And it will write the code for you.** Selecting a pending node offers *Write the code for me*, which is `POST /api/boilerplate` and `gui.boilerplate`. What comes back is a **starting point, not an answer**, and the difference is marked in the text rather than smoothed over. A generated `thermo` names this flowsheet's own species and reads their data out of the bundled database, which is very likely right. A generated rate law is one made-up reaction with made-up Arrhenius parameters, and says `# INVENTED` above it. A fallback species list says `# GUESSED`; a value derived from nothing but a declared annotation says `# PLACEHOLDER`. A snippet that quietly looked finished would be worse than no snippet, because the number it invented would end up in a flowsheet.
-
-`rate_fn`, `stoich` and `rate_params` are written as a single `mass_action_kinetics(...)` call, because a stoichiometry that disagrees with its rate law is the one failure that call exists to remove. A need with no recipe falls back to a stub of the shape the docstring documents (`Signature: rate_fn(C, T, rate_params)`) or to a value of the declared type — which is how a plugin's own constructor argument gets an entry without `boilerplate.py` knowing anything about it. The button **appends** to the code context rather than replacing it, skipping lines already there, so a second snippet cannot define `SPECIES` a second time with a different list.
-
-The point is not to replace writing Python. It is to make the tedious parts quick — seeing the topology, changing one parameter and re-solving, checking what a unit expects — while leaving the door open in both directions: export a script, edit it, and read the result back through `serialize`. An editor you can only enter is worse than none.
-
-It is stdlib only (`http.server`), binds to `127.0.0.1`, and is meant for a single local user. It is a development tool, not a hardened service — do not expose it to a network.
-
-Because the code context runs Python, the server answers mutating requests only from the page it served. Three checks, all in `server.py`: a token minted per process, put into the page as a `<meta>` tag and required in an `X-Difflow-Token` header; an `Origin` that must be this exact host and port; and a `Host` that must be a loopback name, which is what a DNS-rebinding request cannot produce. A request that fails any of them gets a **403** — the one case where a refusal is not a 200, because it is a failure of the request rather than an answer about the flowsheet. Reads are not guarded: the page fetches the catalog before it has done anything. A client outside the browser — `curl`, or `npm run dev` proxying to this server — has to send the token too.
-
-### The editor stops when its page does
-
-A local editor that outlives its tab is a small disaster: the port stays
-held, the next `difflow gui` refuses to bind, and nothing on screen says
-why. So the page and the server keep each other alive.
-
-The page posts `POST /api/ping` every 15 seconds with an id minted for
-that page load, and `POST /api/bye` on `pagehide`. The server keeps a
-**dict keyed by page id**, not a count: a reload increments before it
-decrements, and a tab that dies without a farewell never decrements at
-all, so a counter goes wrong in both directions. A page that has not
-been heard from in `IDLE_GRACE_SECONDS` (90) is dropped, and when the
-last one goes the server shuts itself down and the port comes back. The
-grace is six heartbeats rather than two because Chrome throttles a
-background tab's timers to roughly one firing a minute — a tab left in
-the background is not a tab that has gone away.
-
-Nothing expires before the *first* check-in, so a server started with
-`--no-browser`, or one whose page is still loading, is never killed for
-having no pages yet.
-
-`pagehide` fires for the back/forward cache too, and that is not a
-departure — the tab is coming back with its JavaScript intact. So the
-farewell is suppressed when `event.persisted` is true, and `pageshow`
-re-pings.
-
-**Quit** is the last row of the File menu, and it asks twice: the row
-arms it, a red `Really quit?` appears in the header for six seconds, and
-clicking that posts `POST /api/quit`, after which the page draws a
-*stopped* overlay so a dead tab does not look like a live one. The
-second half is a button rather than a second trip into the menu because
-the menu shuts behind the first click, and a question asked somewhere
-nobody is looking is not asked at all. Either way the process prints why it
-stopped — `stopped: quit from the editor`, or `stopped: the editor page
-was closed`.
-
-`--stay` turns all of this off and serves until Ctrl-C, which is what a
-long-running or embedded server wants. `make_server` never starts the
-watcher at all: a test builds a server and drives it, and a server that
-can vanish mid-test is not testable.
-
-**When the port is taken, the message says by whom.** `lsof` first,
-`ss` second, nothing third — none of which may exist, and none of which
-is allowed to raise:
-
-```
-difflow gui: port 8756 on 127.0.0.1 is already in use.
-
-It is held by pid 62689 (python3.12).
-    difflow gui plant.json
-
-To stop it:
-
-    kill 62689
-```
-
-The `kill` line is offered only when the process is one this user can
-signal (`os.kill(pid, 0)`), because telling someone to kill another
-user's process is telling them to run a command that will fail.
-
-### Where the book talks about a unit
-
-Every operation the palette offers carries a `?` that opens this book at
-the section describing it, and the inspector's heading carries the same
-link for the selected unit. The **Help** menu has `Documentation` and
-`Source on GitHub`, read from the installed package's `Project-URL`
-metadata rather than typed into the front end — and greyed out, saying
-so, on an install whose metadata names neither.
-
-The mapping is **derived, not maintained**. `difflow.gui.doclinks` reads
-`static/docs-index.json` — the same index the assistant retrieves
-against, built from `docs/` and rebuilt by CI — and for an operation
-name prefers, in order: a section whose heading *starts* with the name,
-on a unit-operations page, at the shallowest nesting, then the section
-that mentions it most. A hand-kept table of 87 operations against 760
-sections would be wrong within a release; this one cannot drift from the
-prose, because it is computed from it.
-
-It resolves 82 of the 87 registered operations. The five it does not are
-units the book does not yet describe by name, and `catalog()` reports
-`docs_url: null` for them rather than a link to something else —
-[#228](https://github.com/jkitchin/differentiable-flowsheets/issues/228)
-tracks writing the missing sections. A test asserts that every URL it
-does emit points at a page `_toc.yml` actually builds, so a renamed
-chapter fails a test rather than shipping a 404.
-
-### The code context
-
-Roughly half the catalog cannot be built from data alone. A `Flash` needs a `thermo`, a `PengRobinson` unit needs an `eos`, a reactor needs a rate law — objects, not numbers, and no form can supply one. So the flowsheet carries a snippet of Python in `view["code_context"]`, the session `exec`s it in a fresh namespace, and anything it defines can be referred to by name:
+Without it, `difflow gui` says where it comes from, and nothing else in
+difflow needs it. Its engine is open and here:
+`difflow.workspace.FlowsheetSession` is a live flowsheet with every
+operation on it --- edits, the code context, undo, solves, sensitivities,
+the console, the [debugger](debugger.md) --- and it is what the
+[agent tools](agents.md) drive. The flowsheet files the editor reads and
+writes are `difflow.serialize` documents; `difflow.workspace.examples`
+holds the example flowsheets.
+
+## Parameter Sweeps
+
+`sweep` evaluates a flowsheet across a grid of parameter values with
+`jax.vmap`, and records every output and its exact derivative with respect
+to every axis:
 
 ```python
-from difflow import IdealThermo, get_species_data
-
-thermo = IdealThermo({n: get_species_data(n) for n in ['water', 'ethanol']})
-```
-
-With that in the panel, `Flash` becomes droppable; with a `mass_action_kinetics(...)` call in it, so does `CSTR`. The reference is stored as `{"$ref": "thermo"}` in the unit's `constructor` block rather than inlined, and the same tag works anywhere a value goes:
-
-```python
-serialize.save(fs, "plant.json", refs={"thermo": thermo})
-serialize.load("plant.json", refs={"thermo": thermo})
-```
-
-The scan is by **identity**, and it runs after the primitive branch: two `IdealThermo`s built the same way are two objects, and small ints and short strings are interned, so `x = 1` in the context must not turn every `1.0` in the file into a reference. A `$ref` the namespace cannot resolve is a `SerializationError` naming the missing name, not a silent `None`.
-
-`codegen.to_python` emits the snippet as the script's preamble, ahead of everything that uses it, so what is exported is what ran. A snippet that fails to compile or raises is refused with the line number and *not stored* — the flowsheet keeps the last one that worked, so a half-typed line cannot unbuild the units already depending on it.
-
-### Opening a file that runs code
-
-A flowsheet can carry code: its code context, a `.py` script that builds it, and modules of yours that it names by import path. Running any of it is the same trust as running a script, so **the editor asks first**. A file that would run code opens nothing until you say so: the page shows the code it would run and the modules it would import, and asks *Trust it and open?* Declining leaves the editor with no file — not an empty canvas over your file's name, which **Save** would then write over it.
-
-What is not asked about: a file with no code in it, a bundled example, a file saved in this editor session, and the code context you type into the editor yourself. `difflow gui --trust` answers yes for every file; use it on your own machine for your own files.
-
-From Python, `FlowsheetSession(path=..., trust=True)` and `session.open_file(path, trust=True)` do the same. Without it, `open_file` answers `{"ok": False, "needs_trust": {"path", "kind", "code", "modules"}}`, and a session started on such a file holds it in `session.blocked`. The agent workbench opens with trust exactly when it may run code at all: a `Workbench(allow_exec=False)` refuses a flowsheet JSON with a code context, as it already refused a `.py` file.
-
-### For tests and embedding
-
-`make_server` builds the server without starting it, which is what a test wants:
-
-```python
-from difflow.gui import FlowsheetSession, make_server
-
-server = make_server(FlowsheetSession(fs), port=0)   # 0 => any free port
-```
-
-The routes are:
-
-| Route | What it does |
-|---|---|
-| `GET /api/catalog` | every registered operation, its ports and its parameters |
-| `GET /api/flowsheet` | the document, with `view.nodes` filled in |
-| `GET /api/code` | `codegen.to_python` of the current model |
-| `POST /api/flowsheet` | replace the whole model (load a file) |
-| `POST /api/solve`, `/api/save` | solve; write the JSON |
-| `PATCH /api/unit/<name>` | one unit's `params`, `name` or `position` |
-| `POST` / `DELETE /api/unit[/<name>]` | add one from the palette; remove one |
-| `POST` / `DELETE /api/connect` | wire or unwire, body `{source, outlet, target, inlet}` |
-| `GET` / `POST /api/species` | the species list, and whether it can still be changed |
-| `GET /api/feeds` | the declared feeds, and the inlets still waiting for one |
-| `POST` / `DELETE /api/feed[/<name>]` | declare or change a feed, body `{name, T, P, flows}`; take one back off a stream |
-| `POST /api/layout` | positions only, no rebuild and no solve |
-| `GET` / `POST /api/code-context` | read the snippet and what it defines; set it, or say why it will not run |
-| `GET /api/docs/<op>` | one operation's rendered docstring, equations, assumptions and references |
-| `GET /api/levers` | what a derivative can be taken with respect to, and of |
-| `GET /api/diagram` | the flowsheet drawn as one SVG, at the canvas's own layout |
-| `POST /api/sensitivity` | one derivative sweep, forward or reverse |
-
-A failed solve or a rejected edit comes back as `{"ok": false, "error": ...}` with a **200** rather than a traceback at the socket: it is an answer about the flowsheet, not a failure of the request, and a bad edit from the browser cannot take the server down. Only malformed JSON and an unrouted path get a 4xx.
-
-The incremental routes exist because `POST /api/flowsheet` re-runs `serialize.from_dict` and re-instantiates every unit — wrong twice over for a canvas, since it costs a full reconstruction per keystroke and it drops any constructor object the file cannot carry. `PATCH` rebuilds only the unit you touched and hands its `thermo` back **by identity**, so a hand-built one survives an edit that JSON could not have round-tripped. A unit dropped from the palette takes `species_order` from the flowsheet and its constructor objects from the code context below; one whose `thermo` is nowhere to be found is parked as a pending node naming what is missing and where to define it, and built in place once it appears. Removing a unit also drops any recycle naming its streams, which would otherwise tear a stream nothing produces and fail the solve somewhere far from the edit.
-
-`difflow.gui` is a package rather than one module: `session.py` holds the flowsheet and everything that can be done to it, `server.py` holds the wire encoding and the routes, and `static/` holds the page as files on disk. `FlowsheetSession` needs no socket, so the interesting half — load, edit, solve, emit code — is usable and testable on its own:
-
-```python
-from difflow.gui import FlowsheetSession
-
-session = FlowsheetSession(path="plant.json")
-session.solve()["converged"]
-session.code()["source"]
-```
-
-`GET /api/flowsheet` fills in `view.nodes` when the document has none, from `difflow.gui.layout.auto_layout` — a longest-path column assignment with feeds banked left and dangling products right, shared with `difflow.report.diagram` so a report and the canvas agree on where a unit sits. Recycle edges are left out of the path length, which is what makes a recycle draw as an arrow going back rather than as another column. The positions are served, not adopted: opening a file does not give it a `view`, and coordinates reach disk only when the user saves. Stored positions sit on top of the automatic ones rather than replacing them, so moving one box does not send every other node back to the browser unplaced.
-
-Anything else under `static/` is served alongside the page, by an allow-list of the suffixes a front-end build emits (`.html`, `.js`, `.css`, `.json`, `.svg`, `.map`, `.woff2`, `.ico`); the page is re-read from disk on every request, so a rebuilt bundle appears on reload rather than on restart.
-
-### Building the canvas
-
-The canvas is Svelte plus [`@xyflow/svelte`](https://svelteflow.dev), and its source lives in `src/difflow/gui/frontend/`. The **build output is committed** to `src/difflow/gui/static/`, which is the whole point of the arrangement: `pip install difflow` never needs node, only changing the UI does.
-
-```bash
-make gui-build     # npm ci && npm run build, into static/
-make gui-test      # the pure model functions, under bare node
-make gui FLOWSHEET=plant.json
-```
-
-`npm run build` runs vite twice: once for the editor (`app.js`, `app.css`, `index.html`) and once for the frozen page `difflow.publish` inlines (`publish.js`, `publish.css`). Two builds rather than two entries, for the reason given under [Publishing a Model](#publishing-a-model).
-
-A unit is drawn as its **PFD symbol** rather than as a labelled box: a distillation column as a tray stack, a heat exchanger as the circle with its zigzag, a pump as the circle with its volute, a CSTR as a vessel with an impeller. The symbols are hand-drawn SVG paths in `src/difflow/gui/frontend/src/lib/nodes/symbols.js`, mapped to operations **by name first and by catalog category second**, which is what lets a plugin's own unit — one this front end has never heard of — still draw as equipment: an unknown `reactor` gets the reactor symbol from its category. `tests/test_gui_symbols.py` joins the map to `difflow.catalog()` from the Python side and asserts that every one of the catalog's operations resolves to real equipment and none falls through to a plain block, so adding a unit operation and forgetting its symbol fails a test rather than shipping a rectangle. The same symbol is drawn on the palette row, so what is dragged looks like what lands.
-
-Wires route orthogonally, and two keys toggle the rest: `L` names every port beside its handle, `T` swaps to a dark palette. The dark palette is opt-in by a `data-theme` attribute on the root rather than by `prefers-color-scheme`, so a *report* opened in a dark browser keeps the light palette it was designed and screenshotted with.
-
-**A port says what it is.** Three marks, and they answer two different questions:
-
-| | | |
-|---|---|---|
-| **red dot** | an inlet nothing supplies | the flowsheet cannot be solved; `solve` refuses this stream by name |
-| **green dot** | a port something is joined to | a wire, a declared feed, or a recycle |
-| **grey ring** | an outlet nothing reads | a **product** — the stream leaves, and there is nothing further to do |
-
-The two dots are round and coloured because they are one question with two answers. The ring is neither colour and hollow, because it answers a different question: not *is this wired?* but *where does this stream go?*, and the answer — out — is what the last unit of a finished flowsheet is supposed to say. Marking it red said "unwired" about a flowsheet that was complete, and the only thing red should mean on this canvas is that `solve` will refuse.
-
-Losing the red mark at that end loses no warning. Whenever an outlet *should* have gone somewhere, the unit waiting for it still shows a red inlet, which is the end that can actually be fixed.
-
-All of it comes from `openPorts` in `model/graph.js`, the same walk over the document that the palette's "waiting for" hints use: an inlet is open unless a unit produces that stream, a declared feed supplies it, or a recycle lands on it; an outlet is a product unless a unit reads it or a recycle carries it back. So green is not "a wire was drawn here" — it is "the flowsheet has an answer for this stream", and a feed declared in the inspector turns an inlet green with no wire on the canvas at all.
-
-**The two ends are not symmetric, and the model is where that comes from.** A feed is an *object the flowsheet holds* — `Flowsheet.feeds`, a `Stream` per name — because it is data nothing on the canvas can imply: a temperature, a pressure and a flow per species. A product is not an object at all. It is an outlet nothing happens to read, `solve` returns it in `streams` with everything else, and there is nothing to declare. Which is why one end has a form to fill in and the other has only a mark saying it is finished.
-
-Feeds are declared from the panel of the unit that wants one: the **`feed it`** link beside an open inlet declares it at the flowsheet's own defaults, and the feed box that then appears on the canvas is what you select to type the numbers into. It sits on the port rather than on the canvas because the canvas draws a box only for a feed that exists, so there is no node to click for a stream that has never been one.
-
-The green half is also the acknowledgement for the gesture that earns it, and the lack of one hid a bug worth recording. `@xyflow` calls `onconnect` with the `Connection` itself — `{source, target, sourceHandle, targetHandle}` — and it calls it *after* adding the edge to the canvas. The handler destructured `{ connection }` off that argument, read `undefined`, and refused the connection with `that is not a connection`, so the wire appeared, the server never heard about it, both dots stayed red, and the phantom edge vanished at the next redraw — which dragging a node triggers. Every unit test of the pure function passed, because the function was right and its one caller was wrong. `connectionWire` now accepts either shape, and `edit.test.js` asserts both.
-
-### Starting from an empty canvas
-
-`difflow gui` with no file opens on an empty flowsheet, and *empty* rather than absent: the session used to leave `self.flowsheet = None`, every edit route begins by refusing "no flowsheet loaded", and nothing said so — so the palette filled in, the canvas drew its grid, and dragging a unit onto it did nothing at all. Which reads as a broken drag rather than as an editor with no flowsheet to edit.
-
-So the flowsheet exists from the first frame, and the one thing it is missing is asked for by name. Every stream in difflow is an array indexed by `species_order`, so until that list exists nothing can be built — and the palette says so on every row (`needs species_order`). A drop before then is not lost: it parks as a red node that asks for the list and builds itself once it has it. The list can be typed into the header field or bound by the code context below (as `species_order`, or as `SPECIES`, which is what the starter snippet defines); whoever typed it in the header wins, and the code context does not overwrite it. It freezes once a unit indexes it: re-ordering under a built unit would turn a water flow into an ethanol flow with nothing on screen changing.
-
-The other half of building from nothing is the **feed**, and it is the half that has no gesture. Dropping and wiring can describe a whole topology, but a feed is data — a temperature, a pressure and a flow per species — so a from-scratch flowsheet could be drawn and never solved, and `solve` answered `KeyError: 'mixer_in'`: the name of the stream, which was on the canvas already, and no hint that a feed was the thing missing. An inlet with nothing on the other end is now selectable, and the inspector gives it a form. `set_feed` fills any field left out from the feed that is already there, so editing a temperature does not zero the flows, and from the flowsheet's own `default_flow`/`default_T`/`default_P` when there is no feed yet — the same numbers `Flowsheet.solve` invents for a tear stream, so an untouched feed is not a new guess about the model. It refuses a stream a unit already produces (two sources for one stream, and the solver would silently use one of them), a stream nothing reads, an unknown species, a negative flow and a non-positive temperature or pressure, each by name. A blank box is a question and not a zero: zero is a real flow, and guessing which was meant would put a number nobody typed into the model. What remains unfed at solve time is reported as *that*, with what to do about it, and `GET /api/feeds` answers the same question ahead of time.
-
-### The inspector
-
-Selecting a unit shows what the code already knows about it. None of it is written twice: the unit classes have carried `symbol`, `equations`, `assumptions`, `references`, `parameter_symbols`, `parameter_units` and `numerical_method` since the report writer needed them, `difflow.report.metadata.get_metadata` reads them with docstring fallbacks, and `difflow.catalog` now goes through that same function. So `ParameterSpec.units` — declared from the start and always `None`, because no `Params` field uses `field(metadata={"units": ...})` — fills in from the class's own table for 147 of the 486 catalog parameters, and a field that *does* declare its own metadata still wins, being the more specific of the two.
-
-`GET /api/docs/<op>` renders the class docstring with [docutils](https://docutils.sourceforge.io) when it is installed and returns the escaped source in a `<pre>` when it is not — an optional extra, never a hard dependency, and the panel says which of the two it is showing. Two accommodations make difflow's own docstrings render: nothing rewrites the Google-style sections, because `Args:` followed by an indented block already *is* a reStructuredText definition list; and the Sphinx roles the codebase uses (`` :class:`~difflow.streams.Stream` ``) are registered as literal text, since bare docutils treats an unknown role as an error that swallows the line. Messages are suppressed rather than rendered: a red box in the inspector would be about difflow's prose, not about the user's flowsheet.
-
-Equations are rendered with a bundled [KaTeX](https://katex.org), to **MathML** rather than to KaTeX's own HTML. The HTML output is laid out against KaTeX's fonts and looks wrong without them, so taking it would mean committing twenty `.woff2` files and a stylesheet whose only job is positioning glyphs; MathML asks the browser to do that instead. All 214 equations in the catalog render.
-
-Parameters are editable in place, through `PATCH /api/unit/<name>`. Not all of them: `serialize` writes a JAX array as `{"$array": ...}`, a rate law from `mass_action_kinetics` as `{"$callable": ...}`, and a code-context object as `{"$ref": ...}`, and none of those is something a text input can edit. Each is shown with *where its value came from* — `mass_action_kinetics(...)`, `array 2×1`, `thermo (code context)` — in place of an input, which is the same fact the old editor put in a "set in code:" line under the form, moved to the field it belongs to. The constructor objects get their own section for the same reason: a Flash's thermodynamics are not a `Params` field, and a panel that showed only parameters would not say where they came from.
-
-### Results, and the derivatives that come with them
-
-Solving fills a drawer under the canvas with three things, and the first two are what any flowsheet editor shows: a stream table, and the solve's own diagnostics. The table's columns are the union of the species across all streams, so a stream that never sees a component reads `0` rather than going missing, and a mole-fraction toggle divides by the total — leaving the cells of a zero-flow stream blank rather than printing `NaN`. The diagnostics are `last_solve_converged`, `last_solve_method`, `last_solve_iterations`, `last_solve_residual`, `last_solve_tol` and `last_solve_tear_streams`: `Flowsheet` has recorded how it solved, how far the tear residual came down, against what tolerance and on which streams for as long as the recycle solver has, and none of that was shown anywhere. It matters because a recycle that stopped at `max_iter` with a residual of 1e-3 returns numbers that look exactly like an answer. A solve that did not converge says so in red and still shows its numbers, because the residual and the tear list are exactly what one wants to see when it did not.
-
-The third tab is the one no other flowsheet editor can offer, and it is the reason difflow is built on JAX. Ask for a derivative and the panel takes it — not by re-solving the flowsheet once per lever, but with a single AD pass:
-
-- **Pin a lever** — "if I change the reactor volume, what moves?" — and it is one `jax.jvp`. One forward pass gives `dy/du` for *every* quantity in *every* stream at once, so the cost does not grow with how much you want to look at.
-- **Pin an output** — "what moves the purge's benzene?" — and it is one `jax.value_and_grad`. One reverse pass gives `dy/du` for *every* lever at once, so the cost does not grow with how many knobs the flowsheet has.
-
-That is `difflow.planning`'s `choose_ad_mode` rule surfaced in the UI: the direction of the pass follows from which end you pinned, and either question by finite differences would cost one solve per lever. The derivative goes through the recycle tear solve implicitly, so a flowsheet with a recycle is no more expensive to differentiate than one without.
-
-Levers are found rather than declared. `difflow.gui.sensitivity.levers` walks the flowsheet and keeps every parameter whose **current value is a real scalar** — a Python `int` or `float`, or a 0-d array of float dtype. A `rate_fn` is a function, a `stoich` is an array, a `species_order` is a list and a `thermo` is an object, so all four fall out without a maintained exclusion list: they are ruled out by the same test the solver itself would apply. It falls out as very nearly the set the inspector greys out, arrived at independently and from the other direction. Feed streams are levers too, as `total_flow`, `T` and `P`; `x_<species>` is deliberately left out, because `_apply_params` rescales the other species to hold the total, which makes that derivative a composition swap rather than one knob. Every key the picker offers is a key `Flowsheet._apply_params` accepts, and therefore a key `planning.Block.from_flowsheet`'s `u` list takes — the GUI picker and the Python API name the same things.
-
-Rankings are **relative**: `d ln y / d ln u`, which is the only comparison that means anything between a volume in m³ and a temperature in K. It is `None`, not infinity, when either base value is zero. The reverse view draws them as a tornado — plain SVG geometry computed in `model/results.js`, no plotting library, so the committed bundle stays at half a megabyte and `publish.py`'s self-contained page has nothing new to swallow.
-
-Two smaller things make the panel honest. Edges carry their flow as a label once solved, and tint by relative sensitivity after a derivative — thickness by magnitude, colour by sign — through a CSS custom property, so `Canvas.svelte`'s stylesheet decides what "up" and "down" look like and the model layer never computes a colour. And any edit that is not a move drops the stored solve: results are about the flowsheet you solved, and a panel still showing the previous one is worse than an empty panel.
-
-### Getting the model out again
-
-An editor you can only enter is worse than none, so the **File** menu offers four files and none of them is a re-implementation of something difflow already writes:
-
-| File | Where it comes from |
-|---|---|
-| `<name>.py` | `codegen.to_python`, code context and all — the script that reproduces this solve |
-| `<name>.json` | the served document, `view.nodes` included, and it loads straight back |
-| `<name>.svg` | `GET /api/diagram` |
-| `<name>.png` | that same SVG rastered at 2x in the page, on a white ground |
-
-The diagram is the part worth explaining. `difflow.report.diagram` already owned the only flowsheet-to-SVG drawer in the codebase, and the editor already shared its column algorithm through `difflow.gui.layout.unit_columns` — so rather than grow a second drawer, that one was parameterised: `topology_svg(units, recycles, positions=None)` is the drawing, `flowsheet_svg(report)` is the adapter a report uses, and `flowsheet_diagram(flowsheet, positions)` is the adapter the editor uses. A picture exported from the canvas and a picture in an HTML report are therefore the same picture, and `positions` is what makes the exported one a diagram of *your* flowsheet rather than of some flowsheet with the same topology: pass the canvas's own coordinates and the boxes land where they were dragged. The two callers key their nodes differently — the canvas uses a unit's bare name, because that is `_apply_params`'s vocabulary, while the report prefixes `unit:` — and `_diagram_keys` is the single place that translates. A position naming a node that no longer exists is ignored rather than raised on, because a stale layout is a normal thing to be holding.
-
-The PNG goes through an `Image` and a `<canvas>`, with the SVG handed over as a **data** URL rather than a blob URL: a canvas that has drawn a blob-URL image counts as tainted and `toBlob` on it throws. Its size comes from the SVG's own `viewBox`, since the drawer writes `width="100%"` — right for a document that flows, useless for a raster. Naming, the XML declaration and the raster size are pure functions in `model/download.js` and are tested under node; the `Blob` and the anchor click stay in the component, where nothing can be quietly wrong.
-
-The one thing that can go wrong with committed build output is drift — source edited, bundle not rebuilt — so CI reruns `gui-build` and fails if `static/` differs from the commit.
-
-The functions that turn a serialized flowsheet into nodes and edges (`frontend/src/lib/model/graph.js`) and the ones that turn a canvas gesture into a request (`model/edit.js`) are plain JavaScript with no framework in them, and they are tested under bare `node --test`. That is where the testing effort goes on purpose: a wire attached to the wrong port, or a delete sent to the wrong endpoint, looks exactly like one that worked until the next reload. `tests/test_gui.py` runs those same files when node is on `PATH` and skips when it is not: node is a tool for building difflow, never a dependency of it.
-
-One wrinkle worth knowing: JSON has no literal for the non-finite floats, and `JSON.parse` rejects the `Infinity` that Python's `json` writes. This is the *common* case, not an exotic one — `mass_action_kinetics` puts `inf` in `K_eq` for every irreversible reaction — so those values travel as the strings `"Infinity"`, `"-Infinity"` and `"NaN"`, and are restored on the way back.
-
-### Delta vectors, for someone else's planning model
-
-**Planning** is the panel that turns the open flowsheet into the object an LP planning system consumes: a Jacobian of chosen outputs against chosen levers, around the solved base case, with the bounds and the trust radius that say where it is valid. `difflow.planning` has computed that since it existed. What it never had was a way to say *which* levers, by pointing at them.
-
-Check parameters to make them levers and stream quantities to make them outputs, press **Linearize**, and `POST /api/linearize` builds a `Block.from_flowsheet` over the live flowsheet, calls `linearize_block`, and returns a `DeltaVectorSet`. Lever keys are `_apply_params`'s own vocabulary — `reactor.V`, `feed:feed.total_flow` — which is why the same picker serves the sensitivity sweep and this: they are asking for derivatives of the same thing, one at a time versus all at once.
-
-Four things about it are deliberate.
-
-**The selection is part of the document.** It persists as `view.planning = {"u", "y", "bounds", "radius"}` alongside `view.nodes`, so a flowsheet reopens on the levers it was last linearized against. Choosing them is the work; recomputing the Jacobian is a second.
-
-**A blank bound is not an infinity.** A lever with no bounds still needs a range for the trust region to mean anything, so an unbounded lever gets a symmetric window around its own base value. An infinite bound would make every scaled column zero and the health report would then flag the whole model as dead — a diagnostic failure caused by the diagnostic's own input.
-
-**The finite-difference check is a button, not a default.** `check_delta_vectors` compares the AD Jacobian against central differences, which costs `2 n_u` extra solves against the one the Jacobian took. It is the check that decides whether a Jacobian should leave the building — a `clip`, a `minimum` or a `where` sitting on an active constraint gives an AD derivative that is perfectly correct and completely unlike the flowsheet's actual response — so the panel offers it prominently and states the number either way, but does not make everyone pay for it on every press.
-
-**Health findings travel with the coefficients.** `check_delta_health` runs on every linearization and its findings ship inside the export, because a dead lever or a recycle loop gain near one is a fact about the numbers, and the person pricing against them downstream never sees this panel. The panel also renders an exactly-zero cell as `0` rather than `6.781e-21`: a structurally dead column is the one thing in that table a reader must not miss, and scientific notation hides it among the merely small.
-
-Downloads are the JSON manifest and the CSV tables, and they are fetched from the server rather than rebuilt in the page — `difflow.planning.export`'s own writers produce them, so what a planning system reads is byte-for-byte what `difflow plan-export` writes. The name is `<flowsheet>_delta_vectors.json`, never `<flowsheet>.json`: a download landing next to the document under that name is a flowsheet overwritten by a Jacobian.
-
-`.lp` and `.mps` are **not** offered here, and their absence is not an omission. Those are renderings of an assembled LP, and this panel poses none — no prices, no constraints, therefore no shadow prices. Run `DeltaBasePlanner` or `difflow plan-export` for those; the JSON this writes is what such a run consumes.
-
-### What the assistant is told
-
-The editor can put a small language model next to the canvas, and the model is the least interesting half of that. A 3B model knows nothing about difflow; the useful thing it can do is *read*. So the work is in the brief — and the brief is assembled from things difflow already computed and never showed anyone.
-
-`GET /api/context` (or `session.context(...)` in Python, with no server at all) returns one of four:
-
-| `kind` | What it contains |
-|---|---|
-| `block` | the catalog schema for the operation, its equations and assumptions, its docstring, and **this node's own parameter values with their units** |
-| `flowsheet` | the units and how they are wired, the feeds, the recycles, the species, and the Python `codegen` would emit |
-| `solve` | `last_solve_converged`, `method`, `iterations`, `residual`, `tol`, `tear_streams` — every one of them already recorded on `Flowsheet` and none of them previously reported — plus a troubleshooting card matched to the symptom |
-| `planning` | a `DeltaVectorSet` read out as a table, the prices and constraints, the binding marginals, and the health findings |
-
-Three decisions in there are worth stating.
-
-**The brief is the product, not the answer.** Every pack comes back whole — sections, assembled prompt, token count, and a note for anything the budget dropped — and the panel shows it. When the local model is weak that is still the useful output: read it, or paste it into a stronger assistant. It is a report about the flowsheet that difflow could not previously produce.
-
-**Retrieval is lexical and build-time.** `docs/` is 23 files and 720 KB, fixed at release. `difflow.gui.docs_index` splits it at headings — outside fenced code, since every chapter is full of Python and `# Build the flowsheet` in a fence is a comment, not a section — and writes `static/docs-index.json`. That file is committed and CI rebuilds it and fails on a difference, exactly like the JS bundle: an index that has silently stopped matching the prose it indexes is worse than no index. It lives under `static/` because `docs/` is not in the wheel and `static/` is, and it is built by a stdlib-only script so the CI job needs nothing installed.
-
-Scoring is TF-IDF with length normalisation, and it runs in Python rather than in the browser. Where a dot product happens is not architecture; running it here makes it testable without a headless browser and keeps a 667 KB file off the wire on every question. What actually sharpens it is that **each pack searches on the question plus its own subject** — the operation name, the units in the flowsheet, the solver that ran. A user's question is four words long and two of them are "why" and "this"; the pack is what knows what "this" is.
-
-**And where the question goes is stated, not assumed.** Three things can answer a brief, chosen in the panel:
-
-| Provider | Where the brief goes |
-|---|---|
-| *No model* (the default) | nowhere. The brief is assembled and shown; copy it into an assistant of your choosing |
-| *In this browser* | a small model over WebGPU, via WebLLM. The weights come from the MLC CDN once (1–2 GB) and are cached by the browser; nothing you type leaves the machine |
-| *Local server* | an OpenAI-compatible base URL you give — Ollama, llama.cpp, vLLM |
-| *Anthropic* | `POST /api/assistant`, which the difflow process forwards with a key from **its own environment** (`ANTHROPIC_API_KEY`). The page never holds the key, and the panel says up front if the server has none |
-
-The footer names the active one in a sentence, in the accent colour when the answer is that the brief leaves the machine. The default sends nothing anywhere, and the WebLLM runtime is bundled rather than fetched from a CDN at run time — this page carries the CSRF token for a server that can `exec` Python, so it must not import third-party code over the network. That costs about 6 MB of committed build output, loaded only if someone selects that provider.
-
-**The budget is a real constraint.** The default runtime is a 3B model with a 4096-token window, and a brief that overflows it is truncated *at the end* — where the question is. So a pack is fitted to `context.BUDGET` tokens, dropping whole low-priority sections rather than truncating any of them (half a parameter table is a table with parameters missing from it), never dropping the subject, and recording what went. A thin answer then has a visible cause.
-
-### The console, where the flowsheet is a Python object again
-
-The assistant answers a question in English. **Console** is the same question asked in Python, and it is the panel that admits the editor can never have a button for everything. It is a REPL running *in the difflow process* — every cell is `exec`'d in a namespace that is rebound before each run:
-
-| Name | What it is |
-|---|---|
-| `fs` | the flowsheet on the canvas. Not a copy |
-| `streams` | the last solve's streams, or `None` if nothing has solved |
-| `dvs` | the last linearization, or `None` |
-| `session` | the session itself — `session.solve()` keeps the panels in step |
-| `difflow`, `jax`, `jnp` | imported for you |
-
-plus whatever the code context defines, so a `thermo` object built there is a name at the prompt.
-
-**That `fs` is live is the whole point.** A REPL over a deepcopy would answer questions about a model nobody is looking at. Edit a parameter in a cell and the server refingerprints the document, notices, drops the stale solve, and tells the page to redraw — the canvas follows the prompt. It is also what makes the panel difflow's rather than any editor's: `jax.grad` at the prompt differentiates through the recycle tear solve of the flowsheet you are looking at.
-
-<!-- doc-test: skip: interactive console transcript -->
-```python
->>> import jax
->>> f = lambda V: fs._apply_params({'reactor.V': V}).solve()['liq']['F_ethanol']
->>> float(jax.grad(f)(1.0))
-0.249960277574744
-```
-
-Four things about it are deliberate.
-
-**A traceback is an answer.** `console_run` returns `ok: True` with `error` set, which is the one place difflow's `{"ok": false, "error": ...}` convention is on purpose not followed: the cell raising *is* the normal outcome someone typing at a prompt asked about, and a panel that reported it as a failed request would be reporting on the wrong thing. The traceback is trimmed to start at the user's own frame — the server's stack above it is noise — and the offending line is shown, because cells are registered with `linecache` under `<console:n>` so Python can quote source that was never a file.
-
-**The namespace is not the code context's.** `view["code_context"]` is part of the model: it is serialized, re-evaluated on load, and it is what `$ref` tags resolve against. If a cell's assignments landed there, typing `k = 0.5` would silently change what the saved file means. The console *reads* those bindings and writes to a layer of its own, and `names` lists what you defined — never the names that were injected for you.
-
-**Figures are a hook.** v1 emits text, but the wire format (`{"kind", "mime", "data"}`) and the browser's renderer both already understand an image, so plots are a callable and nothing else:
-
-```python
-from difflow.gui.console import Console, image
-
-def figures(namespace):
-    import io, matplotlib.pyplot as plt
-    out = []
-    for num in plt.get_fignums():
-        buf = io.BytesIO()
-        plt.figure(num).savefig(buf, format="png", dpi=110)
-        out.append(image(buf.getvalue()))
-    plt.close("all")
-    return out
-
-Console(display_hooks=[figures])
-```
-
-A hook that raises is reported where its output would have been, rather than taking the cell's result down with it. And the page has an explicit branch for a `kind` it does not know, so a server emitting something newer degrades to a legible placeholder instead of an empty box.
-
-**It is not a sandbox, and says so.** The server already `exec`s browser-supplied Python for the code context; a console adds no capability that endpoint did not have, and the CSRF token plus the `Origin`/`Host` check are the whole protection either way. What it does add is a way to hang the single-threaded server with a cell that loops forever — there is no safe way to interrupt a running thread in Python, so the panel states that rather than offering a stop button that would not work.
-
----
-
-## Publishing a Model
-
-`difflow.publish` turns a flowsheet into a **self-contained HTML page** that anyone can open with nothing installed — no Python, no server, no network. It is the form a model needs for a paper's supplementary material or a project page.
-
-```python
-from difflow import publish, SweepAxis
+from difflow import SweepAxis, sweep
 
 axes = [
     SweepAxis("reactor.V", 0.5, 5.0, n=5, label="Reactor volume", units="m³"),
@@ -1466,48 +986,15 @@ outputs = {"conversion": lambda streams: 1 - (streams["liquid_product"]["F_n_hex
                                               + streams["vapor_product"]["F_n_hexane"])
                                     / streams["fresh_feed"]["F_n_hexane"]}
 
-publish(
-    fs,
-    axes=axes,
-    outputs=outputs,
-    path="model.html",
-    title="Reactor sizing",
-)
-```
-
-Axis keys are whatever `_apply_params` accepts — `"<unit>.<param>"` and `"feed:<stream>.<field>"` — so a feed rate or a feed temperature is an axis like any other.
-
-The page carries the flowsheet itself, sliders for each axis, the outputs, and their sensitivities. This works because the solve is *pre-computed*: `sweep` evaluates the flowsheet on the grid with `jax.vmap`, takes gradients with `jax.grad`, and bakes the results into the page, which interpolates between them.
-
-### The page is the editor, frozen
-
-A published page is the editor's own front end with nothing editable and nothing to solve: the same `@xyflow` canvas, the same graph model, the same palette. Click a unit and it says what the unit is — description, parameters with units, ports, equations, assumptions, references — read from `difflow.catalog`, which reads the class. A published model therefore cannot describe a unit differently from the editor, and cannot go stale against the code it was published from.
-
-That replaces what a published page used to be, which was a set of sliders belonging to nothing visible. Pass `topology=False` to `publish` to get that back.
-
-Three details follow from *self-contained*, and they are the reason this is a second Vite build rather than a second entry point of the first:
-
-- A build with two entries shares chunks between them, and a chunk is a file the page would have to fetch. `vite.publish.config.js` uses `build.lib` with `formats: ['iife']`, so `publish.js` is one file `publish.py` can inline verbatim.
-- KaTeX is deliberately left out. A quarter megabyte of typesetting is a poor trade for a file that has to open in ten years, so equations are shown as their LaTeX source.
-- The topology on the page is **not** `serialize.to_dict()`. That is a document meant to be loaded back, and it refuses a flowsheet holding a `rate_fn` or a thermo object — which is most interesting flowsheets, and no reason to publish a page without a picture. `publish._topology` builds a description meant for *looking at*: same node keys as the editor, every value reduced to something printable, and anything that cannot be shown named by its type (`<function>`, `<array (2, 1)>`) rather than dropped, because a parameter that vanishes reads as one the unit does not have.
-
-A plain "no URLs" check cannot hold for this bundle: Svelte and `@xyflow` ship documentation URLs inside their error messages, and every SVG carries the `http://www.w3.org/2000/svg` namespace, which is a name that looks like an address. What matters is the constructs that actually load something (`<script src`, `<link `, `url(http`, `@import url(`); no test checks the page for them any more.
-
-That is a deliberate trade, and its limits should be stated plainly. JAX has no WebAssembly build, so a browser cannot run the real solver; the published page is an interpolation of a grid, not a live model. It is exact at the grid points and only as good as the grid between them, and it can only vary what the axes name. When you need the real thing, use the local editor above, or the generated script.
-
-The arithmetic the page runs — interpolation between solved points, and the exact derivatives recorded alongside them — lives in `frontend/src/lib/model/sweep.js` and is tested under bare `node --test` with everything else in `model/`. It used to be a string of JavaScript inside a Python template, where nothing could reach it.
-
-`sweep` is available on its own when you want the grid as data rather than as a page:
-
-```python
-from difflow import sweep
-
 result = sweep(fs, axes, outputs)
-result.values["conversion"]      # shape (5, 3)
-result.gradients["conversion"]   # d(conversion)/d(axis), same shape per axis
+result.values["conversion"]                    # shape (5, 3)
+result.gradients["conversion"]["reactor.V"]    # d conversion / d V at every point
 ```
 
----
+Axis keys are whatever `_apply_params` accepts --- `"<unit>.<param>"` and
+`"feed:<stream>.<field>"` --- so a feed rate or a feed temperature is an
+axis like any other. (The book's app can turn a sweep into a self-contained
+interactive page for a paper's supplementary material.)
 
 ## Best Practices
 
@@ -1557,6 +1044,9 @@ print(fs.last_solve_converged)   # False is a finding; None means "not judged"
 
 The full decision tree is in
 [Convergence and Initialization](convergence.md#when-a-solve-does-not-converge).
+To watch a solve fail rather than read its summary --- unit by unit, with
+breakpoints on the first NaN or a rising residual --- use the
+[flowsheet debugger](debugger.md) (`difflow debug plant.py`).
 
 ### Memory Efficiency
 

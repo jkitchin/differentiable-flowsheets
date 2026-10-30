@@ -2732,9 +2732,8 @@ a single extractor (see [Solvating extractants](#solvating-extractants));
 `capacity_sharpness` likewise reaches both extraction sections' loading
 limiters.
 
-`elements` has no default, so the editor cannot drop a `GroupSeparator`
-from the palette alone --- the code context has to supply the element
-tuple.
+`elements` has no default, so a `GroupSeparator` cannot be placed from
+the catalog alone --- the code context has to supply the element tuple.
 
 ---
 

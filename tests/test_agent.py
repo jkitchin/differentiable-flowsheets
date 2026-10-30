@@ -13,7 +13,7 @@ import pytest
 
 from difflow.agent import TOOLS, Workbench, jsonable
 
-EXAMPLES = Path(__file__).parent.parent / "src" / "difflow" / "gui" / "examples"
+EXAMPLES = Path(__file__).parent.parent / "src" / "difflow" / "workspace" / "examples"
 ESTERIFICATION = ["acetic_acid", "ethanol", "ethyl_acetate", "water"]
 
 
@@ -179,3 +179,102 @@ class TestGuardRails:
             assert kind in ("read", "edit", "exec")
             method = getattr(Workbench, name)
             assert (method.__doc__ or "").strip(), name
+
+
+class TestLiveDebugger:
+    """The debug_* tools: the session's live debugger, as an agent drives it."""
+
+    @staticmethod
+    def bench(middle=None):
+        from difflow.workspace.session import FlowsheetSession
+        from tests.test_debug import loop
+
+        wb = Workbench()
+        wb.sessions["main"] = FlowsheetSession(loop(middle) if middle else loop())
+        return wb
+
+    def test_the_guide_is_the_contract_and_the_handshake(self):
+        guide = Workbench().debug_guide()
+        assert guide["hello"]["protocol"] == "difflow-dbg/1"
+        assert "debug_wait" in guide["contract"]
+
+    def test_start_step_and_finish(self):
+        wb = self.bench()
+        assert wb.debug_state()["state"] == "idle"
+        first = wb.debug_start()
+        assert (first["state"], first["event"]["checkpoint"]) == ("paused", "solve_start")
+        stepped = wb.debug_command("step")
+        assert stepped["event"]["next"]["checkpoint"] == "iteration"
+        assert wb.debug_state()["event"]["checkpoint"] == "iteration"
+        wb.debug_command("continue")
+        end = wb.debug_command("continue")
+        assert end["state"] == "finished" and end["event"]["next"]["ok"]
+        assert wb.debug_stop() == {"ok": True, "state": "idle"}
+
+    def test_on_error_stops_where_the_nan_is_born(self):
+        from tests.test_debug import poisoned
+
+        wb = self.bench(poisoned)
+        stop = wb.debug_start(on_error=True)
+        assert (stop["event"]["unit"], stop["event"]["trigger"]) == ("R1", "nonfinite")
+        wb.debug_stop()
+
+    def test_a_short_wait_says_running_and_wait_picks_it_up(self):
+        from tests.test_debug import slow
+
+        wb = self.bench(slow)
+        wb.debug_start()
+        running = wb.debug_command("continue", timeout=0.01)
+        assert running["state"] == "running"
+        assert wb.debug_pause()["event"]["ok"]
+        paused = wb.debug_wait(timeout=60)
+        assert paused["state"] == "paused" and paused["event"]["reason"] == "paused"
+        wb.debug_stop()
+
+    def test_a_missing_session_and_a_missing_debugger_are_refused(self):
+        wb = Workbench()
+        assert not wb.debug_start(session="nowhere")["ok"]
+        assert "start one" in wb.debug_command("step")["error"]
+        assert json.loads(json.dumps(wb.debug_state()))["state"] == "idle"
+
+    def test_record_frame_and_what_if(self):
+        wb = self.bench()
+        recorded = wb.debug_record()
+        assert recorded["ok"], recorded
+        summary = recorded["summary"]
+        k = summary["iterations"][0]["frame"]
+        assert wb.sessions["main"].flowsheet.last_solve_history is None   # a copy was solved
+
+        shown = wb.debug_trace_frame(k, streams=["recycle"])
+        assert shown["frame"]["checkpoint"] == "iteration"
+        assert set(shown["streams"]) == {"recycle"}
+
+        replay = wb.debug_whatif(k, "recycle", "F_A", 5.0)
+        assert replay["ok"], replay
+        comparison = replay["comparison"]
+        assert comparison["diverged_at"] is None and comparison["same_answer"]
+        assert [e["value"] for e in comparison["edits"]] == [5.0]
+        assert wb.debug_trace_frame(k, which="whatif")["frame"]["edits"]
+        json.dumps(replay)
+
+    def test_a_what_if_can_find_another_steady_state(self):
+        from difflow.workspace.session import FlowsheetSession
+        from tests.test_debug import bistable
+
+        wb = Workbench()
+        wb.sessions["main"] = FlowsheetSession(bistable())
+        wb.sessions["main"].set_solver_options({"use_initialization": False})
+        k = wb.debug_record()["summary"]["iterations"][0]["frame"]
+        comparison = wb.debug_whatif(k, "tear", "F_A", 0.8)["comparison"]
+        assert comparison["same_answer"] is False
+        assert comparison["largest_difference"]["where"] == "out.F_A"
+
+    def test_record_and_replay_refusals(self):
+        wb = self.bench()
+        assert "debug_record" in wb.debug_trace_frame(0)["error"]
+        assert "record a solve first" in wb.debug_whatif(0, "recycle", "F_A", 1.0)["error"]
+        wb.debug_record()
+        assert "debug_whatif" in wb.debug_trace_frame(0, which="whatif")["error"]
+        assert not wb.debug_trace_frame(10_000)["ok"]
+        assert "known:" in wb.debug_trace_frame(0, streams=["nope"])["error"]
+        assert not wb.debug_whatif(0, "recycle", "F_A", 1.0)["ok"]      # not an iteration

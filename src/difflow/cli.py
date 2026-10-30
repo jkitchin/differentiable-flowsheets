@@ -1,21 +1,18 @@
 """The ``difflow`` command --- the front door to everything with a shell face.
 
-Three things here are worth running without writing a script, and they
-had three different invocations: ``python -m difflow.gui`` for the
-editor, ``difflow`` for a report, ``difflow plan-export`` for delta
-vectors. Only the last of those was discoverable. They are subcommands
-now::
+The things worth running without writing a script are subcommands::
 
-    difflow                              # open the editor
-    difflow gui plant.json --port 9000   # ...on a flowsheet, on a port
+    difflow gui plant.json --port 9000   # the editor, if the book's app is installed
     difflow report model.py --format html -o report.html
     difflow plan-export model.py -u reactor.V --format csv -o tables/
     difflow mcp                          # tools for an agent, over stdio
+    difflow debug model.py               # step through a solve
 
-A bare ``difflow`` opens the editor rather than printing usage. It is
-the one subcommand with nothing to say on stdout, the one a new user
-wants first, and the alternative --- an argparse usage error --- taught
-nobody anything.
+A bare ``difflow`` opens the editor when one is installed (it is the
+first thing a new user wants, and has nothing to say on stdout), and
+prints this usage when not. The editor is an app that comes with the
+difflow book and registers itself as a ``difflow.apps`` entry point;
+``gui`` runs whatever is registered (see :mod:`difflow.apps`).
 
 ``difflow model.py`` still means ``difflow report model.py``. That form
 predates the subcommands and is what the older docs and scripts say, so
@@ -34,22 +31,24 @@ from pathlib import Path
 #: subcommand -> (module, callable), imported only when dispatched to.
 #: Importing jax to print `--help` is a second of nothing.
 COMMANDS = {
-    "gui": ("difflow.gui.server", "main"),
+    "gui": ("difflow.apps", "gui"),             # the book's app, if installed
     "report": ("difflow.report.cli", "main"),
     "plan-export": ("difflow.planning.cli", "main"),
     "mcp": ("difflow.mcp.server", "main"),
+    "debug": ("difflow.debug.cli", "main"),
 }
 
 USAGE = """\
 usage: difflow [<command>] [<args>]
 
-Open the local flowsheet editor when given no command.
+Open the flowsheet editor when given no command (if it is installed).
 
 commands:
-  gui           open the editor in a browser (the default)
+  gui           open the browser editor (it comes with the difflow book)
   report        run a script and write its flowsheet report
   plan-export   linearize a model and write delta vectors for a planner
   mcp           serve the flowsheet tools to an agent over stdio (MCP)
+  debug         solve a flowsheet under the interactive debugger
 
   difflow <command> --help   for that command's own options
 
@@ -61,6 +60,10 @@ options:
 
 def _dispatch(name: str, argv: list[str]) -> int:
     module, attr = COMMANDS[name]
+    if module == "difflow.apps":
+        from difflow import apps
+
+        return apps.run(attr, argv)
     import importlib
 
     return getattr(importlib.import_module(module), attr)(argv)
@@ -70,6 +73,11 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
     if not argv:
+        from difflow import apps
+
+        if apps.find("gui") is None:
+            sys.stdout.write(USAGE)
+            return 0
         return _dispatch("gui", [])
 
     head = argv[0]

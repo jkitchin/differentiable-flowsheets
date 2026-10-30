@@ -576,7 +576,7 @@ print(f"lean {float(lean['F_CO2_absorbed'] / lean['F_Amine']):.3f}, "
 | `T` | K | Lean solvent temperature after the trim cooler |
 | `P` | Pa | Lean solvent pressure after the pump |
 
-`info` carries `lean_loading`, `makeup_water` (negative is a purge) and `makeup_amine` (zero at a converged loop). In the editor the absorber starts with only its gas inlet; **Add inlet** gives it `solvent_in`, and it builds the lean solvent from its own parameters until that is wired.
+`info` carries `lean_loading`, `makeup_water` (negative is a purge) and `makeup_amine` (zero at a converged loop). Placed as an operation (`add_unit`), the absorber starts with only its gas inlet; adding an inlet gives it `solvent_in`, and it builds the lean solvent from its own parameters until that is wired.
 
 ---
 

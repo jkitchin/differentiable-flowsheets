@@ -124,7 +124,7 @@ class Context:
         self._econ = None
 
     def attribute(self, owner: str, name: str):
-        from difflow.gui.sensitivity import quantity
+        from difflow.workspace.sensitivity import quantity
 
         if owner in self.streams:
             try:

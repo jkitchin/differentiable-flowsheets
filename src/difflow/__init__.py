@@ -501,9 +501,10 @@ from difflow.kinetics import (
     mass_action_kinetics,
 )
 
-# Flowsheet serialization, code generation and publishing
-from difflow import codegen, gui, publish as publish_module, serialize
-from difflow.publish import SweepAxis, SweepResult, publish, sweep
+# Flowsheet serialization, code generation, parameter sweeps, and the
+# session engine the agent tools (and the book's app) run on
+from difflow import codegen, serialize, workspace
+from difflow.sweeps import SweepAxis, SweepResult, sweep
 
 # Operation catalog
 from difflow.catalog import (
@@ -994,14 +995,13 @@ __all__ = [
     "mass_action_kinetics",
     "ReactionSet",
     "KineticsSpecError",
-    # Flowsheet serialization, code generation and publishing
+    # Flowsheet serialization, code generation, sweeps, the session engine
     "serialize",
     "codegen",
-    "publish",
     "sweep",
     "SweepAxis",
     "SweepResult",
-    "gui",
+    "workspace",
     # Operation catalog
     "catalog",
     "describe_operation",

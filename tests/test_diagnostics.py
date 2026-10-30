@@ -59,7 +59,7 @@ class TestClassify:
         assert classify_history([1.0, 2.0], True) == "converged"
 
     def test_every_remedy_is_a_valid_solve_setting(self):
-        from difflow.gui.session import _solver_option
+        from difflow.workspace.session import _solver_option
 
         for remedy in REMEDIES.values():
             assert remedy.kind in ("numerics", "problem")
@@ -73,7 +73,7 @@ class TestClassify:
             == "TracerArrayConversionError"
 
     def test_the_editor_reads_the_same_cards(self):
-        from difflow.gui.context import TROUBLESHOOTING
+        from difflow.workspace.context import TROUBLESHOOTING
 
         assert [t[0] for t in TROUBLESHOOTING] == [s.title for s in SYMPTOMS]
 

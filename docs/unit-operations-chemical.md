@@ -3889,10 +3889,10 @@ bookkeeping:
   activity-coefficient model (NRTL or UNIQUAC) from which
   $K_i = \gamma_i^{aq} / \gamma_i^{org}$ follows.
 
-Because it is a model object, the editor cannot construct one from a form
-alone: `solutes`, `aqueous_carrier` and `organic_carrier` have no
-defaults, and the palette reports them as unmet requirements until the
-code context binds them.
+Because it is a model object, it cannot be constructed from data alone:
+`solutes`, `aqueous_carrier` and `organic_carrier` have no defaults, and
+the catalog reports them as unmet requirements until the code context
+binds them.
 
 #### Parameters
 
@@ -4584,8 +4584,7 @@ outlet, info = exp(feed)
 
 ### EOSCompressor
 
-**Exported as** `Compressor`; registered in the catalog --- and so labelled
-in the editor's palette --- as **`EOSCompressor`**, because `Compressor`
+**Exported as** `Compressor`; registered in the catalog as **`EOSCompressor`**, because `Compressor`
 is taken by the gas plugin's fixed-ratio compressor station
 ([Gas networks](unit-operations-gas.md)) and the two are different
 models of different things.

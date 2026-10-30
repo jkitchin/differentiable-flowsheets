@@ -172,7 +172,7 @@ def converge(session, *, apply: bool = False, budget: int = 8) -> dict:
     if blocking:
         return {"ok": False, "error": "fix these first: "
                 + "; ".join(f.detail for f in blocking)}
-    from difflow.gui.session import SOLVER_DEFAULTS
+    from difflow.workspace.session import SOLVER_DEFAULTS
 
     base = session._solve_kw()
     effective = {**SOLVER_DEFAULTS, **base}

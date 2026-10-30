@@ -8,7 +8,7 @@ front ends, or a script.
 
 :data:`TOOLS` names the methods that are tools and what kind each is:
 ``"read"`` changes nothing, ``"edit"`` changes a flowsheet (and can be
-undone), ``"exec"`` runs Python.
+undone) or a session's live debugger, ``"exec"`` runs Python.
 """
 
 from difflow.agent.workbench import DEFAULT_TIMEOUT, Workbench, jsonable
@@ -56,6 +56,17 @@ TOOLS: dict[str, str] = {
     "tear_analysis": "read",
     "trace_solve": "read",
     "get_unit_info": "read",
+    # the live debugger (on a copy: the flowsheet itself is never changed)
+    "debug_guide": "read",
+    "debug_state": "read",
+    "debug_start": "edit",
+    "debug_command": "edit",
+    "debug_wait": "read",
+    "debug_pause": "edit",
+    "debug_stop": "edit",
+    "debug_record": "read",
+    "debug_trace_frame": "read",
+    "debug_whatif": "read",
     # analysis
     "levers": "read",
     "define_quantity": "edit",

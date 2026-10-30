@@ -6,8 +6,54 @@ All notable changes to difflow are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **The browser editor moved out of difflow, to the app that comes with the difflow book.** difflow is the
+  open engine; the editor (canvas, inspector, results, planning, console, assistant, and the debugger's
+  Debug and Trace panels), its server, its frontend and the static `publish` page are now `difflow-app`,
+  which registers itself as a `difflow.apps` entry point. `difflow gui` and the agent tool
+  `open_in_editor` run it when it is installed and say where it comes from when it is not; a bare
+  `difflow` prints usage without it. The session engine stays open and is renamed `difflow.gui` ->
+  `difflow.workspace` (`FlowsheetSession`, edit, boilerplate, console, context, docs, docs_index,
+  doclinks, examples, layout, planning, sensitivity, and the new `topology`); the agent and MCP tools are
+  unchanged. `difflow.publish` is gone: `sweep`, `SweepAxis` and `SweepResult` are in `difflow.sweeps` (and
+  still exported from `difflow`); the HTML page is the app's. The docs search index is
+  `src/difflow/workspace/data/docs-index.json`, rebuilt with `make docs-index` (CI checks it); the
+  `gui-build`/`gui-test`/`gui` make targets, the editor's CI job and the `difflow-gui` script are removed.
+
 ### Added
 
+- **An interactive debugger for flowsheet solves.** New `difflow.debug` (docs/debugger.md) and `difflow debug
+  plant.py|plant.json`. Pauses a sequential-modular solve at `solve_start`, `before_unit`/`after_unit` (each
+  unit call, tagged by phase: `init`, `solve`, `probe`, `final`, `sequential`), `unit_error`, `iteration` (the
+  tear map and its residual), `after_accel` and `terminated`; steps by tear iteration (`step`), by unit
+  (`next`) or by checkpoint (`stepi`). Breakpoints by iteration, before a unit, on a condition
+  (`break if residual>1e3 && iter>5`) or on an event (`nonfinite` where a NaN is born, `inner_unconverged`,
+  `residual_rise`, `unit_error`); `print` streams, units, the tear table (`x`, `g(x)`, `|g - x|` per field)
+  and the history; `watch`, `diagnose`, `save`, and `interact` (Python with the pause in scope).
+  `on_error=True` stops only post mortem. One engine, three front ends: a readline REPL, the `difflow-dbg/1`
+  JSON protocol (a self-describing `hello`, pause/result events with request ids) and `DebugRunner`, which
+  runs the solve on a worker thread for a server or an agent. Detached it costs one thread-local read per
+  checkpoint; attached it only reads, and `quit` raises `DebugQuit`. Design and the editor/agent phases in
+  plans/debugger.org, after pounce's and discopt's debuggers.
+  `set tear STREAM.FIELD VALUE` (at an `iteration` or `after_accel` pause) changes the guess the next pass
+  runs on; edits are listed in the `terminated` event and `Flowsheet.last_solve_debug_edits`.
+  `debug.record(fs, solve_kwargs)` solves once through every checkpoint and returns a `difflow-trace/1`
+  trace (`summarize`, `state_at` and `compare` read it). A **what-if** replays the recorded solve with one
+  tear value set at a frame (`record(..., edits=, baseline=)`): a replay, not a fresh solve, so the
+  accelerator keeps its history; frames before the edit are checked against the recording (`diverged_at`),
+  and `compare` says whether the two runs reached the same answer. `FlowsheetSession` (now
+  `difflow.workspace`) carries a live debugger for front ends that cannot block on a prompt: a long poll
+  (`debug_start|command|wait|pause|stop`, 20 s per call) over `DebugRunner`, which gained `state` and
+  `pause()`, plus `debug_record`/`debug_whatif`, refusing a recording of a since-changed flowsheet; the
+  solve runs on a copy. (The book's browser editor puts its Debug and Trace panels on these.)
+  For agents, `difflow mcp` serves the same debugger: `debug_guide` (the contract and the handshake),
+  `debug_start`, `debug_command`, `debug_wait`, `debug_pause`, `debug_state`, `debug_stop`, over the
+  session's `FlowsheetSession.debug_*` methods; the `fix_convergence` prompt uses them. Record and what-if
+  for agents: `debug_record` (a per-iteration summary: frame, residual, largest tear entry, events, regime),
+  `debug_trace_frame` (one frame with every stream's value there) and `debug_whatif` (the replay compared
+  with the recording, `same_answer` flagging a second steady state); `difflow.debug.record.summarize`,
+  `state_at` and `compare`. Recording and replay now run on a copy of the flowsheet.
 - **Model-discrimination and c-optimal experiment design (issue 520).**
   `difflow.estimation.design_discrimination(models, thetas, candidates, n, criterion='HR')` chooses the
   candidate runs that best tell rival models apart, each model at its own fitted parameters: `'HR'`

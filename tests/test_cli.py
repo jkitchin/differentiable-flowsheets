@@ -1,7 +1,7 @@
 """The ``difflow`` command's dispatch.
 
 Only the routing is tested here --- each subcommand has its own tests
-(``test_gui.py``, ``test_report.py``, ``test_planning_export.py``), and
+(``test_report.py``, ``test_planning_export.py``, the book app's own), and
 repeating them through the front door would only assert that argparse
 still works.
 """
@@ -11,45 +11,58 @@ import pytest
 from difflow import cli
 
 
+class FakeEntry:
+    """A stand-in for the book app's ``difflow.apps`` entry point."""
+
+    module = "difflow_app.server"
+
+    def __init__(self, calls):
+        self.calls = calls
+
+    def load(self):
+        return lambda argv: self.calls.append(argv) or 0
+
+
 @pytest.fixture
-def recorded_gui(monkeypatch):
-    """Capture what ``difflow gui`` would serve, without serving it."""
+def installed(monkeypatch):
+    """The editor installed: calls to it are recorded rather than served."""
     calls = []
-    monkeypatch.setattr("difflow.gui.server.serve",
-                        lambda **kw: calls.append(kw))
+    monkeypatch.setattr("difflow.apps.find",
+                        lambda name="gui": FakeEntry(calls) if name == "gui" else None)
     return calls
 
 
-class TestTheEditorIsTheDefault:
-    def test_no_arguments_opens_the_editor(self, recorded_gui):
-        # A bare `difflow` used to be a usage error from the report
-        # parser, which is a poor thing to greet someone with. The
-        # editor is what a new user wants and has nothing to print.
-        from difflow.gui.server import DEFAULT_PORT
+@pytest.fixture
+def missing(monkeypatch):
+    monkeypatch.setattr("difflow.apps.find", lambda name="gui": None)
 
+
+class TestTheEditorIsAnApp:
+    def test_no_arguments_open_it_when_installed(self, installed):
         assert cli.main([]) == 0
-        assert recorded_gui == [{"path": None, "port": DEFAULT_PORT,
-                                 "open_browser": True, "token": None,
-                                 "stay": False, "trust": False}]
+        assert installed == [[]]
 
-    def test_gui_takes_its_own_arguments(self, recorded_gui):
-        assert cli.main(["gui", "plant.json", "--port", "9000",
-                         "--no-browser"]) == 0
-        assert recorded_gui == [{"path": "plant.json", "port": 9000,
-                                 "open_browser": False, "token": None,
-                                 "stay": False, "trust": False}]
+    def test_gui_passes_its_arguments_through(self, installed):
+        assert cli.main(["gui", "plant.json", "--port", "9000"]) == 0
+        assert installed == [["plant.json", "--port", "9000"]]
 
-    def test_stay_is_passed_through(self, recorded_gui):
-        # Without it the editor stops when its last page closes, which
-        # is what someone at a terminal wants and what someone running
-        # it as a service very much does not.
-        assert cli.main(["gui", "--stay"]) == 0
-        assert recorded_gui[0]["stay"] is True
+    def test_no_arguments_print_usage_without_it(self, missing, capsys):
+        assert cli.main([]) == 0
+        assert "usage: difflow" in capsys.readouterr().out
+
+    def test_gui_says_where_the_editor_comes_from(self, missing, capsys):
+        assert cli.main(["gui"]) == 2
+        assert "difflow book" in capsys.readouterr().err
+
+    def test_the_agent_tool_says_so_too(self, missing, tmp_path):
+        from difflow.agent import Workbench
+
+        answer = Workbench().open_in_editor(path=str(tmp_path / "x.json"))
+        assert not answer["ok"] and "difflow book" in answer["error"]
 
 
 class TestDispatch:
     @pytest.mark.parametrize("name, module", [
-        ("gui", "difflow.gui.server"),
         ("report", "difflow.report.cli"),
         ("plan-export", "difflow.planning.cli"),
     ])
@@ -101,8 +114,8 @@ class TestHelp:
         assert capsys.readouterr().out.strip() == difflow.__version__
 
     def test_the_subcommand_help_calls_itself_by_the_right_name(self, capsys):
-        # `difflow gui --help` printing "usage: difflow.gui" sends the
+        # A subcommand's help printing "usage: difflow.debug.cli" sends the
         # reader to an invocation they did not type.
         with pytest.raises(SystemExit):
-            cli.main(["gui", "--help"])
-        assert capsys.readouterr().out.startswith("usage: difflow gui")
+            cli.main(["debug", "--help"])
+        assert capsys.readouterr().out.startswith("usage: difflow debug")

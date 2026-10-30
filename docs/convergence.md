@@ -112,6 +112,14 @@ fs.add_recycle("loop_out", "tear")
    streams = fs.solve(on_nonconvergence="raise")
    ```
 
+9. **Watch it fail.** When the summary does not say why, step the solve with
+   the [flowsheet debugger](debugger.md): `difflow debug plant.py --on-error`
+   stops at the first unit that raises or turns finite inlets into a NaN (in
+   the tear-guessing pass too, which is where a bad starting point is usually
+   born); `break on residual_rise` and `p tear` show which stream and field the
+   residual is made of. `debug.record` plus a what-if replay answers whether a
+   different starting guess reaches the same answer, or a second steady state.
+
 ---
 
 ## Where the initial guess comes from

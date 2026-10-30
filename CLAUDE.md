@@ -23,14 +23,14 @@ pytest tests/test_cstr.py -v
 make convergence          # recycle-solver pass rate over the hard corpus
 make book                 # Jupyter Book (+ the "Ask" index); make ask-check
 make notebooks            # execute example notebooks
-make gui-build            # rebuild the editor bundle + docs-index.json
+make docs-index           # rebuild the committed docs search index
 make test-durations       # re-record .test_durations (CI shards on it)
 ```
 
 Tests check the code, never the physics: per unit, one smoke test (it runs,
 outputs finite, right keys), one `jax.grad`-is-finite test, one test per
 input-validation path, and the simplest form of a fixed crash/NaN regression;
-plus API contracts (Params, flowsheet wiring, serialization, catalog, GUI
+plus API contracts (Params, flowsheet wiring, serialization, catalog, session
 routes, doc links). No comparisons to literature or reference data, no
 rederived answers, no trend or FD-accuracy checks, no `slow`/`release` tiers.
 CI runs the whole suite on every commit (two shards) and fails a test whose call runs
@@ -42,8 +42,10 @@ past `DIFFLOW_TEST_BUDGET` (180 s).
 src/difflow/           core: streams, thermo, eos, database, flowsheet,
                        units/, dynamic/, economics/, uncertainty, convergence,
                        planning/, stochastic/, reconciliation/, catalog,
-                       docstrings, serialize, codegen, kinetics, publish,
-                       gui/ (local browser editor; static/ is a committed build),
+                       docstrings, serialize, codegen, kinetics, sweeps,
+                       workspace/ (FlowsheetSession, the session engine),
+                       debug/ (the flowsheet debugger), apps (finds the
+                       browser editor, which ships with the difflow book),
                        agent/ (tools for agents, SDK-free) + mcp/ (`difflow mcp`)
 src/difflow_bio/       bioreactors, filtration, chromatography
 src/difflow_ree/       rare earth solvent extraction
@@ -126,7 +128,7 @@ params['V']; 'V' in params; params.update(V=2.0)   # ParamsMixin: dict-like, fun
    `register()`.
 4. Document it in `docs/unit-operations-*.md` under a heading naming it (`###`
    or shallower), or a MyST label `(op-<lowercase name>)=` before its table
-   row, then run `python3 src/difflow/gui/docs_index.py`.
+   row, then run `make docs-index`.
    `tests/test_doclinks.py` fails otherwise.
 
 `difflow.planning`, `difflow.stochastic` and most refinery units (reformer,

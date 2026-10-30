@@ -117,13 +117,13 @@ jobs:
           print('difflow', difflow.__version__, '- all packages import, plugins resolve')
           "
 
-      # docutils is the `gui` extra, and the inspector has to degrade to
+      # docutils is the `gui` extra, and operation docs have to degrade to
       # plain text without it rather than break.
-      - name: The editor answers with no docstring renderer
+      - name: Operation docs answer with no docstring renderer
         run: |
           python -c "
-          from difflow.gui import docs
-          from difflow.gui.session import FlowsheetSession
+          from difflow.workspace import docs
+          from difflow.workspace.session import FlowsheetSession
           assert not docs.available(), 'docutils should not be installed here'
           answer = FlowsheetSession().docs('CSTR')
           assert answer['ok'] and answer['format'] == 'text', answer
@@ -132,52 +132,22 @@ jobs:
           print('the inspector degrades to plain text')
           "
 
-  # The editor front end. `src/difflow/gui/static/` is committed build output --
-  # installing difflow must never need node -- so the one thing that can go
-  # wrong is drift: someone edits the svelte source and forgets `make
-  # gui-build`, and the served bundle silently stops matching it. This job
-  # rebuilds from the lockfile and fails if the result differs from the commit.
-  #
-  # If it trips on a bundle nobody touched, the cause is a toolchain difference
-  # rather than a source change: run `make gui-build` on the node version
-  # pinned here and commit what it produces.
-  gui-frontend:
-    name: Editor front end
+  # The documentation index (`src/difflow/workspace/data/docs-index.json`) is
+  # committed build output: `docs/` is not in the wheel, and `search_docs`
+  # reads the index. It goes stale the moment anyone edits the prose, so this
+  # rebuilds it (stdlib only, nothing installed) and fails on a difference.
+  docs-index:
+    name: Documentation index
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: src/difflow/gui/frontend/package-lock.json
-
-      - name: Install the toolchain from the lockfile
-        run: npm ci
-        working-directory: src/difflow/gui/frontend
-
-      # The pure model functions (graph -> nodes/edges), under bare node.
-      # tests/test_gui.py runs these same files when node is on PATH.
-      - name: Test the model functions
-        run: npm test
-        working-directory: src/difflow/gui/frontend
-
-      - name: Rebuild the bundle
-        run: npm run build
-        working-directory: src/difflow/gui/frontend
-
-      # The assistant's retrieval index over `docs/` is committed build
-      # output too, and it goes stale the moment anyone edits the prose.
-      # Stdlib only, so it needs nothing installed.
       - name: Rebuild the documentation index
-        run: python3 src/difflow/gui/docs_index.py
+        run: python3 src/difflow/workspace/docs_index.py
 
-      # `git add` first, so a bundle that grew a NEW file counts as drift too
-      # -- a plain `git diff` sees only tracked ones and would miss it.
-      - name: Fail if the committed bundle is stale
+      - name: Fail if the committed index is stale
         run: |
-          git add -A src/difflow/gui/static
-          git diff --cached --exit-code --stat src/difflow/gui/static
+          git add -A src/difflow/workspace/data
+          git diff --cached --exit-code --stat src/difflow/workspace/data

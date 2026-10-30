@@ -3,8 +3,9 @@
 `difflow mcp` serves difflow's flowsheet tools to an AI agent over the
 [Model Context Protocol](https://modelcontextprotocol.io). An agent connected
 to it can find unit operations, build and edit a flowsheet, solve it, read the
-streams, and run Python in the same session, with the same engine the browser
-editor uses.
+streams, step through a solve with the debugger, and run Python in the same
+session, on the same engine (`difflow.workspace`) the book's browser editor
+uses.
 
 ## Installing and connecting
 
@@ -125,6 +126,7 @@ each package's `__all__`.
 | Building | `set_species`, `set_code_context`, `add_unit`, `update_unit`, `remove_unit`, `connect`, `disconnect`, `set_feed`, `remove_feed` |
 | Running | `set_solver_options`, `solve`, `get_streams` |
 | Diagnosis | `diagnose`, `converge`, `tear_analysis`, `trace_solve`, `get_unit_info` |
+| Debugging | `debug_guide`, `debug_start`, `debug_command`, `debug_wait`, `debug_pause`, `debug_state`, `debug_stop`, `debug_record`, `debug_trace_frame`, `debug_whatif` |
 | Analysis | `levers`, `define_quantity`, `remove_quantity`, `list_quantities`, `evaluate`, `sensitivity`, `sweep`, `optimize`, `uncertainty`, `linearize`, `tea`, `report` |
 | Python | `run_python` |
 
@@ -135,8 +137,30 @@ waiting on a first compile knows the call is alive. The server also offers
 three prompts, `design_flowsheet`, `fix_convergence` and `sensitivity_study`,
 as starting points for those workflows.
 
-`open_in_editor` saves the flowsheet and opens it in the browser editor, so a
-person can see what an agent built. The editor runs on the saved file in its
+The debugging tools are the [flowsheet debugger](debugger.md) itself, as a
+long poll: `debug_start` stops before the first pass (or, with
+`on_error=true`, at the first failure), `debug_command` runs any debugger
+command at a pause (`step`, `next`, `continue`, `break on nonfinite`,
+`print tear`, `set tear ...`) and returns where a resume stopped next, and a
+reply in state `"running"` means call `debug_wait`. `debug_guide` returns the
+whole contract and the protocol handshake. The solve runs on a copy, so
+debugging never changes the session's flowsheet. `fix_convergence` reaches
+for these when the findings alone do not say why a loop fails.
+
+Without a live session, `debug_record` solves once (on a copy) and returns a
+summary rather than every frame: the verdict, one row per tear iteration
+(frame number, residual, the tear entry the residual is mostly made of), the
+events and how the history reads. `debug_trace_frame` shows one frame in
+full, with every stream's values at that point. `debug_whatif` replays the
+recording with one tear value changed at a frame --- a replay, so everything
+before it is the recording --- and compares the two runs: residual histories,
+iterations, convergence, and `same_answer`. Two converged runs that disagree
+(`same_answer: false`, with the stream that differs most) are two steady
+states.
+
+`open_in_editor` saves the flowsheet and opens it in the browser editor (the
+app that comes with the difflow book; without it installed the tool says so),
+so a person can see what an agent built. The editor runs on the saved file in its
 own process; its edits reach the agent's session when `open_file` reads the
 file again. A session holds one flowsheet; every tool takes a
 `session` argument (default `"main"`), so a base case and a variant can be
@@ -184,7 +208,7 @@ says (diverging, oscillating, creeping, stalled), an error estimate above
 `tol`, clipping, a unit whose own inner solve did not close its balance,
 tear-set problems, audit failures and captured warnings. Each finding names
 the remedies that address it. The remedies and the symptom cards live in
-`difflow.diagnostics`, the same table the editor's assistant reads.
+`difflow.diagnostics`, the same table the book editor's assistant reads.
 
 `converge` tries those remedies on the live flowsheet: the stored settings
 first, then Anderson, more iterations, Wegstein, damped substitution, an

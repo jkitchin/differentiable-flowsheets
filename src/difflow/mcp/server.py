@@ -39,6 +39,15 @@ captured `warnings` and an `audit` (mass balance, negative flows, NaN). An
 answer is good only when it converged AND the audit is clean. Read values
 with get_streams.
 
+Debugging: when diagnose and trace_solve do not say why a solve fails, step
+it. debug_guide gives the contract; debug_start pauses before the first pass,
+debug_command steps it (step, next, continue), sets breakpoints (break UNIT,
+break on nonfinite) and inspects (print STREAM, print tear, diagnose); a
+reply in state "running" means call debug_wait. It runs on a copy, so it
+never changes the flowsheet; debug_stop when done. debug_record keeps one
+solve frame by frame; debug_whatif replays it with one tear value changed
+and says whether the answer is the same (if not: two steady states).
+
 Libraries that are not unit operations (planning, stochastic, estimation,
 economics, the refinery reformer and FCC) are found with list_api and
 describe_api, and used through run_python, where `fs` is the live flowsheet.
@@ -123,7 +132,15 @@ def _register_prompts(server) -> None:
             "with converge(apply=True) only if one passed; propose any problem "
             "remedy, a tear change or a model change to the user with the "
             "evidence rather than making it. If two trials disagree on the "
-            "products, report the multiple steady states.")
+            "products, report the multiple steady states. If nothing passes "
+            "and the findings do not say why, step the solve: debug_start, "
+            "then debug_command 'break on nonfinite', 'break on "
+            "residual_rise' and 'continue'; at the stop read 'print tear', "
+            "'print history' and 'diagnose', and 'print' the unit at fault "
+            "and its inlets. Name the unit and the stream in your report, and "
+            "debug_stop when done. To ask whether a different starting point "
+            "changes the answer, debug_record and then debug_whatif at an "
+            "early iteration frame: same_answer false means two steady states.")
 
     @server.prompt(name="sensitivity_study",
                    description="Rank what an output responds to, and by how much")

@@ -1,6 +1,6 @@
 """Named flowsheet sessions and the operations an agent runs on them.
 
-The engine is :class:`difflow.gui.session.FlowsheetSession`, the same
+The engine is :class:`difflow.workspace.session.FlowsheetSession`, the same
 object behind the browser editor: it holds a live ``Flowsheet``, keeps an
 undo history, and answers every call with a dict carrying ``ok`` instead
 of raising. A :class:`Workbench` holds several of them by name, so an
@@ -24,6 +24,37 @@ from difflow.agent import discovery
 #: seconds a solve, a code context or a Python cell may run before the
 #: call returns and leaves it running in the background
 DEFAULT_TIMEOUT = 300.0
+
+#: What an agent needs to drive the live debugger, returned by debug_guide.
+DEBUG_CONTRACT = """\
+1. debug_start pauses before the first pass (state "paused", event.checkpoint
+   "solve_start"). With on_error=true it runs until something fails instead.
+2. At a pause, debug_command runs one command. Inspection (print, where,
+   diagnose, break, watch, set tear) answers at once and stays paused. A resume
+   (step = next tear iteration, next = next unit, stepi, continue, run N)
+   returns its result with the next stop under event.next.
+3. state "running" means the solve has not stopped yet: call debug_wait
+   (or debug_pause to stop it at the next checkpoint). Commands are refused
+   while it runs.
+4. Every pause carries checkpoint, phase, iteration, unit, residual, reason
+   and trigger (the event that fired, e.g. "nonfinite"). Feature-detect from
+   hello, not from versions.
+5. Finish with debug_command("continue") to the end (event "finished"), or
+   debug_stop. The solve runs on a copy: nothing is changed in the session's
+   flowsheet, and its answer is not adopted (run solve for that).
+
+Without a live session: debug_record solves once and summarizes it frame
+by frame (each tear iteration's frame number and residual, the events);
+debug_trace_frame shows one frame in full; debug_whatif replays the recorded
+solve with one tear value changed at a frame and says whether it reached the
+same answer.
+
+A good first session on a failing loop: break on nonfinite, break on
+residual_rise, continue; at the stop, print tear (which stream and field the
+residual is made of), print history, diagnose; for the unit at fault, print
+UNIT and print its inlet streams. set tear STREAM.FIELD VALUE at an iteration
+pause tries a different next guess without changing the problem.
+"""
 
 
 def jsonable(value):
@@ -61,7 +92,7 @@ class Workbench:
     """
 
     def __init__(self, allow_exec: bool = True, timeout: float = DEFAULT_TIMEOUT):
-        from difflow.gui.session import FlowsheetSession
+        from difflow.workspace.session import FlowsheetSession
 
         self._Session = FlowsheetSession
         self.allow_exec = allow_exec
@@ -299,8 +330,9 @@ class Workbench:
 
     def open_in_editor(self, path: str | None = None, port: int | None = None,
                        browser: bool = True, session: str = "main") -> dict:
-        """Save the flowsheet and open it in difflow's browser editor, so a
-        person can see and change what was built.
+        """Save the flowsheet and open it in the browser editor, so a person
+        can see and change what was built. The editor is the app that comes
+        with the difflow book; without it installed this says so.
 
         The editor works on the saved file in its own process: edits made
         there reach this session only when the file is opened again with
@@ -315,12 +347,17 @@ class Workbench:
         import subprocess
         import sys
 
+        from difflow import apps
+
         s, err = self._get(session)
         if err:
             return err
         target = path or (None if s.path is None else str(s.path))
         if target is None:
             return {"ok": False, "error": "the flowsheet has no file yet; give a path"}
+        app = apps.module("gui")
+        if app is None:
+            return {"ok": False, "error": apps.MISSING}
         saved = jsonable(s.save(target, overwrite=path is None or
                                 (s.path is not None and str(s.path) == str(path))))
         if not saved.get("ok"):
@@ -329,7 +366,7 @@ class Workbench:
             with socket.socket() as probe:
                 probe.bind(("127.0.0.1", 0))
                 port = probe.getsockname()[1]
-        command = [sys.executable, "-m", "difflow.gui", saved["path"],
+        command = [sys.executable, "-m", app, saved["path"],
                    "--port", str(port)]
         if not browser:
             command.append("--no-browser")
@@ -633,6 +670,163 @@ class Workbench:
         from difflow.agent import doctor
 
         return self._with(session, lambda s: doctor.unit_info(s, name))
+
+    # -- the live debugger ---------------------------------------------------------------
+    #
+    # The same debugger as `difflow debug` and the editor's Debug panel, on
+    # the session's FlowsheetSession.debug_* methods. Each solve runs on a
+    # copy of the flowsheet, so nothing here changes the flowsheet itself.
+
+    def debug_guide(self) -> dict:
+        """How to drive the live debugger: the whole contract, plus the
+        handshake listing every checkpoint, event, metric and command.
+        Read it once before debug_start."""
+        from difflow.debug.jsonproto import hello
+
+        return jsonable({"ok": True, "contract": DEBUG_CONTRACT, "hello": hello()})
+
+    def debug_start(self, on_error: bool = False, session: str = "main",
+                    timeout: float | None = None) -> dict:
+        """Start a debugged solve of the session's flowsheet (on a copy) and
+        return where it first stops: before the first pass, or with
+        on_error=True at the first failure (a unit that raises, a NaN born
+        in a unit, an unconverged end) or `finished` if nothing failed.
+
+        Args:
+            on_error: Run freely and stop only post mortem.
+            timeout: Seconds to wait for the first stop (default 20); past
+                it the reply says state "running": call debug_wait.
+        """
+        return self._call(session, "debug_start", on_error=on_error, wait=timeout)
+
+    def debug_command(self, command: str, session: str = "main",
+                      timeout: float | None = None) -> dict:
+        """Run one debugger command at the current pause and return its
+        result; a command that resumes the solve also returns, under
+        event.next, where it stopped next (or state "running" if it has not
+        yet: call debug_wait). Commands: step (next tear iteration), next
+        (next unit), stepi, continue, run N, break N | UNIT | if COND | on
+        EVENT, print STREAM | STREAM.FIELD | UNIT | tear | history, watch,
+        diagnose, set tear STREAM.FIELD VALUE, quit, help. See debug_guide.
+
+        Args:
+            command: The command, as typed at the difflow-dbg prompt.
+            timeout: Seconds to wait for the next stop after a resume.
+        """
+        return self._call(session, "debug_command", command, wait=timeout)
+
+    def debug_wait(self, session: str = "main", timeout: float | None = None) -> dict:
+        """Wait for a running debugged solve to stop (a breakpoint, a pause,
+        the end) and return that event; at a pause, return it at once.
+
+        Args:
+            timeout: Seconds to wait (default 20); the reply says state
+                "running" if it is still going.
+        """
+        return self._call(session, "debug_wait", wait=timeout)
+
+    def debug_pause(self, session: str = "main") -> dict:
+        """Ask a running debugged solve to stop at its next checkpoint; the
+        pause itself arrives through debug_wait."""
+        return self._call(session, "debug_pause")
+
+    def debug_state(self, session: str = "main") -> dict:
+        """Where the live debugger is, without waiting: idle, paused (with the
+        pause), running or finished."""
+        return self._call(session, "debug_state")
+
+    def debug_stop(self, session: str = "main") -> dict:
+        """Stop the live debugger and its solve. Always succeeds."""
+        return self._call(session, "debug_stop")
+
+    # Record and replay: one solve kept frame by frame, then "what if the
+    # tear had been X here" answered by replaying it with that one change.
+
+    def debug_record(self, session: str = "main", timeout: float | None = None) -> dict:
+        """Solve once (on a copy) keeping every checkpoint, and summarize it:
+        the verdict, one row per tear iteration (frame number, residual, and
+        the tear entry the residual is mostly made of), the events (a NaN
+        born, a unit error, the residual rising) and how the history reads.
+        Use a row's frame with debug_trace_frame to see every stream there,
+        or with debug_whatif to replay from it with a different tear value.
+        """
+        from difflow.debug.record import summarize
+
+        s, err = self._get(session)
+        if err:
+            return err
+
+        def run():
+            answer = s.debug_record()
+            if not answer.get("ok"):
+                return answer
+            return {"ok": True, "summary": summarize(answer["trace"]),
+                    "warnings": answer.get("warnings", [])}
+
+        return self._timed(session, run, timeout)
+
+    def debug_trace_frame(self, frame: int, which: str = "recorded",
+                          streams: list[str] | None = None,
+                          session: str = "main") -> dict:
+        """One frame of the last recording (which="recorded") or what-if
+        (which="whatif") in full: where the solve was, what that step wrote,
+        the tear table at an iteration, and every stream's values as of that
+        frame (only the named ones if streams is given).
+        """
+        from difflow.debug.record import state_at
+
+        s, err = self._get(session)
+        if err:
+            return err
+        trace = s.debug_trace(which)
+        if trace is None:
+            return {"ok": False, "error": (
+                "record a solve first (debug_record)" if which != "whatif"
+                else "no what-if yet (debug_whatif)")}
+        frames = trace["frames"]
+        if not 0 <= int(frame) < len(frames):
+            return {"ok": False, "error": f"frame must be 0 to {len(frames) - 1}"}
+        state = state_at(trace, int(frame))
+        if streams:
+            missing = [n for n in streams if n not in state]
+            if missing:
+                return {"ok": False, "error": f"no stream {', '.join(missing)} by "
+                        f"frame {frame}; known: {', '.join(sorted(state))}"}
+            state = {n: state[n] for n in streams}
+        return jsonable({"ok": True, "frame": frames[int(frame)], "streams": state})
+
+    def debug_whatif(self, frame: int, stream: str, field: str, value: float,
+                     session: str = "main", timeout: float | None = None) -> dict:
+        """Replay the recorded solve with one tear value changed at a frame
+        (a tear-iteration frame from debug_record), and compare: both
+        residual histories, iterations, convergence, and whether the two
+        reached the same answer (a different answer from a different guess
+        means more than one steady state). It is a replay, not a fresh solve:
+        everything before the frame is the recording (diverged_at says if
+        not), so the accelerator keeps its history and only the edit differs.
+
+        Args:
+            frame: A tear-iteration (or accelerated-guess) frame number.
+            stream: A tear stream, e.g. "recycle".
+            field: F_<species>, T or P.
+            value: The value the next pass runs on.
+        """
+        from difflow.debug.record import compare, summarize
+
+        s, err = self._get(session)
+        if err:
+            return err
+
+        def run():
+            answer = s.debug_whatif(frame, stream, field, value)
+            if not answer.get("ok"):
+                return answer
+            recorded = s.debug_trace("recorded")
+            return {"ok": True, "summary": summarize(answer["trace"]),
+                    "comparison": compare(recorded, answer["trace"]),
+                    "warnings": answer.get("warnings", [])}
+
+        return self._timed(session, run, timeout)
 
     def _with(self, session: str, fn) -> dict:
         s, err = self._get(session)

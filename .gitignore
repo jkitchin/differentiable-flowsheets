@@ -11,7 +11,7 @@ downloads/
 eggs/
 .eggs/
 # Anchored to the root: these are setuptools artifacts, and an unanchored
-# `lib/` also swallows src/difflow/gui/frontend/src/lib/, which is source.
+# `lib/` would swallow source directories named lib/.
 /lib/
 /lib64/
 parts/
@@ -66,10 +66,6 @@ differentiable-flowsheets-ree.pdf
 # Claude Code local settings
 .claude/
 **/.claude/
-
-# Editor front end. The build OUTPUT (src/difflow/gui/static) is committed on
-# purpose -- installing difflow must not need node -- but the toolchain is not.
-src/difflow/gui/frontend/node_modules/
 
 # DWSIM unpacked by scripts/install_dwsim.sh
 .dwsim/

@@ -6,7 +6,7 @@ no ``ipycytoscape``, no external JavaScript, and no network access — it embeds
 directly in the standalone HTML report.  The layout is a simple left-to-right
 layered (Sugiyama-style) placement: feeds on the left, products on the right,
 units in longest-path columns between them; recycle arcs are drawn dashed.
-The column assignment itself is :func:`difflow.gui.layout.unit_columns`,
+The column assignment itself is :func:`difflow.workspace.layout.unit_columns`,
 shared with the editor's canvas so a report and the editor agree on where a
 unit sits.
 """
@@ -125,15 +125,15 @@ def topology_svg(units, recycles, positions=None) -> str:
                 unit_arcs.append((src, u.name, inlet))
 
     # Imported here, not at module scope. `difflow.report` is imported by
-    # `difflow/__init__.py`, and reaching `difflow.gui.layout` runs
-    # `difflow.gui.__init__`, which imports back through the package root --
+    # `difflow/__init__.py`, and reaching `difflow.workspace.layout` runs
+    # `difflow.workspace.__init__`, which imports back through the package root --
     # a cycle that only bites when something imports `difflow.planning`
     # before `difflow`, which is exactly what an xdist worker given a shard
     # of the suite may do. It surfaced as an ImportError under 3.10 in run
     # 34598666441 ("cannot import name 'report' from partially initialized
     # module") while 3.11 and 3.12 happened to import in an order that hid
     # it. A function-level import breaks the cycle for every entry order.
-    from difflow.gui.layout import unit_columns
+    from difflow.workspace.layout import unit_columns
 
     col = unit_columns(unit_names, up_edges)
     max_unit_col = max(col.values()) if col else 0
@@ -273,7 +273,7 @@ def flowsheet_diagram(flowsheet, positions=None) -> str:
     Args:
         flowsheet: the model to draw.
         positions: canvas pixel coordinates, keyed the way
-            :mod:`difflow.gui.layout` keys them --- a unit by its bare
+            :mod:`difflow.workspace.layout` keys them --- a unit by its bare
             name, a feed as ``"feed:<stream>"``, a product as
             ``"product:<stream>"``.
     """
