@@ -6,7 +6,9 @@ All notable changes to difflow are recorded here. The format follows
 
 ## [Unreleased]
 
-### Changed
+## [0.5.0] - 2026-10-30
+
+### Breaking
 
 - **The browser editor moved out of difflow, to the app that comes with the difflow book.** difflow is the
   open engine; the editor (canvas, inspector, results, planning, console, assistant, and the debugger's
@@ -86,6 +88,24 @@ All notable changes to difflow are recorded here. The format follows
   stream over the trajectory.
 
 ### Fixed
+
+- **`make notebooks` installs what the notebooks import, and they run on jax 0.11.** The notebook rule ran under
+  plain `uv run`, which installs no extras, so every notebook that imports tabulate, asdex, gaspype or pounce
+  died with `ModuleNotFoundError`; it now runs with the `examples`, `solvers` and `gaspype` extras and
+  `pounce-solver[jax]`. jax 0.11 removed `jax.core.get_opaque_trace_state` and `jax.core.Effect`, which flax
+  0.12.2 still called, and `xla_pmap_p`, which numpyro 0.20 (under gpjax) still imported: flax is floored at
+  0.12.9 on Python >= 3.12 and numpyro at 0.21.0. `pandas` joins the `examples` extra. Every notebook is
+  re-executed (#525).
+
+- **`difflow.particles` exports `DRAG_METHODS`.** It was missing from `__all__`, so
+  `from difflow.particles import *` raised `NameError` on it (#525).
+
+- **The bastnasite example cuts between Ce and Pr.** Its extraction pH (1.05) was tuned on the REE circuit model
+  before the organic-flow, loading-capacity and scrub-recycle fixes; on the corrected model it sent 86 % of the
+  Pr to the raffinate and net income never changed sign over the scale sweep. At pH 1.20 the closed loop
+  recovers 99.7 % Pr and 100 % Nd and rejects 99.95 % Ce. The purity ceiling now counts only the elements
+  between the extraction and strip cuts (Dy and Y stay on the solvent), and the prose no longer says a third
+  of the Pr is lost whatever the scrub does: Pr is placed by stages, at the cost of recycle inventory (#525).
 
 - **The debugger's `p history` and `diagnose` read a history mid-solve by its observed rate** ("falling, about
   x0.039 per iteration", or creeping, rising, oscillating) instead of applying the verdict meant for a finished
@@ -1778,7 +1798,8 @@ shipped in 0.4.0.
 
 First public release.
 
-[Unreleased]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.2.2...v0.4.0
 [0.2.2]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.2.0...v0.2.1
