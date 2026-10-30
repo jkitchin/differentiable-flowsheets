@@ -13,6 +13,10 @@ flowsheet's own structure --- *before unit R1*, *at iteration 12*, *when the
 residual rises*, *where the first NaN is born* --- and its commands speak
 streams, units and tears.
 
+The example notebook
+[`examples/69_flowsheet_debugger.ipynb`](../examples/69_flowsheet_debugger.ipynb)
+walks through all of it on a recycle loop, with real output.
+
 ## Table of Contents
 
 - [Quick start](#quick-start)

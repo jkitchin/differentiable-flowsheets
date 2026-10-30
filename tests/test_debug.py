@@ -521,3 +521,18 @@ def test_compare_names_a_second_steady_state():
     other = compare(base, up)
     assert other["same_answer"] is False
     assert other["largest_difference"]["where"] == "out.F_A"
+
+
+@pytest.mark.parametrize("history, regime", [
+    ([0.43, 0.34, 6.5e-4], "falling"),      # three iterations in, falling fast: not "creeping"
+    ([1.0, 0.95, 0.9], "creeping"),
+    ([1.0, 2.0, 4.0], "rising"),
+    ([1.0], "early"),
+    ([1.0, float("nan")], "nan"),
+])
+def test_history_mid_solve_reads_the_observed_rate_not_a_verdict(history, regime):
+    from difflow.debug.context import DebugContext
+    from difflow.debug.engine import _reading
+
+    ctx = DebugContext(Checkpoint.ITERATION, loop())
+    assert _reading(ctx, history)[0] == regime
