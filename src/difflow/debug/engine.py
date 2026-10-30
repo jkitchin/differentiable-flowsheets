@@ -370,12 +370,12 @@ def _print(engine, args, ctx, session):
             lines.append(f"... {len(rows) - limit} more ('print tear all')")
         return CommandResult(lines, data={"tear": rows})
     if head == "history":
-        from difflow.diagnostics import classify_history
         hist = list(ctx.history)
-        regime = classify_history(hist, _converged(ctx))
+        regime, reading = _reading(ctx, hist)
         lines = [f"{i:>4}  {_fmt(r)}" for i, r in enumerate(hist)]
-        lines.append(f"reads as: {regime}")
-        return CommandResult(lines, data={"history": hist, "regime": regime})
+        lines.append(f"reads as: {reading}")
+        return CommandResult(lines, data={"history": hist, "regime": regime,
+                                          "reading": reading})
     if head == "next":
         guess = ctx.tear_edit if ctx.tear_edit is not None else ctx.x_next
         if guess is None:
@@ -461,7 +461,7 @@ def _watch(engine, args, ctx, session):
 
 
 def _diagnose(engine, args, ctx, session):
-    from difflow.diagnostics import classify_history, solve_findings
+    from difflow.diagnostics import solve_findings
     lines, data = [], {}
     if ctx.checkpoint is Checkpoint.TERMINATED:
         findings = [f.to_dict() for f in solve_findings(ctx.flowsheet)]
@@ -470,9 +470,9 @@ def _diagnose(engine, args, ctx, session):
             lines.append(f"[{f['severity']}] {f['detail']}")
             if f["remedies"]:
                 lines.append(f"    try: {', '.join(f['remedies'])}")
-    regime = classify_history(list(ctx.history), _converged(ctx))
-    data["regime"] = regime
-    lines.append(f"residual history reads as: {regime}")
+    regime, reading = _reading(ctx, list(ctx.history))
+    data["regime"], data["reading"] = regime, reading
+    lines.append(f"residual history reads as: {reading}")
     worst = ctx.tear_breakdown()[:3]
     if worst:
         lines.append("largest tear residuals: " + "; ".join(
@@ -483,6 +483,40 @@ def _diagnose(engine, args, ctx, session):
         lines.append(f"non-finite streams: {', '.join(bad)}")
         data["nonfinite"] = bad
     return CommandResult(lines, data=data)
+
+
+def _reading(ctx, hist: list[float]) -> tuple[str, str]:
+    """``(regime, words)`` for a residual history, at this pause.
+
+    At ``terminated`` it is the verdict on a finished solve
+    (:func:`difflow.diagnostics.classify_history`). Mid-solve that verdict
+    is the wrong question --- a history three iterations long, falling
+    fast, is not "creeping" just because it has not converged yet --- so
+    the reading is the contraction observed over the last few iterations.
+    """
+    from difflow.diagnostics import classify_history
+
+    if ctx.checkpoint is Checkpoint.TERMINATED:
+        regime = classify_history(hist, _converged(ctx))
+        return regime, regime
+    if not hist:
+        return "no-history", "no tear iteration yet"
+    if any(not math.isfinite(r) for r in hist):
+        return "nan", "nan: the residual is not finite"
+    if len(hist) < 2:
+        return "early", "one iteration so far"
+    if classify_history(hist, None) == "oscillating":
+        return "oscillating", "oscillating: the residual alternates up and down"
+    tail = hist[-min(len(hist), 4):]
+    if tail[0] <= 0 or tail[-1] <= 0:
+        return "falling", "falling (a residual of exactly zero)"
+    rate = (tail[-1] / tail[0]) ** (1.0 / (len(tail) - 1))
+    if rate < 0.5:
+        return "falling", f"falling, about x{rate:.2g} per iteration"
+    if rate < 1.0:
+        return "creeping", (f"creeping, about x{rate:.2g} per iteration "
+                            "(a loop gain near 1)")
+    return "rising", f"rising, about x{rate:.2g} per iteration"
 
 
 def _converged(ctx) -> bool | None:

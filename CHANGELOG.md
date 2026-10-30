@@ -23,6 +23,11 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Example notebook `examples/69_flowsheet_debugger.ipynb`.** The flowsheet debugger on a recycle loop: stepping
+  by unit and tear iteration, breakpoints on a unit, a condition and an event, `on_error` finding the unit where a
+  NaN is born (in the tear-guessing pass), `set tear`, record and replay, and what-ifs on a loop with two steady
+  states (including Anderson converging to the unstable middle one); `DebugRunner` and the JSON protocol.
+
 - **An interactive debugger for flowsheet solves.** New `difflow.debug` (docs/debugger.md) and `difflow debug
   plant.py|plant.json`. Pauses a sequential-modular solve at `solve_start`, `before_unit`/`after_unit` (each
   unit call, tagged by phase: `init`, `solve`, `probe`, `final`, `sequential`), `unit_error`, `iteration` (the
@@ -81,6 +86,10 @@ All notable changes to difflow are recorded here. The format follows
   stream over the trajectory.
 
 ### Fixed
+
+- **The debugger's `p history` and `diagnose` read a history mid-solve by its observed rate** ("falling, about
+  x0.039 per iteration", or creeping, rising, oscillating) instead of applying the verdict meant for a finished
+  solve, which called a residual falling fast after three iterations "creeping".
 
 - **Fisher confidence intervals were too narrow by sqrt(2) (issue 512).**
   `fisher_confidence_intervals` / `Estimator.confidence_intervals` computed `s^2 H^-1` from the Hessian of the

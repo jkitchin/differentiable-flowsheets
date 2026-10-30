@@ -1002,7 +1002,8 @@ compare(trace, replay)["same_answer"]
 
 Agents get the same debugger through `difflow mcp` (`debug_start`,
 `debug_command`, `debug_record`, `debug_whatif`, ...). See
-[docs/debugger.md](docs/debugger.md).
+[docs/debugger.md](docs/debugger.md) and the example notebook
+`examples/69_flowsheet_debugger.ipynb`.
 
 ## Building Flowsheets Without Code
 
@@ -1091,6 +1092,7 @@ Jupyter notebooks are in the `examples/` directory:
 | `07_heat_exchangers.ipynb` | Heat exchanger design, rating, and optimization |
 | `47_evaporators.ipynb` | Single/multiple-effect evaporators, MVR, optimal number of effects |
 | `64_serialization.ipynb` | Save/load flowsheets as JSON, `refs=`/`extras=`, export as Python |
+| `69_flowsheet_debugger.ipynb` | Step a recycle solve, breakpoints, find where a NaN is born, `set tear`, record and what-if replays |
 | `10_dynamic_modeling.ipynb` | Dynamic simulation, DAE systems, diffrax backend |
 
 ```bash
