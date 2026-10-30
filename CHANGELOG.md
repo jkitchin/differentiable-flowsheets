@@ -39,20 +39,17 @@ All notable changes to difflow are recorded here. The format follows
   `set tear STREAM.FIELD VALUE` (at an `iteration` or `after_accel` pause) changes the guess the next pass
   runs on; edits are listed in the `terminated` event and `Flowsheet.last_solve_debug_edits`.
   `debug.record(fs, solve_kwargs)` solves once through every checkpoint and returns a `difflow-trace/1`
-  trace; the editor's **View → Trace** panel (`/api/debug/record`) scrubs it by frame, unit, iteration or
-  event, outlines the current unit on the canvas, plots the residual and shows what each step changed.
-  **What if** at a tear iteration replays the recorded solve with one tear value set at that frame
-  (`record(..., edits=, baseline=)`, `/api/debug/whatif`): a replay, not a fresh solve, so the accelerator
-  keeps its history; frames before the edit are checked against the recording (`diverged_at`), and a
-  recording of a since-changed flowsheet is refused. Both residual curves share the plot.
-  **View → Debug** is the live debugger in the editor: Start / Run to error, Step iteration, Next unit,
-  Step in, Continue, Pause (at the next checkpoint) and Stop; a breakpoint before the selected unit, event
-  breakpoints, the current unit outlined, the tear table at iterations, and a command line taking every
-  debugger command. A long poll (`/api/debug/start|command|wait|pause|stop`, 20 s per request) over
-  `DebugRunner`, which gained `state` and `pause()`; the solve runs on a copy of the flowsheet.
+  trace (`summarize`, `state_at` and `compare` read it). A **what-if** replays the recorded solve with one
+  tear value set at a frame (`record(..., edits=, baseline=)`): a replay, not a fresh solve, so the
+  accelerator keeps its history; frames before the edit are checked against the recording (`diverged_at`),
+  and `compare` says whether the two runs reached the same answer. `FlowsheetSession` (now
+  `difflow.workspace`) carries a live debugger for front ends that cannot block on a prompt: a long poll
+  (`debug_start|command|wait|pause|stop`, 20 s per call) over `DebugRunner`, which gained `state` and
+  `pause()`, plus `debug_record`/`debug_whatif`, refusing a recording of a since-changed flowsheet; the
+  solve runs on a copy. (The book's browser editor puts its Debug and Trace panels on these.)
   For agents, `difflow mcp` serves the same debugger: `debug_guide` (the contract and the handshake),
   `debug_start`, `debug_command`, `debug_wait`, `debug_pause`, `debug_state`, `debug_stop`, over the
-  editor's `FlowsheetSession.debug_*` methods; the `fix_convergence` prompt uses them. Record and what-if
+  session's `FlowsheetSession.debug_*` methods; the `fix_convergence` prompt uses them. Record and what-if
   for agents: `debug_record` (a per-iteration summary: frame, residual, largest tear entry, events, regime),
   `debug_trace_frame` (one frame with every stream's value there) and `debug_whatif` (the replay compared
   with the recording, `same_answer` flagging a second steady state); `difflow.debug.record.summarize`,

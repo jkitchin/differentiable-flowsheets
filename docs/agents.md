@@ -208,7 +208,7 @@ says (diverging, oscillating, creeping, stalled), an error estimate above
 `tol`, clipping, a unit whose own inner solve did not close its balance,
 tear-set problems, audit failures and captured warnings. Each finding names
 the remedies that address it. The remedies and the symptom cards live in
-`difflow.diagnostics`, the same table the editor's assistant reads.
+`difflow.diagnostics`, the same table the book editor's assistant reads.
 
 `converge` tries those remedies on the live flowsheet: the stored settings
 first, then Anderson, more iterations, Wegstein, damped substitution, an

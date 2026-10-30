@@ -956,6 +956,54 @@ fs.add_recycle("recycle", "recycle")        # tear the splitter outlet
 streams = fs.solve(tol=1e-8)
 ```
 
+### Debugging a recycle solve
+
+When a loop will not close, the flowsheet debugger lets you watch it fail: it
+pauses the solve unit by unit and tear iteration by tear iteration, shows every
+stream on the way, and stops on breakpoints --- before a unit, at an iteration,
+on a condition such as `residual>1e3`, or where the first NaN is born.
+
+```bash
+difflow debug plant.py                 # a difflow-dbg> prompt, before the first pass
+difflow debug plant.py --on-error      # run; stop only at a failing unit or an unconverged end
+difflow debug plant.py --json          # the same debugger, as JSON lines for a program
+```
+
+<!-- doc-test: skip: interactive prompt -->
+```python
+from difflow import debug
+
+with debug.attach():                    # the same prompt, from a script or notebook
+    fs.solve(acceleration="wegstein")
+```
+
+```text
+difflow-dbg> break on nonfinite
+difflow-dbg> break if residual>1e3 && iter>5
+difflow-dbg> continue
+difflow-dbg> p tear                     # which stream and field the residual is made of
+difflow-dbg> set tear recycle.F_n_hexane 0.5   # a different next guess
+```
+
+A solve can also be recorded frame by frame and replayed with one tear value
+changed, which asks whether a different starting point reaches the same answer
+(if not, the loop has more than one steady state):
+
+```python
+from difflow.debug.record import compare, summarize
+
+trace = debug.record(fs)
+k = summarize(trace)["iterations"][0]["frame"]
+replay = debug.record(fs, edits=[{"frame": k, "stream": "recycle",
+                                  "field": "F_n_hexane", "value": 0.5}],
+                      baseline=trace["frames"])
+compare(trace, replay)["same_answer"]
+```
+
+Agents get the same debugger through `difflow mcp` (`debug_start`,
+`debug_command`, `debug_record`, `debug_whatif`, ...). See
+[docs/debugger.md](docs/debugger.md).
+
 ## Building Flowsheets Without Code
 
 A flowsheet is a graph with numbers on it. Writing that as Python is the flexible

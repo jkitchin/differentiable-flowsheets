@@ -525,7 +525,7 @@ streams = fs.solve(on_nonconvergence="ignore")# silent; check last_solve_* yours
 
 The message names the tear streams, the final residual, the tolerance, the
 iteration count and the method used --- the same `last_solve_*` diagnostics the
-report layer and the editor read, which stay available whichever option is
+report layer and the agent tools read, which stay available whichever option is
 chosen:
 
 ```text
@@ -741,7 +741,7 @@ fs.view = {"nodes": {"reactor": {"x": 260.0, "y": 40.0},
            "code_context": "thermo = IdealThermo(...)"}
 ```
 
-It is where the editor keeps canvas positions, its code-context snippet and its planning selection, so a flowsheet laid out by hand opens the way it was left. Node keys follow the same vocabulary as `_apply_params`: a unit is its bare name, a feed is `feed:<stream>`. Nothing validates the contents, and `_apply_params` copies the block through, so a swept or optimized flowsheet keeps its layout.
+It is where an editor (the book's app) keeps canvas positions, its code-context snippet and its planning selection, so a flowsheet laid out by hand opens the way it was left. Node keys follow the same vocabulary as `_apply_params`: a unit is its bare name, a feed is `feed:<stream>`. Nothing validates the contents, and `_apply_params` copies the block through, so a swept or optimized flowsheet keeps its layout.
 
 ### What it writes
 
@@ -846,7 +846,7 @@ print(codegen.to_python(fs))
 codegen.save_script(fs, "plant.py")
 ```
 
-The two together close the loop. A graphical editor you can only enter is worse than none: the moment you want something the palette does not offer, you have to be able to drop into Python and keep going. Build in a GUI, export a script, edit it, and read the result back through `serialize`.
+The two together close the loop. A graphical editor you can only enter is worse than none: the moment you want something the palette does not offer, you have to be able to drop into Python and keep going. Build in an editor (the book's app), export a script, edit it, and read the result back through `serialize`.
 
 The output is laid out to be read and edited — imports, then thermodynamics, then kinetics, then the flowsheet:
 
@@ -917,7 +917,7 @@ phase -- - -- Force one phase ('liquid'/'vapor') for the thermo enthalpy. None (
 
 That text is not a second copy. `difflow.docstrings` reads it out of the `Params` class's own `Attributes:` section, which is where the project already writes it, and out of the comments beside the fields for the 35 that are documented there instead — `CSTRParams.eos` and `CSTRParams.outlet_volumetric_basis` among them. Populating `field(metadata={"description": ...})` on all 87 `Params` classes would have duplicated every description and then drifted from it.
 
-The editor gets this for free: the inspector's parameter list already rendered `spec.description` as help text under each field, and the palette already rendered `spec.units` beside its name — both written against a schema that carried neither. 470 of the 487 catalogued parameters gain help text in the inspector with no front-end change.
+The book's editor gets this for free: its inspector's parameter list already rendered `spec.description` as help text under each field, and the palette already rendered `spec.units` beside its name — both written against a schema that carried neither. 470 of the 487 catalogued parameters gain help text in the inspector with no front-end change.
 
 Units are *not* read from the prose. They come from the class's `parameter_units` table (above), which names every numeric field and is guarded by a test; a parenthetical in a sentence is a weaker signal, since `(0-1)` and `(default 10)` sit in the same position as `(Pa)`, and a formula in a description will happily offer `-1/k` as "per kelvin".
 
@@ -1044,6 +1044,9 @@ print(fs.last_solve_converged)   # False is a finding; None means "not judged"
 
 The full decision tree is in
 [Convergence and Initialization](convergence.md#when-a-solve-does-not-converge).
+To watch a solve fail rather than read its summary --- unit by unit, with
+breakpoints on the first NaN or a rising residual --- use the
+[flowsheet debugger](debugger.md) (`difflow debug plant.py`).
 
 ### Memory Efficiency
 

@@ -73,8 +73,9 @@ These are not units, but every unit reads them.
 (refinery-summary-units)=
 ## The units
 
-**Palette** means the unit is registered with the editor and can be placed in
-a `Flowsheet` as an operation. A **library** unit is called from Python (it is
+**Palette** means the unit is a registered operation (in the catalog that
+`list_operations` and the book's editor read) and can be placed in a
+`Flowsheet` as an operation. A **library** unit is called from Python (it is
 still differentiable and usable inside a `Flowsheet` function); it has no
 palette entry.
 
