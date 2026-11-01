@@ -26,6 +26,8 @@ exclude_patterns:
   - tests/**
   - papers
   - papers/**
+  - presentations
+  - presentations/**
   - "src/difflow_*/README.md"
   - differentiable-flowsheets-ree.md
   - docs/estimation-deliverables.md

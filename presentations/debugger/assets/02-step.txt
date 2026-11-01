@@ -1,0 +1,32 @@
+── difflow-dbg ── @solve_start  phase=start
+   ↳ start
+difflow-dbg> step
+stepping to the next iteration
+── difflow-dbg ── @iteration  iter 0  phase=solve  residual=4.252e-01
+   ↳ step
+difflow-dbg> p tear
+stream        field                           x          g(x)       |g-x|
+recycle       F_n_hexane               0.542211      0.967411      0.4252
+recycle       F_2_methylpentane        0.273789      0.485389      0.2116
+recycle       T                             340           340           0
+recycle       P                          101325        101325           0
+difflow-dbg> step
+stepping to the next iteration
+── difflow-dbg ── @iteration  iter 1  phase=solve  residual=3.400e-01
+   ↳ step
+difflow-dbg> step
+stepping to the next iteration
+── difflow-dbg ── @iteration  iter 2  phase=solve  residual=6.525e-04
+   ↳ step
+difflow-dbg> p history
+   0  0.4252
+   1  0.340003
+   2  0.000652472
+reads as: falling, about x0.039 per iteration
+difflow-dbg> continue
+continuing
+── difflow-dbg ── @terminated  iter 6  phase=end  residual=2.874e-11  converged
+   ↳ stop-at terminated
+difflow-dbg> continue
+continuing
+difflow debug: solve finished, converged=True

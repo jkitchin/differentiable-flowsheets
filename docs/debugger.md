@@ -15,7 +15,8 @@ streams, units and tears.
 
 The example notebook
 [`examples/69_flowsheet_debugger.ipynb`](../examples/69_flowsheet_debugger.ipynb)
-walks through all of it on a recycle loop, with real output.
+walks through all of it on a recycle loop, with real output, and a slide deck with
+recordings of it in action is in `presentations/debugger/` (open `debugger.html`).
 
 ## Table of Contents
 
