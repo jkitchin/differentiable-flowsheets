@@ -1,0 +1,36 @@
+── difflow-dbg ── @solve_start  phase=start
+   ↳ start
+difflow-dbg> break if residual<1e-6 && iter>1
+conditional breakpoint: residual<1e-6 && iter>1
+difflow-dbg> watch recycle.F_n_hexane
+watching recycle.F_n_hexane
+difflow-dbg> continue
+continuing
+── difflow-dbg ── @iteration  iter 4  phase=solve  residual=2.239e-07
+   ↳ condition: residual<1e-6 && iter>1
+   [recycle.F_n_hexane] recycle.F_n_hexane = 2.66667
+difflow-dbg> break clear
+all breakpoints cleared
+difflow-dbg> break split
+breakpoint before unit split
+difflow-dbg> continue
+continuing
+── difflow-dbg ── @before_unit  split  iter 5  phase=solve
+   ↳ unit split
+   [recycle.F_n_hexane] recycle.F_n_hexane = 2.66667
+difflow-dbg> p effluent
+effluent:
+  F_n_hexane        3.33333
+  F_2_methylpentane 1.66667
+  T                 340
+  P                 101325
+difflow-dbg> break clear
+all breakpoints cleared
+difflow-dbg> continue
+continuing
+── difflow-dbg ── @terminated  iter 6  phase=end  residual=2.874e-11  converged
+   ↳ stop-at terminated
+   [recycle.F_n_hexane] recycle.F_n_hexane = 2.66667
+difflow-dbg> continue
+continuing
+difflow debug: solve finished, converged=True

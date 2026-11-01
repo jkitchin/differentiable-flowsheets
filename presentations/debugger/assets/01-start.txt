@@ -1,0 +1,44 @@
+── difflow-dbg ── @solve_start  phase=start
+   ↳ start
+difflow-dbg> where
+solve_start  phase=start  iteration=-
+   mixer: (fresh, recycle*) -> (reactor_feed)
+   reactor: (reactor_feed) -> (effluent)
+   split: (effluent) -> (recycle, product)
+   (* = tear stream)
+difflow-dbg> next
+stepping to the next unit
+── difflow-dbg ── @after_unit  mixer  phase=init
+   ↳ step
+difflow-dbg> next
+stepping to the next unit
+── difflow-dbg ── @after_unit  reactor  phase=init
+   ↳ step
+difflow-dbg> p reactor_feed
+reactor_feed:
+  F_n_hexane        1.01
+  F_2_methylpentane 0.01
+  T                 340
+  P                 101325
+difflow-dbg> p reactor
+unit reactor (CSTR)
+  inlets   reactor_feed
+  outlets  effluent
+  V                       1
+  T_damping               0.3
+  molar_density           10
+  outlet_volumetric_basis 0
+  T_spec                  340
+  info:
+    Q                -4.11153
+    molar_density    10
+    balance_residual 2.17691e-16
+    converged        1
+    H_mix            0
+difflow-dbg> continue
+continuing
+── difflow-dbg ── @terminated  iter 6  phase=end  residual=2.874e-11  converged
+   ↳ stop-at terminated
+difflow-dbg> continue
+continuing
+difflow debug: solve finished, converged=True

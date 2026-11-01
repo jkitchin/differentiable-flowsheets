@@ -101,10 +101,16 @@ def _fmt(value) -> str:
         return repr(value)
 
 
+def _width(keys) -> int:
+    """A name column wide enough for every key (species names run long)."""
+    return max([12, *(len(str(k)) for k in keys)])
+
+
 def _stream_lines(name: str, stream: dict) -> list[str]:
     lines = [f"{name}:"]
+    w = _width(stream)
     for key, value in stream.items():
-        lines.append(f"  {key:<12} {_fmt(value)}")
+        lines.append(f"  {key:<{w}} {_fmt(value)}")
     return lines
 
 
@@ -327,16 +333,18 @@ def _unit_lines(ctx, unit) -> CommandResult:
                 if isinstance(value, (str, int, bool)):
                     shown[key] = value
     shown.update({k: v for k, v in unit.params.items() if not callable(v)})
+    w = _width(shown)
     for key, value in shown.items():
-        lines.append(f"  {key:<14} {_fmt(value)}")
+        lines.append(f"  {key:<{w}} {_fmt(value)}")
     info = ctx.info if (ctx.unit is unit and ctx.info is not None) else \
         (getattr(fs, "last_solve_unit_info", None) or {}).get(unit.name)
     if info:
         lines.append("  info:")
+        w = _width(info)
         for key, value in info.items():
             if isinstance(value, (int, float, bool, str)) or hasattr(value, "shape") \
                     and getattr(value, "shape", None) == ():
-                lines.append(f"    {key:<12} {_fmt(value)}")
+                lines.append(f"    {key:<{w}} {_fmt(value)}")
     data = {"unit": unit.name, "inlets": list(unit.inlet_names),
             "outlets": list(unit.outlet_names),
             "params": {k: (v if isinstance(v, (str, bool)) else _num(v))
@@ -362,9 +370,11 @@ def _print(engine, args, ctx, session):
         if not rows:
             return fail("no tear iterate here (only at iteration / after_accel)")
         limit = len(rows) if rest == "all" else 10
-        lines = [f"{'stream':<14}{'field':<10}{'x':>14}{'g(x)':>14}{'|g-x|':>12}"]
+        sw = max([12, *(len(r["stream"]) for r in rows)]) + 2
+        fw = max([8, *(len(r["field"]) for r in rows)]) + 2
+        lines = [f"{'stream':<{sw}}{'field':<{fw}}{'x':>14}{'g(x)':>14}{'|g-x|':>12}"]
         for r in rows[:limit]:
-            lines.append(f"{r['stream']:<14}{r['field']:<10}{_fmt(r['x']):>14}"
+            lines.append(f"{r['stream']:<{sw}}{r['field']:<{fw}}{_fmt(r['x']):>14}"
                          f"{_fmt(r['g']):>14}{_fmt(r['delta']):>12}")
         if len(rows) > limit:
             lines.append(f"... {len(rows) - limit} more ('print tear all')")

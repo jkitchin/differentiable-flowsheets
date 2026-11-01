@@ -1,0 +1,13 @@
+<svg viewBox="0 0 938 94" width="100%" style="max-width:938px" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+<defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#666"/></marker></defs>
+<line x1="344" y1="47" x2="404" y2="47" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/><text x="374" y="43" text-anchor="middle" font-size="9" fill="#666">reactor_feed</text>
+<line x1="534" y1="47" x2="594" y2="47" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/><text x="564" y="43" text-anchor="middle" font-size="9" fill="#666">effluent</text>
+<line x1="154" y1="47" x2="214" y2="47" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="724" y1="47" x2="784" y2="47" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="724" y1="47" x2="214" y2="47" stroke="#e74c3c" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow)"/><text x="469" y="43" text-anchor="middle" font-size="9" fill="#e74c3c">recycle→recycle</text>
+<rect x="24" y="24" width="130" height="46" rx="6" fill="#eef6ff" stroke="#5b8def" stroke-width="1.5"/><text x="89" y="43" text-anchor="middle" font-size="13" font-weight="bold">fresh</text><text x="89" y="59" text-anchor="middle" font-size="10" fill="#555">feed</text>
+<rect x="214" y="24" width="130" height="46" rx="6" fill="#ffffff" stroke="#888" stroke-width="1.5"/><text x="279" y="43" text-anchor="middle" font-size="13" font-weight="bold">mixer</text><text x="279" y="59" text-anchor="middle" font-size="10" fill="#555">Mixer</text>
+<rect x="404" y="24" width="130" height="46" rx="6" fill="#ffffff" stroke="#888" stroke-width="1.5"/><text x="469" y="43" text-anchor="middle" font-size="13" font-weight="bold">reactor</text><text x="469" y="59" text-anchor="middle" font-size="10" fill="#555">CSTR</text>
+<rect x="594" y="24" width="130" height="46" rx="6" fill="#ffffff" stroke="#888" stroke-width="1.5"/><text x="659" y="43" text-anchor="middle" font-size="13" font-weight="bold">split</text><text x="659" y="59" text-anchor="middle" font-size="10" fill="#555">Splitter</text>
+<rect x="784" y="24" width="130" height="46" rx="6" fill="#f0fff0" stroke="#3caa5a" stroke-width="1.5"/><text x="849" y="43" text-anchor="middle" font-size="13" font-weight="bold">product</text><text x="849" y="59" text-anchor="middle" font-size="10" fill="#555">product</text>
+</svg>

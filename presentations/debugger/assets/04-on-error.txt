@@ -1,0 +1,28 @@
+── difflow-dbg ── @after_unit  preheat  phase=init
+   ↳ on-error: nonfinite
+difflow-dbg> info
+checkpoint   after_unit
+phase        init
+unit         preheat
+trigger      nonfinite
+reason       on-error: nonfinite
+tears        -
+units        4
+difflow-dbg> p reactor_feed
+reactor_feed:
+  F_n_hexane        1.01
+  F_2_methylpentane 0.01
+  T                 340
+  P                 101325
+difflow-dbg> p hot_feed
+hot_feed:
+  F_n_hexane        1.01
+  F_2_methylpentane 0.01
+  T                 nan
+  P                 101325
+difflow-dbg> diagnose
+residual history reads as: no tear iteration yet
+non-finite streams: hot_feed
+difflow-dbg> quit
+stopping the solve
+difflow debug: stopped

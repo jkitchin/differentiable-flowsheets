@@ -1,0 +1,26 @@
+── difflow-dbg ── @solve_start  phase=start
+   ↳ start
+difflow-dbg> stop-at iteration
+will stop at every iteration
+difflow-dbg> continue
+continuing
+── difflow-dbg ── @iteration  iter 0  phase=solve  residual=4.252e-01
+   ↳ stop-at iteration
+difflow-dbg> p tear
+stream        field                           x          g(x)       |g-x|
+recycle       F_n_hexane               0.542211      0.967411      0.4252
+recycle       F_2_methylpentane        0.273789      0.485389      0.2116
+recycle       T                             340           340           0
+recycle       P                          101325        101325           0
+difflow-dbg> set tear recycle.F_n_hexane 3.0
+next pass: recycle.F_n_hexane = 3 (was 0.967411)
+difflow-dbg> stop-at clear
+stop-at back to the defaults: terminated, unit_error
+difflow-dbg> continue
+continuing
+── difflow-dbg ── @terminated  iter 16  phase=end  residual=3.571e-09  converged
+   ↳ stop-at terminated
+   ✎ the debugger set 1 tear value(s) on the way
+difflow-dbg> continue
+continuing
+difflow debug: solve finished, converged=True

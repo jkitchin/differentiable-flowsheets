@@ -1,0 +1,5 @@
+_preview/
+demo/_*.dbg
+demo/*.json
+demo/gui.log
+__pycache__/
