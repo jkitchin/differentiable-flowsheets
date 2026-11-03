@@ -7,7 +7,8 @@ Pitzer activity model with seawater speciation and mineral saturation
 indices (scaling), a seawater reverse-osmosis (RO) stage and multi-stage
 train, a pressure exchanger, water pumps, a levelized-cost-of-water (LCOW)
 model, the seawater RO + pressure exchanger plant built from them,
-distribution networks, and thermal desalination (MVC, MED). A one-page map is in
+distribution networks, thermal desalination (MVC, MED), and conventional
+treatment (sedimentation, filtration, disinfection, GAC). A one-page map is in
 [Water units at a glance](water-summary.md); the plan for the rest of the
 plugin (distribution networks, conventional treatment, thermal
 desalination, wastewater) is `src/difflow_water/DESIGN.md`.
@@ -602,6 +603,99 @@ closed links and EPANET to the pump's suction.
 
 ---
 
+(water-treatment)=
+## Conventional treatment
+
+`difflow_water.treatment` has four palette units for a conventional
+drinking-water train. They use plain streams: `F_H2O` plus one
+`F_<name>` per solute, particle class or organism. Particle classes count
+`1 mol = 1 g` of solids, organisms `1 mol = 1 organism`, and volumetric flow
+is mass over a constant 1000 kg/m^3 (WaterTAP's MCAS default).
+
+(op-sedimentation)=
+### Sedimentation
+
+`Sedimentation(SedimentationParams(...))(feed) -> (clarified, sludge, info)`.
+This is the ideal basin of Hazen [D3] and Camp [D4]: plug flow, discrete
+particles settling at constant velocity. Each class is removed in the
+fraction `r = min(1, v_s / v_o)`, where `v_o = Q / A` is the overflow rate,
+independent of depth. That follows directly from the ideal-basin
+assumptions; neither paper was read. Settling velocities are given, or come
+from Stokes' law `v_s = (2/9) a_p^2 (rho_p - rho_w) g / mu` (as stated in
+[F2], read), using the water viscosity of [S1]. The sludge carries the
+removed solids at a set solids fraction. Flocculent and hindered settling
+are not modelled.
+
+(op-filtration)=
+### Filtration
+
+`Filtration(FiltrationParams(...))(feed) -> (filtrate, retained, info)`, a
+clean-bed rapid granular filter:
+
+| Quantity | Equation | Source and status |
+|---|---|---|
+| removal | `ln(C/C0) = -(3/2)(1 - eps) alpha eta L / d_c` | derived here (collector mass balance); the form of Yao et al. [F1] |
+| single collector efficiency | `eta = 4.04 N_Pe^(-2/3) + N_G + (3/2) N_R^2`, `N_Pe = d_c U / D`, `D = k_B T / (3 pi mu d_p)`, `N_G = v_s / U`, `N_R = d_p / d_c` | Yao [F1] as restated by Messina et al. [F2] (read): cross-checked, secondary |
+| head loss | `h_L / L = 180 mu (1 - eps)^2 U / (rho g eps^3 (phi d_c)^2)` | Carman-Kozeny [F3], Kozeny constant 5 (unverified) |
+
+Yao's efficiency is not capped at 1 (it can exceed 1 at the extremes,
+[F2]). Not modelled: clogging, ripening, breakthrough and backwash.
+Later correlations (Rajagopalan-Tien, Tufenkji-Elimelech) are not
+implemented.
+
+(op-disinfection)=
+### Disinfection
+
+`Disinfection(DisinfectionParams(...))(feed) -> (treated, info)`. The
+kinetics are Chick-Watson, `dN/dt = -k C^n N` [K1, K2], with first-order
+residual decay `dC/dt = -k_d C`. The contact tank is `n_tanks` equal CSTRs
+in series, so each tank gives `C_i = C_{i-1}/(1 + k_d tau)` and
+`N_i = N_{i-1}/(1 + k C_i^n tau)`. `info` reports the log inactivation, the
+CT product `sum C_i tau` (mg min/L), the outlet residual and the contact
+time. Rate constants are inputs; the defaults are ILLUSTRATIVE, since real
+values depend on organism, disinfectant, pH and temperature. The 1908
+papers were not read (their PMC copies are behind a bot check), so the
+forms are (unverified) against them.
+
+(op-gacadsorber)=
+### GACAdsorber
+
+`GACAdsorber(GACParams(...))(feed) -> (treated, removed, info)`, or
+`gac_performance(feed, params)`. It is WaterTAP 1.8.0's `GAC`, the
+empirical constant-pattern homogeneous surface diffusion model (CPHSDM) of
+Hand et al. [A1], transcribed from WaterTAP's code. [A1] was not read, so
+the equations and the regression constants are (unverified) against it.
+
+| Quantity | Equation |
+|---|---|
+| equilibrium, distribution, Biot | `q_e = K C0^(1/n)`, `D_g = rho_a q_e (1 - eps)/(eps C0)`, `Bi = k_f (d_p/2)(1 - eps)/(D_s D_g eps)` |
+| constant pattern | `St_min = a0 Bi + a1`, `EBCT_min = St_min (d_p/2)/((1 - eps) k_f)` |
+| throughput, time to ratio `c` | `T(c) = b0 + b1 c^b2 + b3/(1.01 - c^b4)`; `t(c) = eps (D_g + 1)[EBCT_min T(c) + EBCT - EBCT_min]` |
+| bed | `L = v EBCT`, `A = Q/v`, carbon `rho_b L A`, usage `rho_b L A / t(c_replace)` |
+| steady-state removal | `1 - c_avg`, with `c_avg` the trapezoidal average of `c` over a bed life, from 0.01 to `c_replace` in `n_elements` points plus (0, 0) |
+
+The regression constants depend on Bi and 1/n (tables in [A1]); the
+defaults are WaterTAP's example values. The model holds only for
+`EBCT >= EBCT_min` (`info["constant_pattern"]`). Fixed `k_f` and `D_s`
+only: WaterTAP's calculated options (Gnielinski film transfer, a
+surface-diffusion correlation) are not implemented. GAC costing is not
+implemented either.
+
+(water-gac-comparison)=
+### Comparison with WaterTAP (GAC)
+
+`benchmarks/watertap/gac.py` runs WaterTAP's example GAC flowsheet
+(`flowsheets/gac/gac.py`: fixed `k_f`, `D_s`, trapezoidal effluent) at the
+example inputs and at three variations: EBCT 900 s, replacement at 20 %
+breakthrough, and `1/n = 0.6`. `compare_gac.py` compares every model
+quantity (`q_e`, `D_g`, `Bi`, `St_min`, `EBCT_min`, throughput, operating
+time, bed volumes, bed geometry, carbon mass and usage rate, `c_avg`, mass
+adsorbed) and the outlet solute flow. Largest relative difference over
+everything: **2e-14** (the same explicit equations, evaluated in another
+code).
+
+---
+
 (water-thermal)=
 ## Thermal desalination
 
@@ -731,8 +825,9 @@ What the comparison taught:
 (water-editor)=
 ## In the editor
 
-`ROStage`, `ROTrain`, `PressureExchanger`, `WaterPump`, `MVCDesalinator`
-and `MEDDesalinator` are palette operations (category `water`) in the difflow editor (`difflow gui`, from the
+`ROStage`, `ROTrain`, `PressureExchanger`, `WaterPump`, `MVCDesalinator`,
+`MEDDesalinator`, `GACAdsorber`, `Disinfection`, `Sedimentation` and
+`Filtration` are palette operations (category `water`) in the difflow editor (`difflow gui`, from the
 difflow book), each with its own icon. **Examples > Seawater RO with a
 pressure exchanger** opens the plant above (`10_water_swro`, written by
 `scripts/make_gui_examples.py`), with membrane-wall saturation indices on.
@@ -820,6 +915,10 @@ What the comparison taught:
   Sherwood correlation has no identified source.
 - Costing defaults are WaterTAP's convention, not sourced cost data.
 - No nanofiltration yet.
+- Treatment: no coagulation/flocculation, softening, ion exchange,
+  stripping, UV or membrane filtration (UF/MF); clean-bed filtration only;
+  Chick-Watson constants and GAC regression constants are inputs; no
+  treatment costing yet.
 - Thermal: no multi-stage flash (MSF) yet; MED is parallel feed without
   inter-effect preheaters or flash boxes, and has no WaterTAP counterpart to
   compare with; MVC is single-stage. The vapor pressure of seawater and the
@@ -862,8 +961,16 @@ source; a design input or placeholder.
 | N3 | Wagner, J.M.; Shamir, U.; Marks, D.H. "Water distribution reliability: simulation methods." *J. Water Resour. Plann. Manage.* **1988**, 114(3), 276--294. doi:10.1061/(ASCE)0733-9496(1988)114:3(276) | Pressure-driven demand | Citation verified (Crossref). The equation is EPANET's form ([N8] Eq. 13.6, content verified there), not read in this paper. |
 | N7 | Swamee, P.K.; Jain, A.K. "Explicit equations for pipe-flow problems." *J. Hydraul. Div.* **1976**, 102(5), 657--664. doi:10.1061/JYCEAJ.0004542 | Turbulent friction factor | Citation verified (Crossref; the DOI first recalled was wrong). Paper not read; the log10 form is the one that reproduces EPANET (see the network notes). |
 | N8 | Rossman, L.; Woo, H.; Tryby, M.; Shang, F.; Janke, R.; Haxton, T. *EPANET 2.2 User Manual*; EPA/600/R-20/133; U.S. Environmental Protection Agency: Cincinnati, OH, **2020**. Online edition: epanet-manual.readthedocs.io | Network equations (Section 13.1, Table 3.1, pump curves, valve and emitter models, PDD) | Citation verified (report number, authors and title from the EPA PDF cover, via search; no DOI). **Content verified**: equations read in the online edition. Its Swamee-Jain `ln` is a typo (see the network notes). |
+| A1 | Hand, D.W.; Crittenden, J.C.; Thacker, W.E. "Simplified models for design of fixed-bed adsorption systems." *J. Environ. Eng.* **1984**, 110(2), 440--456. doi:10.1061/(ASCE)0733-9372(1984)110:2(440) | CPHSDM (GAC) | Citation verified (Crossref). Not read: equations and regression form via WaterTAP's code (unverified). |
+| K1 | Chick, H. "An investigation of the laws of disinfection." *J. Hyg.* **1908**, 8(1), 92--158. doi:10.1017/S0022172400006987 | First-order inactivation | Citation verified (Crossref). Not read (unverified). |
+| K2 | Watson, H.E. "A note on the variation of the rate of disinfection with change in the concentration of the disinfectant." *J. Hyg.* **1908**, 8(4), 536--542. doi:10.1017/S0022172400015928 | Concentration exponent | Citation verified (Crossref). Not read (unverified). |
+| D3 | Hazen, A. "On sedimentation." *Trans. ASCE* **1904**, 53, 45--71. doi:10.1061/TACEAT.0001655 | Ideal basin, overflow rate | Citation verified (Crossref). Not read: the removal law is derived from the ideal-basin assumptions. |
+| D4 | Camp, T.R. "Sedimentation and the design of settling tanks." *Trans. ASCE* **1946**, 111, 895--936. doi:10.1061/TACEAT.0005912 | Ideal basin (type I settling) | Citation verified (Crossref). Not read. |
+| F1 | Yao, K.-M.; Habibian, M.T.; O'Melia, C.R. "Water and waste water filtration. Concepts and applications." *Environ. Sci. Technol.* **1971**, 5(11), 1105--1112. doi:10.1021/es60058a005 | Filtration theory, single collector efficiency | Citation verified (Crossref). Not read: the efficiency as restated in [F2]. |
+| F2 | Messina, F.; Marchisio, D.L.; Sethi, R. "An extended and total flux normalized correlation equation for predicting single-collector efficiency." *J. Colloid Interface Sci.* **2015**, 446, 185--193. doi:10.1016/j.jcis.2015.01.024 | Yao's efficiency (Eq. 1), dimensionless groups, Stokes and Stokes-Einstein (Table 1) | Citation verified (Crossref). **Content verified** (author manuscript, polito.it). |
+| F3 | Carman, P.C. "Fluid flow through granular beds." *Trans. IChemE* **1937**, 15, 150--166; reprinted *Chem. Eng. Res. Des.* **1997**, 75, S32--S48. doi:10.1016/S0263-8762(97)80003-2 | Clean-bed head loss | Citation verified (Crossref, the reprint). Not read: Kozeny constant 5 (unverified). |
 | D2 | El-Dessouky, H.T.; Ettouney, H.M. *Fundamentals of Salt Water Desalination*; Elsevier: Amsterdam, **2002**. doi:10.1016/B978-0-444-50810-2.X5000-3 | MED and MVC configurations | DOI, title, year and publisher verified (Crossref; it lists no authors, so authorship is (unverified)). Not read: no equation is taken from it. |
 | B1 | Akkor, I.; Amusat, O.O.; Vecchiarelli, P.; Gounaris, C.E.; Knueven, B.; Dudchenko, A.V. "Optimization of desalination systems with detailed water chemistry through integration of Reaktoro in WaterTAP." *ACS ES&T Eng.* **2026**, 6(5), 1464--1477. doi:10.1021/acsestengg.5c01008 | WaterTAP (benchmark context) | Citation verified (Crossref) |
 | B2 | Dudchenko, A.; Atia, A.; Bartholomew, T. "WaterTAP: Tool for analysis of water treatment systems." NAWI Alliance Fall Meeting, **2023** (OSTI). doi:10.2172/2447624 | WaterTAP (benchmark) | Citation verified (Crossref). The comparison used WaterTAP 1.8.0 from PyPI. |
 | B3 | Lee, A.; Ghouse, J.H.; Eslick, J.C.; Laird, C.D.; Siirola, J.D.; et al. "The IDAES process modeling framework and model library -- flexibility for process simulation and optimization." *J. Adv. Manuf. Process.* **2021**, 3(3), e10095. doi:10.1002/amp2.10095 | IDAES (pump model, WaterTAP's base) | Citation verified (Crossref) |
-| WT | WaterTAP 1.8.0 source (`seawater_prop_pack.py`, `water_prop_pack.py`, `membrane_channel_base.py`, `reverse_osmosis_1D.py`, `pressure_exchanger.py`, `mvc/`, `flowsheets/mvc/`, `costing/`), read from the PyPI wheel | Equations as coded; costing structure and defaults | Read directly (the code, not the papers behind it). |
+| WT | WaterTAP 1.8.0 source (`seawater_prop_pack.py`, `water_prop_pack.py`, `membrane_channel_base.py`, `reverse_osmosis_1D.py`, `pressure_exchanger.py`, `mvc/`, `flowsheets/mvc/`, `gac.py`, `flowsheets/gac/`, `costing/`), read from the PyPI wheel | Equations as coded; costing structure and defaults | Read directly (the code, not the papers behind it). |

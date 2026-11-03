@@ -304,8 +304,17 @@ Each phase finishes with its docs section, summary row, notebook and tests.
    WaterTAP; its LCOW optimum reproduced with `jax.grad` + SLSQP).
    **Deviation:** MSF not built, and MED has no content-verified source
    (Mistry et al. 2011 [T1] could not be retrieved; the equations are mass
-   and energy balances, no fitted coefficient). Next, phase 3b:
-   conventional treatment.
+   and energy balances, no fitted coefficient).
+   **Phase 3b as built** (treatment): `treatment/` with `GACAdsorber`
+   (WaterTAP's CPHSDM, within 2e-14 of WaterTAP on four cases;
+   `benchmarks/watertap/gac.py`, `compare_gac.py`), `Disinfection`
+   (Chick-Watson, CSTRs in series, CT and log inactivation),
+   `Sedimentation` (ideal basin, Stokes) and `Filtration` (Yao colloid
+   filtration as restated by Messina et al. 2015, Carman-Kozeny head
+   loss), notebook 74. **Deviation:** no coagulation/flocculation,
+   softening, ion exchange, stripping, UV or UF/MF, and no treatment
+   costing; the 1908 disinfection papers and Hand et al. (1984) could not
+   be read (unverified forms). **Phase 3 is complete.**
 4. **Wastewater** (in this plugin): ASM1/ASM2d, Takacs, ADM1, BSM1 (adds a
    case to the convergence corpus). WaterTAP's activated-sludge and ADM1
    flowsheets are the comparison.

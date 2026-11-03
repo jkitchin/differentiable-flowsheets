@@ -23,7 +23,12 @@ example with EPANET's own answer. Thermal desalination: MVCDesalinator /
 mvc_performance (WaterTAP's single-stage MVC plant; LCOW, SEC, evaporator
 area) and MEDDesalinator / med_performance (parallel-feed multi-effect
 distillation; GOR, areas); thermal seawater properties (cp, enthalpy,
-latent heat, vapor pressure, BPE) in difflow_water.seawater. swro_performance(feed, ro, ro_pressure) gives the seawater RO +
+latent heat, vapor pressure, BPE) in difflow_water.seawater. Conventional
+treatment: Sedimentation (ideal basin, Stokes), Filtration (Yao colloid
+filtration, Carman-Kozeny), GACAdsorber (WaterTAP's CPHSDM), Disinfection
+(Chick-Watson, CT, log inactivation); streams carry F_H2O plus F_<name> per
+solute (molar mass given to the unit), particle class (1 mol = 1 g) or
+organism (1 mol = 1 organism). swro_performance(feed, ro, ro_pressure) gives the seawater RO +
 pressure exchanger plant's recovery, specific energy and LCOW as one
 differentiable function; build_swro_flowsheet gives the same plant as a
 Flowsheet. Costing follows WaterTAP's default costing package so results

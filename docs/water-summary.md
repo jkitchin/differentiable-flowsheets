@@ -42,6 +42,10 @@ treatment (equations, parameters, references) is in
 | [`network`: `WaterNetwork`, `NetworkModel`](unit-operations-water.md#water-network) | library | network, demands, leaks, settings → heads, pressures, flows | EPANET 2.2 equations, equation-oriented Newton; valves as complementarity (sharp or smooth); INP reader; extended-period simulation with controls | Within 2.7e-5 m (Net1, Net3) and 1.6e-3 m (ky10, 920 junctions) of EPANET 2.2; over 24 h / 7 days, tank levels within 1e-4 m (Net1) / 3.4e-2 m (Net3), statuses identical; chlorine within 0.01 mg/L, age 0.16 h (Net1); pump energy and differentiable speed schedules |
 | [`MVCDesalinator`, `mvc_performance`](unit-operations-water.md#op-mvcdesalinator) | palette | feed → distillate, brine | WaterTAP's single-stage MVC plant: evaporator, compressor, condenser, preheaters, pumps, costing; one Newton solve | Within 4e-7 of WaterTAP 1.8.0 on every output; its LCOW optimum reproduced with `jax.grad` + SLSQP (1e-7) |
 | [`MEDDesalinator`, `med_performance`](unit-operations-water.md#op-meddesalinator) | palette | feed → distillate, brine | Parallel-feed MED: per-effect mass, salt and energy balances on Sharqawy properties | No WaterTAP counterpart; balances only (no fitted coefficients) |
+| [`Sedimentation`](unit-operations-water.md#op-sedimentation) | palette | feed → clarified, sludge | Ideal basin, overflow-rate removal, Stokes settling | Derived from the ideal-basin assumptions; Stokes as stated in Messina et al. 2015 (read) |
+| [`Filtration`](unit-operations-water.md#op-filtration) | palette | feed → filtrate, retained | Yao colloid filtration (clean bed), Carman-Kozeny head loss | Yao's efficiency cross-checked against Messina et al. 2015; no independent numerical check |
+| [`Disinfection`](unit-operations-water.md#op-disinfection) | palette | feed → treated | Chick-Watson in CSTRs in series; CT, log inactivation | Standard law; papers not read; rate constants are inputs |
+| [`GACAdsorber`](unit-operations-water.md#op-gacadsorber) | palette | feed → treated, removed | WaterTAP's CPHSDM (Hand et al. 1984) | Within 2e-14 of WaterTAP 1.8.0 on four cases |
 | [thermal properties](unit-operations-water.md#water-thermal-properties) | library | (T, S, P) → c_p, h, h_fg, p_v, BPE | Sharqawy 2010 Eqs. 9, 36, 37, 43, 53-55; Nayar 2016 digits via WaterTAP | Content verified to the printed digits; brine vapor pressure equal to WaterTAP's to 1e-9 |
 | [`swro_performance` / `build_swro_flowsheet`](unit-operations-water.md#water-swro) | library | intake → LCOW, SEC, recovery, ... | The plant above | Against WaterTAP's `RO_with_energy_recovery` layout |
 
@@ -82,5 +86,6 @@ still differentiable.
   volume curves or quality sources.
 - Thermal: no MSF; MED without inter-effect preheaters or flash boxes and
   without an independent cross-check.
-- No conventional treatment or wastewater yet
-  (`src/difflow_water/DESIGN.md`, phases 3b-4).
+- Treatment: no coagulation, softening, ion exchange, UV or UF/MF; filters
+  are clean-bed; no treatment costing.
+- No wastewater yet (`src/difflow_water/DESIGN.md`, phase 4).

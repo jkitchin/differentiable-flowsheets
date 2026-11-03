@@ -1,5 +1,5 @@
 {
- "n_sections": 1292,
+ "n_sections": 1298,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -10723,7 +10723,7 @@
    "path": "Water Treatment and Desalination Unit Operations",
    "source": "unit-operations-water.md",
    "targets": [],
-   "text": "![difflow_water](../images/plugins/difflow-water-logo.svg)\n\nThis page documents the `difflow_water` plugin: seawater properties, a\nPitzer activity model with seawater speciation and mineral saturation\nindices (scaling), a seawater reverse-osmosis (RO) stage and multi-stage\ntrain, a pressure exchanger, water pumps, a levelized-cost-of-water (LCOW)\nmodel, the seawater RO + pressure exchanger plant built from them,\ndistribution networks, and thermal desalination (MVC, MED). A one-page map is in\n[Water units at a glance](water-summary.md); the plan for the rest of the\nplugin (distribution networks, conventional treatment, thermal\ndesalination, wastewater) is `src/difflow_water/DESIGN.md`.\n\nTwo rules shape this plugin, the same ones `difflow_refinery` follows:\n\n- **Every equation, coefficient and data value has a reference with a\n  recorded verification status** (the [references table](water-references)\n  at the end). \"Citation verified\" means the bibliographic record was\n  checked; it says nothing about the content. \"Content verified\" means the\n  coded equation and coefficients were read against the source. Anything\n  taken second-hand (from another code or a review) or recalled is marked\n  **(unverified)**, here and in the code.\n- **WaterTAP is the benchmark.** The units model the same physics as\n  WaterTAP's (same property correlations, same flux laws, same costing\n  structure and defaults), and `benchmarks/watertap/` runs the same cases\n  in WaterTAP so the differences are measured, not assumed\n  ([comparison](water-watertap-comparison)). Water chemistry, which\n  WaterTAP delegates to Reaktoro, is checked against PHREEQC instead\n  ([comparison](water-phreeqc-comparison)).\n\nAll of it is differentiable with JAX: `jax.grad` of the LCOW with respect\nto the RO pressure, membrane area or permeabilities is exact, through the\nRO integration and its local flux solves.\n\n---\n\n(water-streams)="
+   "text": "![difflow_water](../images/plugins/difflow-water-logo.svg)\n\nThis page documents the `difflow_water` plugin: seawater properties, a\nPitzer activity model with seawater speciation and mineral saturation\nindices (scaling), a seawater reverse-osmosis (RO) stage and multi-stage\ntrain, a pressure exchanger, water pumps, a levelized-cost-of-water (LCOW)\nmodel, the seawater RO + pressure exchanger plant built from them,\ndistribution networks, thermal desalination (MVC, MED), and conventional\ntreatment (sedimentation, filtration, disinfection, GAC). A one-page map is in\n[Water units at a glance](water-summary.md); the plan for the rest of the\nplugin (distribution networks, conventional treatment, thermal\ndesalination, wastewater) is `src/difflow_water/DESIGN.md`.\n\nTwo rules shape this plugin, the same ones `difflow_refinery` follows:\n\n- **Every equation, coefficient and data value has a reference with a\n  recorded verification status** (the [references table](water-references)\n  at the end). \"Citation verified\" means the bibliographic record was\n  checked; it says nothing about the content. \"Content verified\" means the\n  coded equation and coefficients were read against the source. Anything\n  taken second-hand (from another code or a review) or recalled is marked\n  **(unverified)**, here and in the code.\n- **WaterTAP is the benchmark.** The units model the same physics as\n  WaterTAP's (same property correlations, same flux laws, same costing\n  structure and defaults), and `benchmarks/watertap/` runs the same cases\n  in WaterTAP so the differences are measured, not assumed\n  ([comparison](water-watertap-comparison)). Water chemistry, which\n  WaterTAP delegates to Reaktoro, is checked against PHREEQC instead\n  ([comparison](water-phreeqc-comparison)).\n\nAll of it is differentiable with JAX: `jax.grad` of the LCOW with respect\nto the RO pressure, membrane area or permeabilities is exact, through the\nRO integration and its local flux solves.\n\n---\n\n(water-streams)="
   },
   {
    "anchor": "seawater-streams",
@@ -10846,6 +10846,66 @@
    "text": "`benchmarks/wntr/export_networks.py` (run where WNTR is installed) reads\nEPANET example networks with WNTR 1.5.0, solves them in EPANET 2.2 (WNTR's\n`EpanetSimulator`, one period: t = 0 demands, levels, controls and link\nstatuses) and writes each network and EPANET's solution to JSON;\n`compare_networks.py` solves the same networks in difflow_water. Hand-run,\nnot a test. Largest differences (both valve formulations gave the same):\n\n| Network | Junctions / links | Head loss | max abs head diff. | max abs flow diff. | solve |\n|---|---|---|---|---|---|\n| Net1 | 9 / 13 (1 pump) | H-W | 2.1e-5 m | 1.2e-4 L/s | 1-2 s |\n| Net1, D-W (roughness 0.26 mm, ILLUSTRATIVE) | 9 / 13 | D-W | 1.7e-3 m | 4.0e-3 L/s | 2-3 s |\n| Net3 | 92 / 119 (2 pumps) | H-W | 2.7e-5 m | 0.020 L/s | 1-2 s |\n| ky10 | 920 / 1061 (13 constant-power pumps, 5 PRVs) | H-W | 1.6e-3 m (median 4e-5 m); 0.075 m in the closed pocket behind pump 11 | 7.2e-3 L/s | 5-6 s |\n\nExtended-period (`benchmarks/wntr/export_eps.py`, `compare_eps.py`: the\nINP files read by difflow's own `read_inp`, the whole duration, every\nreport time):\n\n| Network | Duration | Solves | max tank level diff. | max head diff. | median head diff. | link-status mismatches |\n|---|---|---|---|---|---|---|\n| Net1 | 24 h | 27 | 1.1e-4 m | 1.2e-4 m | 2.7e-5 m | 0 |\n| Net3 | 168 h | 204 | 3.4e-2 m | 3.4e-2 m | 6.9e-4 m | 0 |\n\nWater quality (`compare_quality.py`, same runs):\n\n| Network | Quality | Report times | max abs diff. | median abs diff. | EPANET range |\n|---|---|---|---|---|---|\n| Net1 | chlorine (bulk + wall decay) | 25 | 0.0098 mg/L | 0.0007 mg/L | 0.15-1 mg/L |\n| Net1 | water age | 25 | 0.16 h | 1e-6 h | 0-23.5 h |\n| Net3 | trace of the Lake source | 169 | 22.9 % | 0.0008 % | 0-100 % |\n\nThe Net3 trace's large differences are at moving fronts, where a small\ndifference in arrival time is a large difference at one report time, and\ncluster in the hours where Net3's hydraulics differ most (below): 1.7 % of\nthe 16 393 node-times differ by more than 1 percentage point, 0.1 % by more\nthan 10. Closed links once carried their modelled `h = R Q` trickle in the\ntransport, which made a dead-end node take its source's quality a step\nearly (100 % off at Net3's node 10); they now carry no water, as in EPANET."
   },
   {
+   "anchor": "conventional-treatment",
+   "heading": "Conventional treatment",
+   "path": "Water Treatment and Desalination Unit Operations > Conventional treatment",
+   "source": "unit-operations-water.md",
+   "targets": [
+    "water-treatment"
+   ],
+   "text": "`difflow_water.treatment` has four palette units for a conventional\ndrinking-water train. They use plain streams: `F_H2O` plus one\n`F_<name>` per solute, particle class or organism. Particle classes count\n`1 mol = 1 g` of solids, organisms `1 mol = 1 organism`, and volumetric flow\nis mass over a constant 1000 kg/m^3 (WaterTAP's MCAS default).\n\n(op-sedimentation)="
+  },
+  {
+   "anchor": "sedimentation",
+   "heading": "Sedimentation",
+   "path": "Water Treatment and Desalination Unit Operations > Conventional treatment > Sedimentation",
+   "source": "unit-operations-water.md",
+   "targets": [
+    "op-sedimentation"
+   ],
+   "text": "`Sedimentation(SedimentationParams(...))(feed) -> (clarified, sludge, info)`.\nThis is the ideal basin of Hazen [D3] and Camp [D4]: plug flow, discrete\nparticles settling at constant velocity. Each class is removed in the\nfraction `r = min(1, v_s / v_o)`, where `v_o = Q / A` is the overflow rate,\nindependent of depth. That follows directly from the ideal-basin\nassumptions; neither paper was read. Settling velocities are given, or come\nfrom Stokes' law `v_s = (2/9) a_p^2 (rho_p - rho_w) g / mu` (as stated in\n[F2], read), using the water viscosity of [S1]. The sludge carries the\nremoved solids at a set solids fraction. Flocculent and hindered settling\nare not modelled.\n\n(op-filtration)="
+  },
+  {
+   "anchor": "filtration",
+   "heading": "Filtration",
+   "path": "Water Treatment and Desalination Unit Operations > Conventional treatment > Filtration",
+   "source": "unit-operations-water.md",
+   "targets": [
+    "op-filtration"
+   ],
+   "text": "`Filtration(FiltrationParams(...))(feed) -> (filtrate, retained, info)`, a\nclean-bed rapid granular filter:\n\n| Quantity | Equation | Source and status |\n|---|---|---|\n| removal | `ln(C/C0) = -(3/2)(1 - eps) alpha eta L / d_c` | derived here (collector mass balance); the form of Yao et al. [F1] |\n| single collector efficiency | `eta = 4.04 N_Pe^(-2/3) + N_G + (3/2) N_R^2`, `N_Pe = d_c U / D`, `D = k_B T / (3 pi mu d_p)`, `N_G = v_s / U`, `N_R = d_p / d_c` | Yao [F1] as restated by Messina et al. [F2] (read): cross-checked, secondary |\n| head loss | `h_L / L = 180 mu (1 - eps)^2 U / (rho g eps^3 (phi d_c)^2)` | Carman-Kozeny [F3], Kozeny constant 5 (unverified) |\n\nYao's efficiency is not capped at 1 (it can exceed 1 at the extremes,\n[F2]). Not modelled: clogging, ripening, breakthrough and backwash.\nLater correlations (Rajagopalan-Tien, Tufenkji-Elimelech) are not\nimplemented.\n\n(op-disinfection)="
+  },
+  {
+   "anchor": "disinfection",
+   "heading": "Disinfection",
+   "path": "Water Treatment and Desalination Unit Operations > Conventional treatment > Disinfection",
+   "source": "unit-operations-water.md",
+   "targets": [
+    "op-disinfection"
+   ],
+   "text": "`Disinfection(DisinfectionParams(...))(feed) -> (treated, info)`. The\nkinetics are Chick-Watson, `dN/dt = -k C^n N` [K1, K2], with first-order\nresidual decay `dC/dt = -k_d C`. The contact tank is `n_tanks` equal CSTRs\nin series, so each tank gives `C_i = C_{i-1}/(1 + k_d tau)` and\n`N_i = N_{i-1}/(1 + k C_i^n tau)`. `info` reports the log inactivation, the\nCT product `sum C_i tau` (mg min/L), the outlet residual and the contact\ntime. Rate constants are inputs; the defaults are ILLUSTRATIVE, since real\nvalues depend on organism, disinfectant, pH and temperature. The 1908\npapers were not read (their PMC copies are behind a bot check), so the\nforms are (unverified) against them.\n\n(op-gacadsorber)="
+  },
+  {
+   "anchor": "gacadsorber",
+   "heading": "GACAdsorber",
+   "path": "Water Treatment and Desalination Unit Operations > Conventional treatment > GACAdsorber",
+   "source": "unit-operations-water.md",
+   "targets": [
+    "op-gacadsorber"
+   ],
+   "text": "`GACAdsorber(GACParams(...))(feed) -> (treated, removed, info)`, or\n`gac_performance(feed, params)`. It is WaterTAP 1.8.0's `GAC`, the\nempirical constant-pattern homogeneous surface diffusion model (CPHSDM) of\nHand et al. [A1], transcribed from WaterTAP's code. [A1] was not read, so\nthe equations and the regression constants are (unverified) against it.\n\n| Quantity | Equation |\n|---|---|\n| equilibrium, distribution, Biot | `q_e = K C0^(1/n)`, `D_g = rho_a q_e (1 - eps)/(eps C0)`, `Bi = k_f (d_p/2)(1 - eps)/(D_s D_g eps)` |\n| constant pattern | `St_min = a0 Bi + a1`, `EBCT_min = St_min (d_p/2)/((1 - eps) k_f)` |\n| throughput, time to ratio `c` | `T(c) = b0 + b1 c^b2 + b3/(1.01 - c^b4)`; `t(c) = eps (D_g + 1)[EBCT_min T(c) + EBCT - EBCT_min]` |\n| bed | `L = v EBCT`, `A = Q/v`, carbon `rho_b L A`, usage `rho_b L A / t(c_replace)` |\n| steady-state removal | `1 - c_avg`, with `c_avg` the trapezoidal average of `c` over a bed life, from 0.01 to `c_replace` in `n_elements` points plus (0, 0) |\n\nThe regression constants depend on Bi and 1/n (tables in [A1]); the\ndefaults are WaterTAP's example values. The model holds only for\n`EBCT >= EBCT_min` (`info[\"constant_pattern\"]`). Fixed `k_f` and `D_s`\nonly: WaterTAP's calculated options (Gnielinski film transfer, a\nsurface-diffusion correlation) are not implemented. GAC costing is not\nimplemented either.\n\n(water-gac-comparison)="
+  },
+  {
+   "anchor": "comparison-with-watertap-gac",
+   "heading": "Comparison with WaterTAP (GAC)",
+   "path": "Water Treatment and Desalination Unit Operations > Conventional treatment > Comparison with WaterTAP (GAC)",
+   "source": "unit-operations-water.md",
+   "targets": [
+    "water-gac-comparison"
+   ],
+   "text": "`benchmarks/watertap/gac.py` runs WaterTAP's example GAC flowsheet\n(`flowsheets/gac/gac.py`: fixed `k_f`, `D_s`, trapezoidal effluent) at the\nexample inputs and at three variations: EBCT 900 s, replacement at 20 %\nbreakthrough, and `1/n = 0.6`. `compare_gac.py` compares every model\nquantity (`q_e`, `D_g`, `Bi`, `St_min`, `EBCT_min`, throughput, operating\ntime, bed volumes, bed geometry, carbon mass and usage rate, `c_avg`, mass\nadsorbed) and the outlet solute flow. Largest relative difference over\neverything: **2e-14** (the same explicit equations, evaluated in another\ncode).\n\n---\n\n(water-thermal)="
+  },
+  {
    "anchor": "thermal-desalination",
    "heading": "Thermal desalination",
    "path": "Water Treatment and Desalination Unit Operations > Thermal desalination",
@@ -10903,7 +10963,7 @@
    "targets": [
     "water-editor"
    ],
-   "text": "`ROStage`, `ROTrain`, `PressureExchanger`, `WaterPump`, `MVCDesalinator`\nand `MEDDesalinator` are palette operations (category `water`) in the difflow editor (`difflow gui`, from the\ndifflow book), each with its own icon. **Examples > Seawater RO with a\npressure exchanger** opens the plant above (`10_water_swro`, written by\n`scripts/make_gui_examples.py`), with membrane-wall saturation indices on.\n\n- Dropped from the palette, `ROStage` gets placeholders (1.0) for `A_w`,\n  `B` and `area`, flagged in the inspector; `ROTrain` starts as two 40 m^2\n  stages with WaterTAP's example membrane (ILLUSTRATIVE); `WaterPump` starts\n  with `deltaP = 0` until `outlet_pressure` or `deltaP` is set.\n- The first solve in an editor session compiles the units (about 30 s with\n  scaling on); later solves take about 1.5 s. The example turns the\n  tear-error probe off (`error_probe: 0`): without exchanger mixing the\n  loop gain is zero, and the probe would add a batched recompile of every\n  unit (about 40 s) to the first solve. Turn it back on (Solve panel) when\n  the exchanger mixes.\n\n(water-watertap-comparison)="
+   "text": "`ROStage`, `ROTrain`, `PressureExchanger`, `WaterPump`, `MVCDesalinator`,\n`MEDDesalinator`, `GACAdsorber`, `Disinfection`, `Sedimentation` and\n`Filtration` are palette operations (category `water`) in the difflow editor (`difflow gui`, from the\ndifflow book), each with its own icon. **Examples > Seawater RO with a\npressure exchanger** opens the plant above (`10_water_swro`, written by\n`scripts/make_gui_examples.py`), with membrane-wall saturation indices on.\n\n- Dropped from the palette, `ROStage` gets placeholders (1.0) for `A_w`,\n  `B` and `area`, flagged in the inspector; `ROTrain` starts as two 40 m^2\n  stages with WaterTAP's example membrane (ILLUSTRATIVE); `WaterPump` starts\n  with `deltaP = 0` until `outlet_pressure` or `deltaP` is set.\n- The first solve in an editor session compiles the units (about 30 s with\n  scaling on); later solves take about 1.5 s. The example turns the\n  tear-error probe off (`error_probe: 0`): without exchanger mixing the\n  loop gain is zero, and the probe would add a batched recompile of every\n  unit (about 40 s) to the first solve. Turn it back on (Solve panel) when\n  the exchanger mixes.\n\n(water-watertap-comparison)="
   },
   {
    "anchor": "comparison-with-watertap",
@@ -10923,7 +10983,7 @@
    "targets": [
     "water-gaps"
    ],
-   "text": "- The RO stage transports sea salt as one lumped solute; ions are resolved\n  only for the scaling calculation, which assumes equal rejection of every\n  solute and keeps CO2 in the concentrate.\n- Saturation indices are at 1 atm, without kinetics or antiscalant\n  effects. Sr2+ (celestite), barium, silica and boron are not modelled.\n- Pitzer parameters and log K values are PHREEQC's (second-hand), not\n  re-derived from the primary papers.\n- The channel correlations (Sherwood, friction, diffusivity, hydraulic\n  diameter) are WaterTAP's and are **unverified** against their papers; the\n  Sherwood correlation has no identified source.\n- Costing defaults are WaterTAP's convention, not sourced cost data.\n- No nanofiltration yet.\n- Thermal: no multi-stage flash (MSF) yet; MED is parallel feed without\n  inter-effect preheaters or flash boxes, and has no WaterTAP counterpart to\n  compare with; MVC is single-stage. The vapor pressure of seawater and the\n  pressure term of the enthalpy are [S2]'s via WaterTAP (unverified).\n- Networks: water quality is not differentiable yet; no rule-based\n  controls, tank volume curves, multi-point pump curves, quality sources or\n  Chezy-Manning.\n\n---\n\n(water-references)="
+   "text": "- The RO stage transports sea salt as one lumped solute; ions are resolved\n  only for the scaling calculation, which assumes equal rejection of every\n  solute and keeps CO2 in the concentrate.\n- Saturation indices are at 1 atm, without kinetics or antiscalant\n  effects. Sr2+ (celestite), barium, silica and boron are not modelled.\n- Pitzer parameters and log K values are PHREEQC's (second-hand), not\n  re-derived from the primary papers.\n- The channel correlations (Sherwood, friction, diffusivity, hydraulic\n  diameter) are WaterTAP's and are **unverified** against their papers; the\n  Sherwood correlation has no identified source.\n- Costing defaults are WaterTAP's convention, not sourced cost data.\n- No nanofiltration yet.\n- Treatment: no coagulation/flocculation, softening, ion exchange,\n  stripping, UV or membrane filtration (UF/MF); clean-bed filtration only;\n  Chick-Watson constants and GAC regression constants are inputs; no\n  treatment costing yet.\n- Thermal: no multi-stage flash (MSF) yet; MED is parallel feed without\n  inter-effect preheaters or flash boxes, and has no WaterTAP counterpart to\n  compare with; MVC is single-stage. The vapor pressure of seawater and the\n  pressure term of the enthalpy are [S2]'s via WaterTAP (unverified).\n- Networks: water quality is not differentiable yet; no rule-based\n  controls, tank volume curves, multi-point pump curves, quality sources or\n  Chezy-Manning.\n\n---\n\n(water-references)="
   },
   {
    "anchor": "references",
@@ -10981,7 +11041,7 @@
    "targets": [
     "water-summary-gaps"
    ],
-   "text": "- RO transports sea salt as one solute; ions are resolved only for scaling\n  (equal rejection assumed). Saturation indices are at 1 atm, without\n  kinetics; no Sr, Ba, silica or boron.\n- No nanofiltration yet.\n- Networks: water quality is not differentiable; no rule-based controls,\n  volume curves or quality sources.\n- Thermal: no MSF; MED without inter-effect preheaters or flash boxes and\n  without an independent cross-check.\n- No conventional treatment or wastewater yet\n  (`src/difflow_water/DESIGN.md`, phases 3b-4)."
+   "text": "- RO transports sea salt as one solute; ions are resolved only for scaling\n  (equal rejection assumed). Saturation indices are at 1 atm, without\n  kinetics; no Sr, Ba, silica or boron.\n- No nanofiltration yet.\n- Networks: water quality is not differentiable; no rule-based controls,\n  volume curves or quality sources.\n- Thermal: no MSF; MED without inter-effect preheaters or flash boxes and\n  without an independent cross-check.\n- Treatment: no coagulation, softening, ion exchange, UV or UF/MF; filters\n  are clean-bed; no treatment costing.\n- No wastewater yet (`src/difflow_water/DESIGN.md`, phase 4)."
   }
  ],
  "version": 2

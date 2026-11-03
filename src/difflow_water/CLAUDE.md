@@ -112,9 +112,21 @@ Notes for Claude Code, loaded when working in this directory. The plan is
   `feasible` flag honest. MED is balances only: do not add fitted
   coefficients to it without a content-verified source.
 
+- Treatment (`treatment/`): plain streams with pseudo-component
+  conventions (`1 mol = 1 g` for particle classes, `1 mol = 1 organism`)
+  and a constant 1000 kg/m^3 for volumetric flow (WaterTAP's MCAS default);
+  do not add a treatment stream type. `GACAdsorber` is WaterTAP's GAC
+  equation for equation (2e-14; rerun `make watertap-compare` after a
+  change). The filter's removal law is derived in its docstring; the
+  collector efficiency is Yao's as Messina et al. 2015 restate it -- do not
+  swap in Tufenkji-Elimelech from memory (its coefficients could not be
+  checked against a readable source). Do not use a browser or other means
+  to get past publishers' bot checks for papers.
+
 ## Not palette operations
 
 `chemistry`, `economics`, `network`, `swro_performance`/`build_swro_flowsheet`
 are libraries. `mvc_performance`, `med_performance` and the thermal properties are
 libraries too. Palette: `ROStage`, `ROTrain`, `PressureExchanger`,
-`WaterPump`, `MVCDesalinator`, `MEDDesalinator`.
+`WaterPump`, `MVCDesalinator`, `MEDDesalinator`, `GACAdsorber`,
+`Disinfection`, `Sedimentation`, `Filtration`.

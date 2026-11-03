@@ -43,6 +43,10 @@ a `Flowsheet` operation. **Library**: called from Python; still differentiable.
 | `WaterPump` | palette | Isothermal pump, `V dP / eta` |
 | `MVCDesalinator` | palette | Single-stage mechanical vapor compression plant (WaterTAP's layout and costing) |
 | `MEDDesalinator` | palette | Parallel-feed multi-effect distillation |
+| `Sedimentation` | palette | Ideal settling basin, overflow-rate removal, Stokes settling |
+| `Filtration` | palette | Rapid granular filter: Yao colloid filtration, Carman-Kozeny head loss (clean bed) |
+| `Disinfection` | palette | Chick-Watson inactivation in CSTRs in series; CT, residual |
+| `GACAdsorber` | palette | Granular activated carbon, WaterTAP's constant-pattern HSDM |
 | `thermal.mvc_performance`, `thermal.med_performance` | library | The same plants with every output (works, areas, capital, LCOW) |
 | `economics` | library | LCOW and specific energy, WaterTAP's default costing |
 | `swro_performance`, `build_swro_flowsheet` | library | The seawater RO + pressure exchanger plant |

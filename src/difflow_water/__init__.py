@@ -8,7 +8,9 @@ RO trains and pressure-exchanger leakage. Phase 2: water distribution
 networks (:mod:`difflow_water.network`), solved equation-oriented and
 differentiably, cross-checked against EPANET 2.2. Phase 3a: thermal
 desalination (:mod:`difflow_water.thermal`): mechanical vapor compression
-(cross-checked against WaterTAP) and multi-effect distillation.
+(cross-checked against WaterTAP) and multi-effect distillation. Phase 3b:
+conventional treatment (:mod:`difflow_water.treatment`): GAC (WaterTAP's
+CPHSDM), disinfection, sedimentation and rapid filtration.
 The plan for the rest (distribution networks, conventional treatment,
 thermal desalination, wastewater) is ``src/difflow_water/DESIGN.md``.
 
@@ -25,9 +27,9 @@ Example:
     True
 """
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
-from difflow_water import chemistry, network, thermal
+from difflow_water import chemistry, network, thermal, treatment
 from difflow_water.chemistry import pitzer, seawater, speciation
 from difflow_water.chemistry.speciation import (
     reference_seawater,
@@ -77,6 +79,16 @@ from difflow_water.thermal import (
     med_performance,
     mvc_performance,
 )
+from difflow_water.treatment import (
+    Disinfection,
+    DisinfectionParams,
+    Filtration,
+    FiltrationParams,
+    GACAdsorber,
+    GACParams,
+    Sedimentation,
+    SedimentationParams,
+)
 
 __all__ = [
     "__version__",
@@ -93,6 +105,8 @@ __all__ = [
     "WaterPump", "WaterPumpParams",
     "MVCDesalinator", "MVCParams", "MVCCostingParams", "mvc_performance",
     "MEDDesalinator", "MEDParams", "med_performance", "thermal",
+    "GACAdsorber", "GACParams", "Disinfection", "DisinfectionParams",
+    "Sedimentation", "SedimentationParams", "Filtration", "FiltrationParams", "treatment",
     # economics
     "CostingParams", "capital_recovery_factor", "cost_ro", "cost_hp_pump", "cost_lp_pump",
     "cost_pressure_exchanger", "lcow",
@@ -123,6 +137,14 @@ def register(registry):
          "Single-stage mechanical vapor compression plant (WaterTAP's MVC layout)"),
         ("MEDDesalinator", MEDDesalinator,
          "Parallel-feed multi-effect distillation plant"),
+        ("GACAdsorber", GACAdsorber,
+         "Granular activated carbon contactor (constant-pattern HSDM, WaterTAP's GAC)"),
+        ("Disinfection", Disinfection,
+         "Disinfection contact tank: Chick-Watson kinetics in CSTRs in series"),
+        ("Sedimentation", Sedimentation,
+         "Ideal settling basin: overflow-rate removal of particle classes"),
+        ("Filtration", Filtration,
+         "Rapid granular filter: Yao colloid filtration, Carman-Kozeny head loss"),
     ]:
         registry.register(name=name, cls=cls, category="water",
                           description=description, plugin="difflow_water")
