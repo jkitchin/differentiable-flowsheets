@@ -2,17 +2,21 @@
 
 A library, not palette operations: :class:`NetworkModel` solves a whole
 :class:`WaterNetwork` equation-oriented (heads and flows together, as EPANET
-does), differentiably. See ``docs/unit-operations-water.md``.
+does), differentiably; :func:`read_inp` reads EPANET INP files and
+:func:`simulate` runs extended-period simulations. See
+``docs/unit-operations-water.md``.
 """
 
 import json
 from importlib import resources
 
+from difflow_water.network.eps import dead_end_pumps, simulate
 from difflow_water.network.hydraulics import (
     NetworkConvergenceWarning,
     NetworkModel,
     darcy_friction,
 )
+from difflow_water.network.inp import Control, Schedule, read_inp
 from difflow_water.network.model import WaterNetwork, pump_curve
 
 EXAMPLES = ("Net1", "Net3")
@@ -35,5 +39,13 @@ def load_example(name: str) -> tuple[WaterNetwork, dict]:
     return WaterNetwork.from_dict(rec["network"]), rec["epanet"]
 
 
+def example_inp(name: str):
+    """Path of an EPANET example's INP file shipped with difflow_water ("Net1", "Net3")."""
+    if name not in EXAMPLES:
+        raise ValueError(f"example must be one of {EXAMPLES}")
+    return resources.files("difflow_water.network.data").joinpath(f"{name}.inp")
+
+
 __all__ = ["WaterNetwork", "NetworkModel", "NetworkConvergenceWarning", "pump_curve",
-           "darcy_friction", "load_example", "EXAMPLES"]
+           "darcy_friction", "load_example", "example_inp", "EXAMPLES", "read_inp",
+           "Schedule", "Control", "simulate", "dead_end_pumps"]

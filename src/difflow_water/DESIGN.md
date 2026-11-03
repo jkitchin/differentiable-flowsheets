@@ -273,10 +273,14 @@ Each phase finishes with its docs section, summary row, notebook and tests.
    architecture and not palette units. A network is one equation set and
    EPANET/WNTR solve it equation-oriented; doing the same avoids tears and
    gives the reference's own formulation. It is a library, like
-   `difflow.planning`. **Phase 2b (open):** extended-period simulation
-   (tanks, patterns, controls), pump scheduling, water quality (chlorine
-   decay [N5], age), an INP reader, Chezy-Manning, sparse linear algebra for
-   networks much larger than ky10.
+   `difflow.planning`. **Phase 2b as built:** `network/inp.py` (`read_inp`,
+   `Schedule`, `Control`; matches WNTR's reading of Net1/Net3/ky10),
+   `network/eps.py` (`simulate`: EPANET's time stepping and simple
+   controls; plan/replay for gradients with moving switch times), example
+   INP files, EPS benchmark (`export_eps.py`/`compare_eps.py`), notebook 71
+   section 5. **Phase 2c (open):** water quality (chlorine decay [N5], age),
+   pump scheduling, rule-based controls, volume curves, Chezy-Manning,
+   sparse linear algebra for networks much larger than ky10.
    Original plan: Notebooks:
    roughness calibration and leak localization with `reconcile_network`;
    pump scheduling with tanks. Cross-check target: WNTR/EPANET on the

@@ -127,8 +127,10 @@ def darcy_friction(Q, d, eps, nu) -> Array:
 def _setup(a: NetworkArrays):
     """Static index sets (numpy) for the residual."""
     kind = a.kind
-    t_links = np.where(np.isin(kind, (CODE_PRV, CODE_PSV, CODE_FCV)) & ~a.closed)[0]
-    u_links = np.where(a.check & ~a.closed)[0]
+    # every link that can switch carries its t/u, closed or not: a link's
+    # status is a parameter (extended-period controls change it)
+    t_links = np.where(np.isin(kind, (CODE_PRV, CODE_PSV, CODE_FCV)))[0]
+    u_links = np.where(a.check)[0]
     return t_links, u_links
 
 
@@ -137,7 +139,8 @@ def default_parameters(a: NetworkArrays) -> dict:
     f = lambda v: jnp.asarray(v, dtype=jnp.float64)  # noqa: E731
     return {"demand": f(a.demand), "emitter": f(a.emitter), "roughness": f(a.roughness),
             "diameter": f(a.diameter), "fixed_head": f(a.fixed_head), "speed": f(a.speed),
-            "setting": f(a.setting), "minor_loss": f(a.minor_loss)}
+            "setting": f(a.setting), "minor_loss": f(a.minor_loss),
+            "closed": f(a.closed)}
 
 
 def _residual(x, prm, mu, a: NetworkArrays, t_links, u_links, demand_model, pdd, viscosity):
@@ -180,7 +183,8 @@ def _residual(x, prm, mu, a: NetworkArrays, t_links, u_links, demand_model, pdd,
     # closed links: EPANET's linear h = R Q with a large R [N8] (1e8 in ft/cfs),
     # which keeps the head of a node reached only through closed links defined
     r_closed = (H_all[a.start] - H_all[a.end] - R_CLOSED * Q) / H_SCALE
-    r_link = jnp.where(jnp.asarray(a.closed), r_closed, r_link)
+    closed = prm["closed"] > 0.5
+    r_link = jnp.where(closed, r_closed, r_link)
 
     # junction continuity
     p = H - jnp.asarray(a.elevation)
@@ -205,8 +209,10 @@ def _residual(x, prm, mu, a: NetworkArrays, t_links, u_links, demand_model, pdd,
         g_psv = (H_all[a.start[sel]] - set_ - elev_all[a.start[sel]]) / H_SCALE
         g_fcv = (set_ - Q[sel]) / Q_SCALE
         g = jnp.where(kd == CODE_PRV, g_prv, jnp.where(kd == CODE_PSV, g_psv, g_fcv))
-        r_t = [_fb(t[sel] / H_SCALE, g, mu)]
-    r_u = [_fb(u[u_links] / H_SCALE, Q[u_links] / Q_SCALE, mu)] if len(u_links) else []
+        r_t = [jnp.where(closed[sel], t[sel] / H_SCALE, _fb(t[sel] / H_SCALE, g, mu))]
+    r_u = ([jnp.where(closed[u_links], u[u_links] / H_SCALE,
+                      _fb(u[u_links] / H_SCALE, Q[u_links] / Q_SCALE, mu))]
+           if len(u_links) else [])
     return jnp.concatenate([r_node, r_link, *r_t, *r_u]), (dem, emit, hl, gain, t, u)
 
 
@@ -257,7 +263,8 @@ class NetworkModel:
 
     def parameters(self) -> dict:
         """Default (as-built) parameters: ``demand``, ``emitter``, ``roughness``,
-        ``diameter``, ``fixed_head``, ``speed``, ``setting``, ``minor_loss``."""
+        ``diameter``, ``fixed_head``, ``speed``, ``setting``, ``minor_loss``,
+        ``closed`` (1.0 for a closed link; a status, not differentiable)."""
         return default_parameters(self.arrays)
 
     def _f(self, x, prm, mu):

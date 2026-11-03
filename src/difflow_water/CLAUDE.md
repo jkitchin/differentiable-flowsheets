@@ -84,6 +84,14 @@ Notes for Claude Code, loaded when working in this directory. The plan is
   `solve()` rejects parameter arrays of the wrong shape: an out-of-range
   gather is clamped forward and its gradient dropped, so a short array
   gave a zero derivative.
+- INP reader (`network/inp.py`): unsupported features raise, never skip.
+  Validate a reader change against WNTR's reading (exported networks in
+  `benchmarks/wntr/networks/`, all numeric fields to 1e-6).
+- EPS (`network/eps.py`): decisions (controls, step lengths) are made on
+  concrete values; gradients come from replaying the recorded `plan`, where
+  tank-level-cut steps are recomputed in JAX. Do not make `simulate` decide
+  on traced values. Rerun `compare_eps.py` after a change (Net1 1e-4 m,
+  Net3 3.4e-2 m, 0 status mismatches).
 
 ## Not palette operations
 

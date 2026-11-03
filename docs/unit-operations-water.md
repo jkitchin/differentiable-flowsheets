@@ -470,9 +470,36 @@ stop short of it. A last value-neutral Newton step gives the implicit
 gradients. Dense linear algebra: ky10 (920 junctions, 1061 links) solves in
 about 6 s on one CPU.
 
-**Not yet** (DESIGN.md phase 2b): extended-period simulation (tank levels,
-patterns, controls), water quality (chlorine decay, age), reading INP
-files directly (the benchmark converts them through WNTR), Chezy-Manning.
+**Reading EPANET files.** `read_inp(path)` returns the network (SI, at
+its initial state) and a `Schedule` (patterns, demands with their
+patterns, reservoir and pump-speed patterns, simple controls, times),
+following the manual's input format and units (Appendix A; content
+verified). US units are converted with exact unit definitions; psi to
+metres of head with EPANET's 0.4333 psi/ft (as WNTR converts; EPANET's
+source not read, unverified). On EPANET's Net1, Net3 and ky10 every numeric
+field matches WNTR's reading to 1e-6. Not read (an error, not a silent
+skip): rule-based controls, tank volume curves, multi-point pump curves,
+GPV and PBV valves, Chezy-Manning. `example_inp("Net1" | "Net3")` gives the
+shipped EPANET example files.
+
+**Extended-period simulation.** `simulate(network, schedule)` steps as
+EPANET does [N8]: demands, reservoir heads and pump speeds follow their
+patterns, simple controls (link open/closed or setting, on a tank level, a
+junction pressure, a time or a clock time) switch links, tank levels
+advance with their net inflow (`dh/dt = Q_net/A`), and each step ends at
+the earliest of the next hydraulic step, pattern period, timed control,
+report time, or a tank reaching a control level or a limit. A tank at a
+limit closes the pumps that would overfill or drain it.
+*Gradients:* a run records a `plan` (statuses of every step, and what set
+its length). `simulate(..., plan=plan, params=...)` replays it with traced
+parameters; steps cut to land a tank on a level are recomputed in JAX, so
+the derivative includes how the switch times move (the derivative of the
+trajectory with the same switch sequence). On Net1 over 24 h the
+derivative of the final tank level with respect to pipe roughness matches
+central differences to 1e-9.
+
+**Not yet** (DESIGN.md phase 2c): water quality (chlorine decay, water
+age), rule-based controls, volume curves, Chezy-Manning.
 
 **Two notes from the EPANET comparison.**
 
@@ -502,6 +529,20 @@ not a test. Largest differences (both valve formulations gave the same):
 | Net1, D-W (roughness 0.26 mm, ILLUSTRATIVE) | 9 / 13 | D-W | 1.7e-3 m | 4.0e-3 L/s | 2-3 s |
 | Net3 | 92 / 119 (2 pumps) | H-W | 2.7e-5 m | 0.020 L/s | 1-2 s |
 | ky10 | 920 / 1061 (13 constant-power pumps, 5 PRVs) | H-W | 1.6e-3 m (median 4e-5 m); 0.075 m in the closed pocket behind pump 11 | 7.2e-3 L/s | 5-6 s |
+
+Extended-period (`benchmarks/wntr/export_eps.py`, `compare_eps.py`: the
+INP files read by difflow's own `read_inp`, the whole duration, every
+report time):
+
+| Network | Duration | Solves | max tank level diff. | max head diff. | median head diff. | link-status mismatches |
+|---|---|---|---|---|---|---|
+| Net1 | 24 h | 27 | 1.1e-4 m | 1.2e-4 m | 2.7e-5 m | 0 |
+| Net3 | 168 h | 204 | 3.4e-2 m | 3.4e-2 m | 6.9e-4 m | 0 |
+
+The Net3 differences are episodic: up to 3.4 cm in a tank level in the
+hours after control switches (hours 23-26 of the first day), decaying again
+as the tanks rebalance; every pump and pipe status agrees with EPANET at
+every report time. Not traced further.
 
 EPANET writes heads in single precision (about 1e-5 m at 300 m), and its
 convergence accuracy is 0.001 on flow, so differences of this size are
@@ -603,8 +644,8 @@ What the comparison taught:
   Sherwood correlation has no identified source.
 - Costing defaults are WaterTAP's convention, not sourced cost data.
 - No nanofiltration yet.
-- Networks: steady state only (no extended-period simulation, controls or
-  water quality yet); no INP reader (WNTR converts); no Chezy-Manning.
+- Networks: no water quality yet; no rule-based controls, tank volume
+  curves, multi-point pump curves or Chezy-Manning.
 
 ---
 
