@@ -1108,7 +1108,9 @@ What the comparison taught:
   treatment costing yet.
 - Wastewater: steady state only (no dynamic BSM1 influent files, no
   controllers or performance indices); ASM1 at BSM1's 15 C parameters with
-  no temperature dependence; no ASM2d or ASM3 yet; no aeration energy
+  no temperature dependence; no ASM2d or ASM3 yet (ASM2d waits for a
+  readable primary source: the only spec in hand, WaterTAP's code, has
+  inconsistencies that cannot be resolved without Henze et al. 1999); no aeration energy
   costing. No ASM1-ADM1 interfaces (the digester takes an ADM1 stream).
 - Thermal: no multi-stage flash (MSF) yet; MED is parallel feed without
   inter-effect preheaters or flash boxes, and has no WaterTAP counterpart to

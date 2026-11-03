@@ -339,6 +339,18 @@ Each phase finishes with its docs section, summary row, notebook and tests.
    `compare_adm1.py` (their 13-digit verification case within 1.7e-7, with
    the uncompensated gas flow; WaterTAP's ADM1 example within 2.5e-4).
    **Not built:** ASM2d (and ASM3), ASM-ADM interfaces, BSM2.
+   **ASM2d, deliberately deferred:** no readable primary statement was found
+   (Henze et al. 1999, *Water Sci. Technol.* 39(1) 165-182, and the IWA STR 9
+   book [W3] are not open; Lund's open reports cover ASM1 and ASM3-bioP,
+   not ASM2d). WaterTAP 1.8.0's `asm2d_reactions.py` is the only spec in
+   hand, and it cannot be checked: its alkalinity coefficients use a
+   factor 1.5 on phosphate in most processes but 1.0 in R14 and R19, PAO
+   growth (R13-R14) uses `Y_H` where `Y_PAO` is expected (numerically equal,
+   0.625), and S_ALK is documented in mol/m^3 while its coefficients carry
+   a 61 kg/kmol conversion. Transcribing it would copy unverifiable and
+   possibly wrong stoichiometry; it needs the primary paper first. An open
+   alternative for bio-P is ASM3-bioP (Solon 2015, LTH-IEA-7258, read-able),
+   which has no WaterTAP counterpart.
 
 ## 6. References
 
