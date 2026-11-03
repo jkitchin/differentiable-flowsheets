@@ -58,6 +58,20 @@ Notes for Claude Code, loaded when working in this directory. The plan is
   a `lax.scan`, the gamma passes a `fori_loop`, and `_speciate` is jitted.
   Unrolling them again tripled the gradient compile time.
 
+- `ROStage` runs as one jitted function (`_run_stage`, static config
+  flags); the scaling step (`_scaling`) stays OUTSIDE that jit so the
+  separately jitted speciation compiles once per process. Inlining it made
+  the editor's first solve take ~100 s.
+- Editor (GUI): every palette operation needs a drawing in the difflow-book
+  repo, `app/frontend/src/lib/nodes/symbols.js` (the app's
+  `tests/test_symbols.py` fails on an undrawn catalog operation or
+  category), then `npm run build` to refresh the committed bundle. A new
+  unit must also be droppable from the palette: required numeric fields get
+  a 1.0 placeholder, anything else needs a default (hence `ROTrain`'s
+  default stages and `WaterPump`'s `deltaP = 0`). The GUI example is
+  `src/difflow/workspace/examples/10_water_swro.json`, written by
+  `scripts/make_gui_examples.py` (`water()`); it sets `error_probe: 0`.
+
 ## Not palette operations
 
 `chemistry`, `economics`, `swro_performance`/`build_swro_flowsheet` are

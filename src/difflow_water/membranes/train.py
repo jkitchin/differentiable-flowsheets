@@ -26,13 +26,18 @@ class ROTrainParams(ParamsMixin):
     """Parameters of an RO train.
 
     Attributes:
-        stages: One :class:`ROStageParams` per stage, in flow order.
+        stages: One :class:`ROStageParams` per stage, in flow order. The
+            default (two 40 m^2 stages with the membrane of WaterTAP's
+            ``RO_with_energy_recovery`` example) is ILLUSTRATIVE: it lets the
+            editor place a train, to be edited.
         boost: Pressure added before each stage after the first (Pa); a list
             of ``len(stages) - 1`` values, or None for no interstage boost.
         booster_efficiency: Efficiency of the interstage booster pumps (-).
     """
 
-    stages: list = field(default_factory=list)
+    stages: list = field(default_factory=lambda: [
+        ROStageParams(A_w=4.2e-12, B=3.5e-8, area=40.0),
+        ROStageParams(A_w=4.2e-12, B=3.5e-8, area=40.0)])
     boost: list | None = None
     booster_efficiency: float | Array = 0.8
 

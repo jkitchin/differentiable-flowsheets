@@ -268,7 +268,8 @@ seawater properties and the channel correlations.
 ### ROTrain
 
 `ROTrain(ROTrainParams(stages=[...], boost=[...], booster_efficiency=0.8))`
-runs `ROStage`s in series on the concentrate side, with an optional booster
+(default: two 40 m^2 stages with WaterTAP's example membrane, ILLUSTRATIVE,
+so the editor can place one) runs `ROStage`s in series on the concentrate side, with an optional booster
 pump before each stage after the first (`boost`: pressure added, Pa; the
 pump is a `WaterPump`), and mixes the permeates. Info: `stages` (each
 stage's info), train `recovery_mass_water`, `salinity_permeate`,
@@ -314,7 +315,7 @@ not sourced performance data.
 Isothermal, incompressible pump: `W_fluid = V dP`, `W_mech = W_fluid / eta`,
 with `V` the inlet volumetric flow from the seawater density. This is the
 pump of WaterTAP's RO flowsheets (IDAES isothermal `Pump`), so pump energies
-compare one for one. Give `outlet_pressure` or `deltaP`, and `efficiency`
+compare one for one. Give `outlet_pressure` (takes precedence) or `deltaP` (default 0, a placeholder), and `efficiency`
 (default 0.8). Info: `deltaP`, `flow_vol`, `work_fluid`, `work_mechanical`.
 
 ---
@@ -394,6 +395,26 @@ ILLUSTRATIVE stand-in for an antiscalant's tolerance), and runs a two-stage
 train.
 
 ---
+
+(water-editor)=
+## In the editor
+
+`ROStage`, `ROTrain`, `PressureExchanger` and `WaterPump` are palette
+operations (category `water`) in the difflow editor (`difflow gui`, from the
+difflow book), each with its own icon. **Examples > Seawater RO with a
+pressure exchanger** opens the plant above (`10_water_swro`, written by
+`scripts/make_gui_examples.py`), with membrane-wall saturation indices on.
+
+- Dropped from the palette, `ROStage` gets placeholders (1.0) for `A_w`,
+  `B` and `area`, flagged in the inspector; `ROTrain` starts as two 40 m^2
+  stages with WaterTAP's example membrane (ILLUSTRATIVE); `WaterPump` starts
+  with `deltaP = 0` until `outlet_pressure` or `deltaP` is set.
+- The first solve in an editor session compiles the units (about 30 s with
+  scaling on); later solves take about 1.5 s. The example turns the
+  tear-error probe off (`error_probe: 0`): without exchanger mixing the
+  loop gain is zero, and the probe would add a batched recompile of every
+  unit (about 40 s) to the first solve. Turn it back on (Solve panel) when
+  the exchanger mixes.
 
 (water-watertap-comparison)=
 ## Comparison with WaterTAP

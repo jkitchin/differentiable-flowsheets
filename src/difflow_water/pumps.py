@@ -23,13 +23,16 @@ class WaterPumpParams(ParamsMixin):
     """Parameters of a water pump.
 
     Attributes:
-        outlet_pressure: Outlet pressure (Pa). Give this or ``deltaP``.
+        outlet_pressure: Outlet pressure (Pa); takes precedence over
+            ``deltaP`` when given.
         deltaP: Pressure rise (Pa), used when ``outlet_pressure`` is None.
+            The default 0 is a placeholder (a palette drop builds a pump
+            that does nothing until one of the two is set).
         efficiency: Mechanical (wire-to-water) efficiency (-).
     """
 
     outlet_pressure: float | Array | None = None
-    deltaP: float | Array | None = None
+    deltaP: float | Array = 0.0
     efficiency: float | Array = 0.8
 
 
@@ -57,8 +60,8 @@ class WaterPump:
         Args:
             params: :class:`WaterPumpParams`.
         """
-        if (params.outlet_pressure is None) == (params.deltaP is None):
-            raise ValueError("give exactly one of outlet_pressure or deltaP")
+        if params.outlet_pressure is None and params.deltaP is None:
+            raise ValueError("give outlet_pressure or deltaP")
         self.params = params
 
     def __call__(self, inlet: Stream) -> tuple[Stream, dict]:

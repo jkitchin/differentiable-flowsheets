@@ -41,6 +41,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 from jax import Array
@@ -242,24 +244,6 @@ class ROStage:
             raise ValueError("module_type must be 'flat_sheet' or 'spiral_wound'")
         self.params = params
 
-    def _channel(self, m_tot, S, T):
-        """Mass-transfer coefficient and dP/dx (Pa/m) of the feed channel."""
-        p = self.params
-        rho = sw.density(T, S)
-        mu = sw.viscosity(T, S)
-        dh = spacer_hydraulic_diameter(p.channel_height, p.spacer_porosity)
-        A_x = p.channel_height * p.width * p.spacer_porosity
-        Re = m_tot * dh / (A_x * mu)
-        D = diffusivity_nacl(S)
-        Sc = mu / (rho * D)
-        k = 0.46 * (Re * Sc) ** 0.36 * D / dh
-        u = m_tot / rho / A_x
-        if p.module_type == "spiral_wound":
-            f = 6.23 * Re ** -0.3
-        else:
-            f = 0.42 + 189.3 / Re
-        return k, -0.5 * f * rho * u**2 / dh, Re
-
     def __call__(self, feed: Stream) -> tuple[Stream, Stream, dict]:
         """Desalinate a seawater feed.
 
@@ -283,80 +267,126 @@ class ROStage:
         p = self.params
         if f"F_{WATER}" not in feed or f"F_{SALT}" not in feed:
             raise ValueError(f"the RO feed needs 'F_{WATER}' and 'F_{SALT}'")
-        T = jnp.asarray(feed["T"], dtype=jnp.float64)
-        Pp = jnp.asarray(p.permeate_pressure, dtype=jnp.float64)
-        mw0 = feed[f"F_{WATER}"] * MW_WATER
-        ms0 = feed[f"F_{SALT}"] * MW_SEA_SALT
-        area = jnp.asarray(p.area, dtype=jnp.float64)
+        f64 = lambda v: jnp.asarray(v, dtype=jnp.float64)  # noqa: E731
         calc_k = p.k is None
         calc_dp = isinstance(p.pressure_drop, str) and p.pressure_drop == "calculated"
         fixed_dp = not isinstance(p.pressure_drop, str)
-
-        def local(y):
-            mw, ms, P = y[0], y[1], y[2]
-            mt = mw + ms
-            S = ms / mt
-            if calc_k or calc_dp:
-                k_c, dpdx, Re = self._channel(mt, S, T)
-            else:
-                k_c, dpdx, Re = None, jnp.asarray(0.0), jnp.asarray(jnp.nan)
-            k = k_c if calc_k else jnp.asarray(p.k, dtype=jnp.float64)
-            f = local_flux(P - Pp, S, T, p.A_w, p.B, k)
-            if calc_dp:
-                dPda = dpdx / p.width
-            elif fixed_dp:
-                dPda = -jnp.asarray(p.pressure_drop, dtype=jnp.float64) / area
-            else:
-                dPda = jnp.asarray(0.0)
-            return f, dPda, k, Re, S
-
-        def rhs(y):
-            f, dPda, _, _, _ = local(y)
-            return jnp.stack([-f["J_w"], -f["J_s"], dPda * jnp.ones_like(f["J_w"])])
-
-        h = area / p.n_steps
-        ys = _rk4(rhs, jnp.stack([mw0, ms0, jnp.asarray(feed["P"], dtype=jnp.float64)]), h, p.n_steps)
-        mwc, msc, Pc = ys[-1, 0], ys[-1, 1], ys[-1, 2]
-        mwp, msp = mw0 - mwc, ms0 - msc
-        conc = make_stream({WATER: mwc / MW_WATER, SALT: msc / MW_SEA_SALT}, T, Pc)
-        perm = make_stream({WATER: mwp / MW_WATER, SALT: msp / MW_SEA_SALT}, T, Pp)
-
-        prof = jax.vmap(local)(ys)
-        flux, _, kk, Re, S_prof = prof
-        S_f = ms0 / (mw0 + ms0)
-        S_p = msp / (mwp + msp)
-        S_c = msc / (mwc + msc)
-        vol_f = (mw0 + ms0) / sw.density(T, S_f)
-        vol_p = (mwp + msp) / sw.density(T, S_p)
-        info = {
-            "recovery_mass_water": mwp / mw0,
-            "recovery_vol": vol_p / vol_f,
-            "salt_rejection": 1.0 - S_p / S_f,
-            "salinity_feed": S_f,
-            "salinity_concentrate": S_c,
-            "salinity_permeate": S_p,
-            "deltaP": Pc - feed["P"],
-            "flux_mass_water_avg": mwp / area,
-            "max_cp_modulus": jnp.max(flux["cp_modulus"]),
-            "min_driving_pressure": Pc - Pp - sw.osmotic_pressure(T, flux["S_m"][-1]),
-            "permeate_flow_vol": vol_p,
-            "profile": {
-                "area": jnp.linspace(0.0, 1.0, p.n_steps + 1) * area,
-                "flow_mass_water": ys[:, 0], "flow_mass_salt": ys[:, 1],
-                "pressure": ys[:, 2], "salinity": S_prof,
-                "J_w": flux["J_w"], "J_s": flux["J_s"],
-                "salinity_wall": flux["S_m"], "cp_modulus": flux["cp_modulus"],
-                "k": kk,
-            },
+        num = {
+            "A_w": f64(p.A_w), "B": f64(p.B), "area": f64(p.area), "width": f64(p.width),
+            "Pp": f64(p.permeate_pressure), "k": f64(0.0 if calc_k else p.k),
+            "dp": f64(p.pressure_drop if fixed_dp else 0.0),
+            "h": f64(p.channel_height), "eps": f64(p.spacer_porosity), "feed_pH": f64(p.feed_pH),
         }
-        if calc_k or calc_dp:
-            info["Re_in"], info["Re_out"] = Re[0], Re[-1]
+        x = (feed[f"F_{WATER}"] * MW_WATER, feed[f"F_{SALT}"] * MW_SEA_SALT,
+             f64(feed["P"]), f64(feed["T"]))
+        static = (calc_k, calc_dp, fixed_dp, p.module_type, int(p.n_steps), bool(p.scaling))
+        totals = None if p.feed_totals is None else {k: f64(v) for k, v in p.feed_totals.items()}
+        out = _run_stage(x, num, static)
+        T = x[3]
         if p.scaling:
-            from difflow_water.chemistry import speciation as spc
-            tot = p.feed_totals if p.feed_totals is not None else spc.seawater_feed(S_f, p.feed_pH, T)
-            m_f = sw.molality(S_f)
-            for key, S_x in (("SI_concentrate", S_c), ("SI_wall_outlet", flux["S_m"][-1])):
-                r = spc.speciate(spc.concentrate(tot, sw.molality(S_x) / m_f), T)
-                info[key] = r["SI"]
-                info[key.replace("SI", "pH")] = r["pH_macinnes"]
-        return conc, perm, info
+            _scaling(out["info"], totals, num["feed_pH"], T)
+        conc = make_stream({WATER: out["mwc"] / MW_WATER, SALT: out["msc"] / MW_SEA_SALT}, T, out["Pc"])
+        perm = make_stream({WATER: out["mwp"] / MW_WATER, SALT: out["msp"] / MW_SEA_SALT}, T, num["Pp"])
+        return conc, perm, out["info"]
+
+
+def _channel(m_tot, S, T, num, module_type):
+    """Mass-transfer coefficient, dP/dx (Pa/m) and Re of the feed channel."""
+    rho = sw.density(T, S)
+    mu = sw.viscosity(T, S)
+    dh = spacer_hydraulic_diameter(num["h"], num["eps"])
+    A_x = num["h"] * num["width"] * num["eps"]
+    Re = m_tot * dh / (A_x * mu)
+    D = diffusivity_nacl(S)
+    Sc = mu / (rho * D)
+    k = 0.46 * (Re * Sc) ** 0.36 * D / dh
+    u = m_tot / rho / A_x
+    if module_type == "spiral_wound":
+        f = 6.23 * Re ** -0.3
+    else:
+        f = 0.42 + 189.3 / Re
+    return k, -0.5 * f * rho * u**2 / dh, Re
+
+
+@partial(jax.jit, static_argnums=(2,))
+def _run_stage(x, num, static):
+    """The stage as one jitted function (static: the configuration flags)."""
+    calc_k, calc_dp, fixed_dp, module_type, n_steps, _ = static
+    mw0, ms0, P0, T = x
+    Pp, area = num["Pp"], num["area"]
+
+    def local(y):
+        mw, ms, P = y[0], y[1], y[2]
+        mt = mw + ms
+        S = ms / mt
+        if calc_k or calc_dp:
+            k_c, dpdx, Re = _channel(mt, S, T, num, module_type)
+        else:
+            k_c, dpdx, Re = None, jnp.asarray(0.0), jnp.asarray(jnp.nan)
+        k = k_c if calc_k else num["k"]
+        f = local_flux(P - Pp, S, T, num["A_w"], num["B"], k)
+        if calc_dp:
+            dPda = dpdx / num["width"]
+        elif fixed_dp:
+            dPda = -num["dp"] / area
+        else:
+            dPda = jnp.asarray(0.0)
+        return f, dPda, k, Re, S
+
+    def rhs(y):
+        f, dPda, _, _, _ = local(y)
+        return jnp.stack([-f["J_w"], -f["J_s"], dPda * jnp.ones_like(f["J_w"])])
+
+    h = area / n_steps
+    ys = _rk4(rhs, jnp.stack([mw0, ms0, P0]), h, n_steps)
+    mwc, msc, Pc = ys[-1, 0], ys[-1, 1], ys[-1, 2]
+    mwp, msp = mw0 - mwc, ms0 - msc
+    flux, _, kk, Re, S_prof = jax.vmap(local)(ys)
+    S_f = ms0 / (mw0 + ms0)
+    S_p = msp / (mwp + msp)
+    S_c = msc / (mwc + msc)
+    vol_f = (mw0 + ms0) / sw.density(T, S_f)
+    vol_p = (mwp + msp) / sw.density(T, S_p)
+    info = {
+        "recovery_mass_water": mwp / mw0,
+        "recovery_vol": vol_p / vol_f,
+        "salt_rejection": 1.0 - S_p / S_f,
+        "salinity_feed": S_f,
+        "salinity_concentrate": S_c,
+        "salinity_permeate": S_p,
+        "deltaP": Pc - P0,
+        "flux_mass_water_avg": mwp / area,
+        "max_cp_modulus": jnp.max(flux["cp_modulus"]),
+        "min_driving_pressure": Pc - Pp - sw.osmotic_pressure(T, flux["S_m"][-1]),
+        "permeate_flow_vol": vol_p,
+        "profile": {
+            "area": jnp.linspace(0.0, 1.0, n_steps + 1) * area,
+            "flow_mass_water": ys[:, 0], "flow_mass_salt": ys[:, 1],
+            "pressure": ys[:, 2], "salinity": S_prof,
+            "J_w": flux["J_w"], "J_s": flux["J_s"],
+            "salinity_wall": flux["S_m"], "cp_modulus": flux["cp_modulus"],
+            "k": kk,
+        },
+    }
+    if calc_k or calc_dp:
+        info["Re_in"], info["Re_out"] = Re[0], Re[-1]
+    return {"mwc": mwc, "msc": msc, "Pc": Pc, "mwp": mwp, "msp": msp, "info": info}
+
+
+def _scaling(info, feed_totals, feed_pH, T):
+    """Saturation indices of the concentrate and the outlet wall.
+
+    Outside the stage's jit on purpose: the speciation solve is jitted on
+    its own, so it compiles once per process and is reused by every stage
+    and every solve, rather than being inlined (three times) into each
+    stage's compile.
+    """
+    from difflow_water.chemistry import speciation as spc
+    S_f = info["salinity_feed"]
+    tot = feed_totals if feed_totals is not None else spc.seawater_feed(S_f, feed_pH, T)
+    m_f = sw.molality(S_f)
+    for key, S_x in (("SI_concentrate", info["salinity_concentrate"]),
+                     ("SI_wall_outlet", info["profile"]["salinity_wall"][-1])):
+        r = spc.speciate(spc.concentrate(tot, sw.molality(S_x) / m_f), T)
+        info[key] = r["SI"]
+        info[key.replace("SI", "pH")] = r["pH_macinnes"]

@@ -70,10 +70,15 @@ def test_pump_runs_and_differentiates():
     assert jnp.isfinite(g)
 
 
-@pytest.mark.parametrize("kw", [{}, {"outlet_pressure": 6e6, "deltaP": 1e5}])
-def test_pump_needs_exactly_one_pressure_spec(kw):
+def test_pump_needs_a_pressure_spec():
     with pytest.raises(ValueError):
-        dw.WaterPump(dw.WaterPumpParams(**kw))
+        dw.WaterPump(dw.WaterPumpParams(deltaP=None))
+
+
+def test_pump_outlet_pressure_takes_precedence():
+    """API contract: with both given, outlet_pressure wins."""
+    out, _ = dw.WaterPump(dw.WaterPumpParams(outlet_pressure=6e6, deltaP=1e5))(_feed(P=1e5))
+    assert float(out["P"]) == 6e6
 
 
 def test_ro_stage_reports_saturation_indices():

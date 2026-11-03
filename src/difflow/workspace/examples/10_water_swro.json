@@ -1,0 +1,161 @@
+{
+ "format_version": 2,
+ "difflow_version": "0.5.0",
+ "species_order": [
+  "H2O",
+  "TDS"
+ ],
+ "defaults": {
+  "flow": 0.01
+ },
+ "feeds": {
+  "seawater": {
+   "F_H2O": 54.82772997165716,
+   "F_TDS": 1.1407737215418365,
+   "T": 298.15,
+   "P": 101325.0
+  }
+ },
+ "units": [
+  {
+   "name": "PX",
+   "operation": "PressureExchanger",
+   "params": {
+    "efficiency": 0.95,
+    "mixing": 0.0,
+    "leakage": 0.0
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "ro_conc",
+    "seawater"
+   ],
+   "outlets": [
+    "px_hp",
+    "brine",
+    "px_bypass"
+   ]
+  },
+  {
+   "name": "P1",
+   "operation": "WaterPump",
+   "params": {
+    "outlet_pressure": 6500000.0,
+    "deltaP": 0.0,
+    "efficiency": 0.8
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "px_bypass"
+   ],
+   "outlets": [
+    "p1_out"
+   ]
+  },
+  {
+   "name": "P2",
+   "operation": "WaterPump",
+   "params": {
+    "outlet_pressure": 6500000.0,
+    "deltaP": 0.0,
+    "efficiency": 0.8
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "px_hp"
+   ],
+   "outlets": [
+    "p2_out"
+   ]
+  },
+  {
+   "name": "M1",
+   "operation": "Mixer",
+   "params": {},
+   "constructor": {
+    "species_order": [
+     "H2O",
+     "TDS"
+    ]
+   },
+   "extra_params": {},
+   "inlets": [
+    "p1_out",
+    "p2_out"
+   ],
+   "outlets": [
+    "ro_feed"
+   ]
+  },
+  {
+   "name": "RO",
+   "operation": "ROStage",
+   "params": {
+    "A_w": 4.2e-12,
+    "B": 3.5e-08,
+    "area": 50.0,
+    "width": 5.0,
+    "permeate_pressure": 101325.0,
+    "k": null,
+    "pressure_drop": "calculated",
+    "module_type": "flat_sheet",
+    "channel_height": 0.001,
+    "spacer_porosity": 0.85,
+    "n_steps": 40,
+    "scaling": true,
+    "feed_totals": null,
+    "feed_pH": 8.1
+   },
+   "constructor": {},
+   "extra_params": {},
+   "inlets": [
+    "ro_feed"
+   ],
+   "outlets": [
+    "ro_conc_out",
+    "permeate"
+   ]
+  }
+ ],
+ "recycles": {
+  "ro_conc_out": "ro_conc"
+ },
+ "view": {
+  "title": "Seawater RO with a pressure exchanger",
+  "description": "1 L/s of seawater through a pressure exchanger, high-pressure and booster pumps and a 50 m2 RO stage at 65 bar, with the concentrate recycled to the exchanger and scaling indices at the membrane wall.",
+  "nodes": {
+   "feed:seawater": {
+    "x": 60,
+    "y": 220
+   },
+   "PX": {
+    "x": 260,
+    "y": 220
+   },
+   "P1": {
+    "x": 460,
+    "y": 140
+   },
+   "P2": {
+    "x": 460,
+    "y": 300
+   },
+   "M1": {
+    "x": 640,
+    "y": 220
+   },
+   "RO": {
+    "x": 820,
+    "y": 220
+   }
+  },
+  "solver": {
+   "tol": 1e-10,
+   "max_iter": 100,
+   "error_probe": 0
+  }
+ }
+}

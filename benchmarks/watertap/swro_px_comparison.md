@@ -12,7 +12,7 @@ Reference: WaterTAP 1.8.0, IDAES 2.13.0, Pyomo 6.10.1; RO1D with 160 finite elem
 | `salinity_concentrate` | 0.0590632 | 0.0590631 | -0.00% |
 | `deltaP` | -212208 | -212689 | -0.23% |
 | `flux_mass_water_avg` | 0.00837265 | 0.00837259 | -0.00% |
-| `Re_in` | 266.878 | 266.878 | -0.00% |
+| `Re_in` | 266.878 | 266.878 | +0.00% |
 | `Re_out` | 149.103 | 149.103 | +0.00% |
 
 **Plant (RO + pressure exchanger + pumps + costing)**
@@ -41,7 +41,7 @@ Reference: WaterTAP 1.8.0, IDAES 2.13.0, Pyomo 6.10.1; RO1D with 160 finite elem
 | `salinity_concentrate` | 0.0811551 | 0.0812485 | +0.12% |
 | `deltaP` | -264912 | -265662 | -0.28% |
 | `flux_mass_water_avg` | 0.00730551 | 0.00731178 | +0.09% |
-| `Re_in` | 266.878 | 266.878 | -0.00% |
+| `Re_in` | 266.878 | 266.878 | +0.00% |
 | `Re_out` | 102.487 | 102.346 | -0.14% |
 
 **Plant (RO + pressure exchanger + pumps + costing)**
@@ -99,7 +99,7 @@ Reference: WaterTAP 1.8.0, IDAES 2.13.0, Pyomo 6.10.1; RO1D with 160 finite elem
 | `salinity_concentrate` | 0.0590632 | 0.0590631 | -0.00% |
 | `deltaP` | -212208 | -212689 | -0.23% |
 | `flux_mass_water_avg` | 0.00837265 | 0.00837259 | -0.00% |
-| `Re_in` | 266.878 | 266.878 | -0.00% |
+| `Re_in` | 266.878 | 266.878 | +0.00% |
 | `Re_out` | 149.103 | 149.103 | +0.00% |
 
 **Plant (RO + pressure exchanger + pumps + costing)**
