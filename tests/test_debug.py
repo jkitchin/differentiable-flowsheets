@@ -536,3 +536,34 @@ def test_history_mid_solve_reads_the_observed_rate_not_a_verdict(history, regime
 
     ctx = DebugContext(Checkpoint.ITERATION, loop())
     assert _reading(ctx, history)[0] == regime
+
+
+def test_in_a_notebook_the_prompt_asks_the_front_end(monkeypatch, capsys):
+    """Regression: in a Jupyter kernel stdin is neither a tty nor a pipe anyone
+    writes to, so the prompt read end-of-file and detached before the first
+    command. In a kernel it now goes through input() and prints to stdout."""
+    from difflow.debug import repl
+
+    answers = iter(["where", "continue", "continue"])
+    asked = []
+    monkeypatch.setattr(repl, "in_kernel", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": asked.append(prompt) or next(answers))
+    session = DebugSession(ReplFrontend())
+    with debug.attach(session):
+        loop().solve()
+    assert asked == [repl.PROMPT] * 3
+    out = capsys.readouterr()
+    assert "solve_start" in out.out and "(* = tear stream)" in out.out
+
+
+def test_a_notebook_that_cannot_take_input_falls_back(monkeypatch, capsys):
+    from difflow.debug import repl
+
+    def refuse(prompt=""):
+        raise RuntimeError("this frontend does not support input requests")
+
+    monkeypatch.setattr(repl, "in_kernel", lambda: True)
+    monkeypatch.setattr("builtins.input", refuse)
+    with debug.attach(DebugSession(ReplFrontend())):
+        loop().solve()
+    assert "debug.attach(script=" in capsys.readouterr().out

@@ -4,6 +4,13 @@ Output goes to stderr, so a script's own stdout is left alone. Line
 editing, history and Tab completion come from :mod:`readline` when the
 terminal has it; on a pipe it falls back to plain lines and behaves the
 same, which is what the tests drive.
+
+In a Jupyter notebook the kernel's stdin is neither a terminal nor a
+pipe anyone writes to --- reading it returns end-of-file at once, which
+used to detach the debugger before the first command. There the prompt
+goes through ``input()``, which the kernel routes to an input box under
+the cell, and the output goes to stdout, which a notebook shows as
+ordinary output rather than as an error.
 """
 
 from __future__ import annotations
@@ -16,6 +23,18 @@ from typing import TYPE_CHECKING, Iterable, TextIO
 
 from .checkpoints import EVENTS, METRICS, Checkpoint
 from .engine import COMMANDS, Control
+
+def in_kernel() -> bool:
+    """True inside an IPython kernel (a Jupyter notebook, JupyterLab, VS Code)."""
+    shell = sys.modules.get("IPython")
+    if shell is None:
+        return False
+    try:
+        ip = shell.get_ipython()
+    except Exception:  # noqa: BLE001 -- an IPython too old or too odd to ask
+        return False
+    return ip is not None and hasattr(ip, "kernel")
+
 
 if TYPE_CHECKING:
     from .context import DebugContext
@@ -69,7 +88,8 @@ class ReplFrontend:
         script: Commands to run at the first pause, before prompting (a
             path, or lines).
         stdin: Where commands come from (default ``sys.stdin``).
-        stdout: Where everything is written (default ``sys.stderr``).
+        stdout: Where everything is written (default ``sys.stderr``; in a
+            notebook, ``sys.stdout``).
     """
 
     def __init__(self, script=None, stdin: TextIO | None = None,
@@ -82,8 +102,11 @@ class ReplFrontend:
 
     # -- I/O -------------------------------------------------------------
 
+    def _default_out(self) -> TextIO:
+        return sys.stdout if in_kernel() else sys.stderr
+
     def _write(self, text: str) -> None:
-        out = self.out or sys.stderr
+        out = self.out or self._default_out()
         out.write(text + "\n")
         out.flush()
 
@@ -95,7 +118,17 @@ class ReplFrontend:
                 return input(PROMPT)
             except EOFError:
                 return None
-        (self.out or sys.stderr).write(PROMPT)
+        if self.stdin is None and in_kernel():
+            # A notebook: input() asks the front end for a line.
+            try:
+                return input(PROMPT)
+            except EOFError:
+                return None
+            except Exception as exc:  # noqa: BLE001 -- StdinNotImplementedError
+                self._write(f"(this front end cannot take input: {exc}; pass the "
+                            "commands as debug.attach(script=[...]) instead)")
+                return None
+        (self.out or self._default_out()).write(PROMPT)
         line = stdin.readline()
         return None if line == "" else line
 

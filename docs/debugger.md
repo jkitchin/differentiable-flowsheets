@@ -59,6 +59,11 @@ with debug.attach(on_error=True):       # stop only post mortem
     fs.solve()
 ```
 
+In Jupyter (a notebook, JupyterLab, VS Code) each `difflow-dbg>` prompt is an
+input box under the cell, and the session prints into the cell's output. A
+front end that cannot take input says so and detaches; pass the commands
+instead with `debug.attach(script=["break on nonfinite", "continue", ...])`.
+
 A short session:
 
 ```text
