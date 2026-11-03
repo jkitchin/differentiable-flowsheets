@@ -274,9 +274,9 @@ runner.close()
 </div>
 <div class="small">
 
-`debug.attach()` gives the same `difflow-dbg>` prompt from a script or a notebook.
+`debug.attach()` gives the same `difflow-dbg>` prompt from a script, or in Jupyter as an input box under the cell.
 
-`DebugRunner` runs the solve on a worker thread and hands back **one event per call**: the shape a server, an editor or an agent needs.
+`DebugRunner` runs the solve on a worker thread and hands back **one event per call**: the shape a server or an agent needs.
 
 Detached, a solve is exactly what it was: one thread-local read per checkpoint. Attached, it only reads (apart from `set tear`), and `quit` raises `DebugQuit` rather than returning a partial answer.
 
@@ -401,23 +401,23 @@ Each solve runs on a **copy**: debugging never changes the session's flowsheet.
 
 ---
 
-## In the editor · the book's app
+## In a notebook · `debug.attach()`
 
-# Debug panel: a live solve, stepped
+# The prompt, under the cell
 
-<video src="assets/panel-debug.mp4" poster="assets/panel-debug.png" autoplay loop muted playsinline></video>
+<video src="assets/notebook-debug.mp4" poster="assets/notebook-debug.png" autoplay loop muted playsinline></video>
 
-<p class="note">Start · Next unit (the canvas outlines the unit) · a breakpoint on the selected unit · Step iteration (the tear table) · the command line: <code>p reactor_feed</code>, <code>set tear …</code> · Continue to the end.</p>
+<p class="note">JupyterLab, plain difflow: the cell runs <code>fs.solve</code> inside <code>with debug.attach():</code> and each <code>difflow-dbg&gt;</code> prompt is an input box · <code>where</code> · <code>next</code> · <code>p reactor_feed</code> · <code>step</code> · <code>p tear</code> · <code>break if residual&lt;1e-6</code> · <code>p history</code> · <code>continue</code>.</p>
 
 ---
 
-## In the editor · the book's app
+## In a notebook · record and what-if
 
-# Trace panel: scrub a recording, then ask *what if*
+# Keep a solve, then ask *what if*, as data
 
-<video src="assets/panel-trace.mp4" poster="assets/panel-trace.png" autoplay loop muted playsinline></video>
+<video src="assets/notebook-whatif.mp4" poster="assets/notebook-whatif.png" autoplay loop muted playsinline></video>
 
-<p class="note">Record solve · step by unit, then by tear iteration · <b>What if</b> the next pass ran on 3? · the replay against the faint recording · play.</p>
+<p class="note"><code>debug.record(fs)</code> · <code>summarize</code> · a what-if at the first tear iteration with the tear set to 0.8 · <code>compare</code>: the same loop lands on the other steady state · plot both residual histories.</p>
 
 ---
 
@@ -460,4 +460,4 @@ Each solve runs on a **copy**: debugging never changes the session's flowsheet.
 - **A unit is one step.** Its own inner solve (a CSTR's Newton iteration) is not stepped; what it reports in `info` is shown, and `break on inner_unconverged` stops on it.
 - **It edits tear values only**, never parameters.
 
-<p class="note"><code>docs/debugger.md</code> · <code>examples/69_flowsheet_debugger.ipynb</code> · <code>docs/agents.md</code> · the editor app comes with the difflow book.</p>
+<p class="note"><code>docs/debugger.md</code> · <code>examples/69_flowsheet_debugger.ipynb</code> · <code>docs/agents.md</code> · <code>presentations/debugger/demo/*.ipynb</code></p>

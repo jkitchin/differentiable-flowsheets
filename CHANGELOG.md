@@ -11,13 +11,21 @@ All notable changes to difflow are recorded here. The format follows
 - **A slide deck on the debugger, `presentations/debugger/`** (Marp; `debugger.html` plays the recordings,
   `debugger.pdf` shows their last frames). Step by step, with animated recordings of real `difflow debug`
   sessions (starting, stepping, the tear table, breakpoints, a NaN post mortem, `set tear`, the JSON protocol),
-  a what-if plot, and videos of the book app's Debug and Trace panels. `record.sh` re-records it.
+  a what-if plot, and videos of the same debugger in JupyterLab: `debug.attach()` stepped from a notebook,
+  and a record and what-if run as data (`demo/*.ipynb`). `record.sh` re-records it.
 
 ### Changed
 
 - **The debugger aligns long names.** `print` of a stream, a unit and the tear table sized its name column at
   12 characters, so a species such as `F_2_methylpentane` pushed its value out of line; the columns now fit
   the longest name.
+
+### Fixed
+
+- **`debug.attach()` works in a Jupyter notebook.** A kernel's stdin is closed, so the prompt read end of file
+  and detached at once ("(EOF: detached)"). In a kernel the prompt now asks the front end (an input box under
+  the cell) and writes to the cell's output; a front end that cannot take input says to pass
+  `debug.attach(script=[...])` instead.
 
 ## [0.5.0] - 2026-10-30
 

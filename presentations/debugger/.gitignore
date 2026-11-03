@@ -1,5 +1,6 @@
 _preview/
 demo/_*.dbg
 demo/*.json
-demo/gui.log
+demo/.ipynb_checkpoints/
+video/
 __pycache__/

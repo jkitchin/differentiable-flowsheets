@@ -4,14 +4,14 @@
 # its transcript (assets/NN-*.txt) and its last frame (assets/NN-*.png, the PDF's
 # stand-in for the animation).
 #
-# The editor recordings (assets/panel-*.mp4) need the book's app (`difflow gui`)
-# and node with playwright:
-#   (cd demo && difflow gui plant.py --port 8801 --no-browser --stay --trust --token tok &)
-#   curl -s -X POST -H X-Difflow-Token:tok -H Content-Type:application/json \
-#        -d '{"acceleration":"wegstein"}' http://127.0.0.1:8801/api/solver
-#   node record_gui.js "$PWD/video"     # then trim and encode, as below
-#   ffmpeg -ss "$(cat video/debug.start)" -i video/debug.webm -c:v libx264 -crf 26 \
-#          -pix_fmt yuv420p -movflags +faststart -an assets/panel-debug.mp4
+# The notebook recordings (assets/notebook-*.mp4) run demo/*.ipynb in JupyterLab
+# with node and playwright:
+#   (cd demo && JAX_PLATFORMS=cpu jupyter lab --no-browser --port 8888 \
+#        --ServerApp.token=tok &)
+#   node record_notebook.js "$PWD/video"     # then trim and encode each, as:
+#   ffmpeg -ss "$(cat video/notebook-debug.start)" -i video/notebook-debug.webm \
+#          -c:v libx264 -crf 26 -pix_fmt yuv420p -movflags +faststart -an \
+#          assets/notebook-debug.mp4 && cp video/notebook-debug.png assets/
 set -euo pipefail
 cd "$(dirname "$0")"
 T="python record_term.py"
