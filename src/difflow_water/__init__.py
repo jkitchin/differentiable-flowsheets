@@ -4,7 +4,9 @@ Phase 1: seawater properties, a seawater reverse-osmosis stage, a pressure
 exchanger, water pumps, WaterTAP-compatible levelized cost of water, and the
 seawater RO + pressure exchanger flowsheet. Phase 1b: a Pitzer activity
 model, seawater/brine speciation and mineral saturation indices (scaling),
-RO trains and pressure-exchanger leakage.
+RO trains and pressure-exchanger leakage. Phase 2: water distribution
+networks (:mod:`difflow_water.network`), solved equation-oriented and
+differentiably, cross-checked against EPANET 2.2.
 The plan for the rest (distribution networks, conventional treatment,
 thermal desalination, wastewater) is ``src/difflow_water/DESIGN.md``.
 
@@ -23,7 +25,7 @@ Example:
 
 __version__ = "0.5.0"
 
-from difflow_water import chemistry
+from difflow_water import chemistry, network
 from difflow_water.chemistry import pitzer, seawater, speciation
 from difflow_water.chemistry.speciation import (
     reference_seawater,
@@ -68,7 +70,7 @@ from difflow_water.streams import (
 __all__ = [
     "__version__",
     # chemistry
-    "chemistry", "seawater", "pitzer", "speciation", "speciate", "reference_seawater",
+    "chemistry", "network", "seawater", "pitzer", "speciation", "speciate", "reference_seawater",
     "seawater_feed",
     # streams
     "WATER", "SALT", "make_seawater_stream", "mass_flow", "mass_flows", "salinity",

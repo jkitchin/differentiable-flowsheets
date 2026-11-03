@@ -16,7 +16,10 @@ dw.reference_seawater(S) or dw.seawater_feed(S, pH). Units: ROStage (seawater
 RO, solution-diffusion with polarization, plug flow; scaling=True reports
 saturation indices at the outlet wall), ROTrain (stages in series),
 PressureExchanger (outlets hp_feed, brine, bypass; leakage, mixing),
-WaterPump. swro_performance(feed, ro, ro_pressure) gives the seawater RO +
+WaterPump. Distribution networks: difflow_water.network (WaterNetwork,
+NetworkModel(net).solve(params)) solve heads and flows equation-oriented with
+EPANET 2.2's equations, differentiably; load_example("Net3") gives an EPANET
+example with EPANET's own answer. swro_performance(feed, ro, ro_pressure) gives the seawater RO +
 pressure exchanger plant's recovery, specific energy and LCOW as one
 differentiable function; build_swro_flowsheet gives the same plant as a
 Flowsheet. Costing follows WaterTAP's default costing package so results

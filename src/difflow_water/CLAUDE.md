@@ -72,7 +72,20 @@ Notes for Claude Code, loaded when working in this directory. The plan is
   `src/difflow/workspace/examples/10_water_swro.json`, written by
   `scripts/make_gui_examples.py` (`water()`); it sets `error_probe: 0`.
 
+- Networks (`network/`): one residual in `hydraulics.py` for both valve
+  formulations; do not fork it. EPANET 2.2 [N8] is the reference: rerun
+  `make wntr-compare` (benchmarks/wntr) after a change; current state is
+  2.7e-5 m on Net1/Net3, 1.6e-3 m on ky10 outside its closed pump pocket.
+  Swamee-Jain is log10 (the manual's `ln` is a typo; `ln` put heads 70 m
+  off). Closed links are `h = R Q` (not `Q = 0`: that leaves heads behind
+  closed links undefined). Pumps with no flow path are compiled closed.
+  Newton stages stop on tolerance (`while_loop`), not a fixed count: a
+  fixed 40 left ky10 unconverged in the smooth formulation, silently.
+  `solve()` rejects parameter arrays of the wrong shape: an out-of-range
+  gather is clamped forward and its gradient dropped, so a short array
+  gave a zero derivative.
+
 ## Not palette operations
 
-`chemistry`, `economics`, `swro_performance`/`build_swro_flowsheet` are
-libraries. Palette: `ROStage`, `ROTrain`, `PressureExchanger`, `WaterPump`.
+`chemistry`, `economics`, `network`, `swro_performance`/`build_swro_flowsheet`
+are libraries. Palette: `ROStage`, `ROTrain`, `PressureExchanger`, `WaterPump`.

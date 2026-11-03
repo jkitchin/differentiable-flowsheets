@@ -40,7 +40,6 @@ step, which gives implicit-function gradients. Isothermal.
 from __future__ import annotations
 
 from dataclasses import dataclass
-
 from functools import partial
 
 import jax

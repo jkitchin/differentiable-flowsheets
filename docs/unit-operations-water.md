@@ -396,6 +396,121 @@ train.
 
 ---
 
+(water-network)=
+## Water distribution networks
+
+`difflow_water.network` models a distribution network (junctions,
+reservoirs, tanks, pipes, pumps, valves) and solves its steady state the
+way EPANET does: junction heads and link flows together, by Newton
+(EPANET's gradient method is the same Newton step in a reduced form). It is
+a library, not palette operations: a network is one equation set, solved
+equation-oriented, so there are no tears. Everything is in JAX: pressures
+and flows have exact (implicit-function) gradients with respect to demands,
+leak (emitter) coefficients, roughness, diameters, reservoir heads, pump
+speeds and valve settings.
+
+```python
+from difflow_water.network import NetworkModel, WaterNetwork, load_example
+
+net = WaterNetwork()
+net.add_reservoir("R", head=60.0)
+net.add_junction("J1", elevation=10.0, demand=0.01, emitter=1e-4)   # m, m^3/s
+net.add_pipe("P1", "R", "J1", length=1000.0, diameter=0.2, roughness=120.0)
+res = NetworkModel(net).solve()            # head, pressure, flow, demand, emitter_flow, ...
+
+net3, epanet = load_example("Net3")        # EPANET example 3 + EPANET 2.2's own solution
+grad = jax.grad(lambda c: NetworkModel(net3).solve({"emitter": c})["pressure"].sum())
+```
+
+**Equations** (EPANET 2.2 manual [N8], Section 13.1 and Table 3.1; read
+in the manual, content verified; US-unit constants converted to SI in code):
+
+| Piece | Equation | Notes |
+|---|---|---|
+| link | `H_start - H_end = h_loss(Q) - h_gain(Q) + t - u` | `t`: valve throttling, `u`: blocking head (both >= 0) |
+| junction | `sum Q_in - sum Q_out - demand(p) - C p^gamma = 0` | emitter (leak) `q = C p^gamma` |
+| Hazen-Williams | `h = 10.667 C^-1.852 d^-4.871 L Q|Q|^0.852` | 4.727 in ft/cfs |
+| Darcy-Weisbach | `h = 0.0827 f L d^-5 Q|Q|`; f: 64/Re (Re < 2000), Swamee-Jain [N7] (Re > 4000), EPANET's cubic between | 0.0252 in ft/cfs; see the log10 note |
+| minor loss | `0.0826 K d^-4 Q|Q|` | 0.02517 in ft units |
+| pump | `h_gain = w^2 (A - B (Q/w)^C)`; one-point curve: shutoff 4/3 of design head, zero head at twice design flow | constant-power pump `P/(rho g Q)`, rho g = 9802 N/m^3 (unverified, see below) |
+| open valve | smooth pipe, f = 0.02, length twice the diameter, plus minor loss; TCV: setting is K | |
+| closed link | `h = R Q`, R = 1e8 (ft/cfs) | keeps heads defined behind closed links |
+| pressure-driven demand | `d = D ((p - P0)/(Pf - P0))^e` clipped to [0, D] (Wagner et al. [N3]) | `demand_model="PDD"` |
+
+**Valves and check valves: two formulations** (DESIGN.md Section 3a).
+Every switch is a complementarity pair, `u >= 0 perp Q >= 0` for check
+valves, pumps, PRVs and PSVs; `t >= 0 perp (H_set - H_end) >= 0` for a PRV,
+`(H_start - H_set)` for a PSV, `(Q_set - Q)` for an FCV; each through the
+smoothed Fischer-Burmeister function
+`phi(a, b) = a + b - sqrt(a^2 + b^2 + 2 mu^2)` (scaled: 1 m of head,
+1 L/s of flow).
+
+- `valve_formulation="complementarity"` (default): `mu` is continued down
+  to 1e-9, so valves switch sharply, as EPANET's status logic does;
+  gradients are exact away from a switching point.
+- `valve_formulation="smooth"`: `mu` stops at `smoothing` (default 1e-3),
+  so the equations are differentiable everywhere and a switch is rounded
+  over about `smoothing`; useful when an optimizer has to cross a switch.
+
+Both share one residual (`network/hydraulics.py`) and gave the same
+answers on every benchmark network.
+
+**Smooth where EPANET switches.** `|Q|^(n-1)` is `(Q^2 + delta^2)^((n-1)/2)`
+with delta = 1e-7 m^3/s (EPANET instead linearizes below a flow threshold);
+`max(p, 0)` in emitters and pressure-driven demand is a smooth maximum
+(1 mm). A pump whose outlet side holds no demand, emitter, reservoir or
+tank once closed links are removed is compiled as closed (EPANET's status
+check closes it; a constant-power pump would otherwise produce an unbounded
+head); `solve()["auto_closed"]` lists them.
+
+**Solver.** Newton on the scaled residual with a line search over step
+fractions, per continuation stage until the residual is below 1e-10 (at
+most `n_iter`); `converged` and a `NetworkConvergenceWarning` report a
+stop short of it. A last value-neutral Newton step gives the implicit
+gradients. Dense linear algebra: ky10 (920 junctions, 1061 links) solves in
+about 6 s on one CPU.
+
+**Not yet** (DESIGN.md phase 2b): extended-period simulation (tank levels,
+patterns, controls), water quality (chlorine decay, age), reading INP
+files directly (the benchmark converts them through WNTR), Chezy-Manning.
+
+**Two notes from the EPANET comparison.**
+
+- *Swamee-Jain uses log10.* The EPANET 2.2 manual prints Swamee-Jain with
+  `ln`; coded that way the friction factor came out (ln 10)^2 = 5.3 times
+  small and heads 70 m off EPANET. With `log10` (Swamee & Jain's form; the
+  manual's own transition constant 0.86859 = 2/ln 10 is the log10 form
+  written with ln) the Darcy-Weisbach network agrees to 1.7 mm.
+- *rho g for power pumps.* The manual does not state the unit weight EPANET
+  uses for constant-power pumps. 9802 N/m^3 (62.4 lbf/ft^3) brought ky10's
+  median head difference from 1.3e-3 to 4e-5 m, against 9810; it is used,
+  marked unverified.
+
+(water-epanet-comparison)=
+### Comparison with EPANET 2.2
+
+`benchmarks/wntr/export_networks.py` (run where WNTR is installed) reads
+EPANET example networks with WNTR 1.5.0, solves them in EPANET 2.2 (WNTR's
+`EpanetSimulator`, one period: t = 0 demands, levels, controls and link
+statuses) and writes each network and EPANET's solution to JSON;
+`compare_networks.py` solves the same networks in difflow_water. Hand-run,
+not a test. Largest differences (both valve formulations gave the same):
+
+| Network | Junctions / links | Head loss | max abs head diff. | max abs flow diff. | solve |
+|---|---|---|---|---|---|
+| Net1 | 9 / 13 (1 pump) | H-W | 2.1e-5 m | 1.2e-4 L/s | 1-2 s |
+| Net1, D-W (roughness 0.26 mm, ILLUSTRATIVE) | 9 / 13 | D-W | 1.7e-3 m | 4.0e-3 L/s | 2-3 s |
+| Net3 | 92 / 119 (2 pumps) | H-W | 2.7e-5 m | 0.020 L/s | 1-2 s |
+| ky10 | 920 / 1061 (13 constant-power pumps, 5 PRVs) | H-W | 1.6e-3 m (median 4e-5 m); 0.075 m in the closed pocket behind pump 11 | 7.2e-3 L/s | 5-6 s |
+
+EPANET writes heads in single precision (about 1e-5 m at 300 m), and its
+convergence accuracy is 0.001 on flow, so differences of this size are
+within EPANET's own resolution. ky10's pocket behind the auto-closed pump
+11 and the closed RV-4 has no flow; there difflow ties the heads to both
+closed links and EPANET to the pump's suction.
+
+---
+
 (water-editor)=
 ## In the editor
 
@@ -488,6 +603,8 @@ What the comparison taught:
   Sherwood correlation has no identified source.
 - Costing defaults are WaterTAP's convention, not sourced cost data.
 - No nanofiltration yet.
+- Networks: steady state only (no extended-period simulation, controls or
+  water quality yet); no INP reader (WNTR converts); no Chezy-Manning.
 
 ---
 
@@ -518,6 +635,11 @@ source; a design input or placeholder.
 | C9 | Pitzer, K.S. "Thermodynamics of electrolytes. V. Effects of higher-order electrostatic terms." *J. Solution Chem.* **1975**, 4, 249--265. doi:10.1007/BF00646562 | Origin of E-theta | Citation **unverified** (Crossref lookups rate-limited; as recalled and as cited in [C6]). The code follows [C6]'s listing, not this paper. |
 | C10 | Harvie, C.E.; Weare, J.H. "The prediction of mineral solubilities in natural waters: the Na-K-Mg-Ca-Cl-SO4-H2O system from zero to high concentration at 25 °C." *Geochim. Cosmochim. Acta* **1980**, 44(7), 981--997. doi:10.1016/0016-7037(80)90287-2 | Notation of the Pitzer equations | Citation verified (Crossref). Equations read in [C6], which follows it. |
 | PZ | PHREEQC `pitzer.dat`, as shipped with phreeqpython 1.6.2 (sha256 eb5051704fad461c...) | Every Pitzer parameter and log K value | Read directly and transcribed by script; second-hand to the papers it cites. |
+| N1 | Klise, K.A.; Bynum, M.; Moriarty, D.; Murray, R. "A software framework for assessing the resilience of drinking water systems to disasters with an example earthquake case study." *Environ. Model. Softw.* **2017**, 95, 420--431. doi:10.1016/j.envsoft.2017.06.022 | WNTR, used to run EPANET 2.2 for the network benchmark | Citation verified (Crossref) |
+| N2 | Todini, E.; Rossman, L.A. "Unified framework for deriving simultaneous equation algorithms for water distribution networks." *J. Hydraul. Eng.* **2013**, 139(5), 511--526. doi:10.1061/(ASCE)HY.1943-7900.0000703 | Context: the gradient method as Newton on heads and flows | Citation verified (Crossref); not read |
+| N3 | Wagner, J.M.; Shamir, U.; Marks, D.H. "Water distribution reliability: simulation methods." *J. Water Resour. Plann. Manage.* **1988**, 114(3), 276--294. doi:10.1061/(ASCE)0733-9496(1988)114:3(276) | Pressure-driven demand | Citation verified (Crossref). The equation is EPANET's form ([N8] Eq. 13.6, content verified there), not read in this paper. |
+| N7 | Swamee, P.K.; Jain, A.K. "Explicit equations for pipe-flow problems." *J. Hydraul. Div.* **1976**, 102(5), 657--664. doi:10.1061/JYCEAJ.0004542 | Turbulent friction factor | Citation verified (Crossref; the DOI first recalled was wrong). Paper not read; the log10 form is the one that reproduces EPANET (see the network notes). |
+| N8 | Rossman, L.; Woo, H.; Tryby, M.; Shang, F.; Janke, R.; Haxton, T. *EPANET 2.2 User Manual*; EPA/600/R-20/133; U.S. Environmental Protection Agency: Cincinnati, OH, **2020**. Online edition: epanet-manual.readthedocs.io | Network equations (Section 13.1, Table 3.1, pump curves, valve and emitter models, PDD) | Citation verified (report number, authors and title from the EPA PDF cover, via search; no DOI). **Content verified**: equations read in the online edition. Its Swamee-Jain `ln` is a typo (see the network notes). |
 | B1 | Akkor, I.; Amusat, O.O.; Vecchiarelli, P.; Gounaris, C.E.; Knueven, B.; Dudchenko, A.V. "Optimization of desalination systems with detailed water chemistry through integration of Reaktoro in WaterTAP." *ACS ES&T Eng.* **2026**, 6(5), 1464--1477. doi:10.1021/acsestengg.5c01008 | WaterTAP (benchmark context) | Citation verified (Crossref) |
 | B2 | Dudchenko, A.; Atia, A.; Bartholomew, T. "WaterTAP: Tool for analysis of water treatment systems." NAWI Alliance Fall Meeting, **2023** (OSTI). doi:10.2172/2447624 | WaterTAP (benchmark) | Citation verified (Crossref). The comparison used WaterTAP 1.8.0 from PyPI. |
 | B3 | Lee, A.; Ghouse, J.H.; Eslick, J.C.; Laird, C.D.; Siirola, J.D.; et al. "The IDAES process modeling framework and model library -- flexibility for process simulation and optimization." *J. Adv. Manuf. Process.* **2021**, 3(3), e10095. doi:10.1002/amp2.10095 | IDAES (pump model, WaterTAP's base) | Citation verified (Crossref) |

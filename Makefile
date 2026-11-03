@@ -53,7 +53,7 @@ endif
 .PHONY: all notebooks notebooks-force notebooks-bio notebooks-ree notebooks-cc \
         notebooks-bio-force notebooks-ree-force notebooks-cc-force \
         clean test test-durations book book-clean sync \
-        docs-index convergence ask-check watertap-compare phreeqc-compare
+        docs-index convergence ask-check watertap-compare phreeqc-compare wntr-compare
 
 all: notebooks
 
@@ -165,6 +165,11 @@ watertap-compare:
 # benchmarks/phreeqc/seawater_brines.py in a phreeqpython environment)
 phreeqc-compare:
 	python benchmarks/phreeqc/compare_seawater_brines.py
+
+# difflow_water networks vs EPANET 2.2 (hand-run; network JSON from
+# benchmarks/wntr/export_networks.py in a WNTR environment)
+wntr-compare:
+	python benchmarks/wntr/compare_networks.py
 
 # Clean generated files
 clean:

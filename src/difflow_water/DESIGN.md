@@ -260,7 +260,24 @@ Each phase finishes with its docs section, summary row, notebook and tests.
    optimizes with a calcite scaling limit. `benchmarks/phreeqc/`.
    Still open: nanofiltration (DSPM-DE), ion-resolved RO transport, Sr/Ba/
    silica/boron, pressure dependence of K.
-2. **Distribution network** on the `difflow_gas` architecture. Notebooks:
+2. **Distribution network**. **As built** (2026-11-03): `network/model.py`
+   (`WaterNetwork`, SI, EPANET conventions; pump curves; dead-end pumps
+   auto-closed), `network/hydraulics.py` (`NetworkModel`: one residual,
+   equation-oriented Newton with continuation, implicit gradients; valves
+   and check valves as Fischer-Burmeister complementarity, "complementarity"
+   = mu continued to 1e-9, "smooth" = mu held at `smoothing`), example
+   networks Net1/Net3 (`load_example`), notebook 71 (EPANET check, leak
+   localization, roughness calibration, PRV formulations),
+   `benchmarks/wntr/` (EPANET 2.2 via WNTR: Net1, Net3, ky10, Net1 D-W).
+   **Deviation from the plan:** not the `difflow_gas` sequential-modular
+   architecture and not palette units. A network is one equation set and
+   EPANET/WNTR solve it equation-oriented; doing the same avoids tears and
+   gives the reference's own formulation. It is a library, like
+   `difflow.planning`. **Phase 2b (open):** extended-period simulation
+   (tanks, patterns, controls), pump scheduling, water quality (chlorine
+   decay [N5], age), an INP reader, Chezy-Manning, sparse linear algebra for
+   networks much larger than ky10.
+   Original plan: Notebooks:
    roughness calibration and leak localization with `reconcile_network`;
    pump scheduling with tanks. Cross-check target: WNTR/EPANET on the
    EPANET example networks.
