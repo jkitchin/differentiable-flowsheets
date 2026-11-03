@@ -9,7 +9,8 @@ train, a pressure exchanger, water pumps, a levelized-cost-of-water (LCOW)
 model, the seawater RO + pressure exchanger plant built from them,
 distribution networks, thermal desalination (MVC, MED), and conventional
 treatment (sedimentation, filtration, disinfection, GAC), and activated
-sludge wastewater treatment (ASM1, Takács settler, BSM1). A one-page map is in
+sludge wastewater treatment (ASM1, Takács settler, BSM1), and anaerobic
+digestion (ADM1). A one-page map is in
 [Water units at a glance](water-summary.md); the plan for the rest of the
 plugin (distribution networks, conventional treatment, thermal
 desalination, wastewater) is `src/difflow_water/DESIGN.md`.
@@ -721,6 +722,73 @@ references:
 
 ---
 
+(water-adm1)=
+## Wastewater: anaerobic digestion (ADM1)
+
+(op-anaerobicdigester)=
+### AnaerobicDigester
+
+`AnaerobicDigester(ADM1Params())(influent) -> (effluent, biogas, info)`,
+or `anaerobic_digester(influent, params)`. This is ADM1 [W2] as
+implemented for BSM2 by Rosen & Jeppsson [W6]. The report was read, so the
+content is verified. Its features:
+
+- 19 biochemical processes and 24 water-phase states;
+- carbon and nitrogen balances closed through the inorganic carbon and
+  nitrogen states ([W6] 3.1.1, including its revised fractionation and
+  C and N contents);
+- temperature-dependent `K_w`, `K_a,co2`, `K_a,IN`, Henry constants and
+  water vapour pressure;
+- the three gas-phase states.
+
+The formulation is the report's DAE with an algebraic pH: acid-base pairs
+are at equilibrium, and `S_H+` solves electroneutrality. The left side
+increases monotonically in `S_H+`, so the code bisects on `ln S_H+` and
+then takes a value-neutral Newton step for implicit gradients. Gas
+transfer is `kLa (S - K_H p)`, and the gas flow comes from the head-space
+overpressure.
+
+Options, each a choice [W6] discusses:
+
+| Option | Default | Alternative |
+|---|---|---|
+| `gas_flow` | `"compensated"`: `k_p (P_gas - P_atm) P_gas/P_atm`, as [W6] 3.2.4 states for BSM2 and WaterTAP codes it | `"uncompensated"`: `k_p (P_gas - P_atm)`, the form that reproduces [W6]'s own Section 7 results |
+| `pH_inhibition` | `"hill"`: hydrogen-ion Hill functions, the BSM2 choice ([W6] Expression 3) | `"switch"`: Batstone et al.'s `exp(-3((pH - pH_UL)/(pH_UL - pH_LL))^2)` below `pH_UL`, as WaterTAP codes it |
+
+**Start-up and the soured state.** ADM1 has a second steady state: low
+pH, accumulated volatile fatty acids, and acetogens and methanogens washed
+out. The solver integrates 300 days of dynamics before Newton. It starts
+from an inoculum (each biomass group at `inoculum`, default 1 kg COD/m^3)
+with low substrate. A start that copies the influent into the reactor
+(20+ kg COD/m^3 of solids hydrolysing at once) sours, whatever the seed.
+Check `pH` and `gas_fraction_ch4`.
+
+(water-adm1-comparison)=
+### Comparison: Rosen & Jeppsson and WaterTAP
+
+`benchmarks/watertap/compare_adm1.py`:
+
+- **Rosen & Jeppsson [W6] Section 7**, the steady-state verification case
+  (170 m^3/d, 35 C; outputs printed to 13 digits, transcribed in
+  `benchmarks/adm1/report_steady_state.json`). All 24 states, pH, ions and
+  gas states agree to **1.7e-7**, with pH 7.465537770 against 7.465537770,
+  but only with the *uncompensated* gas flow. With the compensated form
+  that the report says BSM2 uses, its own gas balances are off by 5 % at
+  its printed state (q_gas 2956 against 2801 m^3/d). Methane is 60.9 % of
+  the gas (report: "about 61 %").
+- **WaterTAP 1.8.0's ADM1 example** (`flowsheets/anaerobic_digester/
+  ADM1_flowsheet.py`, the same influent). Run with WaterTAP's choices:
+  compensated gas flow, `P_atm = 101325 Pa` and the Batstone pH switch.
+  The largest difference is **2.5e-4**. Most of it is a uniform 1.7e-4
+  offset in the conserved states (`S_I`, `X_I`, `S_cat`), because WaterTAP
+  takes the evaporated water out of the liquid outflow (its outflow is
+  1.7e-4 below its inflow) and difflow does not. A trial of that term gave
+  3.7 times WaterTAP's evaporation, so it was not kept. With the BSM2 Hill
+  function instead, acetate differs by 2.6e-3: at pH 7.47 the Hill
+  function still inhibits acetoclasts by 0.13 %.
+
+---
+
 (water-treatment)=
 ## Conventional treatment
 
@@ -945,8 +1013,8 @@ What the comparison taught:
 
 `ROStage`, `ROTrain`, `PressureExchanger`, `WaterPump`, `MVCDesalinator`,
 `MEDDesalinator`, `GACAdsorber`, `Disinfection`, `Sedimentation`,
-`Filtration`, `ASM1Reactor`, `TakacsSettler` and `ActivatedSludgePlant` are
-palette operations (category `water`) in the difflow editor (`difflow gui`, from the
+`Filtration`, `ASM1Reactor`, `TakacsSettler`, `ActivatedSludgePlant` and
+`AnaerobicDigester` are palette operations (category `water`) in the difflow editor (`difflow gui`, from the
 difflow book), each with its own icon. **Examples > Seawater RO with a
 pressure exchanger** opens the plant above (`10_water_swro`, written by
 `scripts/make_gui_examples.py`), with membrane-wall saturation indices on.
@@ -1040,8 +1108,8 @@ What the comparison taught:
   treatment costing yet.
 - Wastewater: steady state only (no dynamic BSM1 influent files, no
   controllers or performance indices); ASM1 at BSM1's 15 C parameters with
-  no temperature dependence; no ASM2d, ASM3 or ADM1 yet; no aeration energy
-  or costing.
+  no temperature dependence; no ASM2d or ASM3 yet; no aeration energy
+  costing. No ASM1-ADM1 interfaces (the digester takes an ADM1 stream).
 - Thermal: no multi-stage flash (MSF) yet; MED is parallel feed without
   inter-effect preheaters or flash boxes, and has no WaterTAP counterpart to
   compare with; MVC is single-stage. The vapor pressure of seawater and the
@@ -1085,6 +1153,8 @@ source; a design input or placeholder.
 | N7 | Swamee, P.K.; Jain, A.K. "Explicit equations for pipe-flow problems." *J. Hydraul. Div.* **1976**, 102(5), 657--664. doi:10.1061/JYCEAJ.0004542 | Turbulent friction factor | Citation verified (Crossref; the DOI first recalled was wrong). Paper not read; the log10 form is the one that reproduces EPANET (see the network notes). |
 | N8 | Rossman, L.; Woo, H.; Tryby, M.; Shang, F.; Janke, R.; Haxton, T. *EPANET 2.2 User Manual*; EPA/600/R-20/133; U.S. Environmental Protection Agency: Cincinnati, OH, **2020**. Online edition: epanet-manual.readthedocs.io | Network equations (Section 13.1, Table 3.1, pump curves, valve and emitter models, PDD) | Citation verified (report number, authors and title from the EPA PDF cover, via search; no DOI). **Content verified**: equations read in the online edition. Its Swamee-Jain `ln` is a typo (see the network notes). |
 | W5 | Alex, J.; Benedetti, L.; Copp, J.; Gernaey, K.V.; Jeppsson, U.; Nopens, I.; Pons, M.-N.; Rieger, L.; Rosen, C.; Steyer, J.P.; Vanrolleghem, P.; Winkler, S. *Benchmark Simulation Model no. 1 (BSM1)*; Technical report LTH-IEA-7229 (CODEN LUTEDX/(TEIE-7229)/1-62/(2008)); Dept. of Industrial Electrical Engineering and Automation, Lund University, **2008**. No DOI; Lund University record lup.lub.lu.se/record/4391579 | ASM1 (variables, rates, conversion rates, Tables 2-3), the BSM1 plant, the Takács settler (Table 4), the open-loop steady state (Tables 6-7) | **Content verified** (read; PDF from www2.iea.lth.se). Title, authors and report number checked against the Lund record. |
+| W6 | Rosén, C.; Jeppsson, U. *Aspects on ADM1 Implementation within the BSM2 Framework*; Report TEIE-7224 (CODEN LUTEDX/(TEIE-7224)/1-35/(2006)); Dept. of Industrial Electrical Engineering and Automation, Lund University, **2006**. No DOI; Lund University record lup.lub.lu.se/record/588079 | ADM1 as implemented for BSM2: rates, inhibition, balances, acid-base, gas phase, parameters (Section 6), the steady-state verification case (Section 7) | **Content verified** (read; PDF from www2.iea.lth.se). |
+| W2 | Batstone, D.J.; Keller, J.; Angelidaki, I.; Kalyuzhnyi, S.V.; Pavlostathis, S.G.; Rozzi, A.; Sanders, W.T.M.; Siegrist, H.; Vavilin, V.A. "The IWA Anaerobic Digestion Model No 1 (ADM1)." *Water Sci. Technol.* **2002**, 45(10), 65--73. doi:10.2166/wst.2002.0292 | ADM1 origin | Citation verified (Crossref). Not read: ADM1 as [W6] states it. |
 | W1 | Takács, I.; Patry, G.G.; Nolasco, D. "A dynamic model of the clarification-thickening process." *Water Res.* **1991**, 25(10), 1263--1271. doi:10.1016/0043-1354(91)90066-Y | Double-exponential settling velocity, layered settler | Citation verified (Crossref). Not read: the model as [W5] states it. |
 | W3 | Henze, M.; Gujer, W.; Mino, T.; van Loosdrecht, M. *Activated Sludge Models ASM1, ASM2, ASM2d and ASM3*; IWA Scientific and Technical Report No. 9; IWA Publishing, 2000. doi:10.2166/9781780402369 | ASM1 origin | DOI and authors verified (Crossref). Not read: ASM1 as [W5] states it. |
 | A1 | Hand, D.W.; Crittenden, J.C.; Thacker, W.E. "Simplified models for design of fixed-bed adsorption systems." *J. Environ. Eng.* **1984**, 110(2), 440--456. doi:10.1061/(ASCE)0733-9372(1984)110:2(440) | CPHSDM (GAC) | Citation verified (Crossref). Not read: equations and regression form via WaterTAP's code (unverified). |
@@ -1099,4 +1169,4 @@ source; a design input or placeholder.
 | B1 | Akkor, I.; Amusat, O.O.; Vecchiarelli, P.; Gounaris, C.E.; Knueven, B.; Dudchenko, A.V. "Optimization of desalination systems with detailed water chemistry through integration of Reaktoro in WaterTAP." *ACS ES&T Eng.* **2026**, 6(5), 1464--1477. doi:10.1021/acsestengg.5c01008 | WaterTAP (benchmark context) | Citation verified (Crossref) |
 | B2 | Dudchenko, A.; Atia, A.; Bartholomew, T. "WaterTAP: Tool for analysis of water treatment systems." NAWI Alliance Fall Meeting, **2023** (OSTI). doi:10.2172/2447624 | WaterTAP (benchmark) | Citation verified (Crossref). The comparison used WaterTAP 1.8.0 from PyPI. |
 | B3 | Lee, A.; Ghouse, J.H.; Eslick, J.C.; Laird, C.D.; Siirola, J.D.; et al. "The IDAES process modeling framework and model library -- flexibility for process simulation and optimization." *J. Adv. Manuf. Process.* **2021**, 3(3), e10095. doi:10.1002/amp2.10095 | IDAES (pump model, WaterTAP's base) | Citation verified (Crossref) |
-| WT | WaterTAP 1.8.0 source (`seawater_prop_pack.py`, `water_prop_pack.py`, `membrane_channel_base.py`, `reverse_osmosis_1D.py`, `pressure_exchanger.py`, `mvc/`, `flowsheets/mvc/`, `gac.py`, `flowsheets/gac/`, `flowsheets/activated_sludge/`, `costing/`), read from the PyPI wheel | Equations as coded; costing structure and defaults | Read directly (the code, not the papers behind it). |
+| WT | WaterTAP 1.8.0 source (`seawater_prop_pack.py`, `water_prop_pack.py`, `membrane_channel_base.py`, `reverse_osmosis_1D.py`, `pressure_exchanger.py`, `mvc/`, `flowsheets/mvc/`, `gac.py`, `flowsheets/gac/`, `flowsheets/activated_sludge/`, `anaerobic_digester.py`, `flowsheets/anaerobic_digester/`, `costing/`), read from the PyPI wheel | Equations as coded; costing structure and defaults | Read directly (the code, not the papers behind it). |

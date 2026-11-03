@@ -163,6 +163,7 @@ watertap-compare:
 	python benchmarks/watertap/compare_mvc.py
 	python benchmarks/watertap/compare_gac.py
 	python benchmarks/watertap/compare_bsm1.py
+	python benchmarks/watertap/compare_adm1.py
 
 # difflow_water's Pitzer speciation vs PHREEQC (hand-run; reference JSON from
 # benchmarks/phreeqc/seawater_brines.py in a phreeqpython environment)

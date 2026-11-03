@@ -137,6 +137,19 @@ Notes for Claude Code, loaded when working in this directory. The plan is
   are module-level `jax.jit` functions: un-jitted, a sequential flowsheet
   exhausted LLVM's mappable memory.
 
+- ADM1 (`wastewater/adm1.py`): transcribed from Rosen & Jeppsson
+  TEIE-7224 (read); rerun `compare_adm1.py` after a change (report case
+  1.7e-7, WaterTAP 2.5e-4). The report's own Section 7 numbers need
+  `gas_flow="uncompensated"`, although its text says BSM2 compensates (the
+  default, as WaterTAP); keep both. pH: bisection on ln S_H (monotone
+  electroneutrality) + a value-neutral Newton step -- the earlier Newton in
+  ln S_H found S_H = 0.14 at the report's state. The initial state starts
+  substrates near zero with an inoculum: copying the influent into the
+  reactor sours it (pH 5, methanogens washed out), which is a real ADM1
+  steady state, not a bug. WaterTAP's outflow loses evaporated water
+  (1.7e-4 offset); a trial of that term gave 3.7x WaterTAP's evaporation
+  and was dropped -- do not add it back without finding why.
+
 ## Not palette operations
 
 `chemistry`, `economics`, `network`, `swro_performance`/`build_swro_flowsheet`
@@ -144,4 +157,4 @@ are libraries. `mvc_performance`, `med_performance` and the thermal properties a
 libraries too. Palette: `ROStage`, `ROTrain`, `PressureExchanger`,
 `WaterPump`, `MVCDesalinator`, `MEDDesalinator`, `GACAdsorber`,
 `Disinfection`, `Sedimentation`, `Filtration`, `ASM1Reactor`,
-`TakacsSettler`, `ActivatedSludgePlant`.
+`TakacsSettler`, `ActivatedSludgePlant`, `AnaerobicDigester`.

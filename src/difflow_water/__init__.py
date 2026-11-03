@@ -12,7 +12,9 @@ desalination (:mod:`difflow_water.thermal`): mechanical vapor compression
 conventional treatment (:mod:`difflow_water.treatment`): GAC (WaterTAP's
 CPHSDM), disinfection, sedimentation and rapid filtration. Phase 4a:
 wastewater (:mod:`difflow_water.wastewater`): ASM1, the Takacs settler and
-the BSM1 plant (cross-checked against the BSM1 report and WaterTAP).
+the BSM1 plant (cross-checked against the BSM1 report and WaterTAP). Phase
+4b: anaerobic digestion (ADM1, the BSM2 implementation; cross-checked
+against Rosen & Jeppsson's verification case and WaterTAP).
 The plan for the rest (distribution networks, conventional treatment,
 thermal desalination, wastewater) is ``src/difflow_water/DESIGN.md``.
 
@@ -29,7 +31,7 @@ Example:
     True
 """
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 from difflow_water import chemistry, network, thermal, treatment, wastewater
 from difflow_water.chemistry import pitzer, seawater, speciation
@@ -95,12 +97,15 @@ from difflow_water.wastewater import (
     ActivatedSludgeParams,
     ActivatedSludgePlant,
     ActivatedSludgePlantParams,
+    ADM1Params,
+    AnaerobicDigester,
     ASM1Params,
     ASM1Reactor,
     ASM1ReactorParams,
     TakacsSettler,
     TakacsSettlerParams,
     activated_sludge_plant,
+    anaerobic_digester,
     bsm1_influent,
 )
 
@@ -124,6 +129,7 @@ __all__ = [
     "ASM1Reactor", "ASM1ReactorParams", "ASM1Params", "TakacsSettler", "TakacsSettlerParams",
     "ActivatedSludgePlant", "ActivatedSludgePlantParams", "ActivatedSludgeParams",
     "activated_sludge_plant", "bsm1_influent", "wastewater",
+    "AnaerobicDigester", "ADM1Params", "anaerobic_digester",
     # economics
     "CostingParams", "capital_recovery_factor", "cost_ro", "cost_hp_pump", "cost_lp_pump",
     "cost_pressure_exchanger", "lcow",
@@ -168,6 +174,8 @@ def register(registry):
          "Secondary settler: 10-layer Takacs model, steady state (BSM1)"),
         ("ActivatedSludgePlant", ActivatedSludgePlant,
          "BSM1-layout activated sludge plant (ASM1 + Takacs) solved as one block"),
+        ("AnaerobicDigester", AnaerobicDigester,
+         "Anaerobic digester, ADM1 (BSM2 implementation), steady state with biogas"),
     ]:
         registry.register(name=name, cls=cls, category="water",
                           description=description, plugin="difflow_water")

@@ -330,8 +330,15 @@ Each phase finishes with its docs section, summary row, notebook and tests.
    BSM1 sequential flowsheet is documented as a hard recycle (no
    acceleration converges from default tears; Anderson finds the washout
    state) but not added to the core corpus, which would then import a
-   plugin. Steady state only. Next, phase 4b: ADM1 (WaterTAP's anaerobic
-   digester is the comparison) and ASM2d.
+   plugin. Steady state only.
+   **Phase 4b as built**: `wastewater/adm1.py` (ADM1 as implemented for
+   BSM2 by Rosen & Jeppsson 2006 [W6], read: closed C/N balances,
+   temperature-dependent constants, algebraic pH by bisection + implicit
+   step, gas phase; `gas_flow` and `pH_inhibition` options), palette
+   `AnaerobicDigester`, notebook 76, `benchmarks/watertap/adm1.py` +
+   `compare_adm1.py` (their 13-digit verification case within 1.7e-7, with
+   the uncompensated gas flow; WaterTAP's ADM1 example within 2.5e-4).
+   **Not built:** ASM2d (and ASM3), ASM-ADM interfaces, BSM2.
 
 ## 6. References
 

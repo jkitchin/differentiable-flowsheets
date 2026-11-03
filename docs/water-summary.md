@@ -43,6 +43,7 @@ treatment (equations, parameters, references) is in
 | [`MVCDesalinator`, `mvc_performance`](unit-operations-water.md#op-mvcdesalinator) | palette | feed → distillate, brine | WaterTAP's single-stage MVC plant: evaporator, compressor, condenser, preheaters, pumps, costing; one Newton solve | Within 4e-7 of WaterTAP 1.8.0 on every output; its LCOW optimum reproduced with `jax.grad` + SLSQP (1e-7) |
 | [`MEDDesalinator`, `med_performance`](unit-operations-water.md#op-meddesalinator) | palette | feed → distillate, brine | Parallel-feed MED: per-effect mass, salt and energy balances on Sharqawy properties | No WaterTAP counterpart; balances only (no fitted coefficients) |
 | [`ActivatedSludgePlant`, `activated_sludge_plant`](unit-operations-water.md#op-activatedsludgeplant) | palette | influent → effluent, wastage | BSM1: ASM1 reactors + Takács settler, steady state, one equation set | BSM1 report Tables 6-7 within 3.2e-3 (printed digits); WaterTAP's BSM1 example within 1.3e-7 |
+| [`AnaerobicDigester`, `anaerobic_digester`](unit-operations-water.md#op-anaerobicdigester) | palette | influent → effluent, biogas | ADM1 as implemented for BSM2 (Rosen & Jeppsson 2006), algebraic pH, steady state | Their 13-digit verification case within 1.7e-7; WaterTAP's ADM1 example within 2.5e-4 |
 | [`ASM1Reactor`](unit-operations-water.md#op-asm1reactor) | palette | inlet → outlet | ASM1 CSTR at steady state; KLa or DO setpoint | ASM1 read against the BSM1 report |
 | [`TakacsSettler`](unit-operations-water.md#op-takacssettler) | palette | feed → effluent, underflow | 10-layer Takács settler, steady state | As in the BSM1 report (settler profile reproduced) |
 | [`Sedimentation`](unit-operations-water.md#op-sedimentation) | palette | feed → clarified, sludge | Ideal basin, overflow-rate removal, Stokes settling | Derived from the ideal-basin assumptions; Stokes as stated in Messina et al. 2015 (read) |
@@ -91,5 +92,5 @@ still differentiable.
   without an independent cross-check.
 - Treatment: no coagulation, softening, ion exchange, UV or UF/MF; filters
   are clean-bed; no treatment costing.
-- Wastewater: steady state only, ASM1 at 15 C; no ASM2d, ASM3 or ADM1 yet
-  (phase 4b); no aeration energy or costing.
+- Wastewater: steady state only, ASM1 at 15 C; no ASM2d or ASM3 yet; no
+  ASM1-ADM1 interfaces; no costing.

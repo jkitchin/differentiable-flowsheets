@@ -32,7 +32,11 @@ organism (1 mol = 1 organism). Wastewater: ActivatedSludgePlant /
 activated_sludge_plant (BSM1: ASM1 reactors + Takacs settler at steady
 state; bsm1_indices for effluent quality and energy), ASM1Reactor,
 TakacsSettler; ASM1 streams carry F_<state> with 1 mol = 1 g COD or N and
-Q = F_H2O M_w / 1000; bsm1_influent() is BSM1's influent. swro_performance(feed, ro, ro_pressure) gives the seawater RO +
+Q = F_H2O M_w / 1000; bsm1_influent() is BSM1's influent. AnaerobicDigester /
+anaerobic_digester: ADM1 (BSM2 implementation) at steady state: pH, biogas
+(methane fraction, flow); ADM1 streams carry F_<state> = 1000 Q C (kg COD/m^3,
+kmol C or N /m^3); adm1_test_influent() is the BSM2 verification feed.
+swro_performance(feed, ro, ro_pressure) gives the seawater RO +
 pressure exchanger plant's recovery, specific energy and LCOW as one
 differentiable function; build_swro_flowsheet gives the same plant as a
 Flowsheet. Costing follows WaterTAP's default costing package so results
@@ -53,7 +57,9 @@ evaporator_dT_out > 0). Size the preheater areas to the feed (about 4.5 and
 3.9 m^2 per kg/s at WaterTAP's optimum). The BSM1 plant as a sequential
 Flowsheet (build_bsm1_flowsheet) does not converge from default tear guesses
 (the sludge recycle gain is near one; Anderson finds autotroph washout):
-use activated_sludge_plant or pass its states as tear_initial."""
+use activated_sludge_plant or pass its states as tear_initial. ADM1 has a
+soured steady state (pH ~5, no methane): check info['pH'] and
+gas_fraction_ch4; short retention times wash the methanogens out."""
 
 
 def support() -> AgentSupport:

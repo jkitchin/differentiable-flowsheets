@@ -50,6 +50,7 @@ a `Flowsheet` operation. **Library**: called from Python; still differentiable.
 | `ASM1Reactor` | palette | Activated-sludge CSTR, ASM1 (BSM1 parameters), steady state |
 | `TakacsSettler` | palette | 10-layer Takacs secondary settler, steady state |
 | `ActivatedSludgePlant` | palette | The BSM1 plant as one equation-oriented block |
+| `AnaerobicDigester` | palette | ADM1 anaerobic digester (BSM2 implementation) with biogas |
 | `wastewater.activated_sludge_plant`, `bsm1_indices` | library | BSM1 with every output; effluent quality and energy indices |
 | `thermal.mvc_performance`, `thermal.med_performance` | library | The same plants with every output (works, areas, capital, LCOW) |
 | `economics` | library | LCOW and specific energy, WaterTAP's default costing |
