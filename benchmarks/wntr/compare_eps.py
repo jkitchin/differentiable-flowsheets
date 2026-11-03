@@ -51,7 +51,8 @@ def compare(name):
 
 
 def main(names=None):
-    names = names or sorted(p.stem for p in (HERE / "eps").glob("*.json"))
+    all_names = sorted(p.stem for p in (HERE / "inp").glob("*.inp"))
+    names = names or all_names
     rows = [compare(n) for n in names]
     lines = ["| network | report times | solves | max tank level diff (m) | max head diff (m) "
              "| at hour | median head diff (m) | link-status mismatches | seconds |",
@@ -61,7 +62,7 @@ def main(names=None):
                      f"{r['max_dH']:.2e} | {r['worst_h']:.1f} | {r['median_dH']:.1e} | "
                      f"{r['status_mismatches']} | {r['seconds']:.0f} |")
     text = "\n".join(lines) + "\n"
-    if len(names) == len(list((HERE / "eps").glob("*.json"))):
+    if names == all_names:
         (HERE / "eps_comparison.md").write_text(text)
     print(text)
 
