@@ -67,6 +67,11 @@ CASES = {
                           channel_height=1e-3, spacer_porosity=0.85, width=5.0,
                           permeate_pressure=101325.0, px_efficiency=0.95,
                           pump_efficiency=0.8, booster_efficiency=0.8),
+    "px_leak_mix": dict(flow_vol=1e-3, salinity=0.035, T=298.15, P_feed=101325.0, P_ro=65e5,
+                        area=50.0, A_w=4.2e-12, B=3.5e-8, channel_height=1e-3,
+                        spacer_porosity=0.85, width=5.0, permeate_pressure=101325.0,
+                        px_efficiency=0.95, pump_efficiency=0.8, booster_efficiency=0.8,
+                        px_leakage=0.01, px_mixing=0.035),
 }
 
 N_ELEMENTS = 160
@@ -153,7 +158,9 @@ def plant(c, solver):
     fs.P1 = Pump(property_package=fs.properties)
     fs.RO = _ro(m, c)
     fs.S1 = Separator(property_package=fs.properties, outlet_list=["P1", "PXR"])
-    fs.PXR = PressureExchanger(property_package=fs.properties)
+    leak, mix = c.get("px_leakage", 0.0), c.get("px_mixing", 0.0)
+    fs.PXR = PressureExchanger(property_package=fs.properties,
+                               has_leakage=leak > 0, has_mixing=mix > 0)
     fs.P2 = Pump(property_package=fs.properties)
     fs.M1 = Mixer(property_package=fs.properties,
                   momentum_mixing_type=MomentumMixingType.equality, inlet_list=["P1", "P2"])
@@ -197,6 +204,10 @@ def plant(c, solver):
     fs.P1.control_volume.properties_out[0].pressure.fix(c["P_ro"])
     fs.P2.efficiency_pump.fix(c["booster_efficiency"])
     fs.PXR.efficiency_pressure_exchanger.fix(c["px_efficiency"])
+    if leak > 0:
+        fs.PXR.leakage_vol.fix(leak)
+    if mix > 0:
+        fs.PXR.mixing_vol.fix(mix)
     _fix_ro(fs.RO, c)
     dof = degrees_of_freedom(m)
     assert dof == 0, dof
@@ -248,6 +259,10 @@ def plant(c, solver):
         "px_hp_pressure": value(fs.PXR.feed_side.properties_out[0].pressure),
         "product_flow_vol": value(fs.product.properties[0].flow_vol),
         "salinity_product": value(fs.product.properties[0].mass_frac_phase_comp["Liq", "TDS"]),
+        "px_flow_vol_lp": value(fs.PXR.feed_side.properties_in[0].flow_vol),
+        "px_salinity_hp_out": value(
+            fs.PXR.feed_side.properties_out[0].mass_frac_phase_comp["Liq", "TDS"]),
+        "ro_feed_salinity": value(fs.M1.mixed_state[0].mass_frac_phase_comp["Liq", "TDS"]),
     })
     return out
 

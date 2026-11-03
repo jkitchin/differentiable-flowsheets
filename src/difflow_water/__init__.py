@@ -1,8 +1,10 @@
 """difflow_water: water treatment, desalination and networks for difflow.
 
-Phase 1 (this release): seawater properties, a seawater reverse-osmosis
-stage, a pressure exchanger, water pumps, WaterTAP-compatible levelized
-cost of water, and the seawater RO + pressure exchanger flowsheet.
+Phase 1: seawater properties, a seawater reverse-osmosis stage, a pressure
+exchanger, water pumps, WaterTAP-compatible levelized cost of water, and the
+seawater RO + pressure exchanger flowsheet. Phase 1b: a Pitzer activity
+model, seawater/brine speciation and mineral saturation indices (scaling),
+RO trains and pressure-exchanger leakage.
 The plan for the rest (distribution networks, conventional treatment,
 thermal desalination, wastewater) is ``src/difflow_water/DESIGN.md``.
 
@@ -22,7 +24,12 @@ Example:
 __version__ = "0.5.0"
 
 from difflow_water import chemistry
-from difflow_water.chemistry import seawater
+from difflow_water.chemistry import pitzer, seawater, speciation
+from difflow_water.chemistry.speciation import (
+    reference_seawater,
+    seawater_feed,
+    speciate,
+)
 from difflow_water.economics import (
     CostingParams,
     capital_recovery_factor,
@@ -38,6 +45,8 @@ from difflow_water.membranes import (
     PressureExchangerParams,
     ROStage,
     ROStageParams,
+    ROTrain,
+    ROTrainParams,
     local_flux,
 )
 from difflow_water.pumps import WaterPump, WaterPumpParams
@@ -59,13 +68,14 @@ from difflow_water.streams import (
 __all__ = [
     "__version__",
     # chemistry
-    "chemistry", "seawater",
+    "chemistry", "seawater", "pitzer", "speciation", "speciate", "reference_seawater",
+    "seawater_feed",
     # streams
     "WATER", "SALT", "make_seawater_stream", "mass_flow", "mass_flows", "salinity",
     "stream_density", "volumetric_flow", "concentration_mg_per_L", "combine_seawater",
     "to_watertap_state", "from_watertap_state",
     # units
-    "ROStage", "ROStageParams", "local_flux",
+    "ROStage", "ROStageParams", "local_flux", "ROTrain", "ROTrainParams",
     "PressureExchanger", "PressureExchangerParams",
     "WaterPump", "WaterPumpParams",
     # economics
@@ -88,6 +98,8 @@ def register(registry):
     for name, cls, description in [
         ("ROStage", ROStage,
          "Seawater reverse-osmosis stage (solution-diffusion, film theory, plug flow)"),
+        ("ROTrain", ROTrain,
+         "Concentrate-staged train of seawater RO stages with interstage boosters"),
         ("PressureExchanger", PressureExchanger,
          "Isobaric pressure exchanger with feed bypass outlet"),
         ("WaterPump", WaterPump,

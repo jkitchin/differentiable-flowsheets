@@ -1,8 +1,10 @@
 # Water Plugin (difflow_water) - Design Document
 
-Status: **phase 1 implemented** (seawater properties, `ROStage`,
-`PressureExchanger`, `WaterPump`, LCOW, the SWRO + PX plant; WaterTAP
-comparison in `benchmarks/watertap/`, within 0.3 %). Phases 2-4 are plans.
+Status: **phases 1 and 1b implemented** (seawater properties, Pitzer
+speciation and scaling, `ROStage`, `ROTrain`, `PressureExchanger`,
+`WaterPump`, LCOW, the SWRO + PX plant; WaterTAP comparison in
+`benchmarks/watertap/` within 0.3 %, PHREEQC comparison in
+`benchmarks/phreeqc/`). NF and phases 2-4 are plans.
 See "Phase 1 as built" in Section 5. This document is the plan and the
 contract for `difflow_water`: water distribution networks, drinking-water
 treatment, membrane and thermal desalination, wastewater, and the shared
@@ -249,9 +251,15 @@ Each phase finishes with its docs section, summary row, notebook and tests.
    friction), `membranes/erd.py`, `pumps.py`, `economics.py` (WaterTAP 1.8.0
    default costing), `flowsheets.py`, notebook `examples/70_water_swro_design.ipynb`,
    docs `unit-operations-water.md` + `water-summary.md`, tests `tests/water/`.
-   Deferred to **phase 1b**: carbonate chemistry, activity models and scaling
-   indices (the notebook uses a brine-salinity limit instead of a scaling
-   limit), `ROTrain` (multi-stage), NF, pressure-exchanger leakage.
+   **Phase 1b as built** (2026-11-03): `chemistry/pitzer.py` (Harvie-Moller-
+   Weare Pitzer model, equations content-verified against PHRQPITZ 1988),
+   `chemistry/speciation.py` (seawater/brine speciation, pH on the MacInnes
+   scale, saturation indices of 8 minerals; parameters from PHREEQC
+   pitzer.dat; within 0.0004 SI of PHREEQC), `ROStage(scaling=True)`,
+   `ROTrain`, pressure-exchanger leakage (WaterTAP-checked); notebook 70 now
+   optimizes with a calcite scaling limit. `benchmarks/phreeqc/`.
+   Still open: nanofiltration (DSPM-DE), ion-resolved RO transport, Sr/Ba/
+   silica/boron, pressure dependence of K.
 2. **Distribution network** on the `difflow_gas` architecture. Notebooks:
    roughness calibration and leak localization with `reconcile_network`;
    pump scheduling with tanks. Cross-check target: WNTR/EPANET on the

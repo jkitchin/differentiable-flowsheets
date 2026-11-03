@@ -3,11 +3,12 @@
 A pressure exchanger [M5] hands the pressure of the RO concentrate (brine)
 to an equal volume of incoming seawater. The equations are the ones
 WaterTAP 1.8.0's ``PressureExchanger`` uses (efficiency form, optional
-volumetric mixing; leakage is not modelled here):
+volumetric leakage and mixing):
 
 - pressure transfer: ``P_feed,out - P_feed,in = eta (P_brine,in - P_brine,out)``
 - equal low pressures: ``P_brine,out = P_feed,in``
-- equal volumetric flows: ``V_feed,out = V_brine,in``
+- volumetric flows: ``V_feed,out = (1 - L) V_brine,in`` (``L`` the leakage
+  fraction; ``L = 0`` is WaterTAP's equal-flow constraint)
 - mixing: ``C_feed,out = (1 - x) C_feed,in + x C_brine,in`` (mass
   concentration), the salt moving from the brine to the feed side, the
   low-pressure feed volume unchanged.
@@ -18,7 +19,7 @@ third outlet, ``bypass``, which goes to the high-pressure pump. Feeding the
 exchanger the whole plant intake therefore reproduces the usual split
 without a separate splitter whose fraction would have to be iterated.
 
-The efficiency and mixing defaults (0.95, 0) are the values WaterTAP's
+The efficiency, leakage and mixing defaults (0.95, 0, 0) are the values WaterTAP's
 ``RO_with_energy_recovery`` example fixes; they are design inputs, not
 sourced performance data (ILLUSTRATIVE).
 """
@@ -44,10 +45,13 @@ class PressureExchangerParams(ParamsMixin):
         efficiency: Pressure-transfer efficiency ``eta`` (-). ILLUSTRATIVE default.
         mixing: Volumetric mixing fraction ``x`` of brine into the
             pressurized feed (-). ILLUSTRATIVE default.
+        leakage: Volumetric leakage fraction ``L``: the pressurized feed is
+            ``(1 - L)`` times the brine volume (-). ILLUSTRATIVE default.
     """
 
     efficiency: float | Array = 0.95
     mixing: float | Array = 0.0
+    leakage: float | Array = 0.0
 
 
 def _stream_from_vol_and_conc(V, C, T, P) -> Stream:
@@ -77,20 +81,20 @@ class PressureExchanger:
     symbol = "PX"
     equations = [
         r"P^{out}_{f} - P^{in}_{f} = \eta\,(P^{in}_{b} - P^{out}_{b}),\qquad P^{out}_{b} = P^{in}_{f}",
-        r"V^{out}_{f} = V^{in}_{b}",
+        r"V^{out}_{f} = (1 - L)\,V^{in}_{b}",
         r"C^{out}_{f} = (1-x)\,C^{in}_{f} + x\,C^{in}_{b}",
     ]
     assumptions = [
-        "Isothermal; no leakage.",
-        "Equal volumetric flows on the two sides; the feed in excess of the brine volume bypasses.",
+        "Isothermal.",
+        "Pressurized feed volume (1 - L) times the brine volume; the feed in excess of it bypasses.",
         "Mixing moves salt only; the low-pressure side volume is unchanged.",
     ]
     references = [
         "Stover, Desalination 203 (2007) 168-175, doi:10.1016/j.desal.2006.03.528.",
         "WaterTAP 1.8.0 PressureExchanger (equations as coded).",
     ]
-    parameter_symbols = {"efficiency": "eta", "mixing": "x"}
-    parameter_units = {"efficiency": "-", "mixing": "-"}
+    parameter_symbols = {"efficiency": "eta", "mixing": "x", "leakage": "L"}
+    parameter_units = {"efficiency": "-", "mixing": "-", "leakage": "-"}
     outlet_roles = ["hp_feed", "brine", "bypass"]
 
     def __init__(self, params: PressureExchangerParams):
@@ -124,17 +128,19 @@ class PressureExchanger:
         dP_brine = feed["P"] - brine["P"]
         P_hp = feed["P"] - p.efficiency * dP_brine
         C_hp = (1.0 - p.mixing) * Cf + p.mixing * Cb
-        hp = _stream_from_vol_and_conc(Vb, C_hp, Tf, P_hp)
+        V_hp = (1.0 - p.leakage) * Vb
+        hp = _stream_from_vol_and_conc(V_hp, C_hp, Tf, P_hp)
         # salt moved to the feed side leaves the brine; brine volume unchanged
-        salt_moved = Vb * (C_hp - Cf)
+        salt_moved = V_hp * (C_hp - Cf)
         mw_b, ms_b = mass_flows(brine)
         lp = make_stream({WATER: mw_b / MW_WATER, SALT: (ms_b - salt_moved) / MW_SEA_SALT},
                          Tb, feed["P"])
         # the drawn volume leaves the feed at the feed's own composition
-        frac = Vb / Vf
+        frac = V_hp / Vf
         bypass = {k: (v * (1.0 - frac) if k.startswith("F_") else v) for k, v in feed.items()}
         info = {
-            "flow_vol_exchanged": Vb,
+            "flow_vol_exchanged": V_hp,
+            "flow_vol_brine": Vb,
             "bypass_fraction": 1.0 - frac,
             "salinity_hp_feed": sw.salinity_from_mass_concentration(C_hp, Tf),
             "salinity_increase": sw.salinity_from_mass_concentration(C_hp, Tf) - Sf,

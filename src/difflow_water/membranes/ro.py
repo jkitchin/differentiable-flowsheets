@@ -159,6 +159,15 @@ class ROStageParams(ParamsMixin):
         channel_height: Feed-channel height (m).
         spacer_porosity: Spacer porosity (-).
         n_steps: RK4 steps along the membrane area.
+        scaling: Report mineral saturation indices of the concentrate and of
+            the membrane wall at the outlet (Pitzer speciation; adds a few
+            seconds of compile time).
+        feed_totals: Element totals of the feed (mol/kg water, see
+            :mod:`difflow_water.chemistry.speciation`) for ``scaling``; None
+            for Reference-Composition seawater at the feed salinity and
+            ``feed_pH``.
+        feed_pH: Feed pH (MacInnes scale) used when ``feed_totals`` is None
+            (ILLUSTRATIVE default 8.1).
     """
 
     A_w: float | Array
@@ -172,6 +181,9 @@ class ROStageParams(ParamsMixin):
     channel_height: float | Array = 1e-3
     spacer_porosity: float | Array = 0.85
     n_steps: int = 40
+    scaling: bool = False
+    feed_totals: dict | None = None
+    feed_pH: float | Array = 8.1
 
 
 class ROStage:
@@ -212,7 +224,8 @@ class ROStage:
                          "permeate_pressure": "P_p"}
     parameter_units = {"A_w": "m/(s Pa)", "B": "m/s", "area": "m^2", "width": "m",
                        "permeate_pressure": "Pa", "k": "m/s", "pressure_drop": "Pa",
-                       "module_type": "-", "channel_height": "m", "spacer_porosity": "-", "n_steps": "-"}
+                       "module_type": "-", "scaling": "-", "feed_totals": "mol/kg",
+                       "feed_pH": "-", "channel_height": "m", "spacer_porosity": "-", "n_steps": "-"}
     numerical_method = ("RK4 along the area; local flux by bisection with a "
                         "value-neutral Newton step (implicit-function gradients).")
     outlet_roles = ["concentrate", "permeate"]
@@ -261,7 +274,11 @@ class ROStage:
             (feed-side pressure change, Pa, negative), ``flux_mass_water_avg``
             (kg/(m^2 s)), ``max_cp_modulus``, ``Re_in``/``Re_out`` (when the
             channel is modelled), ``min_driving_pressure`` (``P - P_p -
-            pi_m``, Pa, at the outlet) and ``profile``.
+            pi_m``, Pa, at the outlet) and ``profile``. With
+            ``scaling=True`` also ``SI_concentrate`` and ``SI_wall_outlet``
+            (dict of saturation indices per mineral) and ``pH_concentrate``,
+            ``pH_wall_outlet``: every solute is taken as rejected alike
+            (totals scale with the sea-salt molality) and CO2 stays in.
         """
         p = self.params
         if f"F_{WATER}" not in feed or f"F_{SALT}" not in feed:
@@ -334,4 +351,12 @@ class ROStage:
         }
         if calc_k or calc_dp:
             info["Re_in"], info["Re_out"] = Re[0], Re[-1]
+        if p.scaling:
+            from difflow_water.chemistry import speciation as spc
+            tot = p.feed_totals if p.feed_totals is not None else spc.seawater_feed(S_f, p.feed_pH, T)
+            m_f = sw.molality(S_f)
+            for key, S_x in (("SI_concentrate", S_c), ("SI_wall_outlet", flux["S_m"][-1])):
+                r = spc.speciate(spc.concentrate(tot, sw.molality(S_x) / m_f), T)
+                info[key] = r["SI"]
+                info[key.replace("SI", "pH")] = r["pH_macinnes"]
         return conc, perm, info

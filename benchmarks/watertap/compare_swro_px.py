@@ -28,7 +28,7 @@ N_STEPS = 80
 RO_KEYS = ["recovery_mass_water", "recovery_vol", "salinity_permeate",
            "salinity_concentrate", "deltaP", "flux_mass_water_avg", "Re_in", "Re_out"]
 PLANT_KEYS = ["LCOW", "SEC", "work_P1", "work_P2", "px_hp_pressure", "total_capital",
-              "total_operating"]
+              "total_operating", "px_flow_vol_lp", "ro_feed_salinity"]
 
 
 def _ro_params(c):
@@ -46,7 +46,10 @@ def run_case(c) -> tuple[dict, dict]:
     feed = dw.make_seawater_stream(flow_vol=c["flow_vol"], salinity=c["salinity"],
                                    T=c["T"], P=c["P_feed"])
     r = dw.swro_performance(feed, _ro_params(c), c["P_ro"],
-                            px=dw.PressureExchangerParams(efficiency=c["px_efficiency"]),
+                            px=dw.PressureExchangerParams(efficiency=c["px_efficiency"],
+                                                          leakage=c.get("px_leakage", 0.0),
+                                                          mixing=c.get("px_mixing", 0.0)),
+                            n_passes=12 if c.get("px_mixing", 0.0) else 1,
                             pump_efficiency=c["pump_efficiency"],
                             booster_efficiency=c["booster_efficiency"])
     plant = {
@@ -55,6 +58,8 @@ def run_case(c) -> tuple[dict, dict]:
         "px_hp_pressure": float(r["px"]["deltaP_feed"] + c["P_feed"]),
         "total_capital": float(r["costing"]["total_capital"]),
         "total_operating": float(r["costing"]["total_operating"]),
+        "px_flow_vol_lp": float(r["px"]["flow_vol_exchanged"]),
+        "ro_feed_salinity": float(r["ro"]["salinity_feed"]),
     }
     return ro, plant
 

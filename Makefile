@@ -53,7 +53,7 @@ endif
 .PHONY: all notebooks notebooks-force notebooks-bio notebooks-ree notebooks-cc \
         notebooks-bio-force notebooks-ree-force notebooks-cc-force \
         clean test test-durations book book-clean sync \
-        docs-index convergence ask-check watertap-compare
+        docs-index convergence ask-check watertap-compare phreeqc-compare
 
 all: notebooks
 
@@ -160,6 +160,11 @@ convergence:
 # benchmarks/watertap/swro_px.py writes in a WaterTAP environment)
 watertap-compare:
 	python benchmarks/watertap/compare_swro_px.py
+
+# difflow_water's Pitzer speciation vs PHREEQC (hand-run; reference JSON from
+# benchmarks/phreeqc/seawater_brines.py in a phreeqpython environment)
+phreeqc-compare:
+	python benchmarks/phreeqc/compare_seawater_brines.py
 
 # Clean generated files
 clean:

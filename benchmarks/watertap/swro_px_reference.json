@@ -59,7 +59,10 @@
         "work_P2": 378.4398468268373,
         "px_hp_pressure": 5978469.124175296,
         "product_flow_vol": 0.0004199613101297111,
-        "salinity_product": 0.00024262784385179498
+        "salinity_product": 0.00024262784385179498,
+        "px_flow_vol_lp": 0.0005805061435390668,
+        "px_salinity_hp_out": 0.034999999999999996,
+        "ro_feed_salinity": 0.035
       }
     },
     "high_pressure": {
@@ -113,7 +116,10 @@
         "work_P2": 322.1200152855676,
         "px_hp_pressure": 6878399.755348156,
         "product_flow_vol": 0.0005863108592274547,
-        "salinity_product": 0.00034952994561935924
+        "salinity_product": 0.00034952994561935924,
+        "px_flow_vol_lp": 0.00041456871107376804,
+        "px_salinity_hp_out": 0.035,
+        "ro_feed_salinity": 0.035
       }
     },
     "brackish_like": {
@@ -167,7 +173,69 @@
         "work_P2": 327.95619412525684,
         "px_hp_pressure": 2614961.5367272035,
         "product_flow_vol": 0.00031865834747589494,
-        "salinity_product": 0.00013639770294001112
+        "salinity_product": 0.00013639770294001112,
+        "px_flow_vol_lp": 0.000681399341432344,
+        "px_salinity_hp_out": 0.014999999999999998,
+        "ro_feed_salinity": 0.015
+      }
+    },
+    "px_leak_mix": {
+      "inputs": {
+        "flow_vol": 0.001,
+        "salinity": 0.035,
+        "T": 298.15,
+        "P_feed": 101325.0,
+        "P_ro": 6500000.0,
+        "area": 50.0,
+        "A_w": 4.2e-12,
+        "B": 3.5e-08,
+        "channel_height": 0.001,
+        "spacer_porosity": 0.85,
+        "width": 5.0,
+        "permeate_pressure": 101325.0,
+        "px_efficiency": 0.95,
+        "pump_efficiency": 0.8,
+        "booster_efficiency": 0.8,
+        "px_leakage": 0.01,
+        "px_mixing": 0.035
+      },
+      "ro_alone": {
+        "recovery_mass_water": 0.4238297210641573,
+        "recovery_vol": 0.4199613101550365,
+        "salinity_permeate": 0.000242627843854555,
+        "salinity_concentrate": 0.05906319722042725,
+        "deltaP": -212207.5008680285,
+        "flux_mass_water_avg": 0.008372645157299165,
+        "permeate_flow_vol": 0.00041996131015503653,
+        "osmotic_pressure_feed": 1000000.0,
+        "Re_in": 266.87822747553264,
+        "Re_out": 149.10252858531229
+      },
+      "plant": {
+        "ro": {
+          "recovery_mass_water": 0.4178079119293713,
+          "recovery_vol": 0.4139341586752793,
+          "salinity_permeate": 0.00024768175717514705,
+          "salinity_concentrate": 0.05930845625856454,
+          "deltaP": -213612.63507230816,
+          "flux_mass_water_avg": 0.008252472931055948,
+          "permeate_flow_vol": 0.0004139341161242546,
+          "osmotic_pressure_feed": 1000000.0,
+          "Re_in": 266.6755700529582,
+          "Re_out": 150.5892758574332
+        },
+        "LCOW": 0.41634104587324566,
+        "SEC": 2.5054076340150715,
+        "total_capital": 19483.642199020684,
+        "total_operating": 2946.345345627369,
+        "work_P1": 3353.950106459229,
+        "work_P2": 379.51519355769756,
+        "px_hp_pressure": 5977134.246681305,
+        "product_flow_vol": 0.0004139341160971763,
+        "salinity_product": 0.00024768175717514705,
+        "px_flow_vol_lp": 0.0005806694221589026,
+        "px_salinity_hp_out": 0.03586525791961343,
+        "ro_feed_salinity": 0.03550256447325721
       }
     }
   }

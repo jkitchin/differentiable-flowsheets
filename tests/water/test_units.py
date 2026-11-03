@@ -74,3 +74,34 @@ def test_pump_runs_and_differentiates():
 def test_pump_needs_exactly_one_pressure_spec(kw):
     with pytest.raises(ValueError):
         dw.WaterPump(dw.WaterPumpParams(**kw))
+
+
+def test_ro_stage_reports_saturation_indices():
+    _, _, info = dw.ROStage(dw.ROStageParams(**RO, scaling=True))(_feed())
+    for key in ("SI_concentrate", "SI_wall_outlet"):
+        assert all(jnp.isfinite(v) for v in info[key].values()), key
+
+
+def test_ro_train_runs_and_differentiates():
+    s = dw.ROStageParams(**{**RO, "area": 30.0})
+    conc, perm, info = dw.ROTrain(dw.ROTrainParams(stages=[s, s], boost=[5e5]))(_feed())
+    assert len(info["stages"]) == 2 and jnp.isfinite(info["recovery_mass_water"])
+
+    def rec(boost):
+        t = dw.ROTrain(dw.ROTrainParams(stages=[s, s], boost=[boost]))
+        return t(_feed())[2]["recovery_mass_water"]
+    assert jnp.isfinite(jax.grad(rec)(5e5))
+
+
+@pytest.mark.parametrize("kw", [{"stages": []}, {"boost": [1e5, 1e5]}])
+def test_ro_train_input_validation(kw):
+    s = dw.ROStageParams(**RO)
+    with pytest.raises(ValueError):
+        dw.ROTrain(dw.ROTrainParams(**{"stages": [s, s], **kw}))
+
+
+def test_pressure_exchanger_with_leakage_runs():
+    brine = dw.make_seawater_stream(flow_vol=5e-4, salinity=0.07, P=60e5)
+    feed = dw.make_seawater_stream(flow_vol=1e-3, salinity=0.035, P=2e5)
+    hp, _, _, info = dw.PressureExchanger(dw.PressureExchangerParams(leakage=0.01))(brine, feed)
+    assert jnp.isfinite(hp["F_H2O"]) and jnp.isfinite(info["flow_vol_exchanged"])

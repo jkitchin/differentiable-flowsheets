@@ -45,7 +45,20 @@ Notes for Claude Code, loaded when working in this directory. The plan is
   CRF 0.1, utilization 0.9, electricity 0.07 USD/kWh, year = 365.25 d,
   pump work costed as electricity). Change defaults only with WaterTAP.
 
+- Pitzer chemistry (`chemistry/pitzer.py`, `speciation.py`): equations from
+  PHRQPITZ (Plummer et al. 1988), content verified; parameters in
+  `chemistry/data/pitzer_seawater.py` are GENERATED from PHREEQC pitzer.dat
+  by `benchmarks/phreeqc/gen_pitzer_data.py` -- regenerate, never hand-edit.
+  `A_phi` uses the defining Eq. 4 with CODATA constants (PHRQPITZ's printed
+  Eq. 5 constant is inconsistent; using it put NaCl gamma 0.2 % off PHREEQC).
+  PHREEQC prints and reads pH on the MacInnes scale: compare `pH_macinnes`.
+  After changing the chemistry, rerun `make phreeqc-compare` (SI within
+  ~4e-4 of PHREEQC is the current state).
+- Compile time matters (180 s per-test budget): the Chebyshev recursion is
+  a `lax.scan`, the gamma passes a `fori_loop`, and `_speciate` is jitted.
+  Unrolling them again tripled the gradient compile time.
+
 ## Not palette operations
 
 `chemistry`, `economics`, `swro_performance`/`build_swro_flowsheet` are
-libraries. Palette: `ROStage`, `PressureExchanger`, `WaterPump`.
+libraries. Palette: `ROStage`, `ROTrain`, `PressureExchanger`, `WaterPump`.

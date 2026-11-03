@@ -1,10 +1,13 @@
 """Water chemistry for difflow_water (a library, not palette operations).
 
-Phase 1 provides seawater properties (:mod:`difflow_water.chemistry.seawater`).
-Carbonate equilibria, activity models and scaling indices are planned
-(see ``src/difflow_water/DESIGN.md``) and are not here yet.
+- :mod:`~difflow_water.chemistry.seawater`: seawater physical properties
+  (Sharqawy et al. 2010).
+- :mod:`~difflow_water.chemistry.pitzer`: Pitzer activity model (HMW form
+  as in PHRQPITZ; parameters from PHREEQC pitzer.dat).
+- :mod:`~difflow_water.chemistry.speciation`: seawater/brine speciation,
+  alkalinity, pH and mineral saturation indices.
 """
 
-from difflow_water.chemistry import seawater
+from difflow_water.chemistry import pitzer, seawater, speciation
 
-__all__ = ["seawater"]
+__all__ = ["seawater", "pitzer", "speciation"]

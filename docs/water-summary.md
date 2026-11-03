@@ -8,14 +8,14 @@ treatment (equations, parameters, references) is in
 ---
 
 (water-summary-map)=
-## How the units connect (phase 1)
+## How the units connect (phases 1 and 1b)
 
 ```
  intake seawater (H2O + TDS)
         │
         ▼
  PressureExchanger ──bypass──► WaterPump (HP) ──┐
-   ▲      │                                     ├─► ROStage ──► permeate (product)
+   ▲      │                                     ├─► ROStage / ROTrain ──► permeate (product)
    │      └──hp_feed──► WaterPump (booster) ────┘       │
    │                                                    │
    └──────────────── concentrate ◄──────────────────────┘
@@ -33,8 +33,10 @@ treatment (equations, parameters, references) is in
 | Unit | Kind | In → out | Model | Validated how |
 |---|---|---|---|---|
 | [`seawater` properties](unit-operations-water.md#water-seawater-properties) | library | (T, S) → ρ, μ, φ, π | Sharqawy et al. 2010 Eqs. 8, 22, 23, 49 | Coefficients read against the paper (content verified); WaterTAP uses the same equations |
-| [`ROStage`](unit-operations-water.md#op-rostage) | palette | feed → concentrate, permeate | Solution-diffusion, film theory, plug flow; WaterTAP channel correlations | Within 0.3 % of WaterTAP RO1D (160 elements) on three cases |
-| [`PressureExchanger`](unit-operations-water.md#op-pressureexchanger) | palette | brine, feed → hp_feed, brine, bypass | Efficiency form, equal volumes, optional mixing | Within 0.02 % (outlet pressure) of WaterTAP in the plant |
+| [Pitzer chemistry, `speciate`](unit-operations-water.md#water-chemistry) | library | element totals, T → speciation, pH, saturation indices | Harvie-Møller-Weare Pitzer model as in PHRQPITZ; PHREEQC pitzer.dat parameters | Equations read against PHRQPITZ (content verified); SI within 0.0004 and pH within 3e-5 of PHREEQC, seawater to 3x concentrate, 15-35 C |
+| [`ROStage`](unit-operations-water.md#op-rostage) | palette | feed → concentrate, permeate | Solution-diffusion, film theory, plug flow; WaterTAP channel correlations; optional saturation indices | Within 0.3 % of WaterTAP RO1D (160 elements) on four cases |
+| [`ROTrain`](unit-operations-water.md#op-rotrain) | palette | feed → concentrate, permeate | ROStages in series with interstage boosters | No physics of its own |
+| [`PressureExchanger`](unit-operations-water.md#op-pressureexchanger) | palette | brine, feed → hp_feed, brine, bypass | Efficiency form, optional leakage and mixing | Within 0.02 % (outlet pressure) of WaterTAP in the plant, with and without leakage/mixing |
 | [`WaterPump`](unit-operations-water.md#op-waterpump) | palette | inlet → outlet | Isothermal, `V dP / eta` | Within 0.24 % of WaterTAP in the plant |
 | [`economics`](unit-operations-water.md#water-costing) | library | sizes, power, product flow → LCOW, SEC | WaterTAP 1.8.0 costing structure and defaults | LCOW within 0.16 % of WaterTAP |
 | [`swro_performance` / `build_swro_flowsheet`](unit-operations-water.md#water-swro) | library | intake → LCOW, SEC, recovery, ... | The plant above | Against WaterTAP's `RO_with_energy_recovery` layout |
@@ -55,6 +57,8 @@ still differentiable.
   not the physics against a plant. The channel correlations behind the
   mass-transfer coefficient and pressure drop are WaterTAP's and are
   unverified against their papers.
+- **Scaling**: the Pitzer equations are checked against their source and
+  the numbers against PHREEQC; the parameters themselves are PHREEQC's.
 - **Costs**: WaterTAP's default parameters, a benchmark convention, not a
   cost estimate for a real plant.
 
@@ -63,6 +67,9 @@ still differentiable.
 (water-summary-gaps)=
 ## Known gaps
 
-- Seawater only; no ion speciation, carbonate chemistry or scaling limits yet.
+- RO transports sea salt as one solute; ions are resolved only for scaling
+  (equal rejection assumed). Saturation indices are at 1 atm, without
+  kinetics; no Sr, Ba, silica or boron.
+- No nanofiltration yet.
 - No distribution networks, conventional treatment, thermal desalination or
   wastewater yet (`src/difflow_water/DESIGN.md`, phases 2-4).
