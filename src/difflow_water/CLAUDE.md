@@ -123,10 +123,25 @@ Notes for Claude Code, loaded when working in this directory. The plan is
   checked against a readable source). Do not use a browser or other means
   to get past publishers' bot checks for papers.
 
+- Wastewater (`wastewater/`): ASM1, the settler and the plant are
+  transcribed from the BSM1 report (LTH-IEA-7229, read); rerun
+  `compare_bsm1.py` after a change (WaterTAP 1.3e-7, report 3.2e-3 = its
+  printed digits). Steady states are found by integrating the dynamics
+  (diffrax Kvaerno5, `ForwardMode` adjoint) with EVERY input
+  stop-gradiented (`_sg` for params; the reactor/settler `f_sg`), then a
+  Newton polish carries the gradients: keep both halves, or forward mode
+  breaks (custom_vjp) or gradients flow through the settle phase. A bare
+  Newton from the guess finds the autotroph-washout state; do not
+  "simplify" the settle phase away. The settler feed layer loses
+  `(v_up + v_dn) X` (confirmed by Table 7). The reactor and settler solves
+  are module-level `jax.jit` functions: un-jitted, a sequential flowsheet
+  exhausted LLVM's mappable memory.
+
 ## Not palette operations
 
 `chemistry`, `economics`, `network`, `swro_performance`/`build_swro_flowsheet`
 are libraries. `mvc_performance`, `med_performance` and the thermal properties are
 libraries too. Palette: `ROStage`, `ROTrain`, `PressureExchanger`,
 `WaterPump`, `MVCDesalinator`, `MEDDesalinator`, `GACAdsorber`,
-`Disinfection`, `Sedimentation`, `Filtration`.
+`Disinfection`, `Sedimentation`, `Filtration`, `ASM1Reactor`,
+`TakacsSettler`, `ActivatedSludgePlant`.

@@ -42,6 +42,9 @@ treatment (equations, parameters, references) is in
 | [`network`: `WaterNetwork`, `NetworkModel`](unit-operations-water.md#water-network) | library | network, demands, leaks, settings → heads, pressures, flows | EPANET 2.2 equations, equation-oriented Newton; valves as complementarity (sharp or smooth); INP reader; extended-period simulation with controls | Within 2.7e-5 m (Net1, Net3) and 1.6e-3 m (ky10, 920 junctions) of EPANET 2.2; over 24 h / 7 days, tank levels within 1e-4 m (Net1) / 3.4e-2 m (Net3), statuses identical; chlorine within 0.01 mg/L, age 0.16 h (Net1); pump energy and differentiable speed schedules |
 | [`MVCDesalinator`, `mvc_performance`](unit-operations-water.md#op-mvcdesalinator) | palette | feed → distillate, brine | WaterTAP's single-stage MVC plant: evaporator, compressor, condenser, preheaters, pumps, costing; one Newton solve | Within 4e-7 of WaterTAP 1.8.0 on every output; its LCOW optimum reproduced with `jax.grad` + SLSQP (1e-7) |
 | [`MEDDesalinator`, `med_performance`](unit-operations-water.md#op-meddesalinator) | palette | feed → distillate, brine | Parallel-feed MED: per-effect mass, salt and energy balances on Sharqawy properties | No WaterTAP counterpart; balances only (no fitted coefficients) |
+| [`ActivatedSludgePlant`, `activated_sludge_plant`](unit-operations-water.md#op-activatedsludgeplant) | palette | influent → effluent, wastage | BSM1: ASM1 reactors + Takács settler, steady state, one equation set | BSM1 report Tables 6-7 within 3.2e-3 (printed digits); WaterTAP's BSM1 example within 1.3e-7 |
+| [`ASM1Reactor`](unit-operations-water.md#op-asm1reactor) | palette | inlet → outlet | ASM1 CSTR at steady state; KLa or DO setpoint | ASM1 read against the BSM1 report |
+| [`TakacsSettler`](unit-operations-water.md#op-takacssettler) | palette | feed → effluent, underflow | 10-layer Takács settler, steady state | As in the BSM1 report (settler profile reproduced) |
 | [`Sedimentation`](unit-operations-water.md#op-sedimentation) | palette | feed → clarified, sludge | Ideal basin, overflow-rate removal, Stokes settling | Derived from the ideal-basin assumptions; Stokes as stated in Messina et al. 2015 (read) |
 | [`Filtration`](unit-operations-water.md#op-filtration) | palette | feed → filtrate, retained | Yao colloid filtration (clean bed), Carman-Kozeny head loss | Yao's efficiency cross-checked against Messina et al. 2015; no independent numerical check |
 | [`Disinfection`](unit-operations-water.md#op-disinfection) | palette | feed → treated | Chick-Watson in CSTRs in series; CT, log inactivation | Standard law; papers not read; rate constants are inputs |
@@ -88,4 +91,5 @@ still differentiable.
   without an independent cross-check.
 - Treatment: no coagulation, softening, ion exchange, UV or UF/MF; filters
   are clean-bed; no treatment costing.
-- No wastewater yet (`src/difflow_water/DESIGN.md`, phase 4).
+- Wastewater: steady state only, ASM1 at 15 C; no ASM2d, ASM3 or ADM1 yet
+  (phase 4b); no aeration energy or costing.

@@ -8,7 +8,8 @@ indices (scaling), a seawater reverse-osmosis (RO) stage and multi-stage
 train, a pressure exchanger, water pumps, a levelized-cost-of-water (LCOW)
 model, the seawater RO + pressure exchanger plant built from them,
 distribution networks, thermal desalination (MVC, MED), and conventional
-treatment (sedimentation, filtration, disinfection, GAC). A one-page map is in
+treatment (sedimentation, filtration, disinfection, GAC), and activated
+sludge wastewater treatment (ASM1, Takács settler, BSM1). A one-page map is in
 [Water units at a glance](water-summary.md); the plan for the rest of the
 plugin (distribution networks, conventional treatment, thermal
 desalination, wastewater) is `src/difflow_water/DESIGN.md`.
@@ -603,6 +604,123 @@ closed links and EPANET to the pump's suction.
 
 ---
 
+(water-wastewater)=
+## Wastewater: activated sludge (ASM1, BSM1)
+
+`difflow_water.wastewater` covers municipal activated sludge: the ASM1
+kinetics, a steady-state ASM1 reactor, the Takács secondary settler, and
+the Benchmark Simulation Model no. 1 (BSM1) plant. All of it is
+transcribed from the BSM1 technical report [W5], which states ASM1 in full
+(variables, the eight process rates, the conversion rates, the
+parameters), the settler and the plant. The report was read, so the
+content is verified. ASM1 itself is Henze et al. 1987, restated in [W3],
+which was not read.
+
+Stream convention: plain streams, with `F_H2O` (it carries the volume,
+`Q = F_H2O M_w / 1000`) and one `F_<state>` per ASM1 state with
+`1 mol = 1 g` of COD or N (`S_ALK`: a real mole), so that
+`F_<state> = Q C`. `bsm1_influent()` is the BSM1 constant influent ([W5]
+Table 5).
+
+| Function / unit | What it is |
+|---|---|
+| `conversion_rates(Z, ASM1Params())` | ASM1's 13 conversion rates (g/m^3/d), BSM1 parameters at about 15 C |
+| `ASM1Reactor` | one completely mixed ASM1 reactor at steady state; aeration by `KLa` or a DO setpoint |
+| `TakacsSettler` | 10-layer non-reactive settler with the Takács double-exponential settling velocity [W1, W5]; given underflow |
+| `ActivatedSludgePlant` / `activated_sludge_plant` | the BSM1 plant (2 anoxic + 3 aerobic reactors, internal and external recycle, Takács settler) as one equation set |
+| `build_bsm1_flowsheet()` | the same plant as a difflow `Flowsheet` of the palette units, with two recycle tears |
+
+(op-asm1reactor)=
+### ASM1Reactor
+
+`ASM1Reactor(ASM1ReactorParams(volume=..., KLa=...))(inlet) -> (outlet, info)`:
+`0 = Q (Z_in - Z)/V + r(Z) + KLa (S_O* - S_O)` (for oxygen; `S_O* = 8
+g/m^3`), or `S_O` held at `DO_setpoint` with the aeration it needs
+reported. The kinetic parameters are fields of the params (BSM1 values by
+default). `info` has the state, the conversion rates and the aeration.
+
+(op-takacssettler)=
+### TakacsSettler
+
+`TakacsSettler(TakacsSettlerParams(Q_underflow=...))(feed) -> (effluent,
+underflow, info)`: the BSM1 settler ([W5] 2.3.3) at steady state. The
+settling velocity is `v_s = max(0, min(v0', v0 (e^{-r_h (X - X_min)} -
+e^{-r_p (X - X_min)})))` with `X_min = f_ns X_f`. Fluxes between layers
+are limited by `min(J_s,m, J_s,m+-1)`, and above the feed layer by the
+threshold `X_t`. Solubles pass unchanged, and particulates keep the feed's
+fractions. `info["solids"]` is the layer profile, bottom first.
+
+(op-activatedsludgeplant)=
+### ActivatedSludgePlant
+
+`ActivatedSludgePlant(ActivatedSludgePlantParams())(influent) -> (effluent,
+wastage, info)`, or `activated_sludge_plant(influent,
+ActivatedSludgeParams(...))` for any number of reactors, DO setpoints and
+the split clarifier. The result has the reactor states, the settler
+profile, the flows, the aeration per reactor, the sludge age (on biomass,
+[W5] 2.3.3) and the effluent TSS.
+
+**Solving.** A steady state is found the way BSM1 prescribes ([W5]
+Section 3). The dynamics are integrated with constant influent from a
+generic sludge state (diffrax Kvaerno5, adaptive): 200 days for the plant,
+20 residence times for a reactor, 50 days for the settler. Newton
+(optimistix) then polishes the result, so gradients come from the
+implicit-function theorem at the steady state. Starting Newton directly
+from the guess can find the *autotroph washout* steady state (no
+nitrification), which also solves the equations; following the dynamics
+avoids it. The settler's feed-layer balance has `(v_up + v_dn) X` leaving
+the layer. This is the mass-conservative form (the sign in the extracted
+report text is garbled), and the agreement with [W5] Table 7 confirms it.
+
+**Performance indices.** `bsm1_indices(result, params)` gives the BSM1
+report's effluent COD, BOD5, TSS, Kjeldahl and total nitrogen, the
+effluent quality index EQ (Table 10 weights), and the aeration energy
+`AE = S_O,sat / 1.8e3 sum V_i KLa_i` and pumping energy
+`PE = 0.004 Q_a + 0.008 Q_r + 0.05 Q_w` (kWh/d). These are [W5] Section 6
+at steady state; reactors on a DO setpoint are left out of AE. It also
+gives the margins to the Table 9 limits.
+
+**As a sequential flowsheet: a hard recycle.** `build_bsm1_flowsheet()`
+builds the same plant from the palette units: a mixer, five
+`ASM1Reactor`s, splitters and the `TakacsSettler`, with two tear streams.
+From the default tear guesses none of `Flowsheet.solve`'s accelerations
+reaches the steady state within 150 iterations:
+
+| Acceleration | After 150 iterations |
+|---|---|
+| Wegstein | NaN |
+| Anderson | the autotroph-washout state (X_BA about 1e-40) |
+| plain substitution | still creeping (X_BA 0.075 against 150) |
+
+The sludge recycle has a loop gain close to one, since the sludge age is
+about 9 days and each pass is about 0.6 days, and the washout state is a
+second fixed point. Started from the equation-oriented answer, the
+sequential flowsheet reproduces it to 1e-15. Use `ActivatedSludgePlant` /
+`activated_sludge_plant`, or pass its states as `tear_initial`. This
+case is documented here and not added to the core convergence corpus,
+which would then have to import a plugin.
+
+### Comparison: the BSM1 report and WaterTAP
+
+`benchmarks/watertap/compare_bsm1.py` checks the plant against two
+references:
+
+- **The BSM1 report** ([W5] Tables 6-7, open-loop steady state:
+  `Q_a = 55338`, `KLa = 0, 0, 240, 240, 84 1/d`; transcribed in
+  `benchmarks/bsm1/report_tables.json`). All 13 states of the 5 reactors,
+  the reactor TSS and the 10 settler layers agree to **3.2e-3** relative,
+  within the tables' 3-4 printed digits. The sludge age is 9.14 d
+  (report: "about 9 days").
+- **WaterTAP 1.8.0's BSM1 example** (`flowsheets/activated_sludge/
+  ASM1_flowsheet.py`). WaterTAP's clarifier is a component-split separator
+  rather than a settler model, so difflow runs it with `settler="split"`,
+  WaterTAP's split fractions and its recycle fractions converted to flows,
+  `KLa = 240 1/d` in reactors 3-4 and DO held at 0.449 g/m^3 in reactor 5.
+  Every state of the 5 reactors, the effluent and the wastage agrees to
+  **1.3e-7**.
+
+---
+
 (water-treatment)=
 ## Conventional treatment
 
@@ -826,8 +944,9 @@ What the comparison taught:
 ## In the editor
 
 `ROStage`, `ROTrain`, `PressureExchanger`, `WaterPump`, `MVCDesalinator`,
-`MEDDesalinator`, `GACAdsorber`, `Disinfection`, `Sedimentation` and
-`Filtration` are palette operations (category `water`) in the difflow editor (`difflow gui`, from the
+`MEDDesalinator`, `GACAdsorber`, `Disinfection`, `Sedimentation`,
+`Filtration`, `ASM1Reactor`, `TakacsSettler` and `ActivatedSludgePlant` are
+palette operations (category `water`) in the difflow editor (`difflow gui`, from the
 difflow book), each with its own icon. **Examples > Seawater RO with a
 pressure exchanger** opens the plant above (`10_water_swro`, written by
 `scripts/make_gui_examples.py`), with membrane-wall saturation indices on.
@@ -919,6 +1038,10 @@ What the comparison taught:
   stripping, UV or membrane filtration (UF/MF); clean-bed filtration only;
   Chick-Watson constants and GAC regression constants are inputs; no
   treatment costing yet.
+- Wastewater: steady state only (no dynamic BSM1 influent files, no
+  controllers or performance indices); ASM1 at BSM1's 15 C parameters with
+  no temperature dependence; no ASM2d, ASM3 or ADM1 yet; no aeration energy
+  or costing.
 - Thermal: no multi-stage flash (MSF) yet; MED is parallel feed without
   inter-effect preheaters or flash boxes, and has no WaterTAP counterpart to
   compare with; MVC is single-stage. The vapor pressure of seawater and the
@@ -961,6 +1084,9 @@ source; a design input or placeholder.
 | N3 | Wagner, J.M.; Shamir, U.; Marks, D.H. "Water distribution reliability: simulation methods." *J. Water Resour. Plann. Manage.* **1988**, 114(3), 276--294. doi:10.1061/(ASCE)0733-9496(1988)114:3(276) | Pressure-driven demand | Citation verified (Crossref). The equation is EPANET's form ([N8] Eq. 13.6, content verified there), not read in this paper. |
 | N7 | Swamee, P.K.; Jain, A.K. "Explicit equations for pipe-flow problems." *J. Hydraul. Div.* **1976**, 102(5), 657--664. doi:10.1061/JYCEAJ.0004542 | Turbulent friction factor | Citation verified (Crossref; the DOI first recalled was wrong). Paper not read; the log10 form is the one that reproduces EPANET (see the network notes). |
 | N8 | Rossman, L.; Woo, H.; Tryby, M.; Shang, F.; Janke, R.; Haxton, T. *EPANET 2.2 User Manual*; EPA/600/R-20/133; U.S. Environmental Protection Agency: Cincinnati, OH, **2020**. Online edition: epanet-manual.readthedocs.io | Network equations (Section 13.1, Table 3.1, pump curves, valve and emitter models, PDD) | Citation verified (report number, authors and title from the EPA PDF cover, via search; no DOI). **Content verified**: equations read in the online edition. Its Swamee-Jain `ln` is a typo (see the network notes). |
+| W5 | Alex, J.; Benedetti, L.; Copp, J.; Gernaey, K.V.; Jeppsson, U.; Nopens, I.; Pons, M.-N.; Rieger, L.; Rosen, C.; Steyer, J.P.; Vanrolleghem, P.; Winkler, S. *Benchmark Simulation Model no. 1 (BSM1)*; Technical report LTH-IEA-7229 (CODEN LUTEDX/(TEIE-7229)/1-62/(2008)); Dept. of Industrial Electrical Engineering and Automation, Lund University, **2008**. No DOI; Lund University record lup.lub.lu.se/record/4391579 | ASM1 (variables, rates, conversion rates, Tables 2-3), the BSM1 plant, the Takács settler (Table 4), the open-loop steady state (Tables 6-7) | **Content verified** (read; PDF from www2.iea.lth.se). Title, authors and report number checked against the Lund record. |
+| W1 | Takács, I.; Patry, G.G.; Nolasco, D. "A dynamic model of the clarification-thickening process." *Water Res.* **1991**, 25(10), 1263--1271. doi:10.1016/0043-1354(91)90066-Y | Double-exponential settling velocity, layered settler | Citation verified (Crossref). Not read: the model as [W5] states it. |
+| W3 | Henze, M.; Gujer, W.; Mino, T.; van Loosdrecht, M. *Activated Sludge Models ASM1, ASM2, ASM2d and ASM3*; IWA Scientific and Technical Report No. 9; IWA Publishing, 2000. doi:10.2166/9781780402369 | ASM1 origin | DOI and authors verified (Crossref). Not read: ASM1 as [W5] states it. |
 | A1 | Hand, D.W.; Crittenden, J.C.; Thacker, W.E. "Simplified models for design of fixed-bed adsorption systems." *J. Environ. Eng.* **1984**, 110(2), 440--456. doi:10.1061/(ASCE)0733-9372(1984)110:2(440) | CPHSDM (GAC) | Citation verified (Crossref). Not read: equations and regression form via WaterTAP's code (unverified). |
 | K1 | Chick, H. "An investigation of the laws of disinfection." *J. Hyg.* **1908**, 8(1), 92--158. doi:10.1017/S0022172400006987 | First-order inactivation | Citation verified (Crossref). Not read (unverified). |
 | K2 | Watson, H.E. "A note on the variation of the rate of disinfection with change in the concentration of the disinfectant." *J. Hyg.* **1908**, 8(4), 536--542. doi:10.1017/S0022172400015928 | Concentration exponent | Citation verified (Crossref). Not read (unverified). |
@@ -973,4 +1099,4 @@ source; a design input or placeholder.
 | B1 | Akkor, I.; Amusat, O.O.; Vecchiarelli, P.; Gounaris, C.E.; Knueven, B.; Dudchenko, A.V. "Optimization of desalination systems with detailed water chemistry through integration of Reaktoro in WaterTAP." *ACS ES&T Eng.* **2026**, 6(5), 1464--1477. doi:10.1021/acsestengg.5c01008 | WaterTAP (benchmark context) | Citation verified (Crossref) |
 | B2 | Dudchenko, A.; Atia, A.; Bartholomew, T. "WaterTAP: Tool for analysis of water treatment systems." NAWI Alliance Fall Meeting, **2023** (OSTI). doi:10.2172/2447624 | WaterTAP (benchmark) | Citation verified (Crossref). The comparison used WaterTAP 1.8.0 from PyPI. |
 | B3 | Lee, A.; Ghouse, J.H.; Eslick, J.C.; Laird, C.D.; Siirola, J.D.; et al. "The IDAES process modeling framework and model library -- flexibility for process simulation and optimization." *J. Adv. Manuf. Process.* **2021**, 3(3), e10095. doi:10.1002/amp2.10095 | IDAES (pump model, WaterTAP's base) | Citation verified (Crossref) |
-| WT | WaterTAP 1.8.0 source (`seawater_prop_pack.py`, `water_prop_pack.py`, `membrane_channel_base.py`, `reverse_osmosis_1D.py`, `pressure_exchanger.py`, `mvc/`, `flowsheets/mvc/`, `gac.py`, `flowsheets/gac/`, `costing/`), read from the PyPI wheel | Equations as coded; costing structure and defaults | Read directly (the code, not the papers behind it). |
+| WT | WaterTAP 1.8.0 source (`seawater_prop_pack.py`, `water_prop_pack.py`, `membrane_channel_base.py`, `reverse_osmosis_1D.py`, `pressure_exchanger.py`, `mvc/`, `flowsheets/mvc/`, `gac.py`, `flowsheets/gac/`, `flowsheets/activated_sludge/`, `costing/`), read from the PyPI wheel | Equations as coded; costing structure and defaults | Read directly (the code, not the papers behind it). |

@@ -12,6 +12,8 @@ difflow dependency, and the tests do not compare against reference data).
 | `mvc.py` | a WaterTAP environment | Runs WaterTAP's single-stage MVC flowsheet (`flowsheets/mvc/mvc_single_stage.py`: its LCOW optimum, then simulations at fixed designs); writes `mvc_reference.json`. |
 | `gac.py` | a WaterTAP environment | Runs WaterTAP's example GAC flowsheet (`flowsheets/gac/gac.py`, fixed `kf`, `ds`) at four inputs; writes `gac_reference.json`. |
 | `compare_gac.py` | the difflow environment | Runs `GACAdsorber` on the same inputs; writes `gac_comparison.md`. |
+| `bsm1.py` | a WaterTAP environment | Runs WaterTAP's BSM1 example (`flowsheets/activated_sludge/ASM1_flowsheet.py`); writes `bsm1_reference.json`. |
+| `compare_bsm1.py` | the difflow environment | Runs `activated_sludge_plant` against it (split clarifier) and against the BSM1 report's Tables 6-7 (`benchmarks/bsm1/`, Takacs settler); writes `bsm1_comparison.md`. |
 | `compare_mvc.py` | the difflow environment | Runs `difflow_water.thermal.mvc_performance` on the same designs and repeats the LCOW optimization with SLSQP and `jax.grad`; writes `mvc_comparison.md`. |
 
 ```bash
@@ -19,6 +21,7 @@ python -m venv wtenv && wtenv/bin/pip install watertap==1.8.0 && wtenv/bin/idaes
 wtenv/bin/python benchmarks/watertap/swro_px.py
 wtenv/bin/python benchmarks/watertap/mvc.py
 wtenv/bin/python benchmarks/watertap/gac.py
+wtenv/bin/python benchmarks/watertap/bsm1.py
 make watertap-compare
 ```
 

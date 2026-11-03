@@ -10,7 +10,9 @@ differentiably, cross-checked against EPANET 2.2. Phase 3a: thermal
 desalination (:mod:`difflow_water.thermal`): mechanical vapor compression
 (cross-checked against WaterTAP) and multi-effect distillation. Phase 3b:
 conventional treatment (:mod:`difflow_water.treatment`): GAC (WaterTAP's
-CPHSDM), disinfection, sedimentation and rapid filtration.
+CPHSDM), disinfection, sedimentation and rapid filtration. Phase 4a:
+wastewater (:mod:`difflow_water.wastewater`): ASM1, the Takacs settler and
+the BSM1 plant (cross-checked against the BSM1 report and WaterTAP).
 The plan for the rest (distribution networks, conventional treatment,
 thermal desalination, wastewater) is ``src/difflow_water/DESIGN.md``.
 
@@ -27,9 +29,9 @@ Example:
     True
 """
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
-from difflow_water import chemistry, network, thermal, treatment
+from difflow_water import chemistry, network, thermal, treatment, wastewater
 from difflow_water.chemistry import pitzer, seawater, speciation
 from difflow_water.chemistry.speciation import (
     reference_seawater,
@@ -89,6 +91,18 @@ from difflow_water.treatment import (
     Sedimentation,
     SedimentationParams,
 )
+from difflow_water.wastewater import (
+    ActivatedSludgeParams,
+    ActivatedSludgePlant,
+    ActivatedSludgePlantParams,
+    ASM1Params,
+    ASM1Reactor,
+    ASM1ReactorParams,
+    TakacsSettler,
+    TakacsSettlerParams,
+    activated_sludge_plant,
+    bsm1_influent,
+)
 
 __all__ = [
     "__version__",
@@ -107,6 +121,9 @@ __all__ = [
     "MEDDesalinator", "MEDParams", "med_performance", "thermal",
     "GACAdsorber", "GACParams", "Disinfection", "DisinfectionParams",
     "Sedimentation", "SedimentationParams", "Filtration", "FiltrationParams", "treatment",
+    "ASM1Reactor", "ASM1ReactorParams", "ASM1Params", "TakacsSettler", "TakacsSettlerParams",
+    "ActivatedSludgePlant", "ActivatedSludgePlantParams", "ActivatedSludgeParams",
+    "activated_sludge_plant", "bsm1_influent", "wastewater",
     # economics
     "CostingParams", "capital_recovery_factor", "cost_ro", "cost_hp_pump", "cost_lp_pump",
     "cost_pressure_exchanger", "lcow",
@@ -145,6 +162,12 @@ def register(registry):
          "Ideal settling basin: overflow-rate removal of particle classes"),
         ("Filtration", Filtration,
          "Rapid granular filter: Yao colloid filtration, Carman-Kozeny head loss"),
+        ("ASM1Reactor", ASM1Reactor,
+         "Activated sludge CSTR with ASM1 kinetics (BSM1 parameters), steady state"),
+        ("TakacsSettler", TakacsSettler,
+         "Secondary settler: 10-layer Takacs model, steady state (BSM1)"),
+        ("ActivatedSludgePlant", ActivatedSludgePlant,
+         "BSM1-layout activated sludge plant (ASM1 + Takacs) solved as one block"),
     ]:
         registry.register(name=name, cls=cls, category="water",
                           description=description, plugin="difflow_water")

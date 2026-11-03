@@ -318,6 +318,20 @@ Each phase finishes with its docs section, summary row, notebook and tests.
 4. **Wastewater** (in this plugin): ASM1/ASM2d, Takacs, ADM1, BSM1 (adds a
    case to the convergence corpus). WaterTAP's activated-sludge and ADM1
    flowsheets are the comparison.
+   **Phase 4a as built**: `wastewater/asm1.py` (ASM1 as the BSM1 report
+   [W5] states it, content verified), `wastewater/bsm1.py`
+   (`activated_sludge_plant`: BSM1 layout, Takacs or split settler, KLa or
+   DO setpoints, one equation set solved by stiff integration then Newton;
+   `bsm1_indices`), palette `ASM1Reactor`, `TakacsSettler`,
+   `ActivatedSludgePlant`, `build_bsm1_flowsheet`, notebook 75,
+   `benchmarks/watertap/bsm1.py` + `compare_bsm1.py` (WaterTAP's BSM1
+   example within 1.3e-7; BSM1 report Tables 6-7 within 3.2e-3, their
+   printed digits; `benchmarks/bsm1/report_tables.json`). **Deviation:** the
+   BSM1 sequential flowsheet is documented as a hard recycle (no
+   acceleration converges from default tears; Anderson finds the washout
+   state) but not added to the core corpus, which would then import a
+   plugin. Steady state only. Next, phase 4b: ADM1 (WaterTAP's anaerobic
+   digester is the comparison) and ASM2d.
 
 ## 6. References
 
