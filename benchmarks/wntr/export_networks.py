@@ -15,6 +15,7 @@ networks in difflow_water.
 """
 
 import json
+import tempfile
 from importlib import metadata
 from pathlib import Path
 
@@ -35,7 +36,8 @@ def export(name, inp):
         for _, p in wn.pipes():
             p.roughness = 0.26e-3
     wn.options.time.duration = 0
-    res = wntr.sim.EpanetSimulator(wn).run_sim()
+    with tempfile.TemporaryDirectory() as tmp:  # EPANET's scratch files go here
+        res = wntr.sim.EpanetSimulator(wn).run_sim(file_prefix=str(Path(tmp) / "epanet"))
     status = res.link["status"].iloc[0]
     d = {"headloss": wn.options.hydraulic.headloss, "viscosity": 1.0e-6,
          "junctions": {}, "reservoirs": {}, "tanks": {}, "pipes": {}, "pumps": {}, "valves": {}}
