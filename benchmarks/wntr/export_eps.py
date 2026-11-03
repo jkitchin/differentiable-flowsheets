@@ -36,8 +36,20 @@ def main():
             "flow": {n: [float(v) for v in r.link["flowrate"][n]] for n in wn.link_name_list},
             "status": {n: [float(v) for v in r.link["status"][n]] for n in wn.link_name_list},
         }
+        rec["quality"] = {n: [float(v) for v in r.node["quality"][n]] for n in wn.node_name_list}
+        rec["quality_parameter"] = str(wn.options.quality.parameter)
         (HERE / "eps" / f"{inp.stem}.json").write_text(json.dumps(rec) + "\n")
         print(inp.stem, len(rec["time"]), "report times")
+        if inp.stem == "Net1":  # water age on the same network
+            wn = wntr.network.WaterNetworkModel(str(inp))
+            wn.options.quality.parameter = "AGE"
+            with tempfile.TemporaryDirectory() as tmp:
+                r = wntr.sim.EpanetSimulator(wn).run_sim(file_prefix=str(Path(tmp) / "epanet"))
+            age = {"inp": inp.name, "quality_parameter": "AGE",
+                   "time": [float(t) for t in r.node["quality"].index],
+                   "quality": {n: [float(v) / 3600.0 for v in r.node["quality"][n]]
+                               for n in wn.node_name_list}}
+            (HERE / "eps" / "Net1_age.json").write_text(json.dumps(age) + "\n")
 
 
 if __name__ == "__main__":

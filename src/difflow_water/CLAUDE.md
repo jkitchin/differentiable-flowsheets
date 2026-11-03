@@ -92,6 +92,11 @@ Notes for Claude Code, loaded when working in this directory. The plan is
   tank-level-cut steps are recomputed in JAX. Do not make `simulate` decide
   on traced values. Rerun `compare_eps.py` after a change (Net1 1e-4 m,
   Net3 3.4e-2 m, 0 status mismatches).
+- Water quality (`network/quality.py`) is NumPy and follows the manual's
+  Lagrangian algorithm step by step; keep it that way and rerun
+  `compare_quality.py` (Net1 chlorine 0.01 mg/L, age 0.16 h). Closed links
+  and sub-QZERO flows carry no water: giving them their modelled trickle
+  put Net3's node 10 at 100 % a step early.
 
 ## Not palette operations
 

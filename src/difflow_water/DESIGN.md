@@ -278,9 +278,13 @@ Each phase finishes with its docs section, summary row, notebook and tests.
    `network/eps.py` (`simulate`: EPANET's time stepping and simple
    controls; plan/replay for gradients with moving switch times), example
    INP files, EPS benchmark (`export_eps.py`/`compare_eps.py`), notebook 71
-   section 5. **Phase 2c (open):** water quality (chlorine decay [N5], age),
-   pump scheduling, rule-based controls, volume curves, Chezy-Manning,
-   sparse linear algebra for networks much larger than ky10.
+   section 5. **Phase 2c as built:** `network/quality.py` (EPANET's
+   Lagrangian transport, CHEMICAL/AGE/TRACE, bulk and wall reactions;
+   NumPy, not differentiable), quality benchmark (`compare_quality.py`),
+   notebook 71 section 6. **Phase 2d (open):** pump scheduling (gradient-
+   based, with tanks and a tariff). **Later:** differentiable water quality,
+   rule-based controls, volume curves, Chezy-Manning, sparse linear algebra
+   for networks much larger than ky10.
    Original plan: Notebooks:
    roughness calibration and leak localization with `reconcile_network`;
    pump scheduling with tanks. Cross-check target: WNTR/EPANET on the

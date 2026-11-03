@@ -84,7 +84,9 @@ def simulate(network: WaterNetwork, schedule: Schedule, duration: float | None =
         ``head``, ``pressure`` (junctions), ``flow`` (links), ``tank_level``
         (tanks, m), ``status`` (links, 1 open / 0 closed), ``demand``; plus
         ``junctions``, ``links``, ``tanks`` names, ``steps`` (all solve
-        times, including those between reports) and ``plan``.
+        times, including those between reports), ``plan`` and ``history``
+        (per hydraulic step: start time, length, flows, tank levels, demands;
+        the input of :func:`difflow_water.network.quality.water_quality`).
     """
     model = model or NetworkModel(network)
     a = model.arrays
@@ -119,6 +121,7 @@ def simulate(network: WaterNetwork, schedule: Schedule, duration: float | None =
     next_report = 0.0
     replay = plan is not None
     new_plan = []
+    history = []
     k_step = 0
     while t <= duration + 1e-6:
         if replay:
@@ -202,12 +205,17 @@ def simulate(network: WaterNetwork, schedule: Schedule, duration: float | None =
                                     tanks, schedule.controls)
             dt = dt_c
             new_plan.append((closed.copy(), rule))
+        if not replay:
+            history.append({"t": t, "dt": float(dt_c), "flow": np.asarray(q),
+                            "closed": closed.copy(),
+                            "tank_level": np.asarray(levels), "demand": np.asarray(sol["demand"]),
+                            "emitter_flow": np.asarray(sol["emitter_flow"])})
         levels = levels + qn * dt / jnp.asarray(area) if tanks else levels
         t += dt_c
         k_step += 1
     return {**{k: (jnp.stack(v) if k != "time" else np.asarray(v)) for k, v in out.items()},
             "junctions": a.junctions, "links": links, "tanks": tanks, "steps": np.asarray(steps),
-            "plan": plan if replay else new_plan}
+            "plan": plan if replay else new_plan, "history": history}
 
 
 def _initial_status_closed(network, name) -> bool:

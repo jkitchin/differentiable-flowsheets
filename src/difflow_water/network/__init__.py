@@ -18,6 +18,7 @@ from difflow_water.network.hydraulics import (
 )
 from difflow_water.network.inp import Control, Schedule, read_inp
 from difflow_water.network.model import WaterNetwork, pump_curve
+from difflow_water.network.quality import water_quality
 
 EXAMPLES = ("Net1", "Net3")
 
@@ -48,4 +49,4 @@ def example_inp(name: str):
 
 __all__ = ["WaterNetwork", "NetworkModel", "NetworkConvergenceWarning", "pump_curve",
            "darcy_friction", "load_example", "example_inp", "EXAMPLES", "read_inp",
-           "Schedule", "Control", "simulate", "dead_end_pumps"]
+           "Schedule", "Control", "simulate", "dead_end_pumps", "water_quality"]

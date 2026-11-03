@@ -498,8 +498,27 @@ trajectory with the same switch sequence). On Net1 over 24 h the
 derivative of the final tank level with respect to pipe roughness matches
 central differences to 1e-9.
 
-**Not yet** (DESIGN.md phase 2c): water quality (chlorine decay, water
-age), rule-based controls, volume curves, Chezy-Manning.
+**Water quality.** `water_quality(network, schedule, simulate(...))` runs
+EPANET's Lagrangian transport (Section 13.2 of [N8], content verified):
+parcels move through pipes without dispersion, blend completely at
+junctions (Eq. 13.9) and in tanks (Eq. 13.10), nodes are visited upstream
+to downstream each quality step, a new parcel of the node's quality enters
+each outflow pipe (merged into the last one within `tolerance`), and a
+reversing pipe reverses its parcel train. Modes: CHEMICAL (bulk reaction
+order 0 or 1; first-order wall reaction with the mass-transfer
+coefficient from the laminar Edwards et al. or turbulent Notter-Sleicher
+Sherwood number, both as given in [N8]), AGE (1 h per hour) and TRACE (% of
+water from a node). Closed links and flows below 1e-6 cfs carry no water
+for quality. Taken as EPANET's, not stated in the manual (unverified):
+chlorine diffusivity 1.3e-8 ft^2/s, laminar below Re = 2300, `|k_w|` in
+the wall-rate denominator, the 1e-6 cfs zero-flow threshold. NumPy, **not
+differentiable** (the parcel bookkeeping is discrete). Not supported (an
+error): water-quality sources ([SOURCES]), tank mixing models other than
+complete mixing ([MIXING]), bulk orders other than 0 and 1, roughness-
+correlated wall coefficients, limiting potentials.
+
+**Not yet:** pump scheduling (DESIGN.md phase 2d), rule-based controls,
+volume curves, Chezy-Manning, differentiable water quality.
 
 **Two notes from the EPANET comparison.**
 
@@ -538,6 +557,22 @@ report time):
 |---|---|---|---|---|---|---|
 | Net1 | 24 h | 27 | 1.1e-4 m | 1.2e-4 m | 2.7e-5 m | 0 |
 | Net3 | 168 h | 204 | 3.4e-2 m | 3.4e-2 m | 6.9e-4 m | 0 |
+
+Water quality (`compare_quality.py`, same runs):
+
+| Network | Quality | Report times | max abs diff. | median abs diff. | EPANET range |
+|---|---|---|---|---|---|
+| Net1 | chlorine (bulk + wall decay) | 25 | 0.0098 mg/L | 0.0007 mg/L | 0.15-1 mg/L |
+| Net1 | water age | 25 | 0.16 h | 1e-6 h | 0-23.5 h |
+| Net3 | trace of the Lake source | 169 | 22.9 % | 0.0008 % | 0-100 % |
+
+The Net3 trace's large differences are at moving fronts, where a small
+difference in arrival time is a large difference at one report time, and
+cluster in the hours where Net3's hydraulics differ most (below): 1.7 % of
+the 16 393 node-times differ by more than 1 percentage point, 0.1 % by more
+than 10. Closed links once carried their modelled `h = R Q` trickle in the
+transport, which made a dead-end node take its source's quality a step
+early (100 % off at Net3's node 10); they now carry no water, as in EPANET.
 
 The Net3 differences are episodic: up to 3.4 cm in a tank level in the
 hours after control switches (hours 23-26 of the first day), decaying again
@@ -644,8 +679,9 @@ What the comparison taught:
   Sherwood correlation has no identified source.
 - Costing defaults are WaterTAP's convention, not sourced cost data.
 - No nanofiltration yet.
-- Networks: no water quality yet; no rule-based controls, tank volume
-  curves, multi-point pump curves or Chezy-Manning.
+- Networks: water quality is not differentiable yet; no pump scheduling
+  example, rule-based controls, tank volume curves, multi-point pump curves,
+  quality sources or Chezy-Manning.
 
 ---
 

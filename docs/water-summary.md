@@ -39,7 +39,7 @@ treatment (equations, parameters, references) is in
 | [`PressureExchanger`](unit-operations-water.md#op-pressureexchanger) | palette | brine, feed → hp_feed, brine, bypass | Efficiency form, optional leakage and mixing | Within 0.02 % (outlet pressure) of WaterTAP in the plant, with and without leakage/mixing |
 | [`WaterPump`](unit-operations-water.md#op-waterpump) | palette | inlet → outlet | Isothermal, `V dP / eta` | Within 0.24 % of WaterTAP in the plant |
 | [`economics`](unit-operations-water.md#water-costing) | library | sizes, power, product flow → LCOW, SEC | WaterTAP 1.8.0 costing structure and defaults | LCOW within 0.16 % of WaterTAP |
-| [`network`: `WaterNetwork`, `NetworkModel`](unit-operations-water.md#water-network) | library | network, demands, leaks, settings → heads, pressures, flows | EPANET 2.2 equations, equation-oriented Newton; valves as complementarity (sharp or smooth); INP reader; extended-period simulation with controls | Within 2.7e-5 m (Net1, Net3) and 1.6e-3 m (ky10, 920 junctions) of EPANET 2.2; over 24 h / 7 days, tank levels within 1e-4 m (Net1) / 3.4e-2 m (Net3), statuses identical |
+| [`network`: `WaterNetwork`, `NetworkModel`](unit-operations-water.md#water-network) | library | network, demands, leaks, settings → heads, pressures, flows | EPANET 2.2 equations, equation-oriented Newton; valves as complementarity (sharp or smooth); INP reader; extended-period simulation with controls | Within 2.7e-5 m (Net1, Net3) and 1.6e-3 m (ky10, 920 junctions) of EPANET 2.2; over 24 h / 7 days, tank levels within 1e-4 m (Net1) / 3.4e-2 m (Net3), statuses identical; chlorine within 0.01 mg/L, age 0.16 h (Net1) |
 | [`swro_performance` / `build_swro_flowsheet`](unit-operations-water.md#water-swro) | library | intake → LCOW, SEC, recovery, ... | The plant above | Against WaterTAP's `RO_with_energy_recovery` layout |
 
 **Palette**: registered with the editor through the plugin's `register()`
@@ -72,6 +72,7 @@ still differentiable.
   (equal rejection assumed). Saturation indices are at 1 atm, without
   kinetics; no Sr, Ba, silica or boron.
 - No nanofiltration yet.
-- Networks: no water quality yet; no rule-based controls or volume curves.
+- Networks: water quality is not differentiable; no rule-based controls,
+  volume curves or quality sources.
 - No conventional treatment, thermal desalination or wastewater yet
   (`src/difflow_water/DESIGN.md`, phases 3-4).

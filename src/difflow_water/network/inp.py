@@ -70,7 +70,13 @@ class Schedule:
         start_clocktime: times (s).
         default_pattern: pattern for demands with none (EPANET: "1" if it exists).
         demand_multiplier: global demand multiplier.
-        quality, reactions: raw quality data, for water quality.
+        quality: initial quality by node.
+        reactions: reaction orders and coefficients (SI: 1/s bulk, m/s or
+            mass/m^2/s wall), see :func:`_reactions`.
+        quality_options: ``mode`` (NONE, CHEMICAL, AGE, TRACE),
+            ``trace_node``, ``diffusivity`` (relative to chlorine),
+            ``tolerance``.
+        quality_step: water-quality time step (s).
     """
 
     patterns: dict = field(default_factory=dict)
@@ -88,6 +94,8 @@ class Schedule:
     demand_multiplier: float = 1.0
     quality: dict = field(default_factory=dict)
     reactions: dict = field(default_factory=dict)
+    quality_options: dict = field(default_factory=lambda: {"mode": "NONE"})
+    quality_step: float = 300.0
 
     def multiplier(self, pattern: str | None, t: float) -> float:
         """Pattern multiplier at time t (s); 1 for no pattern."""
@@ -275,10 +283,31 @@ def read_inp(path) -> tuple[WaterNetwork, Schedule]:
             sch.pattern_start = _seconds(w[2], w[3] if len(w) > 3 else None)
         elif words[:2] == ["REPORT", "TIMESTEP"]:
             sch.report_step = _seconds(w[2], w[3] if len(w) > 3 else None)
+        elif words[:2] == ["QUALITY", "TIMESTEP"]:
+            sch.quality_step = _seconds(w[2], w[3] if len(w) > 3 else None)
         elif words[:2] == ["START", "CLOCKTIME"]:
             sch.start_clocktime = _clock(w[2:])
     sch.quality = {w[0]: float(w[1]) for w in sec.get("QUALITY", [])}
-    sch.reactions = [w for w in sec.get("REACTIONS", [])]
+    sch.reactions = _reactions(sec.get("REACTIONS", []), us)
+    q = opts.get("QUALITY", ["NONE"])
+    mode = q[0].upper()
+    if mode in ("NONE",):
+        qmode, trace = "NONE", None
+    elif mode == "AGE":
+        qmode, trace = "AGE", None
+    elif mode == "TRACE":
+        qmode, trace = "TRACE", q[1]
+    else:
+        qmode, trace = "CHEMICAL", None
+    sch.quality_options = {
+        "mode": qmode, "trace_node": trace,
+        "diffusivity": float(opts.get("DIFFUSIVITY", ["1.0"])[0]),
+        "tolerance": float(opts.get("TOLERANCE", ["0.01"])[0]),
+    }
+    if sec.get("SOURCES"):
+        raise ValueError("[SOURCES] (water-quality sources) are not supported")
+    if sec.get("MIXING"):
+        raise ValueError("[MIXING] (tank mixing models other than complete mixing) is not supported")
     # initial demands and reservoir heads
     for j in net.junctions:
         net.junctions[j].demand = sch.demand(j, 0.0)
@@ -305,3 +334,39 @@ def _control(w, net, L, P, qf) -> Control:
         return Control(link, status, setting, "time", None,
                        _seconds(w[i + 2], w[i + 3] if len(w) > i + 3 else None))
     return Control(link, status, setting, "clocktime", None, _clock(w[i + 2:]))
+
+
+def _reactions(rows, us) -> dict:
+    """[REACTIONS]: orders, global and per-pipe/tank coefficients, in SI per second.
+
+    Bulk coefficients are 1/day in the file ([N8] Appendix A); first-order
+    wall coefficients ft/day (US) or m/day (SI); zero-order wall coefficients
+    mass/area/day.
+    """
+    out = {"order_bulk": 1.0, "order_wall": 1.0, "order_tank": 1.0, "global_bulk": 0.0,
+           "global_wall": 0.0, "limiting_potential": 0.0, "roughness_correlation": 0.0,
+           "bulk": {}, "wall": {}, "tank": {}}
+    day = 86400.0
+    for w in rows:
+        k = [x.upper() for x in w]
+        if k[0] == "ORDER":
+            out[f"order_{k[1].lower()}"] = float(w[2])
+        elif k[0] == "GLOBAL":
+            out[f"global_{k[1].lower()}"] = float(w[2])
+        elif k[0] == "LIMITING":
+            out["limiting_potential"] = float(w[2])
+        elif k[0] == "ROUGHNESS":
+            out["roughness_correlation"] = float(w[2])
+        elif k[0] in ("BULK", "WALL", "TANK"):
+            out[k[0].lower()][w[1]] = float(w[2])
+    if out["roughness_correlation"] != 0.0:
+        raise ValueError("a wall-reaction roughness correlation is not supported")
+    if out["limiting_potential"] != 0.0:
+        raise ValueError("a limiting reaction potential is not supported")
+    wall_len = (FT if us else 1.0) if out["order_wall"] == 1.0 else 1.0
+    out["global_bulk"] /= day
+    out["global_wall"] *= wall_len / day
+    out["bulk"] = {n: v / day for n, v in out["bulk"].items()}
+    out["tank"] = {n: v / day for n, v in out["tank"].items()}
+    out["wall"] = {n: v * wall_len / day for n, v in out["wall"].items()}
+    return out
