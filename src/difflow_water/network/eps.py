@@ -29,7 +29,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
-from difflow_water.network.hydraulics import NetworkModel
+from difflow_water.network.hydraulics import RHO_G, NetworkModel
 from difflow_water.network.inp import Schedule
 from difflow_water.network.model import WaterNetwork
 
@@ -63,7 +63,8 @@ def dead_end_pumps(arrays, closed: np.ndarray, demand: np.ndarray, emitter: np.n
 
 def simulate(network: WaterNetwork, schedule: Schedule, duration: float | None = None,
              model: NetworkModel | None = None, params: dict | None = None,
-             report_step: float | None = None, plan: list | None = None) -> dict:
+             report_step: float | None = None, plan: list | None = None,
+             speed_profile=None, profile_step: float = 3600.0) -> dict:
     """Run an extended-period simulation.
 
     Args:
@@ -75,6 +76,10 @@ def simulate(network: WaterNetwork, schedule: Schedule, duration: float | None =
         params: Overrides for the model's static parameters (``roughness``,
             ``emitter``, ...), applied at every step; differentiable.
         report_step: Reporting interval (s); the schedule's when None.
+        speed_profile: ``(n_periods, n_links)`` multipliers of the pump speeds,
+            period ``k`` covering ``[k, k + 1) * profile_step``; traced arrays
+            are fine (pump scheduling). Rows past the end repeat the last.
+        profile_step: Length of a speed-profile period (s).
         plan: The ``plan`` of an earlier run of the same simulation, to replay
             it with (possibly traced) ``params``: statuses and step rules are
             taken from it instead of being decided on the fly.
@@ -122,6 +127,10 @@ def simulate(network: WaterNetwork, schedule: Schedule, duration: float | None =
     replay = plan is not None
     new_plan = []
     history = []
+    step_power, step_dt, step_t = [], [], []
+    is_pump = jnp.asarray(a.kind == 1)
+    eff = np.array([schedule.energy["pumps"].get(n, {}).get("efficiency", schedule.energy["efficiency"])
+                    if a.kind[i] == 1 else 1.0 for i, n in enumerate(links)])
     k_step = 0
     while t <= duration + 1e-6:
         if replay:
@@ -161,6 +170,9 @@ def simulate(network: WaterNetwork, schedule: Schedule, duration: float | None =
         for pmp, pat in schedule.pump_patterns.items():
             mult[link_idx[pmp]] = schedule.multiplier(pat, t)
         speed = speed0 * jnp.asarray(mult)
+        if speed_profile is not None:
+            kp = min(int(t // profile_step), speed_profile.shape[0] - 1)
+            speed = speed * speed_profile[kp]
         if replay:
             closed = np.asarray(closed_p, bool)
         else:
@@ -205,6 +217,12 @@ def simulate(network: WaterNetwork, schedule: Schedule, duration: float | None =
                                     tanks, schedule.controls)
             dt = dt_c
             new_plan.append((closed.copy(), rule))
+        # pump power rho g Q h_gain / efficiency (W); EPANET's wire-to-water efficiency
+        power = jnp.where(is_pump & ~jnp.asarray(closed),
+                          RHO_G * jnp.maximum(q, 0.0) * sol["head_gain"] / jnp.asarray(eff), 0.0)
+        step_power.append(power)
+        step_dt.append(dt)
+        step_t.append(t)
         if not replay:
             history.append({"t": t, "dt": float(dt_c), "flow": np.asarray(q),
                             "closed": closed.copy(),
@@ -215,7 +233,12 @@ def simulate(network: WaterNetwork, schedule: Schedule, duration: float | None =
         k_step += 1
     return {**{k: (jnp.stack(v) if k != "time" else np.asarray(v)) for k, v in out.items()},
             "junctions": a.junctions, "links": links, "tanks": tanks, "steps": np.asarray(steps),
-            "plan": plan if replay else new_plan, "history": history}
+            "plan": plan if replay else new_plan, "history": history,
+            "step_time": np.asarray(step_t), "step_dt": jnp.stack([jnp.asarray(x, dtype=jnp.float64)
+                                                                    for x in step_dt]),
+            "step_power": jnp.stack(step_power),
+            "pump_energy_kwh": jnp.sum(jnp.stack(step_power) * jnp.stack(
+                [jnp.asarray(x, dtype=jnp.float64) for x in step_dt])[:, None], axis=0) / 3.6e6}
 
 
 def _initial_status_closed(network, name) -> bool:

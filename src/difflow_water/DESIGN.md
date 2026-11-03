@@ -281,8 +281,10 @@ Each phase finishes with its docs section, summary row, notebook and tests.
    section 5. **Phase 2c as built:** `network/quality.py` (EPANET's
    Lagrangian transport, CHEMICAL/AGE/TRACE, bulk and wall reactions;
    NumPy, not differentiable), quality benchmark (`compare_quality.py`),
-   notebook 71 section 6. **Phase 2d (open):** pump scheduling (gradient-
-   based, with tanks and a tariff). **Later:** differentiable water quality,
+   notebook 71 section 6. **Phase 2d as built:** pump energy in `simulate`
+   (`step_power`, `pump_energy_kwh`; [ENERGY] efficiencies), traced
+   `speed_profile`, notebook 72 (pump scheduling under a tariff, SLSQP with
+   plan-replay derivatives). **Phase 2 is complete.** **Later:** differentiable water quality,
    rule-based controls, volume curves, Chezy-Manning, sparse linear algebra
    for networks much larger than ky10.
    Original plan: Notebooks:

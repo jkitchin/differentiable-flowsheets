@@ -68,3 +68,25 @@ def test_simulate_replay_gradient_is_finite():
         return simulate(net, sch, model=model, duration=4 * 3600, plan=res["plan"],
                         params={"roughness": rough})["tank_level"][-1, 0]
     assert jnp.all(jnp.isfinite(jax.grad(level)(r0)))
+
+
+def test_energy_is_read_and_pump_energy_is_finite():
+    net, sch = read_inp(example_inp("Net1"))
+    assert sch.energy["efficiency"] == pytest.approx(0.75)
+    res = simulate(net, sch, duration=3 * 3600)
+    assert jnp.all(jnp.isfinite(res["pump_energy_kwh"])) and jnp.all(res["step_power"] >= 0)
+
+
+def test_speed_profile_gradient_is_finite():
+    net, sch = read_inp(example_inp("Net1"))
+    sch.controls = []
+    model = NetworkModel(net)
+    ip = model.arrays.links.index("9")
+
+    def run(s, plan=None):
+        prof = jnp.ones((2, model.arrays.n_links)).at[:, ip].set(s)
+        return simulate(net, sch, model=model, duration=2 * 3600, speed_profile=prof,
+                        profile_step=3600.0, plan=plan)
+    plan = run(jnp.array([1.0, 0.9]))["plan"]
+    g = jax.grad(lambda s: jnp.sum(run(s, plan)["pump_energy_kwh"]))(jnp.array([1.0, 0.9]))
+    assert jnp.all(jnp.isfinite(g))

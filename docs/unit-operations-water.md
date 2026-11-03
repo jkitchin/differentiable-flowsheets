@@ -497,6 +497,19 @@ the derivative includes how the switch times move (the derivative of the
 trajectory with the same switch sequence). On Net1 over 24 h the
 derivative of the final tank level with respect to pipe roughness matches
 central differences to 1e-9.
+*Energy and pump scheduling:* `simulate` returns each step's pump power
+`rho g Q h_gain / efficiency` (`step_power`, W; efficiencies from the
+input file's [ENERGY] section, EPANET's default 75 %) with `step_time`,
+`step_dt` and `pump_energy_kwh`, all JAX values, and takes a
+`speed_profile` (pump-speed multipliers per period) that may be traced, so
+an energy cost under any tariff can be minimized over a schedule with exact
+derivatives. On Net1 the day's pump energy is 1333 kWh; rebuilt from
+EPANET's hourly flows and heads with the same formula it is 1348 kWh (the
+hourly rectangle rule counts the pump as on for the whole hour in which it
+switches off). `examples/72_water_pump_scheduling.ipynb` replaces Net1's
+level controls by a 12-block speed schedule under an ILLUSTRATIVE
+time-of-use tariff and cuts the day's cost from 171 to 149 USD (a local
+stop of SLSQP on a non-convex problem; the notebook says so).
 
 **Water quality.** `water_quality(network, schedule, simulate(...))` runs
 EPANET's Lagrangian transport (Section 13.2 of [N8], content verified):
@@ -517,8 +530,9 @@ error): water-quality sources ([SOURCES]), tank mixing models other than
 complete mixing ([MIXING]), bulk orders other than 0 and 1, roughness-
 correlated wall coefficients, limiting potentials.
 
-**Not yet:** pump scheduling (DESIGN.md phase 2d), rule-based controls,
-volume curves, Chezy-Manning, differentiable water quality.
+**Not yet:** rule-based controls, volume curves, Chezy-Manning,
+differentiable water quality, energy cost from [ENERGY] price patterns and
+demand charges (the notebook applies its own tariff).
 
 **Two notes from the EPANET comparison.**
 
@@ -679,9 +693,9 @@ What the comparison taught:
   Sherwood correlation has no identified source.
 - Costing defaults are WaterTAP's convention, not sourced cost data.
 - No nanofiltration yet.
-- Networks: water quality is not differentiable yet; no pump scheduling
-  example, rule-based controls, tank volume curves, multi-point pump curves,
-  quality sources or Chezy-Manning.
+- Networks: water quality is not differentiable yet; no rule-based
+  controls, tank volume curves, multi-point pump curves, quality sources or
+  Chezy-Manning.
 
 ---
 

@@ -77,6 +77,8 @@ class Schedule:
             ``trace_node``, ``diffusivity`` (relative to chlorine),
             ``tolerance``.
         quality_step: water-quality time step (s).
+        energy: ``efficiency`` (fraction), ``price`` (per kWh), ``pattern``
+            (price multipliers), and per pump ``pumps[name]`` overrides.
     """
 
     patterns: dict = field(default_factory=dict)
@@ -95,6 +97,8 @@ class Schedule:
     quality: dict = field(default_factory=dict)
     reactions: dict = field(default_factory=dict)
     quality_options: dict = field(default_factory=lambda: {"mode": "NONE"})
+    energy: dict = field(default_factory=lambda: {"efficiency": 0.75, "price": 0.0,
+                                                  "pattern": None, "pumps": {}})
     quality_step: float = 300.0
 
     def multiplier(self, pattern: str | None, t: float) -> float:
@@ -304,6 +308,26 @@ def read_inp(path) -> tuple[WaterNetwork, Schedule]:
         "diffusivity": float(opts.get("DIFFUSIVITY", ["1.0"])[0]),
         "tolerance": float(opts.get("TOLERANCE", ["0.01"])[0]),
     }
+    for w in sec.get("ENERGY", []):
+        k = [x.upper() for x in w]
+        if k[0] == "GLOBAL":
+            if k[1] == "EFFICIENCY":
+                sch.energy["efficiency"] = float(w[2]) / 100.0
+            elif k[1] == "PRICE":
+                sch.energy["price"] = float(w[2])
+            elif k[1] == "PATTERN":
+                sch.energy["pattern"] = w[2]
+        elif k[0] == "PUMP":
+            rec = sch.energy["pumps"].setdefault(w[1], {})
+            if k[2] == "EFFICIENCY":
+                try:
+                    rec["efficiency"] = float(w[3]) / 100.0
+                except ValueError:
+                    raise ValueError(f"pump {w[1]}: efficiency curves are not supported") from None
+            elif k[2] == "PRICE":
+                rec["price"] = float(w[3])
+            elif k[2] == "PATTERN":
+                rec["pattern"] = w[3]
     if sec.get("SOURCES"):
         raise ValueError("[SOURCES] (water-quality sources) are not supported")
     if sec.get("MIXING"):
