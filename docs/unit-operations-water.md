@@ -6,7 +6,8 @@ This page documents the `difflow_water` plugin: seawater properties, a
 Pitzer activity model with seawater speciation and mineral saturation
 indices (scaling), a seawater reverse-osmosis (RO) stage and multi-stage
 train, a pressure exchanger, water pumps, a levelized-cost-of-water (LCOW)
-model, and the seawater RO + pressure exchanger plant built from them. A one-page map is in
+model, the seawater RO + pressure exchanger plant built from them,
+distribution networks, and thermal desalination (MVC, MED). A one-page map is in
 [Water units at a glance](water-summary.md); the plan for the rest of the
 plugin (distribution networks, conventional treatment, thermal
 desalination, wastewater) is `src/difflow_water/DESIGN.md`.
@@ -601,11 +602,137 @@ closed links and EPANET to the pump's suction.
 
 ---
 
+(water-thermal)=
+## Thermal desalination
+
+`difflow_water.thermal` has two whole-plant blocks: single-stage
+mechanical vapor compression (MVC), built equation for equation as
+WaterTAP's MVC flowsheet and cross-checked against it, and parallel-feed
+multi-effect distillation (MED), a first-principles model with no WaterTAP
+counterpart (WaterTAP 1.8.0 has none).
+
+(water-thermal-properties)=
+### Thermal seawater properties
+
+Added to `difflow_water.seawater` for the evaporators:
+
+| Function | Equation | Status |
+|---|---|---|
+| `specific_heat(T, S)` | [S1] Eq. 9, T68 by Eq. 4, `S_P = 1000 S` (as WaterTAP) | content verified |
+| `enthalpy(T, S, P)` | [S1] Eq. 43 with Eq. 55 for water; 6-digit coefficients and the pressure term of [S2] Eqs. 25-26 as WaterTAP codes them | Eq. 43 content verified at its printed digits; [S2] values (unverified) |
+| `latent_heat(T, S)` | [S1] Eqs. 37 and 54 | content verified |
+| `vapor_pressure_water(T)` | [S1] Eq. 53 (Hyland-Wexler), full coefficients of [S2] Eq. 5 via WaterTAP | Eq. 53 content verified at its printed digits; full digits (unverified) |
+| `vapor_pressure(T, S)` | `p_w exp(B1 s + B2 s^2)`, [S2] Eq. 6 via WaterTAP | (unverified) |
+| `boiling_point_elevation(T, S)` | [S1] Eq. 36 | content verified |
+| `vapor_enthalpy(T, P)` | `h_w(T, P) + h_fg(T)`: WaterTAP's water property package (ideal-gas vapor) | convention |
+
+(op-mvcdesalinator)=
+### MVCDesalinator
+
+`MVCDesalinator(MVCParams(...))(feed) -> (distillate, brine, info)`, or
+`mvc_performance(feed, params)` for the full result (state, works, capital
+per unit, SEC, LCOW). The layout is WaterTAP's `mvc_single_stage`: feed
+pump, a split (fraction = recovery) to a distillate and a brine
+preheater, mixer, evaporator, compressor, condenser (the evaporator's hot
+side), brine and distillate pumps.
+
+| Part | Equations |
+|---|---|
+| Evaporator | brine and vapor at `T_b`; brine at `p_sw(T_b, S_b)`; `Q + H_feed = H_brine + H_vapor`; `Q = U A LMTD` with `dT_in = T_compressed - T_b`, `dT_out = T_condensate - T_b` |
+| Compressor | `P_out = r P_in`; `T_s = T_in r^(1-1/gamma)`, `gamma = 1.3`; `eta (h_out - h_in) = h_s - h_in` |
+| Condenser | complete condensation at the compressor pressure, `m_v (h_v,in - h_l,out) = Q` |
+| Preheaters | countercurrent, `Q = U A LMTD`, Chen's `LMTD = (dT1 dT2 (dT1 + dT2)/2)^(1/3)` |
+| Pumps | isothermal, `W = V dP / eta` |
+| Costing | WaterTAP's MVC example: evaporator 1000 USD(2020)/m^2 and preheaters 300 USD(2020)/m^2, each x 5 (material) x TIC 2; compressor `7364 USD(2001) m_v r (eta/(1-eta))^0.7`; pumps 1.908 USD(2018)/W; mixer 361 USD(2018)/(L/s); electricity 0.1 USD(2018)/kWh; CEPCI 394.3 (2001), 603.1 (2018), 596.2 (2020) as IDAES has them (unverified) |
+
+The plant is one Newton solve (`optimistix.root_find`, 8 unknowns:
+condensate and preheater temperatures, mixed feed temperature, duty,
+pressure ratio), so `jax.grad` is implicit and exact at the solution.
+
+Degrees of freedom: brine temperature, recovery and the two preheater
+areas are inputs; the evaporator area is computed. The pressure ratio is
+either solved so that the condensate leaves saturated
+(`mode="saturated_condensate"`, the default) or given
+(`mode="fixed_pressure_ratio"`, WaterTAP's simulation). With a fixed
+pressure ratio the compressor's energy has to match what the plant
+absorbs, and most designs are then unphysical: the condensate would be
+hotter than saturation (WaterTAP: infeasible) or colder than the brine.
+`info` reports `condensate_subcooling`, `evaporator_dT_out` and
+`feasible`. Preheater areas are absolute and must be sized to the feed:
+WaterTAP's optimum is about 4.5 and 3.9 m^2 per kg/s of feed. Oversized
+preheaters leave too little work for the compressor, and the
+saturated-condensate solution is then infeasible too.
+
+(op-meddesalinator)=
+### MEDDesalinator
+
+`MEDDesalinator(MEDParams(...))(feed) -> (distillate, brine, info)`, or
+`med_performance(feed, params)`. Parallel feed, `N` effects with brine
+temperatures falling linearly from `T_top` to `T_last`, each fed `F/N` at
+`T_feed`:
+
+- effect 1 heated by motive steam, `Q_1 = m_s h_fg(T_steam)`; effect `i`
+  by the vapor of effect `i-1` condensing at `T_{i-1} - BPE_{i-1}`,
+  `Q_i = D_{i-1} (h_v(T_{i-1}) - h_w(T_{i-1} - BPE_{i-1}))`;
+- `Q_i + F_i h(T_f, S_f) = B_i h(T_i, S_i) + D_i h_v(T_i)`,
+  `F_i S_f = B_i S_i`, solved for `D_i` (Newton, fixed count);
+- `A_i = Q_i / (U (T_c,i - T_i))`; the final condenser preheats the feed
+  from the intake temperature and rejects the rest to cooling seawater;
+- `GOR = sum D_i / m_s`.
+
+Everything is mass and energy balances on the properties above; the
+configuration is the textbook one [D2] (book not read: the equations are
+this module's own). Not modelled: feed preheaters between effects,
+distillate flash boxes, non-condensables, pressure losses. Parallel feed
+heats each effect's feed from `T_feed` inside the effect, which costs GOR
+(about 4.6 for the default 8 effects). Defaults are ILLUSTRATIVE.
+
+(water-mvc-comparison)=
+### Comparison with WaterTAP (MVC)
+
+`benchmarks/watertap/mvc.py` runs WaterTAP 1.8.0's `mvc_single_stage`
+(its own build, operating conditions and initialization): its LCOW
+optimum, and a simulation at a lower pressure ratio (1.58, preheaters 199 /
+174 m^2). `compare_mvc.py` runs difflow on the same inputs with
+`mode="fixed_pressure_ratio"`, and repeats the optimization (SLSQP with
+`jax.grad`, WaterTAP's bounds) from the simulation design.
+
+Largest relative difference over every reported output (evaporator area,
+duty and LMTD, all temperatures and pressures, compressor and pump works,
+product flow, SEC, LCOW, total capital and operating cost, and the capital
+of each of the 8 units): **2.6e-7** at the optimum, **3.9e-7** at the
+simulation point.
+
+| Decision at the LCOW optimum | WaterTAP (IPOPT) | difflow (SLSQP + `jax.grad`) | rel. diff |
+|---|---|---|---|
+| brine temperature (K) | 348.15 (bound) | 348.15 | +1.5e-09 |
+| pressure ratio | 1.604816 | 1.604816 | -7.5e-09 |
+| distillate preheater (m^2) | 199.2295 | 199.2295 | -2.4e-08 |
+| brine preheater (m^2) | 174.4172 | 174.4171 | -8.3e-08 |
+| LCOW (USD/m^3) | 4.518535 | 4.518535 | +1.0e-07 |
+
+What the comparison taught:
+
+- **Currency year.** WaterTAP's example sets `base_currency = USD_2020`
+  after its costs are built, so its results are in its default USD 2018;
+  difflow's `MVCCostingParams.base_year` defaults to 2018 to match (with
+  2020 every cost was 1.14 % lower).
+- **Preheater pressure "drop".** The example fixes IDAES
+  `deltaP = +7 kPa` on both sides of both preheaters: a pressure gain,
+  which lowers the brine pump's work by 19 %. difflow's `hx_dP` is a loss
+  (default +7 kPa); the comparison passes `hx_dP = -7e3`.
+- **Feasibility.** At WaterTAP's optimum the condensate leaves exactly
+  saturated (the condenser's `P >= P_sat` bound is active). Any higher
+  pressure ratio at the same design is infeasible, and so were several
+  lower-ratio designs tried; hence the saturated-condensate mode.
+
+---
+
 (water-editor)=
 ## In the editor
 
-`ROStage`, `ROTrain`, `PressureExchanger` and `WaterPump` are palette
-operations (category `water`) in the difflow editor (`difflow gui`, from the
+`ROStage`, `ROTrain`, `PressureExchanger`, `WaterPump`, `MVCDesalinator`
+and `MEDDesalinator` are palette operations (category `water`) in the difflow editor (`difflow gui`, from the
 difflow book), each with its own icon. **Examples > Seawater RO with a
 pressure exchanger** opens the plant above (`10_water_swro`, written by
 `scripts/make_gui_examples.py`), with membrane-wall saturation indices on.
@@ -693,6 +820,10 @@ What the comparison taught:
   Sherwood correlation has no identified source.
 - Costing defaults are WaterTAP's convention, not sourced cost data.
 - No nanofiltration yet.
+- Thermal: no multi-stage flash (MSF) yet; MED is parallel feed without
+  inter-effect preheaters or flash boxes, and has no WaterTAP counterpart to
+  compare with; MVC is single-stage. The vapor pressure of seawater and the
+  pressure term of the enthalpy are [S2]'s via WaterTAP (unverified).
 - Networks: water quality is not differentiable yet; no rule-based
   controls, tank volume curves, multi-point pump curves, quality sources or
   Chezy-Manning.
@@ -710,8 +841,8 @@ source; a design input or placeholder.
 
 | ID | Reference | Used for | Status |
 |---|---|---|---|
-| S1 | Sharqawy, M.H.; Lienhard, J.H.; Zubair, S.M. "Thermophysical properties of seawater: a review of existing correlations and data." *Desalin. Water Treat.* **2010**, 16(1-3), 354--380. doi:10.5004/dwt.2010.1079 | Density (Eq. 8), viscosity (Eqs. 22, 23), osmotic coefficient (Eq. 49) | Citation verified (Crossref). **Content verified**: coefficients read against the authors' corrected version (web.mit.edu/lienhard), including the five correction notes (none affect these equations). |
-| S2 | Nayar, K.G.; Sharqawy, M.H.; Banchik, L.D.; Lienhard V, J.H. "Thermophysical properties of seawater: A review and new correlations that include pressure dependence." *Desalination* **2016**, 390, 1--24. doi:10.1016/j.desal.2016.02.024 | Osmotic pressure form `phi m rho_w R T` (Eq. 48, per WaterTAP) | Citation verified (Crossref). Content **unverified** (paper not reached; attribution from WaterTAP's code). |
+| S1 | Sharqawy, M.H.; Lienhard, J.H.; Zubair, S.M. "Thermophysical properties of seawater: a review of existing correlations and data." *Desalin. Water Treat.* **2010**, 16(1-3), 354--380. doi:10.5004/dwt.2010.1079 | Density (Eq. 8), viscosity (Eqs. 22, 23), osmotic coefficient (Eq. 49); specific heat (Eq. 9), BPE (Eq. 36), latent heat (Eqs. 37, 54), enthalpy (Eqs. 43, 55), water vapor pressure (Eq. 53) | Citation verified (Crossref). **Content verified**: coefficients read against the authors' corrected version (web.mit.edu/lienhard), including the five correction notes (none affect these equations). |
+| S2 | Nayar, K.G.; Sharqawy, M.H.; Banchik, L.D.; Lienhard V, J.H. "Thermophysical properties of seawater: A review and new correlations that include pressure dependence." *Desalination* **2016**, 390, 1--24. doi:10.1016/j.desal.2016.02.024 | Osmotic pressure form `phi m rho_w R T` (Eq. 48, per WaterTAP); enthalpy coefficients and pressure term (Eqs. 25-26), water vapor pressure coefficients (Eq. 5) and seawater vapor pressure (Eq. 6), all per WaterTAP | Citation verified (Crossref). Content **unverified** (paper not reached; attribution from WaterTAP's code). |
 | S3 | Millero, F.J.; Feistel, R.; Wright, D.G.; McDougall, T.J. "The composition of Standard Seawater and the definition of the Reference-Composition Salinity Scale." *Deep-Sea Res. I* **2008**, 55(1), 50--72. doi:10.1016/j.dsr.2007.10.001 | Origin of `M_S` | Citation verified (Crossref). Value read via S4. |
 | S4 | IOC, SCOR and IAPSO. *The International Thermodynamic Equation of Seawater -- 2010: Calculation and Use of Thermodynamic Properties*. Intergovernmental Oceanographic Commission, Manuals and Guides No. 56, UNESCO, **2010** (TEOS-10 manual, teos-10.org) | `M_S = 31.4038218 g/mol` | **Content verified**: value read in the manual ("M_S = 31.403 821 8... g mol^-1, from Millero et al. (2008a)"). No DOI. |
 | M1 | Wijmans, J.G.; Baker, R.W. "The solution-diffusion model: a review." *J. Membr. Sci.* **1995**, 107(1-2), 1--21. doi:10.1016/0376-7388(95)00102-I | Water and salt flux laws | Citation verified (Crossref). The flux forms are the standard ones; not re-read against the paper (unverified). |
@@ -731,7 +862,8 @@ source; a design input or placeholder.
 | N3 | Wagner, J.M.; Shamir, U.; Marks, D.H. "Water distribution reliability: simulation methods." *J. Water Resour. Plann. Manage.* **1988**, 114(3), 276--294. doi:10.1061/(ASCE)0733-9496(1988)114:3(276) | Pressure-driven demand | Citation verified (Crossref). The equation is EPANET's form ([N8] Eq. 13.6, content verified there), not read in this paper. |
 | N7 | Swamee, P.K.; Jain, A.K. "Explicit equations for pipe-flow problems." *J. Hydraul. Div.* **1976**, 102(5), 657--664. doi:10.1061/JYCEAJ.0004542 | Turbulent friction factor | Citation verified (Crossref; the DOI first recalled was wrong). Paper not read; the log10 form is the one that reproduces EPANET (see the network notes). |
 | N8 | Rossman, L.; Woo, H.; Tryby, M.; Shang, F.; Janke, R.; Haxton, T. *EPANET 2.2 User Manual*; EPA/600/R-20/133; U.S. Environmental Protection Agency: Cincinnati, OH, **2020**. Online edition: epanet-manual.readthedocs.io | Network equations (Section 13.1, Table 3.1, pump curves, valve and emitter models, PDD) | Citation verified (report number, authors and title from the EPA PDF cover, via search; no DOI). **Content verified**: equations read in the online edition. Its Swamee-Jain `ln` is a typo (see the network notes). |
+| D2 | El-Dessouky, H.T.; Ettouney, H.M. *Fundamentals of Salt Water Desalination*; Elsevier: Amsterdam, **2002**. doi:10.1016/B978-0-444-50810-2.X5000-3 | MED and MVC configurations | DOI, title, year and publisher verified (Crossref; it lists no authors, so authorship is (unverified)). Not read: no equation is taken from it. |
 | B1 | Akkor, I.; Amusat, O.O.; Vecchiarelli, P.; Gounaris, C.E.; Knueven, B.; Dudchenko, A.V. "Optimization of desalination systems with detailed water chemistry through integration of Reaktoro in WaterTAP." *ACS ES&T Eng.* **2026**, 6(5), 1464--1477. doi:10.1021/acsestengg.5c01008 | WaterTAP (benchmark context) | Citation verified (Crossref) |
 | B2 | Dudchenko, A.; Atia, A.; Bartholomew, T. "WaterTAP: Tool for analysis of water treatment systems." NAWI Alliance Fall Meeting, **2023** (OSTI). doi:10.2172/2447624 | WaterTAP (benchmark) | Citation verified (Crossref). The comparison used WaterTAP 1.8.0 from PyPI. |
 | B3 | Lee, A.; Ghouse, J.H.; Eslick, J.C.; Laird, C.D.; Siirola, J.D.; et al. "The IDAES process modeling framework and model library -- flexibility for process simulation and optimization." *J. Adv. Manuf. Process.* **2021**, 3(3), e10095. doi:10.1002/amp2.10095 | IDAES (pump model, WaterTAP's base) | Citation verified (Crossref) |
-| WT | WaterTAP 1.8.0 source (`seawater_prop_pack.py`, `membrane_channel_base.py`, `reverse_osmosis_1D.py`, `pressure_exchanger.py`, `costing/`), read from the PyPI wheel | Equations as coded; costing structure and defaults | Read directly (the code, not the papers behind it). |
+| WT | WaterTAP 1.8.0 source (`seawater_prop_pack.py`, `water_prop_pack.py`, `membrane_channel_base.py`, `reverse_osmosis_1D.py`, `pressure_exchanger.py`, `mvc/`, `flowsheets/mvc/`, `costing/`), read from the PyPI wheel | Equations as coded; costing structure and defaults | Read directly (the code, not the papers behind it). |

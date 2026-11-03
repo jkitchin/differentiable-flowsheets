@@ -292,6 +292,20 @@ Each phase finishes with its docs section, summary row, notebook and tests.
    pump scheduling with tanks. Cross-check target: WNTR/EPANET on the
    EPANET example networks.
 3. **Conventional treatment train** and **thermal desalination**.
+   **Phase 3a as built** (thermal): `chemistry/seawater.py` thermal
+   properties (Sharqawy 2010 Eqs. 9, 36, 37, 43, 53-55, content verified;
+   Nayar 2016 digits and vapor pressure via WaterTAP, unverified),
+   `thermal/mvc.py` (`mvc_performance`: WaterTAP's single-stage MVC
+   flowsheet as one Newton solve, with WaterTAP's MVC costing; a
+   saturated-condensate mode that closes the energy balance for any feed),
+   `thermal/med.py` (`med_performance`: parallel-feed MED, balances only),
+   palette `MVCDesalinator`, `MEDDesalinator`, notebook 73,
+   `benchmarks/watertap/mvc.py` + `compare_mvc.py` (within 4e-7 of
+   WaterTAP; its LCOW optimum reproduced with `jax.grad` + SLSQP).
+   **Deviation:** MSF not built, and MED has no content-verified source
+   (Mistry et al. 2011 [T1] could not be retrieved; the equations are mass
+   and energy balances, no fitted coefficient). Next, phase 3b:
+   conventional treatment.
 4. **Wastewater** (in this plugin): ASM1/ASM2d, Takacs, ADM1, BSM1 (adds a
    case to the convergence corpus). WaterTAP's activated-sludge and ADM1
    flowsheets are the comparison.

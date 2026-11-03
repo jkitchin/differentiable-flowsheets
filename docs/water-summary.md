@@ -40,6 +40,9 @@ treatment (equations, parameters, references) is in
 | [`WaterPump`](unit-operations-water.md#op-waterpump) | palette | inlet → outlet | Isothermal, `V dP / eta` | Within 0.24 % of WaterTAP in the plant |
 | [`economics`](unit-operations-water.md#water-costing) | library | sizes, power, product flow → LCOW, SEC | WaterTAP 1.8.0 costing structure and defaults | LCOW within 0.16 % of WaterTAP |
 | [`network`: `WaterNetwork`, `NetworkModel`](unit-operations-water.md#water-network) | library | network, demands, leaks, settings → heads, pressures, flows | EPANET 2.2 equations, equation-oriented Newton; valves as complementarity (sharp or smooth); INP reader; extended-period simulation with controls | Within 2.7e-5 m (Net1, Net3) and 1.6e-3 m (ky10, 920 junctions) of EPANET 2.2; over 24 h / 7 days, tank levels within 1e-4 m (Net1) / 3.4e-2 m (Net3), statuses identical; chlorine within 0.01 mg/L, age 0.16 h (Net1); pump energy and differentiable speed schedules |
+| [`MVCDesalinator`, `mvc_performance`](unit-operations-water.md#op-mvcdesalinator) | palette | feed → distillate, brine | WaterTAP's single-stage MVC plant: evaporator, compressor, condenser, preheaters, pumps, costing; one Newton solve | Within 4e-7 of WaterTAP 1.8.0 on every output; its LCOW optimum reproduced with `jax.grad` + SLSQP (1e-7) |
+| [`MEDDesalinator`, `med_performance`](unit-operations-water.md#op-meddesalinator) | palette | feed → distillate, brine | Parallel-feed MED: per-effect mass, salt and energy balances on Sharqawy properties | No WaterTAP counterpart; balances only (no fitted coefficients) |
+| [thermal properties](unit-operations-water.md#water-thermal-properties) | library | (T, S, P) → c_p, h, h_fg, p_v, BPE | Sharqawy 2010 Eqs. 9, 36, 37, 43, 53-55; Nayar 2016 digits via WaterTAP | Content verified to the printed digits; brine vapor pressure equal to WaterTAP's to 1e-9 |
 | [`swro_performance` / `build_swro_flowsheet`](unit-operations-water.md#water-swro) | library | intake → LCOW, SEC, recovery, ... | The plant above | Against WaterTAP's `RO_with_energy_recovery` layout |
 
 **Palette**: registered with the editor through the plugin's `register()`
@@ -60,6 +63,9 @@ still differentiable.
   unverified against their papers.
 - **Scaling**: the Pitzer equations are checked against their source and
   the numbers against PHREEQC; the parameters themselves are PHREEQC's.
+- **MVC**: equal to WaterTAP's model to 4e-7: an implementation check
+  (same equations, same properties), not a plant validation. MED rests on
+  mass and energy balances only and has not been cross-checked.
 - **Costs**: WaterTAP's default parameters, a benchmark convention, not a
   cost estimate for a real plant.
 
@@ -74,5 +80,7 @@ still differentiable.
 - No nanofiltration yet.
 - Networks: water quality is not differentiable; no rule-based controls,
   volume curves or quality sources.
-- No conventional treatment, thermal desalination or wastewater yet
-  (`src/difflow_water/DESIGN.md`, phases 3-4).
+- Thermal: no MSF; MED without inter-effect preheaters or flash boxes and
+  without an independent cross-check.
+- No conventional treatment or wastewater yet
+  (`src/difflow_water/DESIGN.md`, phases 3b-4).

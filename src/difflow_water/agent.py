@@ -19,7 +19,11 @@ PressureExchanger (outlets hp_feed, brine, bypass; leakage, mixing),
 WaterPump. Distribution networks: difflow_water.network (WaterNetwork,
 NetworkModel(net).solve(params)) solve heads and flows equation-oriented with
 EPANET 2.2's equations, differentiably; load_example("Net3") gives an EPANET
-example with EPANET's own answer. swro_performance(feed, ro, ro_pressure) gives the seawater RO +
+example with EPANET's own answer. Thermal desalination: MVCDesalinator /
+mvc_performance (WaterTAP's single-stage MVC plant; LCOW, SEC, evaporator
+area) and MEDDesalinator / med_performance (parallel-feed multi-effect
+distillation; GOR, areas); thermal seawater properties (cp, enthalpy,
+latent heat, vapor pressure, BPE) in difflow_water.seawater. swro_performance(feed, ro, ro_pressure) gives the seawater RO +
 pressure exchanger plant's recovery, specific energy and LCOW as one
 differentiable function; build_swro_flowsheet gives the same plant as a
 Flowsheet. Costing follows WaterTAP's default costing package so results
@@ -33,7 +37,11 @@ the brine's volume from its feed; the feed must carry at least that volume
 (bypass_fraction >= 0). With pressure-exchanger mixing the concentrate loop
 is a real recycle; with mixing = 0 one pass is exact. Saturation indices are
 at 1 atm and assume equal rejection of all solutes; pH_macinnes is the scale
-PHREEQC uses."""
+PHREEQC uses. MVC: the default mode solves the compressor pressure ratio
+for saturated condensate; with mode="fixed_pressure_ratio" most designs are
+unphysical, so check info['feasible'] (condensate_subcooling >= 0,
+evaporator_dT_out > 0). Size the preheater areas to the feed (about 4.5 and
+3.9 m^2 per kg/s at WaterTAP's optimum)."""
 
 
 def support() -> AgentSupport:

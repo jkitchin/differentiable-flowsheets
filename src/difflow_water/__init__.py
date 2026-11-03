@@ -6,7 +6,9 @@ seawater RO + pressure exchanger flowsheet. Phase 1b: a Pitzer activity
 model, seawater/brine speciation and mineral saturation indices (scaling),
 RO trains and pressure-exchanger leakage. Phase 2: water distribution
 networks (:mod:`difflow_water.network`), solved equation-oriented and
-differentiably, cross-checked against EPANET 2.2.
+differentiably, cross-checked against EPANET 2.2. Phase 3a: thermal
+desalination (:mod:`difflow_water.thermal`): mechanical vapor compression
+(cross-checked against WaterTAP) and multi-effect distillation.
 The plan for the rest (distribution networks, conventional treatment,
 thermal desalination, wastewater) is ``src/difflow_water/DESIGN.md``.
 
@@ -23,9 +25,9 @@ Example:
     True
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
-from difflow_water import chemistry, network
+from difflow_water import chemistry, network, thermal
 from difflow_water.chemistry import pitzer, seawater, speciation
 from difflow_water.chemistry.speciation import (
     reference_seawater,
@@ -66,6 +68,15 @@ from difflow_water.streams import (
     to_watertap_state,
     volumetric_flow,
 )
+from difflow_water.thermal import (
+    MEDDesalinator,
+    MEDParams,
+    MVCCostingParams,
+    MVCDesalinator,
+    MVCParams,
+    med_performance,
+    mvc_performance,
+)
 
 __all__ = [
     "__version__",
@@ -80,6 +91,8 @@ __all__ = [
     "ROStage", "ROStageParams", "local_flux", "ROTrain", "ROTrainParams",
     "PressureExchanger", "PressureExchangerParams",
     "WaterPump", "WaterPumpParams",
+    "MVCDesalinator", "MVCParams", "MVCCostingParams", "mvc_performance",
+    "MEDDesalinator", "MEDParams", "med_performance", "thermal",
     # economics
     "CostingParams", "capital_recovery_factor", "cost_ro", "cost_hp_pump", "cost_lp_pump",
     "cost_pressure_exchanger", "lcow",
@@ -106,6 +119,10 @@ def register(registry):
          "Isobaric pressure exchanger with feed bypass outlet"),
         ("WaterPump", WaterPump,
          "Isothermal water pump with mechanical efficiency"),
+        ("MVCDesalinator", MVCDesalinator,
+         "Single-stage mechanical vapor compression plant (WaterTAP's MVC layout)"),
+        ("MEDDesalinator", MEDDesalinator,
+         "Parallel-feed multi-effect distillation plant"),
     ]:
         registry.register(name=name, cls=cls, category="water",
                           description=description, plugin="difflow_water")

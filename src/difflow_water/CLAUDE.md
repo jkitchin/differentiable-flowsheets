@@ -98,7 +98,23 @@ Notes for Claude Code, loaded when working in this directory. The plan is
   and sub-QZERO flows carry no water: giving them their modelled trickle
   put Net3's node 10 at 100 % a step early.
 
+- Thermal (`thermal/`): `mvc_performance` is WaterTAP 1.8.0's
+  `mvc_single_stage`, equation for equation; rerun `make watertap-compare`
+  after a change (current state: 4e-7 on every output, optimum to 1e-7).
+  Three WaterTAP quirks are matched on purpose and documented: costs in
+  USD 2018 (the example sets USD_2020 after costing, which does nothing),
+  the example's preheater `deltaP = +7 kPa` is a GAIN (comparison passes
+  `hx_dP = -7e3`; difflow's default is a loss), compressor `gamma = 1.3`.
+  The plant is ONE `optimistix` Newton solve (8 unknowns); do not split it
+  into sequential sub-solves (the condenser-evaporator coupling makes
+  that a recycle). Default `mode="saturated_condensate"`: with a fixed
+  pressure ratio almost every design is unphysical (see the docs); keep the
+  `feasible` flag honest. MED is balances only: do not add fitted
+  coefficients to it without a content-verified source.
+
 ## Not palette operations
 
 `chemistry`, `economics`, `network`, `swro_performance`/`build_swro_flowsheet`
-are libraries. Palette: `ROStage`, `ROTrain`, `PressureExchanger`, `WaterPump`.
+are libraries. `mvc_performance`, `med_performance` and the thermal properties are
+libraries too. Palette: `ROStage`, `ROTrain`, `PressureExchanger`,
+`WaterPump`, `MVCDesalinator`, `MEDDesalinator`.

@@ -160,6 +160,7 @@ convergence:
 # benchmarks/watertap/swro_px.py writes in a WaterTAP environment)
 watertap-compare:
 	python benchmarks/watertap/compare_swro_px.py
+	python benchmarks/watertap/compare_mvc.py
 
 # difflow_water's Pitzer speciation vs PHREEQC (hand-run; reference JSON from
 # benchmarks/phreeqc/seawater_brines.py in a phreeqpython environment)

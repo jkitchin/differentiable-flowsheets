@@ -1,0 +1,111 @@
+{
+ "versions": {
+  "watertap": "1.8.0",
+  "idaes-pse": "2.13.0",
+  "pyomo": "6.10.1",
+  "python": "3.13.18"
+ },
+ "flowsheet": "watertap.flowsheets.mvc.mvc_single_stage (build, set_operating_conditions, initialize_system, main)",
+ "cases": {
+  "optimum": {
+   "inputs": {
+    "feed_H2O_kg_s": 40.0,
+    "feed_TDS_kg_s": 4.444444444444445,
+    "T_feed": 298.15,
+    "P_feed": 101325.0,
+    "recovery": 0.5,
+    "T_brine": 348.1499994680595,
+    "pressure_ratio": 1.6048158773760737,
+    "compressor_efficiency": 0.8,
+    "U_evaporator": 3000.0,
+    "A_hx_distillate": 199.22949413789036,
+    "A_hx_brine": 174.41716424764584,
+    "U_hx": 2000.0,
+    "electricity_cost": 0.1
+   },
+   "outputs": {
+    "Q_ext": 0.0,
+    "evaporator_area": 789.1347769078595,
+    "evaporator_heat": 52668022.69222934,
+    "evaporator_lmtd": 22.24715989874432,
+    "T_evaporator_feed": 342.01385653728744,
+    "P_brine": 32448.24074880972,
+    "brine_salinity": 0.2,
+    "T_compressed_vapor": 399.40415991531637,
+    "P_compressed_vapor": 52073.45194641701,
+    "compressor_work": 1779255.7821916542,
+    "T_condensate": 355.4836067446315,
+    "T_distillate_out": 311.2931095905997,
+    "T_brine_out": 305.13363996929763,
+    "pump_feed_work": 362.40098240959617,
+    "pump_brine_work": 1532.5959869985618,
+    "pump_distillate_work": 1145.1416842529964,
+    "product_flow_vol": 0.02238187669938635,
+    "SEC": 22.119780520834684,
+    "LCOW": 4.518534772275487,
+    "capital": {
+     "pump_feed": 1382.9221488750188,
+     "pump_brine": 5848.386286386512,
+     "pump_distillate": 4369.860667109434,
+     "hx_distillate": 604605.7090635443,
+     "hx_brine": 529307.2379625388,
+     "mixer_feed": 30508.880569995057,
+     "evaporator": 7982676.684889805,
+     "compressor": 2120122.814498839
+    },
+    "total_capital": 11278822.496087093,
+    "total_operating": 1744489.218674316
+   }
+  },
+  "sim_lower_PR": {
+   "inputs": {
+    "feed_H2O_kg_s": 40.0,
+    "feed_TDS_kg_s": 4.444444444444445,
+    "T_feed": 298.15,
+    "P_feed": 101325.0,
+    "recovery": 0.5,
+    "T_brine": 348.15,
+    "pressure_ratio": 1.58,
+    "compressor_efficiency": 0.8,
+    "U_evaporator": 3000.0,
+    "A_hx_distillate": 199.0,
+    "A_hx_brine": 174.0,
+    "U_hx": 2000.0,
+    "electricity_cost": 0.1
+   },
+   "outputs": {
+    "Q_ext": 0.0,
+    "evaporator_area": 965.6985413967575,
+    "evaporator_heat": 52869251.60309379,
+    "evaporator_lmtd": 18.249053003855856,
+    "T_evaporator_feed": 340.80481780455204,
+    "P_brine": 32448.24149786463,
+    "brine_salinity": 0.2,
+    "T_compressed_vapor": 397.56641374468666,
+    "P_compressed_vapor": 51268.221566626125,
+    "compressor_work": 1721697.3702435365,
+    "T_condensate": 352.7072017748083,
+    "T_distillate_out": 310.6587236532911,
+    "T_brine_out": 305.1519503425926,
+    "pump_feed_work": 362.40098240959617,
+    "pump_brine_work": 1532.595968863795,
+    "pump_distillate_work": 1143.0758850376387,
+    "product_flow_vol": 0.02237674596561682,
+    "SEC": 21.4103149479127,
+    "LCOW": 4.80634527600264,
+    "capital": {
+     "pump_feed": 1382.9221488750188,
+     "pump_brine": 5848.386217184241,
+     "pump_distillate": 4361.977577303628,
+     "hx_distillate": 603909.258638041,
+     "hx_brine": 528041.2613217041,
+     "mixer_feed": 30488.622033798445,
+     "evaporator": 9768748.579610609,
+     "compressor": 2087338.5502548676
+    },
+    "total_capital": 13030119.557802385,
+    "total_operating": 1751616.3671974873
+   }
+  }
+ }
+}
