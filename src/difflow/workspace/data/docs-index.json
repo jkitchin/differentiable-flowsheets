@@ -1,5 +1,5 @@
 {
- "n_sections": 1265,
+ "n_sections": 1281,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -10716,6 +10716,162 @@
     "refinery-limitations"
    ],
    "text": "- **Dynamics: illustrative holdups, fixed pressures.** Every refinery unit has a dynamic version in `difflow_refinery.dynamic` (the hydrotreater, the reformer train and recycle loop, the hydrocracker, the hydrogen plant, the amine unit, the sulfur plant and the crude unit); the holdup sizes, heat capacities and time constants are illustrative, pressures are fixed, columns are their steady splits behind holdups, and no transient has been compared with a plant or a published dynamic model. See [Dynamic operation](#refinery-dynamic).\n- **The reformer's kinetics are illustrative.** The rate-law forms and activation energies are Smith's (1959, unverified transcription); the pre-exponentials are this module's, chosen for plausible behaviour, and no published commercial-reformer simulation is reproduced. Pure-compound octanes other than the reference fuels are recalled, not checked against ASTM STP 225. The stabilizer is a component split, not a column. See [Catalytic reforming](#refinery-reforming).\n- **The crude unit is the atmospheric column only.** The preflash drum and preheat train are not modelled; the inlet is the preheat train's outlet. The vacuum unit is a separate operation, fed from the crude unit's residue in a `Flowsheet` (above).\n- **Thermodynamics:** Raoult's law and ideal-gas-path enthalpies. This is the usual model for an atmospheric column at one or two bar; it is not a cubic equation of state.\n- **Equilibrium stages.** There are no tray efficiencies or hydraulics.\n- **Boiling ranges are TBP, not ASTM D86.**\n- **FCC:** illustrative kinetics (no published parameter set reproduced), a simplified main fractionator (a TBP split, not a `StageColumn`), no gas plant, no 10-lump scheme, no literature cross-check. See [FCC: what is tested, and what is not](#refinery-fcc-validation).\n- **Composition is correlated, not measured.** Hydrocarbon types and hydrogen come from Riazi-Daubert / Goossens (or n-d-M) unless the caller gives PIONA, SARA or hydrogen data; the default sulfur- and nitrogen-class splits are illustrative. The MNL50 worked examples for those correlations are not reproduced (see [the composition section](#refinery-composition)).\n- **Hydrotreater kinetics are illustrative** (rate forms from the literature, constants chosen for CoMo-like trends), and the Korsten-Hoffmann cross-check is not done; see [the hydrotreater](#refinery-hydrotreater-no"
+  },
+  {
+   "anchor": "water-treatment-and-desalination-unit-operations",
+   "heading": "Water Treatment and Desalination Unit Operations",
+   "path": "Water Treatment and Desalination Unit Operations",
+   "source": "unit-operations-water.md",
+   "targets": [],
+   "text": "![difflow_water](../images/plugins/difflow-water-logo.svg)\n\nThis page documents the `difflow_water` plugin: seawater properties, a\nseawater reverse-osmosis (RO) stage, a pressure exchanger, water pumps, a\nlevelized-cost-of-water (LCOW) model, and the seawater RO + pressure\nexchanger plant built from them. A one-page map is in\n[Water units at a glance](water-summary.md); the plan for the rest of the\nplugin (distribution networks, conventional treatment, thermal\ndesalination, wastewater) is `src/difflow_water/DESIGN.md`.\n\nTwo rules shape this plugin, the same ones `difflow_refinery` follows:\n\n- **Every equation, coefficient and data value has a reference with a\n  recorded verification status** (the [references table](water-references)\n  at the end). \"Citation verified\" means the bibliographic record was\n  checked; it says nothing about the content. \"Content verified\" means the\n  coded equation and coefficients were read against the source. Anything\n  taken second-hand (from another code or a review) or recalled is marked\n  **(unverified)**, here and in the code.\n- **WaterTAP is the benchmark.** The units model the same physics as\n  WaterTAP's (same property correlations, same flux laws, same costing\n  structure and defaults), and `benchmarks/watertap/` runs the same cases\n  in WaterTAP so the differences are measured, not assumed\n  ([comparison](water-watertap-comparison)).\n\nAll of it is differentiable with JAX: `jax.grad` of the LCOW with respect\nto the RO pressure, membrane area or permeabilities is exact, through the\nRO integration and its local flux solves.\n\n---\n\n(water-streams)="
+  },
+  {
+   "anchor": "seawater-streams",
+   "heading": "Seawater streams",
+   "path": "Water Treatment and Desalination Unit Operations > Seawater streams",
+   "source": "unit-operations-water.md",
+   "targets": [
+    "water-streams"
+   ],
+   "text": "A difflow_water stream is an ordinary difflow stream: molar flows in mol/s\nunder `F_<species>`, plus `T` (K) and `P` (Pa). Seawater carries two species:\n\n- `H2O`, molar mass 18.01528 g/mol;\n- `TDS`, sea salt, counted in moles of the Reference-Composition mean molar\n  mass `M_S = 31.4038218 g/mol` [S4, from S3]. One mole of `TDS` is\n  `M_S` grams of sea salt, and the molality `S / ((1 - S) M_S)` already\n  counts every ion.\n\n```python\nimport difflow_water as dw\n\nfeed = dw.make_seawater_stream(flow_vol=1e-3, salinity=0.035, T=298.15, P=101325.0)\ndw.salinity(feed)              # 0.035 kg/kg\ndw.volumetric_flow(feed)       # 1e-3 m^3/s\ndw.concentration_mg_per_L(feed)  # ~35 800 mg/L\ndw.to_watertap_state(feed)     # WaterTAP's flow_mass_phase_comp, temperature, pressure\n```\n\nMixing (`combine_seawater`) sums flows, takes the flow-weighted temperature\nand the lowest pressure (difflow's `combine_streams`).\n\n---\n\n(water-seawater-properties)="
+  },
+  {
+   "anchor": "seawater-properties",
+   "heading": "Seawater properties",
+   "path": "Water Treatment and Desalination Unit Operations > Seawater properties",
+   "source": "unit-operations-water.md",
+   "targets": [
+    "water-seawater-properties"
+   ],
+   "text": "`difflow_water.seawater` (the module `difflow_water.chemistry.seawater`)\nimplements the correlations of Sharqawy, Lienhard and Zubair [S1]. T is in\nK, salinity `S` is a mass fraction (kg/kg); the correlations use ITS-90\nCelsius `t` internally.\n\n| Function | Equation | Source | Validity | Stated accuracy |\n|---|---|---|---|---|\n| `density_water(T)` | `a1 + a2 t + a3 t^2 + a4 t^3 + a5 t^4` | [S1] Eq. 8, S = 0 | 0-180 C | +-0.1 % |\n| `density(T, S)` | Eq. 8: pure water + `b1 S + b2 S t + b3 S t^2 + b4 S t^3 + b5 S^2 t^2` | [S1] Eq. 8 | 0-180 C, 0-0.16 kg/kg | +-0.1 % |\n| `viscosity_water(T)` | `4.2844e-5 + (0.157 (t + 64.993)^2 - 91.296)^-1` | [S1] Eq. 23 | 0-180 C | +-1.5 % |\n| `viscosity(T, S)` | `mu_w (1 + A S + B S^2)` | [S1] Eq. 22 | 0-180 C, 0-0.15 kg/kg | +-1.5 % |\n| `osmotic_coefficient(T, S)` | 10-term polynomial in t and S | [S1] Eq. 49 | 0-200 C, 0.01-0.12 kg/kg | +-1.4 % |\n| `osmotic_pressure(T, S)` | `phi m rho_w R T` | see below | as Eq. 49 | |\n| `salinity_from_mass_concentration(C, T)` | Newton on `S rho(T, S) = C` | -- | | |\n\n**Content verification.** The coefficients of Eqs. 8, 22, 23 and 49 were\nread against the authors' corrected version of [S1] (MIT; it carries the\npaper's five published corrections, none of which touches these four\nequations). Spot values the code reproduces: pure water 996.9 kg/m^3 and\n0.890 mPa s at 25 C; seawater (35 g/kg, 25 C) 1023.6 kg/m^3, osmotic\ncoefficient 0.907, osmotic pressure 25.9 bar.\n\n**Osmotic pressure.** `pi = phi m rho_w R T`, with `m` the molality on the\n`M_S` basis and `rho_w` the pure-water density, is the dilute form of the\nthermodynamic definition `pi = -(R T / V_w) ln a_w` with\n`ln a_w = -phi m M_w`. It is the form WaterTAP's seawater property package\ncodes, citing Nayar et al. 2016 [S2] Eq. 48 (that paper was not read here,\nso the attribution is second-hand, **unverified**). Using the same form\nkeeps the two codes comparable.\n\n**Limits.** Eq. 49 gives `phi = 0.8945` at `S = 0`, not 1, so the\nosmotic pressure of a permeate (S ~ 1e-4) is an extrapolation. It is small\nnext to the feed's, and WaterTAP does the same. `seawater.validity(T, S)`\nreports whether a concrete state is inside each correlation's range.\n\n---\n\n(op-rostage)="
+  },
+  {
+   "anchor": "rostage",
+   "heading": "ROStage",
+   "path": "Water Treatment and Desalination Unit Operations > Seawater properties > ROStage",
+   "source": "unit-operations-water.md",
+   "targets": [
+    "op-rostage"
+   ],
+   "text": "A seawater RO stage in plug flow, integrated along its membrane area.\n\n| Inlet | Outlets |\n|---|---|\n| `feed`: seawater at the feed pressure | `concentrate` (retentate), `permeate` |\n\n**Local fluxes** (solution-diffusion [M1], in WaterTAP's form so that the\nsame `A` and `B` mean the same thing in both codes):\n\n```\nJ_w = A rho_w (P_f - P_p - (pi(S_m) - pi(S_p)))     water, kg/(m^2 s)\nJ_s = B (C_m - C_p)                                 salt,  kg/(m^2 s)\nS_p = J_s / (J_s + J_w)                             local permeate\n(C_m - C_p) / (C_b - C_p) = exp(J_v / k),  J_v = J_w / rho_w   (film theory)\n```\n\nwith `C = S rho(T, S)` the salt mass concentration and `m` (wall), `b`\n(bulk), `p` (permeate). For a given `J_w` the salt flux is the positive\nroot of a quadratic, so the local problem is one equation in `J_w`,\nincreasing on `[0, A rho_w (P_f - P_p)]`. It is solved by bisection plus a\nvalue-neutral Newton step, which gives implicit-function gradients. The\npermeate volume flux uses the pure-water density (`S_p` ~ 1e-4).\n\n**Feed channel** (when `k=None` and/or `pressure_drop=\"calculated\"`), as\ncoded in WaterTAP 1.8.0 (`membrane_channel_base.py`):\n\n| Quantity | Equation | Source | Status |\n|---|---|---|---|\n| hydraulic diameter | `d_h = 4 eps / (2/h + (1 - eps) 8/h)` | [M4] Eq. 17 | **unverified** (via WaterTAP) |\n| Reynolds number | `Re = m_dot d_h / (A_x mu)`, `A_x = h W eps` | definition | |\n| Sherwood number | `Sh = 0.46 (Re Sc)^0.36`, `k = Sh D / d_h` | none identified | **unverified**; WaterTAP names no source |\n| diffusivity | `D = 1.51e-9 - 2.00e-9 w + 3.01e-8 w^2 - 1.22e-7 w^3 + 1.53e-7 w^4` (NaCl, 25 C) | [M7] Eq. 6 | **unverified** (via WaterTAP) |\n| friction, `module_type=\"flat_sheet\"` (default) | `f = 0.42 + 189.3 / Re` | [M8] SI Eq. S27 | **unverified** (via WaterTAP) |\n| friction, `module_type=\"spiral_wound\"` | `f = 6.23 Re^-0.3` | [M4] Eq. 24 | **unverified** (via WaterTAP) |\n| pressure gradient | `dP/dx = -f rho u^2 / (2 d_h)` | Darcy-Weisbach | |\n\n**Parameters** (`ROStageParams`): `A_w` (m/(s Pa)), `B` (m/s), `area`\n(m^2), `width` (m; length = area/width), `permeate_pressure` (Pa), `k`\n(m/s, or None to compute it), `pressure_drop` (`\"none\"`, `\"calculated\"` or\na fixed total in Pa), `module_type`, `channel_height` (m),\n`spacer_porosity`, `n_steps` (RK4 steps, default 40)."
+  },
+  {
+   "anchor": "pressureexchanger",
+   "heading": "PressureExchanger",
+   "path": "Water Treatment and Desalination Unit Operations > Seawater properties > PressureExchanger",
+   "source": "unit-operations-water.md",
+   "targets": [
+    "op-pressureexchanger"
+   ],
+   "text": "An isobaric energy-recovery device [M5]: the pressure of the RO\nconcentrate is handed to an equal volume of incoming seawater. Equations as\nin WaterTAP 1.8.0's `PressureExchanger` (efficiency form, optional mixing,\nno leakage):\n\n```\nP_feed,out - P_feed,in = eta (P_brine,in - P_brine,out)\nP_brine,out = P_feed,in\nV_feed,out  = V_brine,in\nC_feed,out  = (1 - x) C_feed,in + x C_brine,in     (salt moves brine -> feed)\n```\n\n| Inlets | Outlets |\n|---|---|\n| `brine` (high-pressure concentrate), `feed` (low-pressure seawater) | `hp_feed`, `brine`, `bypass` |\n\nIn a sequential flowsheet the equal-flow condition is met by drawing the\nbrine's volume from the seawater fed to the exchanger; the rest leaves as\n`bypass` (to the high-pressure pump). Feeding it the whole intake therefore\nreproduces WaterTAP's splitter without a split fraction to iterate. The\nfeed must carry at least the brine's volume (`info[\"bypass_fraction\"] >= 0`).\n\nDefaults `efficiency=0.95`, `mixing=0` are the values WaterTAP's\n`RO_with_energy_recovery` example fixes: design inputs, **ILLUSTRATIVE**,\nnot sourced performance data.\n\n---\n\n(op-waterpump)="
+  },
+  {
+   "anchor": "waterpump",
+   "heading": "WaterPump",
+   "path": "Water Treatment and Desalination Unit Operations > Seawater properties > WaterPump",
+   "source": "unit-operations-water.md",
+   "targets": [
+    "op-waterpump"
+   ],
+   "text": "Isothermal, incompressible pump: `W_fluid = V dP`, `W_mech = W_fluid / eta`,\nwith `V` the inlet volumetric flow from the seawater density. This is the\npump of WaterTAP's RO flowsheets (IDAES isothermal `Pump`), so pump energies\ncompare one for one. Give `outlet_pressure` or `deltaP`, and `efficiency`\n(default 0.8). Info: `deltaP`, `flow_vol`, `work_fluid`, `work_mechanical`.\n\n---\n\n(water-costing)="
+  },
+  {
+   "anchor": "levelized-cost-of-water",
+   "heading": "Levelized cost of water",
+   "path": "Water Treatment and Desalination Unit Operations > Levelized cost of water",
+   "source": "unit-operations-water.md",
+   "targets": [
+    "water-costing"
+   ],
+   "text": "`difflow_water.economics` reproduces the structure and default parameters\nof WaterTAP 1.8.0's default costing package (`WaterTAPCosting`) and its RO,\npump and pressure-exchanger costing methods (read from WaterTAP's source):\n\n```\ncapital_i      = TIC * unit_cost_i * size_i\ntotal_capital  = total_investment_factor * sum_i capital_i\nopex           = membrane_replacement * membrane_cost * area\n                 + maintenance_labor_chemical_factor * sum_i capital_i\n                 + electricity_cost * P_kW * 8766 h * utilization\nCRF            = wacc / (1 - (1 + wacc)^-lifetime)\nLCOW           = (total_capital * CRF + opex) / (Q_product * 1 yr * utilization)\nSEC            = P_kW / Q_product[m^3/h]\n```\n\n| Parameter (`CostingParams`) | Default | Basis of size |\n|---|---|---|\n| `utilization_factor` | 0.9 | |\n| `electricity_cost` | 0.07 USD/kWh | pump `work_mechanical` |\n| `plant_lifetime`, `wacc` | 30 yr, 0.0930734 (CRF = 0.1) | |\n| `TIC` | 2.0 | |\n| `total_investment_factor` | 1.0 | |\n| `maintenance_labor_chemical_factor` | 0.03 /yr | |\n| `membrane_cost`, `membrane_replacement` | 30 USD/m^2, 0.2 /yr | membrane area |\n| `hp_pump_cost` | 1.908 USD/W | mechanical work |\n| `lp_pump_cost` | 889 USD/(L/s) | inlet flow |\n| `px_cost` | 535 USD/(m^3/h) | low-pressure flow |\n\nAll USD 2018, a year of 365.25 days. WaterTAP's code cites no source for\nthese numbers; they are the benchmark's convention (**second-hand,\nILLUSTRATIVE** for any real plant). Change them through `CostingParams`.\n\n---\n\n(water-swro)="
+  },
+  {
+   "anchor": "seawater-ro-with-a-pressure-exchanger",
+   "heading": "Seawater RO with a pressure exchanger",
+   "path": "Water Treatment and Desalination Unit Operations > Seawater RO with a pressure exchanger",
+   "source": "unit-operations-water.md",
+   "targets": [
+    "water-swro"
+   ],
+   "text": "The phase-1 plant is WaterTAP's `RO_with_energy_recovery` layout:\n\n```\nseawater -> PX (low-pressure side) -bypass-> P1 (HP pump) --+\n             |  ^                                           M1 -> RO -> permeate\n             |  +---------- RO concentrate <----------------+ |\n             +--hp_feed--> P2 (booster) --------------------->+\n             +--brine--> disposal\n```\n\n- `dw.swro_performance(feed, ro, ro_pressure, px=..., costing=...)` is the\n  plant as one differentiable function; it returns `LCOW`, `SEC`,\n  `recovery`, permeate and brine salinities, pump works, the costing\n  breakdown and the unit infos. Without exchanger mixing the RO feed is the\n  intake at the RO pressure and one pass is exact; with mixing the loop is\n  solved by substitution (`n_passes`).\n- `dw.build_swro_flowsheet(ro, ro_pressure, ...)` is the same plant as a\n  difflow `Flowsheet` (feed `\"seawater\"`, recycle `ro_conc_out -> ro_conc`)\n  for the session tools and the editor.\n\n```python\nimport jax\nfeed = dw.make_seawater_stream(flow_vol=1e-3, salinity=0.035)\nro = dw.ROStageParams(A_w=4.2e-12, B=3.5e-8, area=50.0)\nr = dw.swro_performance(feed, ro, ro_pressure=65e5)\ndLCOW_dP = jax.grad(lambda P: dw.swro_performance(feed, ro, P)[\"LCOW\"])(65e5)\n```\n\nThe example notebook `examples/70_water_swro_design.ipynb` minimizes the\nLCOW over the RO pressure and membrane area with a brine salinity limit.\n\n---\n\n(water-watertap-comparison)="
+  },
+  {
+   "anchor": "comparison-with-watertap",
+   "heading": "Comparison with WaterTAP",
+   "path": "Water Treatment and Desalination Unit Operations > Comparison with WaterTAP",
+   "source": "unit-operations-water.md",
+   "targets": [
+    "water-watertap-comparison"
+   ],
+   "text": "`benchmarks/watertap/swro_px.py` builds the plant above in WaterTAP 1.8.0\n(IDAES 2.13.0, Pyomo 6.10.1, IPOPT from `idaes get-extensions`) with the\nseawater property package and the 1-D RO model (calculated mass transfer\nand pressure drop, 160 finite elements), at a fixed design (pump outlet\npressure and area fixed), and writes `swro_px_reference.json`.\n`benchmarks/watertap/compare_swro_px.py` runs difflow_water on the same\ninputs (RK4, 80 steps) and writes `swro_px_comparison.md`. Neither is a test:\nWaterTAP is not a difflow dependency, and the test suite does not compare\nagainst reference data. Run them by hand when a unit changes.\n\nThree cases: `base` (35 g/kg, 65 bar, 50 m^2), `high_pressure` (35 g/kg,\n75 bar, 80 m^2) and `brackish_like` (15 g/kg, 30 bar, 60 m^2, 30 C). Largest\nrelative difference over the three, per quantity:\n\n| Quantity | max abs. rel. diff. | Quantity | max abs. rel. diff. |\n|---|---|---|---|\n| RO water recovery | 0.22 % | LCOW | 0.16 % |\n| permeate salinity | 0.20 % | SEC | 0.10 % |\n| concentrate salinity | 0.12 % | P1 work | 0.22 % |\n| feed-side pressure drop | 0.28 % | P2 (booster) work | 0.24 % |\n| average water flux | 0.22 % | PX outlet pressure | 0.02 % |\n| outlet Reynolds number | 0.14 % | total capital / operating | 0.06 % / 0.07 % |\n\nThe base case in full:\n\n| Quantity | WaterTAP | difflow | rel. diff |\n|---|---|---|---|\n| RO `recovery_mass_water` | 0.42383 | 0.423827 | -0.00 % |\n| RO `salinity_permeate` | 2.42628e-4 | 2.42319e-4 | -0.13 % |\n| RO `deltaP` (Pa) | -212208 | -212689 | -0.23 % |\n| `LCOW` (USD/m^3) | 0.410379 | 0.410409 | +0.01 % |\n| `SEC` (kWh/m^3) | 2.4696 | 2.46983 | +0.01 % |\n| `work_P1` (W) | 3355.26 | 3355.23 | -0.00 % |\n| `work_P2` (W) | 378.44 | 378.773 | +0.09 % |\n\nWhat the comparison taught:"
+  },
+  {
+   "anchor": "known-gaps",
+   "heading": "Known gaps",
+   "path": "Water Treatment and Desalination Unit Operations > Known gaps",
+   "source": "unit-operations-water.md",
+   "targets": [
+    "water-gaps"
+   ],
+   "text": "- Seawater only (one lumped salt). No ion speciation, carbonate chemistry,\n  scaling indices or activity models yet (DESIGN.md phase 1b), so recovery\n  is not limited by scaling; the example uses a brine salinity limit\n  instead.\n- One RO stage type; multi-stage trains are built from stages by hand.\n- The channel correlations (Sherwood, friction, diffusivity, hydraulic\n  diameter) are WaterTAP's and are **unverified** against their papers; the\n  Sherwood correlation has no identified source.\n- Costing defaults are WaterTAP's convention, not sourced cost data.\n- Pressure exchanger leakage is not modelled.\n\n---\n\n(water-references)="
+  },
+  {
+   "anchor": "references",
+   "heading": "References",
+   "path": "Water Treatment and Desalination Unit Operations > References",
+   "source": "unit-operations-water.md",
+   "targets": [
+    "water-references"
+   ],
+   "text": "Status terms: **Citation verified (Crossref)**: authors, title, journal,\nyear, volume, pages and DOI matched against the Crossref record.\n**Content verified**: the coded equation/coefficients read against the\nsource. **(unverified)**: second-hand or recalled. **ILLUSTRATIVE**: no\nsource; a design input or placeholder.\n\n| ID | Reference | Used for | Status |\n|---|---|---|---|\n| S1 | Sharqawy, M.H.; Lienhard, J.H.; Zubair, S.M. \"Thermophysical properties of seawater: a review of existing correlations and data.\" *Desalin. Water Treat.* **2010**, 16(1-3), 354--380. doi:10.5004/dwt.2010.1079 | Density (Eq. 8), viscosity (Eqs. 22, 23), osmotic coefficient (Eq. 49) | Citation verified (Crossref). **Content verified**: coefficients read against the authors' corrected version (web.mit.edu/lienhard), including the five correction notes (none affect these equations). |\n| S2 | Nayar, K.G.; Sharqawy, M.H.; Banchik, L.D.; Lienhard V, J.H. \"Thermophysical properties of seawater: A review and new correlations that include pressure dependence.\" *Desalination* **2016**, 390, 1--24. doi:10.1016/j.desal.2016.02.024 | Osmotic pressure form `phi m rho_w R T` (Eq. 48, per WaterTAP) | Citation verified (Crossref). Content **unverified** (paper not reached; attribution from WaterTAP's code). |\n| S3 | Millero, F.J.; Feistel, R.; Wright, D.G.; McDougall, T.J. \"The composition of Standard Seawater and the definition of the Reference-Composition Salinity Scale.\" *Deep-Sea Res. I* **2008**, 55(1), 50--72. doi:10.1016/j.dsr.2007.10.001 | Origin of `M_S` | Citation verified (Crossref). Value read via S4. |\n| S4 | IOC, SCOR and IAPSO. *The International Thermodynamic Equation of Seawater -- 2010: Calculation and Use of Thermodynamic Properties*. Intergovernmental Oceanographic Commission, Manuals and Guides No. 56, UNESCO, **2010** (TEOS-10 manual, teos-10.org) | `M_S = 31.4038218 g/mol` | **Content verified**: value read in the manual (\"M_S = 31.403 821 8... g mol^-1, from Millero et al. (2008a)\"). No DOI. |\n| M1 | Wijmans, J.G.; Baker, R.W. \"The solution-diffusion model: a review.\" *J. Membr. Sci.* **1995**, 107(1-2), 1--21. doi:10.1016/0376-7388(95)00102-I | Water and salt flux laws | Citation verified (Crossref). The flux forms are the standard ones; not re-read against the paper (unverified). |\n| M4 | Schock, G.; Miquel, A. \"Mass transfer and pressure loss in spiral wound modules.\" *D"
+  },
+  {
+   "anchor": "water-units-at-a-glance",
+   "heading": "Water Units at a Glance",
+   "path": "Water Units at a Glance",
+   "source": "water-summary.md",
+   "targets": [],
+   "text": "A one-page map of the `difflow_water` plugin: every unit, what it takes and\nmakes, what model it is, and how far it has been validated. The full\ntreatment (equations, parameters, references) is in\n[Water Treatment and Desalination Unit Operations](unit-operations-water.md).\n\n---\n\n(water-summary-map)="
+  },
+  {
+   "anchor": "how-the-units-connect-phase-1",
+   "heading": "How the units connect (phase 1)",
+   "path": "Water Units at a Glance > How the units connect (phase 1)",
+   "source": "water-summary.md",
+   "targets": [
+    "water-summary-map"
+   ],
+   "text": "```\n intake seawater (H2O + TDS)\n        \u2502\n        \u25bc\n PressureExchanger \u2500\u2500bypass\u2500\u2500\u25ba WaterPump (HP) \u2500\u2500\u2510\n   \u25b2      \u2502                                     \u251c\u2500\u25ba ROStage \u2500\u2500\u25ba permeate (product)\n   \u2502      \u2514\u2500\u2500hp_feed\u2500\u2500\u25ba WaterPump (booster) \u2500\u2500\u2500\u2500\u2518       \u2502\n   \u2502                                                    \u2502\n   \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 concentrate \u25c4\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n          \u2502\n          \u2514\u2500\u2500brine\u2500\u2500\u25ba disposal\n\n economics.lcow(...) \u25c4\u2500\u2500 RO area, pump works, PX flow\n```\n\n---\n\n(water-summary-units)="
+  },
+  {
+   "anchor": "units",
+   "heading": "Units",
+   "path": "Water Units at a Glance > Units",
+   "source": "water-summary.md",
+   "targets": [
+    "water-summary-units"
+   ],
+   "text": "| Unit | Kind | In \u2192 out | Model | Validated how |\n|---|---|---|---|---|\n| [`seawater` properties](unit-operations-water.md#water-seawater-properties) | library | (T, S) \u2192 \u03c1, \u03bc, \u03c6, \u03c0 | Sharqawy et al. 2010 Eqs. 8, 22, 23, 49 | Coefficients read against the paper (content verified); WaterTAP uses the same equations |\n| [`ROStage`](unit-operations-water.md#op-rostage) | palette | feed \u2192 concentrate, permeate | Solution-diffusion, film theory, plug flow; WaterTAP channel correlations | Within 0.3 % of WaterTAP RO1D (160 elements) on three cases |\n| [`PressureExchanger`](unit-operations-water.md#op-pressureexchanger) | palette | brine, feed \u2192 hp_feed, brine, bypass | Efficiency form, equal volumes, optional mixing | Within 0.02 % (outlet pressure) of WaterTAP in the plant |\n| [`WaterPump`](unit-operations-water.md#op-waterpump) | palette | inlet \u2192 outlet | Isothermal, `V dP / eta` | Within 0.24 % of WaterTAP in the plant |\n| [`economics`](unit-operations-water.md#water-costing) | library | sizes, power, product flow \u2192 LCOW, SEC | WaterTAP 1.8.0 costing structure and defaults | LCOW within 0.16 % of WaterTAP |\n| [`swro_performance` / `build_swro_flowsheet`](unit-operations-water.md#water-swro) | library | intake \u2192 LCOW, SEC, recovery, ... | The plant above | Against WaterTAP's `RO_with_energy_recovery` layout |\n\n**Palette**: registered with the editor through the plugin's `register()`\nand usable as a `Flowsheet` operation. **Library**: called from Python;\nstill differentiable.\n\n---\n\n(water-summary-trust)="
+  },
+  {
+   "anchor": "what-to-trust",
+   "heading": "What to trust",
+   "path": "Water Units at a Glance > What to trust",
+   "source": "water-summary.md",
+   "targets": [
+    "water-summary-trust"
+   ],
+   "text": "- **Seawater properties**: published correlations, coefficients checked\n  against the source, inside their stated ranges.\n- **RO and plant numbers**: they reproduce WaterTAP to 0.3 %. That checks\n  the implementation against an independent code with the same physics,\n  not the physics against a plant. The channel correlations behind the\n  mass-transfer coefficient and pressure drop are WaterTAP's and are\n  unverified against their papers.\n- **Costs**: WaterTAP's default parameters, a benchmark convention, not a\n  cost estimate for a real plant.\n\n---\n\n(water-summary-gaps)="
+  },
+  {
+   "anchor": "known-gaps",
+   "heading": "Known gaps",
+   "path": "Water Units at a Glance > Known gaps",
+   "source": "water-summary.md",
+   "targets": [
+    "water-summary-gaps"
+   ],
+   "text": "- Seawater only; no ion speciation, carbonate chemistry or scaling limits yet.\n- No distribution networks, conventional treatment, thermal desalination or\n  wastewater yet (`src/difflow_water/DESIGN.md`, phases 2-4)."
   }
  ],
  "version": 2

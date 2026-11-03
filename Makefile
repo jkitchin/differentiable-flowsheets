@@ -53,7 +53,7 @@ endif
 .PHONY: all notebooks notebooks-force notebooks-bio notebooks-ree notebooks-cc \
         notebooks-bio-force notebooks-ree-force notebooks-cc-force \
         clean test test-durations book book-clean sync \
-        docs-index convergence ask-check
+        docs-index convergence ask-check watertap-compare
 
 all: notebooks
 
@@ -155,6 +155,11 @@ test-durations:
 # that touches initialization, acceleration or the tear solve.
 convergence:
 	$(UV_RUN_DEV) python -m difflow.convergence
+
+# difflow_water vs WaterTAP (hand-run; needs the reference JSON, which
+# benchmarks/watertap/swro_px.py writes in a WaterTAP environment)
+watertap-compare:
+	python benchmarks/watertap/compare_swro_px.py
 
 # Clean generated files
 clean:

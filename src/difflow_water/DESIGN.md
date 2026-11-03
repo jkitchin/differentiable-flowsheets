@@ -1,6 +1,9 @@
 # Water Plugin (difflow_water) - Design Document
 
-Status: **design only, no code yet.** This document is the plan and the
+Status: **phase 1 implemented** (seawater properties, `ROStage`,
+`PressureExchanger`, `WaterPump`, LCOW, the SWRO + PX plant; WaterTAP
+comparison in `benchmarks/watertap/`, within 0.3 %). Phases 2-4 are plans.
+See "Phase 1 as built" in Section 5. This document is the plan and the
 contract for `difflow_water`: water distribution networks, drinking-water
 treatment, membrane and thermal desalination, wastewater, and the shared
 water chemistry they all need.
@@ -240,6 +243,15 @@ Each phase finishes with its docs section, summary row, notebook and tests.
    recovery, subject to a scaling limit; `jax.grad` through the ERD recycle.
    Set up `benchmarks/watertap/` here, with the WaterTAP SWRO flowsheet as
    the first comparison.
+   **Phase 1 as built** (2026-11-03): `streams.py`, `chemistry/seawater.py`
+   (Sharqawy 2010 Eqs. 8, 22, 23, 49, content verified; `M_S` from TEOS-10),
+   `membranes/ro.py` (`ROStage`: one stage; flat-sheet or spiral-wound
+   friction), `membranes/erd.py`, `pumps.py`, `economics.py` (WaterTAP 1.8.0
+   default costing), `flowsheets.py`, notebook `examples/70_water_swro_design.ipynb`,
+   docs `unit-operations-water.md` + `water-summary.md`, tests `tests/water/`.
+   Deferred to **phase 1b**: carbonate chemistry, activity models and scaling
+   indices (the notebook uses a brine-salinity limit instead of a scaling
+   limit), `ROTrain` (multi-stage), NF, pressure-exchanger leakage.
 2. **Distribution network** on the `difflow_gas` architecture. Notebooks:
    roughness calibration and leak localization with `reconcile_network`;
    pump scheduling with tanks. Cross-check target: WNTR/EPANET on the
@@ -281,6 +293,9 @@ values below. Re-run it for any new reference.
 | M3 | Bowen, W.R.; Welfoot, J.S. "Modelling the performance of membrane nanofiltration -- critical assessment and model development." *Chem. Eng. Sci.* **2002**, 57(7), 1121--1137. doi:10.1016/S0009-2509(01)00413-4 | DSPM-DE | Citation verified (Crossref) |
 | M4 | Schock, G.; Miquel, A. "Mass transfer and pressure loss in spiral wound modules." *Desalination* **1987**, 64, 339--352. doi:10.1016/0011-9164(87)90107-X | Spiral-wound k and pressure drop | Citation verified (Crossref) |
 | M5 | Stover, R.L. "Seawater reverse osmosis with isobaric energy recovery devices." *Desalination* **2007**, 203(1-3), 168--175. doi:10.1016/j.desal.2006.03.528 | Pressure exchanger | Citation verified (Crossref) |
+| S4 | IOC, SCOR and IAPSO. *The International Thermodynamic Equation of Seawater -- 2010* (TEOS-10 manual), IOC Manuals and Guides 56, UNESCO, **2010** | `M_S = 31.4038218 g/mol` | Content verified (value read in the manual). No DOI. |
+| M7 | Bartholomew, T.V.; Mauter, M.S. "Computational framework for modeling membrane processes without process and solution property simplifications." *J. Membr. Sci.* **2019**, 573, 682--693. doi:10.1016/j.memsci.2018.11.067 | Salt diffusivity (Eq. 6) | Citation verified (Crossref; the DOI first recalled was wrong). Coefficients via WaterTAP (unverified). |
+| M8 | Bartholomew, T.V.; Siefert, N.S.; Mauter, M.S. "Cost optimization of osmotically assisted reverse osmosis." *Environ. Sci. Technol.* **2018**. doi:10.1021/acs.est.8b02771 | Flat-sheet friction factor (SI Eq. S27) | Title/authors/year/DOI verified (Crossref); volume/pages not in Crossref. Correlation via WaterTAP (unverified). |
 | M6 | Elimelech, M.; Phillip, W.A. "The future of seawater desalination: energy, technology, and the environment." *Science* **2011**, 333(6043), 712--717. doi:10.1126/science.1200488 | Context, energy bounds | Citation verified (Crossref) |
 | T1 | Mistry, K.H.; McGovern, R.K.; Thiel, G.P.; Summers, E.K.; Zubair, S.M.; Lienhard, J.H. "Entropy generation analysis of desalination technologies." *Entropy* **2011**, 13(10), 1829--1864. doi:10.3390/e13101829 | Thermal/RO energy comparison | Citation verified (Crossref) |
 | D2 | El-Dessouky, H.T.; Ettouney, H.M. *Fundamentals of Salt Water Desalination*; Elsevier: Amsterdam, **2002**. doi:10.1016/B978-0-444-50810-2.X5000-3 | MSF, MED, MVC models | DOI and title/year verified (Crossref); Crossref lists no authors, so authorship is (unverified) there |

@@ -16,7 +16,7 @@ python -m compileall -q src/ | head -20
 
 2. Check that the core package and every plugin import:
 ```bash
-for m in difflow difflow_bio difflow_ree difflow_cc difflow_gas difflow_power difflow_refinery; do
+for m in difflow difflow_bio difflow_ree difflow_cc difflow_gas difflow_power difflow_refinery difflow_water; do
   python -c "import $m" 2>/dev/null && echo "ok   $m" || echo "FAIL $m"
 done
 ```
