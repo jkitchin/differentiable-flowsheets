@@ -65,6 +65,7 @@ import difflow_gas  # noqa: F401
 import difflow_power  # noqa: F401
 import difflow_ree  # noqa: F401
 import difflow_refinery  # noqa: F401
+import difflow_water  # noqa: F401
 
 #: The kernel's ceiling on mapped sections per process, ``vm.max_map_count``.
 #: 65530 is the kernel default and what this budget was first measured

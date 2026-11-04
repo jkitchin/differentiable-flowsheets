@@ -1,0 +1,276 @@
+{
+ "network": {
+  "headloss": "H-W",
+  "viscosity": 1e-06,
+  "junctions": {
+   "10": {
+    "elevation": 216.40800000000002,
+    "demand": 0.0,
+    "emitter": 0.0,
+    "emitter_exponent": 0.5
+   },
+   "11": {
+    "elevation": 216.40800000000002,
+    "demand": 0.00946352946,
+    "emitter": 0.0,
+    "emitter_exponent": 0.5
+   },
+   "12": {
+    "elevation": 213.36,
+    "demand": 0.00946352946,
+    "emitter": 0.0,
+    "emitter_exponent": 0.5
+   },
+   "13": {
+    "elevation": 211.836,
+    "demand": 0.00630901964,
+    "emitter": 0.0,
+    "emitter_exponent": 0.5
+   },
+   "21": {
+    "elevation": 213.36,
+    "demand": 0.00946352946,
+    "emitter": 0.0,
+    "emitter_exponent": 0.5
+   },
+   "22": {
+    "elevation": 211.836,
+    "demand": 0.01261803928,
+    "emitter": 0.0,
+    "emitter_exponent": 0.5
+   },
+   "23": {
+    "elevation": 210.312,
+    "demand": 0.00946352946,
+    "emitter": 0.0,
+    "emitter_exponent": 0.5
+   },
+   "31": {
+    "elevation": 213.36,
+    "demand": 0.00630901964,
+    "emitter": 0.0,
+    "emitter_exponent": 0.5
+   },
+   "32": {
+    "elevation": 216.40800000000002,
+    "demand": 0.00630901964,
+    "emitter": 0.0,
+    "emitter_exponent": 0.5
+   }
+  },
+  "reservoirs": {
+   "9": {
+    "head": 243.84
+   }
+  },
+  "tanks": {
+   "2": {
+    "elevation": 259.08000000000004,
+    "level": 36.576,
+    "min_level": 30.48,
+    "max_level": 45.72,
+    "diameter": 15.3924
+   }
+  },
+  "pipes": {
+   "10": {
+    "start": "10",
+    "end": "11",
+    "length": 3209.5440000000003,
+    "diameter": 0.4572,
+    "roughness": 100.0,
+    "minor_loss": 0.0,
+    "check_valve": false,
+    "status": "open"
+   },
+   "11": {
+    "start": "11",
+    "end": "12",
+    "length": 1609.344,
+    "diameter": 0.35559999999999997,
+    "roughness": 100.0,
+    "minor_loss": 0.0,
+    "check_valve": false,
+    "status": "open"
+   },
+   "12": {
+    "start": "12",
+    "end": "13",
+    "length": 1609.344,
+    "diameter": 0.254,
+    "roughness": 100.0,
+    "minor_loss": 0.0,
+    "check_valve": false,
+    "status": "open"
+   },
+   "21": {
+    "start": "21",
+    "end": "22",
+    "length": 1609.344,
+    "diameter": 0.254,
+    "roughness": 100.0,
+    "minor_loss": 0.0,
+    "check_valve": false,
+    "status": "open"
+   },
+   "22": {
+    "start": "22",
+    "end": "23",
+    "length": 1609.344,
+    "diameter": 0.30479999999999996,
+    "roughness": 100.0,
+    "minor_loss": 0.0,
+    "check_valve": false,
+    "status": "open"
+   },
+   "31": {
+    "start": "31",
+    "end": "32",
+    "length": 1609.344,
+    "diameter": 0.15239999999999998,
+    "roughness": 100.0,
+    "minor_loss": 0.0,
+    "check_valve": false,
+    "status": "open"
+   },
+   "110": {
+    "start": "2",
+    "end": "12",
+    "length": 60.96,
+    "diameter": 0.4572,
+    "roughness": 100.0,
+    "minor_loss": 0.0,
+    "check_valve": false,
+    "status": "open"
+   },
+   "111": {
+    "start": "11",
+    "end": "21",
+    "length": 1609.344,
+    "diameter": 0.254,
+    "roughness": 100.0,
+    "minor_loss": 0.0,
+    "check_valve": false,
+    "status": "open"
+   },
+   "112": {
+    "start": "12",
+    "end": "22",
+    "length": 1609.344,
+    "diameter": 0.30479999999999996,
+    "roughness": 100.0,
+    "minor_loss": 0.0,
+    "check_valve": false,
+    "status": "open"
+   },
+   "113": {
+    "start": "13",
+    "end": "23",
+    "length": 1609.344,
+    "diameter": 0.2032,
+    "roughness": 100.0,
+    "minor_loss": 0.0,
+    "check_valve": false,
+    "status": "open"
+   },
+   "121": {
+    "start": "21",
+    "end": "31",
+    "length": 1609.344,
+    "diameter": 0.2032,
+    "roughness": 100.0,
+    "minor_loss": 0.0,
+    "check_valve": false,
+    "status": "open"
+   },
+   "122": {
+    "start": "22",
+    "end": "32",
+    "length": 1609.344,
+    "diameter": 0.15239999999999998,
+    "roughness": 100.0,
+    "minor_loss": 0.0,
+    "check_valve": false,
+    "status": "open"
+   }
+  },
+  "pumps": {
+   "9": {
+    "start": "9",
+    "end": "10",
+    "speed": 1.0,
+    "status": "open",
+    "A": 101.6,
+    "B": 2836.1385287628063,
+    "C": 2.0,
+    "_curve": [
+     [
+      0.0946352946,
+      76.2
+     ]
+    ]
+   }
+  },
+  "valves": {}
+ },
+ "epanet": {
+  "head": {
+   "10": 306.1250915527344,
+   "11": 300.2982177734375,
+   "12": 295.6772766113281,
+   "13": 295.3124084472656,
+   "21": 296.1274108886719,
+   "22": 295.3750915527344,
+   "23": 295.2430725097656,
+   "31": 294.8609619140625,
+   "32": 294.34210205078125,
+   "9": 243.83999633789062,
+   "2": 295.656005859375
+  },
+  "pressure": {
+   "10": 89.71708679199219,
+   "11": 83.89020538330078,
+   "12": 82.31727600097656,
+   "13": 83.47638702392578,
+   "21": 82.76741027832031,
+   "22": 83.5390853881836,
+   "23": 84.9310531616211,
+   "31": 81.5009536743164,
+   "32": 77.9341049194336,
+   "9": 0.0,
+   "2": 36.57599639892578
+  },
+  "demand": {
+   "10": 0.0,
+   "11": 0.009463530033826828,
+   "12": 0.009463530033826828,
+   "13": 0.0063090198673307896,
+   "21": 0.009463530033826828,
+   "22": 0.012618039734661579,
+   "23": 0.009463530033826828,
+   "31": 0.0063090198673307896,
+   "32": 0.0063090198673307896,
+   "9": -0.11773740500211716,
+   "2": 0.048338185995817184
+  },
+  "flow": {
+   "10": 0.11773740500211716,
+   "11": 0.07786637544631958,
+   "12": 0.008159779943525791,
+   "21": 0.012060204520821571,
+   "22": 0.007612770888954401,
+   "31": 0.0025747439358383417,
+   "110": -0.048338185995817184,
+   "111": 0.0304074976593256,
+   "112": 0.011904881335794926,
+   "113": 0.0018507594941183925,
+   "121": 0.008883764035999775,
+   "122": 0.0037342761643230915,
+   "9": 0.11773740500211716
+  }
+ },
+ "inp": "Net1.inp",
+ "generated_by": "benchmarks/wntr/export_networks.py",
+ "wntr": "1.5.0",
+ "epanet_version": "2.2 (bundled with WNTR)"
+}

@@ -98,7 +98,8 @@ help(difflow.FlashParams)
 ```
 
 Plugins add domains: `difflow_refinery`, `difflow_cc` (carbon capture),
-`difflow_bio`, `difflow_ree` (rare earths), `difflow_gas`, `difflow_power`.
+`difflow_bio`, `difflow_ree` (rare earths), `difflow_gas`, `difflow_power`,
+`difflow_water` (desalination, water treatment).
 Many refinery models (reformer, hydrotreater, FCC) and `difflow.planning` /
 `difflow.stochastic` are libraries called directly, not flowsheet units.
 

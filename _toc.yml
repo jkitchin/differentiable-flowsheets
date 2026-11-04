@@ -16,6 +16,8 @@ parts:
       - file: docs/unit-operations-power
       - file: docs/unit-operations-refinery
       - file: docs/refinery-summary
+      - file: docs/unit-operations-water
+      - file: docs/water-summary
       - file: docs/thermodynamics
       - file: docs/technoeconomics
       - file: docs/parameter-estimation

@@ -187,6 +187,7 @@ cc = "difflow_cc:register"
 gas = "difflow_gas:register"
 power = "difflow_power:register"
 refinery = "difflow_refinery:register"
+water = "difflow_water:register"
 
 [project.entry-points."difflow.agent"]
 # What each plugin adds to the agent tools (difflow.agent.plugins).
@@ -196,6 +197,7 @@ cc = "difflow_cc.agent:support"
 gas = "difflow_gas.agent:support"
 power = "difflow_power.agent:support"
 refinery = "difflow_refinery.agent:support"
+water = "difflow_water.agent:support"
 
 [project.scripts]
 difflow = "difflow.cli:main"
@@ -220,6 +222,7 @@ packages = [
     "src/difflow_gas",
     "src/difflow_power",
     "src/difflow_refinery",
+    "src/difflow_water",
 ]
 
 [tool.hatch.build.targets.sdist]

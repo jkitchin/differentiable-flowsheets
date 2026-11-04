@@ -1,0 +1,441 @@
+# Water Plugin (difflow_water) - Design Document
+
+Status: **phases 1 and 1b implemented** (seawater properties, Pitzer
+speciation and scaling, `ROStage`, `ROTrain`, `PressureExchanger`,
+`WaterPump`, LCOW, the SWRO + PX plant; WaterTAP comparison in
+`benchmarks/watertap/` within 0.3 %, PHREEQC comparison in
+`benchmarks/phreeqc/`). NF and phases 2-4 are plans.
+See "Phase 1 as built" in Section 5. This document is the plan and the
+contract for `difflow_water`: water distribution networks, drinking-water
+treatment, membrane and thermal desalination, wastewater, and the shared
+water chemistry they all need.
+
+**Decisions made** (2026-11-03):
+
+- **Wastewater lives in `difflow_water`** (not `difflow_bio`).
+- **WaterTAP is the benchmark.** Every unit WaterTAP also models is
+  cross-checked against WaterTAP on matched inputs, and the agreement is
+  recorded in the docs (Section 2a). The aim is to be comparable to WaterTAP
+  and differentiable end to end.
+- **Streams are difflow-compatible**: per-component molar flows (`F_H2O`,
+  `F_Na+`, ...) plus `T` and `P`, as `make_stream` produces, with mg/L, TDS
+  and volumetric-flow helpers on top.
+- **Network valves get both formulations**: smoothed switching and
+  complementarity, selectable per valve (Section 3a).
+
+It follows the conventions `difflow_refinery` established (see
+`docs/unit-operations-refinery.md` and `docs/refinery-summary.md`):
+every unit ships with **code, documentation, an example notebook and tests**,
+and every equation, coefficient and data value is tied to a **reference whose
+verification status is recorded**.
+
+---
+
+## 1. Requirements every unit must meet
+
+A unit is not done until it has all six of the following.
+
+1. **Code**: a `Params` dataclass on `ParamsMixin` with an `Attributes:`
+   docstring and `parameter_units`, and a JAX-only `__call__`. Its NumPy-style
+   docstring has a `References` section naming reference IDs from Section 6
+   (e.g. `[S2]`, `[M4]`). A coefficient with no source carries the comment
+   `# ILLUSTRATIVE` and is listed as illustrative in the docs.
+2. **Documentation**: a section in `docs/unit-operations-water.md` under a
+   heading naming the unit (or a `(op-<name>)=` label), so
+   `tests/test_doclinks.py` passes after `make docs-index`. Each section
+   gives the equations, inputs, outputs, validity range, known gaps and a
+   **References** table (Section 2 format). A row in the one-page map
+   `docs/water-summary.md` (modelled on `docs/refinery-summary.md`) links to
+   it.
+3. **Example**: a notebook in `examples/` (numbered after the current last
+   one, `69_...`, or under `examples/water/` as `bio` does). It runs the
+   unit, takes a gradient, and shows one design or sensitivity question.
+   `make notebooks` executes it.
+4. **Tests** in `tests/water/`, following the project policy: a smoke test,
+   a finite `jax.grad` test, one test per input-validation path, and any
+   fixed crash/NaN regression. **No comparisons to literature values.** The
+   docs table records what has been cross-checked; tests do not.
+5. **Registration**: palette units go in `register()` and `__all__`;
+   library-only functions (e.g. the chemistry module, network builders) say
+   so in the plugin `CLAUDE.md`, as the refinery does for `BlendPool`.
+6. **Bibliography**: each reference is added to `docs/literature/references.bib`
+   with the same key the docs use.
+
+## 2. Citation verification protocol
+
+The refinery docs separate *checking the citation* from *checking the
+content*. A DOI that resolves does not mean the equation as coded matches
+the paper. Every reference row records its status using these terms:
+
+| Status | Meaning |
+|---|---|
+| **Citation verified (Crossref)** | Authors, title, journal, year, volume, pages and DOI were matched against the Crossref record for the DOI. Says nothing about the content. |
+| **Content verified** | The equation, table or coefficient as coded was read against the source (with page, equation or table number recorded) by someone who had the paper. |
+| **Cross-checked** | Output reproduced against an independent implementation (WaterTAP, WNTR/EPANET, PHREEQC, a published worked example), with the case and agreement stated. |
+| **(unverified)** | Anything recalled, taken second-hand (from another code or a review), or not reached. Marked in the docs **and** in a code comment. |
+| **ILLUSTRATIVE** | A value with no source, chosen to give plausible behaviour. Must be fitted before the model is used to predict. |
+
+Rules:
+
+- Never put a value in code without its reference ID or the word ILLUSTRATIVE.
+- A second-hand constant (e.g. copied from WaterTAP or WNTR source code) is
+  cited to the primary paper **and** to the code it came from, and stays
+  (unverified) until read in the primary source. This mirrors the refinery's
+  treatment of constants taken from pychemqt.
+- Re-run the Crossref check (Section 6.1) whenever a reference is added.
+  The check already caught one wrong DOI in this plan: the DOI recalled for
+  Swamee & Jain (1976) belonged to a different paper.
+- Software references (EPANET, WNTR, WaterTAP, PHREEQC) are used for
+  cross-checks, not as the source of the physics, wherever a primary
+  paper exists.
+
+## 2a. WaterTAP comparisons
+
+WaterTAP (the NAWI water treatment model library, built on Pyomo/IDAES
+[B1, B2, B3]) is the benchmark this plugin must be comparable to.
+
+- **Which units**: every unit that has a WaterTAP counterpart (RO and its
+  0-D/1-D forms, NF/DSPM-DE, pressure exchanger, pumps, ED, MVC/MED,
+  crystallizer, UV/AOP, ion exchange, GAC, the activated-sludge and ADM1
+  models, the clarifier, LCOW costing). Units with no counterpart say so.
+- **How**: a script under `benchmarks/watertap/` (repo root) builds the same
+  case in WaterTAP (pinned version, recorded with the IPOPT version), solves
+  it, and writes a JSON reference, as `isom_reference.json` does for the
+  refinery's IDAES check. difflow runs the same inputs and the docs report
+  the differences per output.
+- **Not a test.** The test policy forbids reference-data comparisons, and
+  WaterTAP is not a dev dependency. The comparison is a `make` target run by
+  hand when a unit changes; a reference that a unit change invalidates is
+  marked stale in the docs until regenerated (the refinery's
+  `STALE_SINCE_339` pattern).
+- **Where WaterTAP and the primary paper disagree**, the paper wins, and the
+  docs say what WaterTAP does differently.
+- **Property packages**: where WaterTAP uses a property correlation (e.g.
+  seawater [S1, S2]), use the same primary source so differences come from
+  the models, not the property data.
+- **Stream mapping**: WaterTAP uses mass-flow-per-component state variables;
+  `streams.py` has the converter so a comparison feeds identical streams.
+
+## 3. Module structure
+
+Modelled on `difflow_refinery` (package-level docs, subpackages each with
+their own `CLAUDE.md` once they have invariants) and on `difflow_gas` (the
+network graph and its decomposition).
+
+```
+src/difflow_water/
+├── CLAUDE.md                # invariants, loaded when working here
+├── DESIGN.md                # this file
+├── README.md                # overview + palette/library table (as refinery)
+├── __init__.py              # exports, __all__, register()
+├── agent.py                 # agent support entry point
+├── streams.py               # make_water_stream(ions=..., T, P) -> a plain difflow
+│                            #   stream (F_<species> mol/s, T, P); mg/L, TDS, m3/s and
+│                            #   WaterTAP mass-flow converters
+├── chemistry/               # library
+│   ├── seawater.py          # density, viscosity, osmotic pressure, Cp, BPE [S1, S2]
+│   ├── activity.py          # Davies, Pitzer [C3, C5]; reuse difflow.activity
+│   ├── carbonate.py         # CO2-HCO3-CO3 equilibrium, alkalinity [C2]
+│   └── scaling.py           # LSI, saturation indices (calcite, gypsum) [C1, C2]
+├── network/                 # distribution (library + palette units)
+│   ├── network.py           # WaterNetwork graph, decomposition (from difflow_gas)
+│   ├── residuals.py         # the one equation set
+│   ├── hydraulics.py        # Hazen-Williams, Darcy-Weisbach, Colebrook [N4, N7]
+│   ├── units.py             # WaterPipe, Pump, Tank, Reservoir, Junction, Leak
+│   ├── valves.py            # PRV, PSV, FCV, TCV, check valve; smooth | complementarity
+│   └── quality.py           # chlorine decay, water age [N5]
+├── treatment/               # conventional drinking water
+│   ├── coagulation.py, sedimentation.py, filtration.py
+│   ├── disinfection.py      # Chick-Watson CT [K1, K2]
+│   ├── adsorption.py        # GAC breakthrough [A1]
+│   └── ion_exchange.py, softening.py, stripping.py
+├── membranes/               # RO, NF, UF/MF, pressure exchanger
+│   ├── ro.py                # wraps difflow.units.membranes.ReverseOsmosis [M1, M4]
+│   ├── nf.py                # DSPM-DE [M2, M3]
+│   └── erd.py               # pressure exchanger [M5]
+├── thermal/                 # MSF, MED, MVC [D2]; reuse core evaporator.py
+├── electro/                 # electrodialysis [E1, E2]
+├── wastewater/              # ASM1/ASM2d [W3], Takacs settler [W1], ADM1 [W2]
+├── economics/               # LCOW, specific energy; on difflow.economics
+└── flowsheets.py            # SWRO train, conventional plant, BSM1 builder
+```
+
+Wastewater (ASM1/ASM2d, settler, ADM1, BSM1) is part of this plugin.
+
+Docs: `docs/unit-operations-water.md` (full treatment, reference tables per
+section), `docs/water-summary.md` (one-page map with a "how validated" column
+and a "Known gaps" section). Tests: `tests/water/`. Plugin entry points in
+`pyproject.toml` alongside `gas` and `refinery`.
+
+## 3a. Network valves: two formulations
+
+Valves switch mode (a PRV is open, active or closed; a check valve blocks
+reverse flow), which puts kinks or jumps in the equations. Both standard
+treatments are implemented, chosen per valve with
+`formulation="smooth" | "complementarity"`:
+
+- **Smoothed switching** (default for the sequential/fixed-point solve): each
+  mode change is replaced by a smooth blend with a width parameter
+  (e.g. a softplus or logistic in the pressure or flow error), so the
+  residuals are differentiable everywhere and `jax.grad` works through any
+  mode. The width is a documented parameter; the docs state how far the
+  smoothed answer sits from the sharp one at the default width.
+- **Complementarity** (for equation-oriented solves and optimization): the
+  mode is written as complementarity conditions `0 <= a  perp  b >= 0`,
+  solved through a smoothing or Fischer-Burmeister reformulation whose
+  parameter is driven to zero. Gradients come from the implicit function
+  theorem at the solution and are valid away from mode boundaries (strict
+  complementarity); at a boundary the result is flagged in `info`.
+
+Both share one residual definition in `network/residuals.py` and are
+checked to agree on the same network away from switching points. Primary
+references for each (beyond the EPANET manual) are still to find
+(Section 6.3).
+
+### What to reuse from core (do not duplicate)
+
+- `difflow.units.membranes`: `ReverseOsmosis`, `osmotic_pressure`,
+  `ro_local_flux` (concentration polarization), `uf_flux`.
+- `difflow.units.pipe.Pipe`, `pump.py`, `evaporator.py`, `crystallizer.py`.
+- `difflow.activity`; `difflow_ree.equilibrium.speciation` for electrolyte
+  speciation patterns.
+- `difflow_gas.network` / `residuals` / `reconcile` as the architecture
+  template; `difflow.reconciliation` for calibration and leak localization.
+
+## 4. Units and the references behind them
+
+| Area | Unit / function | Model | Refs | Palette? |
+|---|---|---|---|---|
+| Chemistry | seawater properties | Sharqawy/Nayar correlations | S1, S2, S3 | library |
+| Chemistry | activity coefficients | Davies; Pitzer for brines | C5, C3 | library |
+| Chemistry | carbonate system, LSI, saturation index | calcite solubility; Langelier | C2, C1, C4 (cross-check) | library |
+| Network | `WaterPipe` | Hazen-Williams; Darcy-Weisbach + Colebrook or Swamee-Jain | N4, N7, (HW: see 6.3) | yes |
+| Network | network solve | global gradient algorithm | N2 | library |
+| Network | `Junction` pressure-driven demand | Wagner-Shamir-Marks | N3 | yes |
+| Network | `Pump`, `Tank`, `Reservoir`, valves | EPANET conventions | EPANET manual (6.3), N1 (cross-check) | yes |
+| Network | `Leak` / emitter, calibration | Q = C p^beta; reconciliation | N6 | yes / library |
+| Network | chlorine decay | first-order bulk + wall | N5 | library |
+| Treatment | coagulation, sedimentation, filtration, softening, stripping | textbook design equations | D1 | yes |
+| Treatment | `Disinfection` | Chick-Watson CT | K1, K2, D1 | yes |
+| Treatment | `GACAdsorber` | HSDM, simplified | A1, D1 | yes |
+| Membranes | `ROStage`, `ROTrain` | solution-diffusion + polarization; spiral-wound mass transfer and pressure loss | M1, M4 | yes |
+| Membranes | `Nanofiltration` | DSPM-DE | M2, M3 | yes |
+| Membranes | `PressureExchanger` | isobaric ERD efficiency + mixing | M5 | yes |
+| Thermal | `MSF`, `MED`, `MVC` | stage/effect balances | D2, T1 | yes |
+| Electro | `Electrodialysis` | current, ion flux, limiting current density | E1, E2 | yes |
+| Wastewater | `ActivatedSludgeReactor` | ASM1, ASM2d | W3 | yes |
+| Wastewater | `SecondaryClarifier` | Takacs layered settler | W1 | yes |
+| Wastewater | `AnaerobicDigester` | ADM1 | W2 | yes |
+| Wastewater | BSM1 flowsheet | benchmark plant | W4 | library |
+| Context | desalination energy, review | | M6, T1 | docs only |
+
+WaterTAP counterpart exists (cross-check per Section 2a) for: RO, NF,
+pressure exchanger, pumps, ED, MVC/MED, crystallizer, GAC, ion exchange,
+UV/AOP, ASM1/ASM2d, ADM1, clarifier, LCOW costing. Which WaterTAP models
+match which units is confirmed against the pinned WaterTAP version when each
+unit is written.
+
+## 5. Phasing
+
+Each phase finishes with its docs section, summary row, notebook and tests.
+
+1. **Chemistry + SWRO** (the headline demo): `streams`, `chemistry/`,
+   `ROStage`/`ROTrain`, `PressureExchanger`, high-pressure and booster pumps,
+   LCOW. Notebook: minimise LCOW over feed pressure, stage areas and
+   recovery, subject to a scaling limit; `jax.grad` through the ERD recycle.
+   Set up `benchmarks/watertap/` here, with the WaterTAP SWRO flowsheet as
+   the first comparison.
+   **Phase 1 as built** (2026-11-03): `streams.py`, `chemistry/seawater.py`
+   (Sharqawy 2010 Eqs. 8, 22, 23, 49, content verified; `M_S` from TEOS-10),
+   `membranes/ro.py` (`ROStage`: one stage; flat-sheet or spiral-wound
+   friction), `membranes/erd.py`, `pumps.py`, `economics.py` (WaterTAP 1.8.0
+   default costing), `flowsheets.py`, notebook `examples/70_water_swro_design.ipynb`,
+   docs `unit-operations-water.md` + `water-summary.md`, tests `tests/water/`.
+   **Phase 1b as built** (2026-11-03): `chemistry/pitzer.py` (Harvie-Moller-
+   Weare Pitzer model, equations content-verified against PHRQPITZ 1988),
+   `chemistry/speciation.py` (seawater/brine speciation, pH on the MacInnes
+   scale, saturation indices of 8 minerals; parameters from PHREEQC
+   pitzer.dat; within 0.0004 SI of PHREEQC), `ROStage(scaling=True)`,
+   `ROTrain`, pressure-exchanger leakage (WaterTAP-checked); notebook 70 now
+   optimizes with a calcite scaling limit. `benchmarks/phreeqc/`.
+   Still open: nanofiltration (DSPM-DE), ion-resolved RO transport, Sr/Ba/
+   silica/boron, pressure dependence of K.
+2. **Distribution network**. **As built** (2026-11-03): `network/model.py`
+   (`WaterNetwork`, SI, EPANET conventions; pump curves; dead-end pumps
+   auto-closed), `network/hydraulics.py` (`NetworkModel`: one residual,
+   equation-oriented Newton with continuation, implicit gradients; valves
+   and check valves as Fischer-Burmeister complementarity, "complementarity"
+   = mu continued to 1e-9, "smooth" = mu held at `smoothing`), example
+   networks Net1/Net3 (`load_example`), notebook 71 (EPANET check, leak
+   localization, roughness calibration, PRV formulations),
+   `benchmarks/wntr/` (EPANET 2.2 via WNTR: Net1, Net3, ky10, Net1 D-W).
+   **Deviation from the plan:** not the `difflow_gas` sequential-modular
+   architecture and not palette units. A network is one equation set and
+   EPANET/WNTR solve it equation-oriented; doing the same avoids tears and
+   gives the reference's own formulation. It is a library, like
+   `difflow.planning`. **Phase 2b as built:** `network/inp.py` (`read_inp`,
+   `Schedule`, `Control`; matches WNTR's reading of Net1/Net3/ky10),
+   `network/eps.py` (`simulate`: EPANET's time stepping and simple
+   controls; plan/replay for gradients with moving switch times), example
+   INP files, EPS benchmark (`export_eps.py`/`compare_eps.py`), notebook 71
+   section 5. **Phase 2c as built:** `network/quality.py` (EPANET's
+   Lagrangian transport, CHEMICAL/AGE/TRACE, bulk and wall reactions;
+   NumPy, not differentiable), quality benchmark (`compare_quality.py`),
+   notebook 71 section 6. **Phase 2d as built:** pump energy in `simulate`
+   (`step_power`, `pump_energy_kwh`; [ENERGY] efficiencies), traced
+   `speed_profile`, notebook 72 (pump scheduling under a tariff, SLSQP with
+   plan-replay derivatives). **Phase 2 is complete.** **Later:** differentiable water quality,
+   rule-based controls, volume curves, Chezy-Manning, sparse linear algebra
+   for networks much larger than ky10.
+   Original plan: Notebooks:
+   roughness calibration and leak localization with `reconcile_network`;
+   pump scheduling with tanks. Cross-check target: WNTR/EPANET on the
+   EPANET example networks.
+3. **Conventional treatment train** and **thermal desalination**.
+   **Phase 3a as built** (thermal): `chemistry/seawater.py` thermal
+   properties (Sharqawy 2010 Eqs. 9, 36, 37, 43, 53-55, content verified;
+   Nayar 2016 digits and vapor pressure via WaterTAP, unverified),
+   `thermal/mvc.py` (`mvc_performance`: WaterTAP's single-stage MVC
+   flowsheet as one Newton solve, with WaterTAP's MVC costing; a
+   saturated-condensate mode that closes the energy balance for any feed),
+   `thermal/med.py` (`med_performance`: parallel-feed MED, balances only),
+   palette `MVCDesalinator`, `MEDDesalinator`, notebook 73,
+   `benchmarks/watertap/mvc.py` + `compare_mvc.py` (within 4e-7 of
+   WaterTAP; its LCOW optimum reproduced with `jax.grad` + SLSQP).
+   **Deviation:** MSF not built, and MED has no content-verified source
+   (Mistry et al. 2011 [T1] could not be retrieved; the equations are mass
+   and energy balances, no fitted coefficient).
+   **Phase 3b as built** (treatment): `treatment/` with `GACAdsorber`
+   (WaterTAP's CPHSDM, within 2e-14 of WaterTAP on four cases;
+   `benchmarks/watertap/gac.py`, `compare_gac.py`), `Disinfection`
+   (Chick-Watson, CSTRs in series, CT and log inactivation),
+   `Sedimentation` (ideal basin, Stokes) and `Filtration` (Yao colloid
+   filtration as restated by Messina et al. 2015, Carman-Kozeny head
+   loss), notebook 74. **Deviation:** no coagulation/flocculation,
+   softening, ion exchange, stripping, UV or UF/MF, and no treatment
+   costing; the 1908 disinfection papers and Hand et al. (1984) could not
+   be read (unverified forms). **Phase 3 is complete.**
+4. **Wastewater** (in this plugin): ASM1/ASM2d, Takacs, ADM1, BSM1 (adds a
+   case to the convergence corpus). WaterTAP's activated-sludge and ADM1
+   flowsheets are the comparison.
+   **Phase 4a as built**: `wastewater/asm1.py` (ASM1 as the BSM1 report
+   [W5] states it, content verified), `wastewater/bsm1.py`
+   (`activated_sludge_plant`: BSM1 layout, Takacs or split settler, KLa or
+   DO setpoints, one equation set solved by stiff integration then Newton;
+   `bsm1_indices`), palette `ASM1Reactor`, `TakacsSettler`,
+   `ActivatedSludgePlant`, `build_bsm1_flowsheet`, notebook 75,
+   `benchmarks/watertap/bsm1.py` + `compare_bsm1.py` (WaterTAP's BSM1
+   example within 1.3e-7; BSM1 report Tables 6-7 within 3.2e-3, their
+   printed digits; `benchmarks/bsm1/report_tables.json`). **Deviation:** the
+   BSM1 sequential flowsheet is documented as a hard recycle (no
+   acceleration converges from default tears; Anderson finds the washout
+   state) but not added to the core corpus, which would then import a
+   plugin. Steady state only.
+   **Phase 4b as built**: `wastewater/adm1.py` (ADM1 as implemented for
+   BSM2 by Rosen & Jeppsson 2006 [W6], read: closed C/N balances,
+   temperature-dependent constants, algebraic pH by bisection + implicit
+   step, gas phase; `gas_flow` and `pH_inhibition` options), palette
+   `AnaerobicDigester`, notebook 76, `benchmarks/watertap/adm1.py` +
+   `compare_adm1.py` (their 13-digit verification case within 1.7e-7, with
+   the uncompensated gas flow; WaterTAP's ADM1 example within 2.5e-4).
+   **Not built:** ASM2d (and ASM3), ASM-ADM interfaces, BSM2.
+   **ASM2d, deliberately deferred:** no readable primary statement was found
+   (Henze et al. 1999, *Water Sci. Technol.* 39(1) 165-182, and the IWA STR 9
+   book [W3] are not open; Lund's open reports cover ASM1 and ASM3-bioP,
+   not ASM2d). WaterTAP 1.8.0's `asm2d_reactions.py` is the only spec in
+   hand, and it cannot be checked: its alkalinity coefficients use a
+   factor 1.5 on phosphate in most processes but 1.0 in R14 and R19, PAO
+   growth (R13-R14) uses `Y_H` where `Y_PAO` is expected (numerically equal,
+   0.625), and S_ALK is documented in mol/m^3 while its coefficients carry
+   a 61 kg/kmol conversion. Transcribing it would copy unverifiable and
+   possibly wrong stoichiometry; it needs the primary paper first. An open
+   alternative for bio-P is ASM3-bioP (Solon 2015, LTH-IEA-7258, read-able),
+   which has no WaterTAP counterpart.
+
+## 6. References
+
+Status as of this document: the **citation** (bibliographic record) was
+checked against Crossref by DOI for every row marked "Citation verified
+(Crossref)". **No equation or coefficient has been content-verified yet**;
+that happens when each unit is written.
+
+### 6.1 How the check was done
+
+Each DOI was fetched from `https://api.crossref.org/works/<doi>` and the first
+author's family name, year, volume and first page were compared with the
+values below. Re-run it for any new reference.
+
+### 6.2 Reference table
+
+| ID | Reference | Used for | Status |
+|---|---|---|---|
+| N1 | Klise, K.A.; Bynum, M.; Moriarty, D.; Murray, R. "A software framework for assessing the resilience of drinking water systems to disasters with an example earthquake case study." *Environ. Model. Softw.* **2017**, 95, 420--431. doi:10.1016/j.envsoft.2017.06.022 | WNTR (network cross-check target) | Citation verified (Crossref) |
+| N2 | Todini, E.; Rossman, L.A. "Unified framework for deriving simultaneous equation algorithms for water distribution networks." *J. Hydraul. Eng.* **2013**, 139(5), 511--526. doi:10.1061/(ASCE)HY.1943-7900.0000703 | Global gradient network solve | Citation verified (Crossref) |
+| N3 | Wagner, J.M.; Shamir, U.; Marks, D.H. "Water distribution reliability: simulation methods." *J. Water Resour. Plann. Manage.* **1988**, 114(3), 276--294. doi:10.1061/(ASCE)0733-9496(1988)114:3(276) | Pressure-driven demand | Citation verified (Crossref) |
+| N4 | Colebrook, C.F. "Turbulent flow in pipes, with particular reference to the transition region between the smooth and rough pipe laws." *J. Inst. Civ. Eng.* **1939**, 11(4), 133--156. doi:10.1680/ijoti.1939.13150 | Colebrook friction factor | Citation verified (Crossref) |
+| N5 | Rossman, L.A.; Clark, R.M.; Grayman, W.M. "Modeling chlorine residuals in drinking-water distribution systems." *J. Environ. Eng.* **1994**, 120(4), 803--820. doi:10.1061/(ASCE)0733-9372(1994)120:4(803) | Bulk + wall chlorine decay | Citation verified (Crossref) |
+| N6 | Ostfeld, A.; Salomons, E.; Ormsbee, L.; et al. "Battle of the water calibration networks." *J. Water Resour. Plann. Manage.* **2012**, 138(5), 523--532. doi:10.1061/(ASCE)WR.1943-5452.0000191 | Calibration benchmark | Citation verified (Crossref) |
+| N7 | Swamee, P.K.; Jain, A.K. "Explicit equations for pipe-flow problems." *J. Hydraul. Div.* **1976**, 102(5), 657--664. doi:10.1061/JYCEAJ.0004542 | Explicit friction factor | Citation verified (Crossref, by search; the DOI first recalled was wrong). An erratum exists: *J. Hydraul. Div.* 1978, 104, 300, doi:10.1061/JYCEAJ.0004941 -- read it before coding. |
+| S1 | Sharqawy, M.H.; Lienhard, J.H.; Zubair, S.M. "Thermophysical properties of seawater: a review of existing correlations and data." *Desalin. Water Treat.* **2010**, 16(1-3), 354--380. doi:10.5004/dwt.2010.1079 | Seawater properties | Citation verified (Crossref) |
+| S2 | Nayar, K.G.; Sharqawy, M.H.; Banchik, L.D.; Lienhard V, J.H. "Thermophysical properties of seawater: A review and new correlations that include pressure dependence." *Desalination* **2016**, 390, 1--24. doi:10.1016/j.desal.2016.02.024 | Seawater properties with pressure | Citation verified (Crossref) |
+| S3 | Millero, F.J.; Feistel, R.; Wright, D.G.; McDougall, T.J. "The composition of Standard Seawater and the definition of the Reference-Composition Salinity Scale." *Deep-Sea Res. I* **2008**, 55(1), 50--72. doi:10.1016/j.dsr.2007.10.001 | Reference seawater ion composition | Citation verified (Crossref) |
+| M1 | Wijmans, J.G.; Baker, R.W. "The solution-diffusion model: a review." *J. Membr. Sci.* **1995**, 107(1-2), 1--21. doi:10.1016/0376-7388(95)00102-I | RO water and salt flux | Citation verified (Crossref) |
+| M2 | Bowen, W.R.; Mohammad, A.W.; Hilal, N. "Characterisation of nanofiltration membranes for predictive purposes -- use of salts, uncharged solutes and atomic force microscopy." *J. Membr. Sci.* **1997**, 126(1), 91--105. doi:10.1016/S0376-7388(96)00276-1 | DSPM | Citation verified (Crossref) |
+| M3 | Bowen, W.R.; Welfoot, J.S. "Modelling the performance of membrane nanofiltration -- critical assessment and model development." *Chem. Eng. Sci.* **2002**, 57(7), 1121--1137. doi:10.1016/S0009-2509(01)00413-4 | DSPM-DE | Citation verified (Crossref) |
+| M4 | Schock, G.; Miquel, A. "Mass transfer and pressure loss in spiral wound modules." *Desalination* **1987**, 64, 339--352. doi:10.1016/0011-9164(87)90107-X | Spiral-wound k and pressure drop | Citation verified (Crossref) |
+| M5 | Stover, R.L. "Seawater reverse osmosis with isobaric energy recovery devices." *Desalination* **2007**, 203(1-3), 168--175. doi:10.1016/j.desal.2006.03.528 | Pressure exchanger | Citation verified (Crossref) |
+| S4 | IOC, SCOR and IAPSO. *The International Thermodynamic Equation of Seawater -- 2010* (TEOS-10 manual), IOC Manuals and Guides 56, UNESCO, **2010** | `M_S = 31.4038218 g/mol` | Content verified (value read in the manual). No DOI. |
+| M7 | Bartholomew, T.V.; Mauter, M.S. "Computational framework for modeling membrane processes without process and solution property simplifications." *J. Membr. Sci.* **2019**, 573, 682--693. doi:10.1016/j.memsci.2018.11.067 | Salt diffusivity (Eq. 6) | Citation verified (Crossref; the DOI first recalled was wrong). Coefficients via WaterTAP (unverified). |
+| M8 | Bartholomew, T.V.; Siefert, N.S.; Mauter, M.S. "Cost optimization of osmotically assisted reverse osmosis." *Environ. Sci. Technol.* **2018**. doi:10.1021/acs.est.8b02771 | Flat-sheet friction factor (SI Eq. S27) | Title/authors/year/DOI verified (Crossref); volume/pages not in Crossref. Correlation via WaterTAP (unverified). |
+| M6 | Elimelech, M.; Phillip, W.A. "The future of seawater desalination: energy, technology, and the environment." *Science* **2011**, 333(6043), 712--717. doi:10.1126/science.1200488 | Context, energy bounds | Citation verified (Crossref) |
+| T1 | Mistry, K.H.; McGovern, R.K.; Thiel, G.P.; Summers, E.K.; Zubair, S.M.; Lienhard, J.H. "Entropy generation analysis of desalination technologies." *Entropy* **2011**, 13(10), 1829--1864. doi:10.3390/e13101829 | Thermal/RO energy comparison | Citation verified (Crossref) |
+| D2 | El-Dessouky, H.T.; Ettouney, H.M. *Fundamentals of Salt Water Desalination*; Elsevier: Amsterdam, **2002**. doi:10.1016/B978-0-444-50810-2.X5000-3 | MSF, MED, MVC models | DOI and title/year verified (Crossref); Crossref lists no authors, so authorship is (unverified) there |
+| E1 | Strathmann, H. "Electrodialysis, a mature technology with a multitude of new applications." *Desalination* **2010**, 264(3), 268--288. doi:10.1016/j.desal.2010.04.069 | Electrodialysis | Citation verified (Crossref) |
+| E2 | McGovern, R.K.; Weiner, A.M.; Sun, L.; Chambers, C.G.; Zubair, S.M.; Lienhard V, J.H. "On the cost of electrodialysis for the desalination of high salinity feeds." *Appl. Energy* **2014**, 136, 649--661. doi:10.1016/j.apenergy.2014.09.050 | ED model and cost | Citation verified (Crossref) |
+| W1 | Takács, I.; Patry, G.G.; Nolasco, D. "A dynamic model of the clarification-thickening process." *Water Res.* **1991**, 25(10), 1263--1271. doi:10.1016/0043-1354(91)90066-Y | Layered settler | Citation verified (Crossref); Crossref lists only the first author, co-authors confirmed from the 1990 conference version (doi:10.1016/B978-0-08-040776-0.50065-2) |
+| W2 | Batstone, D.J.; Keller, J.; Angelidaki, I.; Kalyuzhnyi, S.V.; Pavlostathis, S.G.; Rozzi, A.; Sanders, W.T.M.; Siegrist, H.; Vavilin, V.A. "The IWA Anaerobic Digestion Model No 1 (ADM1)." *Water Sci. Technol.* **2002**, 45(10), 65--73. doi:10.2166/wst.2002.0292 | ADM1 | Citation verified (Crossref). The full parameter set is in the IWA Scientific and Technical Report No. 13 (not checked). |
+| W3 | Henze, M.; Gujer, W.; Mino, T.; van Loosdrecht, M. *Activated Sludge Models ASM1, ASM2, ASM2d and ASM3*; IWA Scientific and Technical Report No. 9; IWA Publishing: London, 2000. doi:10.2166/9781780402369 | ASM1, ASM2d | DOI and authors verified (Crossref); Crossref dates the e-book reissue 2015, the 2000 print date is (unverified) |
+| W4 | Gernaey, K.V.; Jeppsson, U.; Vanrolleghem, P.A.; Copp, J.B. *Benchmarking of Control Strategies for Wastewater Treatment Plants*; IWA Scientific and Technical Report No. 23; IWA Publishing, **2014**. doi:10.2166/9781780401171 | BSM1 definition | Citation verified (Crossref); report number (unverified) |
+| D1 | Crittenden, J.C.; Trussell, R.R.; Hand, D.W.; Howe, K.J.; Tchobanoglous, G. *MWH's Water Treatment: Principles and Design*, 3rd ed.; Wiley: Hoboken, NJ, **2012**. doi:10.1002/9781118131473 | Conventional treatment design equations | Citation verified (Crossref); edition (unverified) |
+| C1 | Langelier, W.F. "The analytical control of anti-corrosion water treatment." *J. AWWA* **1936**, 28(10), 1500--1521. doi:10.1002/j.1551-8833.1936.tb13785.x | Langelier saturation index | Citation verified (Crossref) |
+| C2 | Plummer, L.N.; Busenberg, E. "The solubilities of calcite, aragonite and vaterite in CO2-H2O solutions between 0 and 90 °C, and an evaluation of the aqueous model for the system CaCO3-CO2-H2O." *Geochim. Cosmochim. Acta* **1982**, 46(6), 1011--1040. doi:10.1016/0016-7037(82)90056-4 | Carbonate constants, calcite Ksp(T) | Citation verified (Crossref) |
+| C3 | Pitzer, K.S. "Thermodynamics of electrolytes. I. Theoretical basis and general equations." *J. Phys. Chem.* **1973**, 77(2), 268--277. doi:10.1021/j100621a026 | Pitzer activity model | Citation verified (Crossref) |
+| C4 | Parkhurst, D.L.; Appelo, C.A.J. *Description of Input and Examples for PHREEQC Version 3*; U.S. Geological Survey Techniques and Methods 6-A43, **2013**. doi:10.3133/tm6A43 | Chemistry cross-check target | Citation verified (Crossref) |
+| C5 | Davies, C.W. "The extent of dissociation of salts in water. Part VIII. ..." *J. Chem. Soc.* **1938**, 2093. doi:10.1039/JR9380002093 | Davies activity equation | Citation verified (Crossref) |
+| K1 | Chick, H. "An investigation of the laws of disinfection." *J. Hyg.* **1908**, 8(1), 92--158. doi:10.1017/S0022172400006987 | Disinfection kinetics | Citation verified (Crossref) |
+| K2 | Watson, H.E. "A note on the variation of the rate of disinfection with change in the concentration of the disinfectant." *J. Hyg.* **1908**, 8(4), 536--542. doi:10.1017/S0022172400015928 | Concentration exponent (CT) | Citation verified (Crossref) |
+| B1 | Akkor, I.; Amusat, O.O.; Vecchiarelli, P.; Gounaris, C.E.; Knueven, B.; Dudchenko, A.V. "Optimization of desalination systems with detailed water chemistry through integration of Reaktoro in WaterTAP." *ACS ES&T Eng.* **2026**, 6(5), 1464--1477. doi:10.1021/acsestengg.5c01008 | WaterTAP with detailed chemistry (benchmark) | Citation verified (Crossref) |
+| B2 | Dudchenko, A.; Atia, A.; Bartholomew, T. "WaterTAP: Tool for analysis of water treatment systems." NAWI Alliance Fall Meeting, **2023** (OSTI). doi:10.2172/2447624 | WaterTAP (benchmark) | Citation verified (Crossref). A presentation, not a paper: also cite the pinned software release (Zenodo/GitHub) used for each comparison. |
+| B3 | Lee, A.; Ghouse, J.H.; Eslick, J.C.; Laird, C.D.; Siirola, J.D.; et al. "The IDAES process modeling framework and model library -- flexibility for process simulation and optimization." *J. Adv. Manuf. Process.* **2021**, 3(3), e10095. doi:10.1002/amp2.10095 | IDAES, which WaterTAP is built on | Citation verified (Crossref) |
+| A1 | Hand, D.W.; Crittenden, J.C.; Thacker, W.E. "Simplified models for design of fixed-bed adsorption systems." *J. Environ. Eng.* **1984**, 110(2), 440--456. doi:10.1061/(ASCE)0733-9372(1984)110:2(440) | GAC breakthrough (HSDM) | Citation verified (Crossref) |
+
+### 6.3 Still to find (no DOI in hand; do not cite until resolved)
+
+- Hazen-Williams: Williams, G.S.; Hazen, A. *Hydraulic Tables* (1905 and later
+  editions). A book with no DOI; cite the edition read.
+- EPANET 2.2 user manual (Rossman et al., U.S. EPA, 2020); report number and
+  URL to be confirmed from the EPA site.
+- Todini & Pilati (1988), the original global gradient algorithm (book chapter);
+  N2 covers the method in the meantime.
+- A primary WaterTAP methods paper, if one exists beyond B1/B2, and the
+  software release DOI to pin for the comparisons.
+- Valve modelling: primary references for (a) the smoothed PRV/PSV/FCV/check
+  valve forms and (b) complementarity formulations of network valves.
+
+## 6a. Status after phases 1-4 and next candidates
+
+Built: phases 1-4 except ASM2d (deferred, see phase 4). Coverage of
+WaterTAP 1.8.0 is listed in `docs/unit-operations-water.md`, "Coverage
+relative to WaterTAP". Next candidates, in priority order for WaterTAP
+comparability: nanofiltration (DSPM-DE), electrodialysis, ion exchange, a
+zero-order removal unit with WaterTAP's cost curves, BSM2 (with the
+ASM-ADM interfaces), then ASM2d once Henze et al. (1999) is in hand. Also
+open from earlier phases: MSF, coagulation/softening/UV, treatment
+costing.
+
+## 7. Open design questions
+
+- Smoothing width defaults for the smoothed valves, and the solver for the
+  complementarity form (smoothing continuation vs Fischer-Burmeister Newton).
+- Which WaterTAP version to pin, and whether the comparison scripts live in
+  this repo or a separate one (WaterTAP + IPOPT is a heavy dependency).

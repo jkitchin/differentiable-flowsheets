@@ -13,7 +13,7 @@ import pytest
 from difflow.agent import Workbench, plugins
 from difflow.agent.doctor import _symptom_findings
 
-PLUGINS = {"bio", "cc", "gas", "power", "ree", "refinery"}
+PLUGINS = {"bio", "cc", "gas", "power", "ree", "refinery", "water"}
 
 
 def test_every_plugin_has_a_guide():

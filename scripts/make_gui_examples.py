@@ -666,6 +666,55 @@ def refinery() -> Path:
     )
 
 
+# ---------------------------------------------------------------------
+# Water: seawater RO with a pressure exchanger
+# ---------------------------------------------------------------------
+
+def water() -> Path:
+    """Seawater RO with a pressure exchanger (WaterTAP's RO_with_energy_recovery layout).
+
+    1 L/s of 35 g/kg Reference-Composition seawater at 25 C. RO feed at
+    65 bar through 50 m^2 of membrane, A = 4.2e-12 m/(s Pa), B = 3.5e-8 m/s,
+    1 mm channel, porosity 0.85, 5 m wide: the ``base`` case of
+    ``benchmarks/watertap/swro_px.py``, which WaterTAP 1.8.0 solves to
+    recovery 0.4238, P1 3.36 kW and P2 0.38 kW (difflow_water agrees within
+    0.1 %). Pressure exchanger efficiency 0.95, pumps 0.8; the RO stage
+    reports concentrate and membrane-wall saturation indices (feed pH 8.1).
+    Every parameter is a plain dataclass, so the file needs no code context.
+    The tear-error probe is off (``error_probe: 0``): without exchanger mixing
+    the RO feed is the intake whatever the recycled concentrate is, so the
+    loop gain is zero and the probe would only cost a batched recompile of
+    every unit on the first solve (about 40 s).
+    """
+    import difflow_water as dw
+
+    ro = dw.ROStageParams(A_w=4.2e-12, B=3.5e-8, area=50.0, scaling=True)
+    fs = dw.build_swro_flowsheet(ro, 65e5)
+    feed = dw.make_seawater_stream(flow_vol=1e-3, salinity=0.035, T=298.15, P=101325.0)
+    fs.add_feed("seawater", {k: float(v) for k, v in feed.items()})
+    nodes = {
+        "feed:seawater": {"x": 60, "y": 220},
+        "PX": {"x": 260, "y": 220},
+        "P1": {"x": 460, "y": 140},
+        "P2": {"x": 460, "y": 300},
+        "M1": {"x": 640, "y": 220},
+        "RO": {"x": 820, "y": 220},
+    }
+    return write(
+        "10_water_swro",
+        fs,
+        title="Seawater RO with a pressure exchanger",
+        description=(
+            "1 L/s of seawater through a pressure exchanger, high-pressure "
+            "and booster pumps and a 50 m2 RO stage at 65 bar, with the "
+            "concentrate recycled to the exchanger and scaling indices at "
+            "the membrane wall."
+        ),
+        nodes=nodes,
+        solver={"tol": 1e-10, "max_iter": 100, "error_probe": 0},
+    )
+
+
 if __name__ == "__main__":
     gaslib11()
     bio()
@@ -673,3 +722,4 @@ if __name__ == "__main__":
     power()
     ree()
     refinery()
+    water()

@@ -42,6 +42,7 @@ Six domain plugins ship with difflow:
 | <img src="https://raw.githubusercontent.com/jkitchin/differentiable-flowsheets/main/images/plugins/difflow-gas-icon.svg" alt="" width="24"> | [`difflow_gas`](https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/docs/unit-operations-gas.html) | Gas transmission networks |
 | <img src="https://raw.githubusercontent.com/jkitchin/differentiable-flowsheets/main/images/plugins/difflow-power-icon.svg" alt="" width="24"> | [`difflow_power`](https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/docs/unit-operations-power.html) | Electrical grids |
 | <img src="https://raw.githubusercontent.com/jkitchin/differentiable-flowsheets/main/images/plugins/difflow-refinery-icon.svg" alt="" width="24"> | [`difflow_refinery`](https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/docs/unit-operations-refinery.html) | Petroleum refining |
+| <img src="https://raw.githubusercontent.com/jkitchin/differentiable-flowsheets/main/images/plugins/difflow-water-icon.svg" alt="" width="24"> | [`difflow_water`](https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/docs/unit-operations-water.html) | Desalination and water treatment |
 
 ## ⚠️ ALPHA SOFTWARE
 

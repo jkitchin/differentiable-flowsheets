@@ -53,7 +53,7 @@ endif
 .PHONY: all notebooks notebooks-force notebooks-bio notebooks-ree notebooks-cc \
         notebooks-bio-force notebooks-ree-force notebooks-cc-force \
         clean test test-durations book book-clean sync \
-        docs-index convergence ask-check
+        docs-index convergence ask-check watertap-compare phreeqc-compare wntr-compare
 
 all: notebooks
 
@@ -155,6 +155,25 @@ test-durations:
 # that touches initialization, acceleration or the tear solve.
 convergence:
 	$(UV_RUN_DEV) python -m difflow.convergence
+
+# difflow_water vs WaterTAP (hand-run; needs the reference JSON, which
+# benchmarks/watertap/swro_px.py writes in a WaterTAP environment)
+watertap-compare:
+	python benchmarks/watertap/compare_swro_px.py
+	python benchmarks/watertap/compare_mvc.py
+	python benchmarks/watertap/compare_gac.py
+	python benchmarks/watertap/compare_bsm1.py
+	python benchmarks/watertap/compare_adm1.py
+
+# difflow_water's Pitzer speciation vs PHREEQC (hand-run; reference JSON from
+# benchmarks/phreeqc/seawater_brines.py in a phreeqpython environment)
+phreeqc-compare:
+	python benchmarks/phreeqc/compare_seawater_brines.py
+
+# difflow_water networks vs EPANET 2.2 (hand-run; network JSON from
+# benchmarks/wntr/export_networks.py in a WNTR environment)
+wntr-compare:
+	python benchmarks/wntr/compare_networks.py
 
 # Clean generated files
 clean:

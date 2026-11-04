@@ -1,0 +1,2233 @@
+{
+"source": "EPANET example network Net3 (U.S. EPA, public domain), converted to SI by WNTR 1.5.0; epanet = EPANET 2.2 solution at t = 0 (benchmarks/wntr/export_networks.py)",
+"network": {
+"headloss": "H-W",
+"viscosity": 1e-06,
+"junctions": {
+"10": {
+"elevation": 44.805600000000005,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"15": {
+"elevation": 9.7536,
+"demand": 0.039115921768,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"20": {
+"elevation": 39.3192,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"35": {
+"elevation": 3.81,
+"demand": 0.1032786515068,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"40": {
+"elevation": 40.203120000000006,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"50": {
+"elevation": 35.5092,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"60": {
+"elevation": 0.0,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"601": {
+"elevation": 0.0,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"61": {
+"elevation": 0.0,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"101": {
+"elevation": 12.8016,
+"demand": 0.0160585369602812,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"103": {
+"elevation": 13.1064,
+"demand": 0.011260842975043199,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"105": {
+"elevation": 8.6868,
+"demand": 0.011444296648135122,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"107": {
+"elevation": 6.7056000000000004,
+"demand": 0.00461931276393664,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"109": {
+"elevation": 6.1874400000000005,
+"demand": 0.019562755738926404,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"111": {
+"elevation": 3.048,
+"demand": 0.01199973011920144,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"113": {
+"elevation": 0.6096,
+"demand": 0.0016916626721517603,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"115": {
+"elevation": 4.2672,
+"demand": 0.0044045789714696,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"117": {
+"elevation": 4.1452800000000005,
+"demand": 0.00995130500444696,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"119": {
+"elevation": 0.6096,
+"demand": 0.01489018223118888,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"120": {
+"elevation": 0.0,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"121": {
+"elevation": -0.6096,
+"demand": 0.0035194361340168804,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"123": {
+"elevation": 3.3528000000000002,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"125": {
+"elevation": 3.3528000000000002,
+"demand": 0.0038550633608256005,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"127": {
+"elevation": 17.0688,
+"demand": 0.0014929916436881602,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"129": {
+"elevation": 15.5448,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"131": {
+"elevation": 1.8288000000000002,
+"demand": 0.0036141219007740006,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"139": {
+"elevation": 9.4488,
+"demand": 0.00049794568410664,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"141": {
+"elevation": 1.2192,
+"demand": 0.0008327275022836,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"143": {
+"elevation": -1.3716000000000002,
+"demand": 0.0005241533516912001,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"145": {
+"elevation": 0.3048,
+"demand": 0.00233586404955288,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"147": {
+"elevation": 5.638800000000001,
+"demand": 0.0007228243801548002,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"149": {
+"elevation": 4.8768,
+"demand": 0.0022885211661743204,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"151": {
+"elevation": 10.2108,
+"demand": 0.012214463911668482,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"153": {
+"elevation": 20.177760000000003,
+"demand": 0.0037341699264839207,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"157": {
+"elevation": 3.99288,
+"demand": 0.00437837130388504,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"159": {
+"elevation": 1.8288000000000002,
+"demand": 0.003493228466432321,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"161": {
+"elevation": 1.2192,
+"demand": 0.0013357456381808003,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"163": {
+"elevation": 1.524,
+"demand": 0.00079637493111792,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"164": {
+"elevation": 1.524,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"166": {
+"elevation": -0.6096,
+"demand": 0.00021980624425760003,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"167": {
+"elevation": -1.524,
+"demand": 0.0012309149678425603,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"169": {
+"elevation": -1.524,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"171": {
+"elevation": -1.2192,
+"demand": 0.0033258375573438407,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"173": {
+"elevation": -1.2192,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"177": {
+"elevation": 2.4384,
+"demand": 0.004917742010947921,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"179": {
+"elevation": 2.4384,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"181": {
+"elevation": 2.4384,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"183": {
+"elevation": 3.3528000000000002,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"184": {
+"elevation": 4.8768,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"185": {
+"elevation": 4.8768,
+"demand": 0.0021684731404644003,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"187": {
+"elevation": 3.81,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"189": {
+"elevation": 1.2192,
+"demand": 0.00912364995395392,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"191": {
+"elevation": 7.62,
+"demand": 0.006923896694114401,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"193": {
+"elevation": 5.486400000000001,
+"demand": 0.006028608953080561,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"195": {
+"elevation": 4.7244,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"197": {
+"elevation": 7.010400000000001,
+"demand": 0.00144057630851904,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"199": {
+"elevation": -0.6096,
+"demand": 0.010087415794160321,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"201": {
+"elevation": 0.030480000000000004,
+"demand": 0.0037713679062813606,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"203": {
+"elevation": 0.6096,
+"demand": 0.2800573818196,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"204": {
+"elevation": 6.4008,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"205": {
+"elevation": 6.4008,
+"demand": 0.00552559081718336,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"206": {
+"elevation": 0.3048,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"207": {
+"elevation": 2.7432000000000003,
+"demand": 0.00586629049578264,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"208": {
+"elevation": 4.8768,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"209": {
+"elevation": -0.6096,
+"demand": 7.355055096312e-05,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"211": {
+"elevation": 2.1336,
+"demand": 0.00073296928373592,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"213": {
+"elevation": 2.1336,
+"demand": 0.00117849963267344,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"215": {
+"elevation": 2.1336,
+"demand": 0.007793822176195441,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"217": {
+"elevation": 1.8288000000000002,
+"demand": 0.00204757970612272,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"219": {
+"elevation": 1.2192,
+"demand": 0.003493228466432321,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"225": {
+"elevation": 2.4384,
+"demand": 0.0019275316804128002,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"229": {
+"elevation": 3.2004,
+"demand": 0.005425832598635681,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"231": {
+"elevation": 1.524,
+"demand": 0.0013932334251404803,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"237": {
+"elevation": 4.2672,
+"demand": 0.0013196828741773602,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"239": {
+"elevation": 3.9624,
+"demand": 0.0037713679062813606,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"241": {
+"elevation": 3.9624,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"243": {
+"elevation": 4.2672,
+"demand": 0.00036690734618384003,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"247": {
+"elevation": 5.486400000000001,
+"demand": 0.00594998595032688,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"249": {
+"elevation": 5.486400000000001,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"251": {
+"elevation": 9.144,
+"demand": 0.00204250725433216,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"253": {
+"elevation": 10.972800000000001,
+"demand": 0.00460916786035552,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"255": {
+"elevation": 8.2296,
+"demand": 0.0034146054636786404,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"257": {
+"elevation": 5.1816,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"259": {
+"elevation": 7.62,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"261": {
+"elevation": 0.0,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"263": {
+"elevation": 0.0,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"265": {
+"elevation": 0.0,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"267": {
+"elevation": 6.4008,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"269": {
+"elevation": 0.0,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"271": {
+"elevation": 1.8288000000000002,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"273": {
+"elevation": 2.4384,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+},
+"275": {
+"elevation": 3.048,
+"demand": 0.0,
+"emitter": 0.0,
+"emitter_exponent": 0.5
+}
+},
+"reservoirs": {
+"River": {
+"head": 67.056
+},
+"Lake": {
+"head": 50.9016
+}
+},
+"tanks": {
+"1": {
+"elevation": 40.203120000000006,
+"level": 3.99288,
+"min_level": 0.030480000000000004,
+"max_level": 9.784080000000001,
+"diameter": 25.908
+},
+"2": {
+"elevation": 35.5092,
+"level": 7.162800000000001,
+"min_level": 1.9812,
+"max_level": 12.28344,
+"diameter": 15.24
+},
+"3": {
+"elevation": 39.3192,
+"level": 8.8392,
+"min_level": 1.2192,
+"max_level": 10.820400000000001,
+"diameter": 49.9872
+}
+},
+"pipes": {
+"20": {
+"start": "3",
+"end": "20",
+"length": 30.1752,
+"diameter": 2.5145999999999997,
+"roughness": 199.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"40": {
+"start": "1",
+"end": "40",
+"length": 30.1752,
+"diameter": 2.5145999999999997,
+"roughness": 199.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"50": {
+"start": "2",
+"end": "50",
+"length": 30.1752,
+"diameter": 2.5145999999999997,
+"roughness": 199.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"60": {
+"start": "River",
+"end": "60",
+"length": 375.2088,
+"diameter": 0.6095999999999999,
+"roughness": 140.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"101": {
+"start": "10",
+"end": "101",
+"length": 4328.16,
+"diameter": 0.4572,
+"roughness": 110.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"103": {
+"start": "101",
+"end": "103",
+"length": 411.48,
+"diameter": 0.4064,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"105": {
+"start": "101",
+"end": "105",
+"length": 774.192,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"107": {
+"start": "105",
+"end": "107",
+"length": 448.05600000000004,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"109": {
+"start": "103",
+"end": "109",
+"length": 1200.912,
+"diameter": 0.4064,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"111": {
+"start": "109",
+"end": "111",
+"length": 609.6,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"112": {
+"start": "115",
+"end": "111",
+"length": 353.56800000000004,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"113": {
+"start": "111",
+"end": "113",
+"length": 512.0640000000001,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"114": {
+"start": "115",
+"end": "113",
+"length": 609.6,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"115": {
+"start": "107",
+"end": "115",
+"length": 594.36,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"116": {
+"start": "113",
+"end": "193",
+"length": 505.968,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"117": {
+"start": "263",
+"end": "105",
+"length": 830.58,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"119": {
+"start": "115",
+"end": "117",
+"length": 664.464,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"120": {
+"start": "119",
+"end": "120",
+"length": 222.50400000000002,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"121": {
+"start": "120",
+"end": "117",
+"length": 569.976,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"122": {
+"start": "121",
+"end": "120",
+"length": 624.84,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"123": {
+"start": "121",
+"end": "119",
+"length": 609.6,
+"diameter": 0.762,
+"roughness": 141.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"125": {
+"start": "123",
+"end": "121",
+"length": 457.20000000000005,
+"diameter": 0.762,
+"roughness": 141.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"129": {
+"start": "121",
+"end": "125",
+"length": 283.464,
+"diameter": 0.6095999999999999,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"131": {
+"start": "125",
+"end": "127",
+"length": 987.552,
+"diameter": 0.6095999999999999,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"133": {
+"start": "20",
+"end": "127",
+"length": 239.268,
+"diameter": 0.508,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"135": {
+"start": "127",
+"end": "129",
+"length": 274.32,
+"diameter": 0.6095999999999999,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"137": {
+"start": "129",
+"end": "131",
+"length": 1975.104,
+"diameter": 0.4064,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"145": {
+"start": "129",
+"end": "139",
+"length": 838.2,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"147": {
+"start": "139",
+"end": "141",
+"length": 624.84,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"149": {
+"start": "143",
+"end": "141",
+"length": 426.72,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"151": {
+"start": "15",
+"end": "143",
+"length": 502.92,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"153": {
+"start": "145",
+"end": "141",
+"length": 1069.848,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"155": {
+"start": "147",
+"end": "145",
+"length": 670.5600000000001,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"159": {
+"start": "147",
+"end": "149",
+"length": 268.224,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"161": {
+"start": "149",
+"end": "151",
+"length": 310.896,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"163": {
+"start": "151",
+"end": "153",
+"length": 356.61600000000004,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"169": {
+"start": "125",
+"end": "153",
+"length": 1389.8880000000001,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"171": {
+"start": "119",
+"end": "151",
+"length": 1054.608,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"173": {
+"start": "119",
+"end": "157",
+"length": 633.984,
+"diameter": 0.762,
+"roughness": 141.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"175": {
+"start": "157",
+"end": "159",
+"length": 886.9680000000001,
+"diameter": 0.762,
+"roughness": 141.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"177": {
+"start": "159",
+"end": "161",
+"length": 609.6,
+"diameter": 0.762,
+"roughness": 141.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"179": {
+"start": "161",
+"end": "163",
+"length": 131.064,
+"diameter": 0.762,
+"roughness": 141.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"180": {
+"start": "163",
+"end": "164",
+"length": 45.72,
+"diameter": 0.35559999999999997,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"181": {
+"start": "164",
+"end": "166",
+"length": 149.352,
+"diameter": 0.35559999999999997,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"183": {
+"start": "265",
+"end": "169",
+"length": 179.83200000000002,
+"diameter": 0.762,
+"roughness": 141.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"185": {
+"start": "167",
+"end": "169",
+"length": 18.288,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"186": {
+"start": "187",
+"end": "204",
+"length": 30.449520000000003,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"187": {
+"start": "169",
+"end": "171",
+"length": 387.096,
+"diameter": 0.762,
+"roughness": 141.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"189": {
+"start": "171",
+"end": "173",
+"length": 15.24,
+"diameter": 0.762,
+"roughness": 141.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"191": {
+"start": "271",
+"end": "171",
+"length": 231.64800000000002,
+"diameter": 0.6095999999999999,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"193": {
+"start": "35",
+"end": "181",
+"length": 9.144,
+"diameter": 0.6095999999999999,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"195": {
+"start": "181",
+"end": "177",
+"length": 9.144,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"197": {
+"start": "177",
+"end": "179",
+"length": 9.144,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"199": {
+"start": "179",
+"end": "183",
+"length": 64.00800000000001,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"201": {
+"start": "40",
+"end": "179",
+"length": 362.71200000000005,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"202": {
+"start": "185",
+"end": "184",
+"length": 30.449520000000003,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"203": {
+"start": "183",
+"end": "185",
+"length": 155.448,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"204": {
+"start": "184",
+"end": "205",
+"length": 1380.7440000000001,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"205": {
+"start": "204",
+"end": "185",
+"length": 403.86,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"207": {
+"start": "189",
+"end": "183",
+"length": 411.48,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"209": {
+"start": "189",
+"end": "187",
+"length": 152.4,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"211": {
+"start": "169",
+"end": "269",
+"length": 196.9008,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"213": {
+"start": "191",
+"end": "187",
+"length": 780.288,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"215": {
+"start": "267",
+"end": "189",
+"length": 374.904,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"217": {
+"start": "191",
+"end": "193",
+"length": 158.496,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"219": {
+"start": "193",
+"end": "195",
+"length": 109.72800000000001,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"221": {
+"start": "161",
+"end": "195",
+"length": 701.0400000000001,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"223": {
+"start": "197",
+"end": "191",
+"length": 350.52000000000004,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"225": {
+"start": "111",
+"end": "197",
+"length": 850.392,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"229": {
+"start": "173",
+"end": "199",
+"length": 1219.2,
+"diameter": 0.6095999999999999,
+"roughness": 141.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"231": {
+"start": "199",
+"end": "201",
+"length": 192.024,
+"diameter": 0.6095999999999999,
+"roughness": 141.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"233": {
+"start": "201",
+"end": "203",
+"length": 36.576,
+"diameter": 0.6095999999999999,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"235": {
+"start": "199",
+"end": "273",
+"length": 220.98000000000002,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"237": {
+"start": "205",
+"end": "207",
+"length": 365.76,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"238": {
+"start": "207",
+"end": "206",
+"length": 137.16,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"239": {
+"start": "275",
+"end": "207",
+"length": 435.86400000000003,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"240": {
+"start": "206",
+"end": "208",
+"length": 155.448,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"241": {
+"start": "208",
+"end": "209",
+"length": 269.748,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"243": {
+"start": "209",
+"end": "211",
+"length": 368.808,
+"diameter": 0.4064,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"245": {
+"start": "211",
+"end": "213",
+"length": 301.752,
+"diameter": 0.4064,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"247": {
+"start": "213",
+"end": "215",
+"length": 1306.068,
+"diameter": 0.4064,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"249": {
+"start": "215",
+"end": "217",
+"length": 505.968,
+"diameter": 0.4064,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"251": {
+"start": "217",
+"end": "219",
+"length": 624.84,
+"diameter": 0.35559999999999997,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"257": {
+"start": "217",
+"end": "225",
+"length": 475.488,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"261": {
+"start": "213",
+"end": "229",
+"length": 670.5600000000001,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"263": {
+"start": "229",
+"end": "231",
+"length": 597.408,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"269": {
+"start": "211",
+"end": "237",
+"length": 633.984,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"271": {
+"start": "237",
+"end": "229",
+"length": 240.792,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"273": {
+"start": "237",
+"end": "239",
+"length": 155.448,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"275": {
+"start": "239",
+"end": "241",
+"length": 10.668000000000001,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"277": {
+"start": "241",
+"end": "243",
+"length": 670.5600000000001,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"281": {
+"start": "241",
+"end": "247",
+"length": 135.636,
+"diameter": 0.254,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"283": {
+"start": "239",
+"end": "249",
+"length": 131.064,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"285": {
+"start": "247",
+"end": "249",
+"length": 3.048,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"287": {
+"start": "247",
+"end": "255",
+"length": 423.672,
+"diameter": 0.254,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"289": {
+"start": "50",
+"end": "255",
+"length": 281.94,
+"diameter": 0.254,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"291": {
+"start": "255",
+"end": "253",
+"length": 335.28000000000003,
+"diameter": 0.254,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"293": {
+"start": "255",
+"end": "251",
+"length": 335.28000000000003,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"295": {
+"start": "249",
+"end": "251",
+"length": 441.96000000000004,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"297": {
+"start": "120",
+"end": "257",
+"length": 196.596,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"299": {
+"start": "257",
+"end": "259",
+"length": 106.68,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"301": {
+"start": "259",
+"end": "263",
+"length": 426.72,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"303": {
+"start": "257",
+"end": "261",
+"length": 426.72,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"305": {
+"start": "117",
+"end": "261",
+"length": 196.596,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"307": {
+"start": "261",
+"end": "263",
+"length": 106.68,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"309": {
+"start": "265",
+"end": "267",
+"length": 481.584,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"311": {
+"start": "193",
+"end": "267",
+"length": 356.61600000000004,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"313": {
+"start": "269",
+"end": "189",
+"length": 196.9008,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"315": {
+"start": "181",
+"end": "271",
+"length": 79.248,
+"diameter": 0.6095999999999999,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"317": {
+"start": "273",
+"end": "275",
+"length": 679.7040000000001,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"319": {
+"start": "273",
+"end": "205",
+"length": 196.596,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"321": {
+"start": "163",
+"end": "265",
+"length": 365.76,
+"diameter": 0.762,
+"roughness": 141.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"323": {
+"start": "201",
+"end": "275",
+"length": 91.44,
+"diameter": 0.30479999999999996,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"325": {
+"start": "269",
+"end": "271",
+"length": 393.192,
+"diameter": 0.2032,
+"roughness": 130.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"329": {
+"start": "61",
+"end": "123",
+"length": 13868.400000000001,
+"diameter": 0.762,
+"roughness": 140.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+},
+"330": {
+"start": "60",
+"end": "601",
+"length": 0.3048,
+"diameter": 0.762,
+"roughness": 140.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "closed"
+},
+"333": {
+"start": "601",
+"end": "61",
+"length": 0.3048,
+"diameter": 0.762,
+"roughness": 140.0,
+"minor_loss": 0.0,
+"check_valve": false,
+"status": "open"
+}
+},
+"pumps": {
+"10": {
+"start": "Lake",
+"end": "10",
+"speed": 1.0,
+"status": "closed",
+"A": 31.6992,
+"B": 143.47246994481017,
+"C": 1.7725895038969284,
+"_curve": [
+[
+0.0,
+31.6992
+],
+[
+0.1261803928,
+28.041600000000003
+],
+[
+0.2523607856,
+19.2024
+]
+]
+},
+"335": {
+"start": "60",
+"end": "61",
+"speed": 1.0,
+"status": "open",
+"A": 60.96,
+"B": 39.773467431184784,
+"C": 1.0883611157512365,
+"_curve": [
+[
+0.0,
+60.96
+],
+[
+0.5047215712,
+42.062400000000004
+],
+[
+0.8832627496000001,
+26.2128
+]
+]
+}
+},
+"valves": {}
+},
+"epanet": {
+"head": {
+"10": 44.35552978515625,
+"15": 38.34725570678711,
+"20": 48.15840530395508,
+"35": 44.42247009277344,
+"40": 44.19599914550781,
+"50": 42.672000885009766,
+"60": 63.70644760131836,
+"601": 92.18788146972656,
+"61": 92.18788146972656,
+"101": 44.35552978515625,
+"103": 44.34608459472656,
+"105": 44.753597259521484,
+"107": 44.75163269042969,
+"109": 44.34624099731445,
+"111": 44.53407287597656,
+"113": 44.54631805419922,
+"115": 44.78080368041992,
+"117": 45.72932434082031,
+"119": 48.02217483520508,
+"120": 47.28084182739258,
+"121": 49.07604217529297,
+"123": 50.43449783325195,
+"125": 48.8983039855957,
+"127": 48.38386917114258,
+"129": 48.38019943237305,
+"131": 48.3740234375,
+"139": 46.65739440917969,
+"141": 45.43351745605469,
+"143": 42.137386322021484,
+"145": 45.80524826049805,
+"147": 46.087093353271484,
+"149": 46.20623016357422,
+"151": 47.37934112548828,
+"153": 47.40867614746094,
+"157": 47.27896499633789,
+"159": 46.25590896606445,
+"161": 45.5618782043457,
+"163": 45.42213821411133,
+"164": 45.42213821411133,
+"166": 45.4221305847168,
+"167": 44.85213851928711,
+"169": 44.85236358642578,
+"171": 44.52199935913086,
+"173": 44.515296936035156,
+"177": 44.418636322021484,
+"179": 44.41448211669922,
+"181": 44.424442291259766,
+"183": 44.415504455566406,
+"184": 44.04085159301758,
+"185": 44.219635009765625,
+"187": 44.434059143066406,
+"189": 44.52824401855469,
+"191": 44.5162239074707,
+"193": 44.545650482177734,
+"195": 44.5672492980957,
+"197": 44.51911926269531,
+"199": 42.92546844482422,
+"201": 42.701171875,
+"203": 42.65110397338867,
+"204": 44.35856628417969,
+"205": 42.915958404541016,
+"206": 42.63988494873047,
+"207": 42.7014274597168,
+"208": 42.57014083862305,
+"209": 42.44911193847656,
+"211": 42.40858459472656,
+"213": 42.3885612487793,
+"215": 42.32970428466797,
+"217": 42.32363510131836,
+"219": 42.32011413574219,
+"225": 42.321746826171875,
+"229": 42.36057662963867,
+"231": 42.35927963256836,
+"237": 42.393028259277344,
+"239": 42.39310073852539,
+"241": 42.393123626708984,
+"243": 42.39299774169922,
+"247": 42.394229888916016,
+"249": 42.394229888916016,
+"251": 42.39768981933594,
+"253": 42.43389129638672,
+"255": 42.45012664794922,
+"257": 46.32917404174805,
+"259": 46.196311950683594,
+"261": 45.71482849121094,
+"263": 45.66488265991211,
+"265": 45.0337028503418,
+"267": 44.552345275878906,
+"269": 44.650840759277344,
+"271": 44.45181655883789,
+"273": 42.915958404541016,
+"275": 42.70329666137695,
+"River": 67.05599975585938,
+"Lake": 50.9015998840332,
+"1": 44.19599914550781,
+"2": 42.672000885009766,
+"3": 48.15840148925781
+},
+"pressure": {
+"10": -0.45007020235061646,
+"15": 28.593656539916992,
+"20": 8.839203834533691,
+"35": 40.61246871948242,
+"40": 3.992879867553711,
+"50": 7.162799835205078,
+"60": 63.706443786621094,
+"601": 92.18787384033203,
+"61": 92.18787384033203,
+"101": 31.55392837524414,
+"103": 31.239683151245117,
+"105": 36.066795349121094,
+"107": 38.04602813720703,
+"109": 38.1588020324707,
+"111": 41.4860725402832,
+"113": 43.93671798706055,
+"115": 40.51359939575195,
+"117": 41.584041595458984,
+"119": 47.412574768066406,
+"120": 47.28083419799805,
+"121": 49.685638427734375,
+"123": 47.081695556640625,
+"125": 45.54550552368164,
+"127": 31.315067291259766,
+"129": 32.83539962768555,
+"131": 46.545223236083984,
+"139": 37.20859146118164,
+"141": 44.21431350708008,
+"143": 43.50898361206055,
+"145": 45.50044250488281,
+"147": 40.44829177856445,
+"149": 41.329429626464844,
+"151": 37.168540954589844,
+"153": 27.230913162231445,
+"157": 43.28608322143555,
+"159": 44.42710494995117,
+"161": 44.34267807006836,
+"163": 43.898136138916016,
+"164": 43.898136138916016,
+"166": 46.0317268371582,
+"167": 46.376136779785156,
+"169": 46.37636184692383,
+"171": 45.7411994934082,
+"173": 45.7344970703125,
+"177": 41.9802360534668,
+"179": 41.976078033447266,
+"181": 41.98604202270508,
+"183": 41.06269836425781,
+"184": 39.1640510559082,
+"185": 39.34283447265625,
+"187": 40.62405776977539,
+"189": 43.309043884277344,
+"191": 36.89622116088867,
+"193": 39.05924606323242,
+"195": 39.84284591674805,
+"197": 37.50871658325195,
+"199": 43.53506851196289,
+"201": 42.67068862915039,
+"203": 42.041500091552734,
+"204": 37.957767486572266,
+"205": 36.51515579223633,
+"206": 42.335086822509766,
+"207": 39.95822525024414,
+"208": 37.69334030151367,
+"209": 43.05870819091797,
+"211": 40.27498245239258,
+"213": 40.25495910644531,
+"215": 40.196102142333984,
+"217": 40.49483108520508,
+"219": 41.10091018676758,
+"225": 39.88334655761719,
+"229": 39.16017532348633,
+"231": 40.83527755737305,
+"237": 38.125823974609375,
+"239": 38.430702209472656,
+"241": 38.430721282958984,
+"243": 38.125797271728516,
+"247": 36.90782928466797,
+"249": 36.90782928466797,
+"251": 33.25368881225586,
+"253": 31.461088180541992,
+"255": 34.220523834228516,
+"257": 41.1475715637207,
+"259": 38.57630920410156,
+"261": 45.71482467651367,
+"263": 45.66488265991211,
+"265": 45.0337028503418,
+"267": 38.15154266357422,
+"269": 44.650840759277344,
+"271": 42.623016357421875,
+"273": 40.47755813598633,
+"275": 39.65529251098633,
+"River": 0.0,
+"Lake": 0.0,
+"1": 3.992879867553711,
+"2": 7.162799835205078,
+"3": 8.83919906616211
+},
+"demand": {
+"10": 0.0,
+"15": 0.03911592438817024,
+"20": 0.0,
+"35": 0.10327865928411484,
+"40": 0.0,
+"50": 0.0,
+"60": 0.0,
+"601": 0.0,
+"61": 0.0,
+"101": 0.016058536246418953,
+"103": 0.011260843835771084,
+"105": 0.011444296687841415,
+"107": 0.004619312938302755,
+"109": 0.01956275664269924,
+"111": 0.011999730952084064,
+"113": 0.0016916628228500485,
+"115": 0.004404578823596239,
+"117": 0.009951305575668812,
+"119": 0.014890182763338089,
+"120": 0.0,
+"121": 0.0035194363445043564,
+"123": 0.0,
+"125": 0.0038550635799765587,
+"127": 0.0014929916942492127,
+"129": 0.0,
+"131": 0.003614122048020363,
+"139": 0.0004979457589797676,
+"141": 0.0008327275281772017,
+"143": 0.0005241534090600908,
+"145": 0.0023358638864010572,
+"147": 0.0007228244212456048,
+"149": 0.0022885212674736977,
+"151": 0.012214464135468006,
+"153": 0.003734170226380229,
+"157": 0.0043783714063465595,
+"159": 0.0034932284615933895,
+"161": 0.0013357456773519516,
+"163": 0.0007963749812915921,
+"164": 0.0,
+"166": 0.0002198062720708549,
+"167": 0.0012309150770306587,
+"169": 0.0,
+"171": 0.003325837664306164,
+"173": 0.0,
+"177": 0.004917742218822241,
+"179": 0.0,
+"181": 0.0,
+"183": 0.0,
+"184": 0.0,
+"185": 0.002168473321944475,
+"187": 0.0,
+"189": 0.009123650379478931,
+"191": 0.0069238971918821335,
+"193": 0.006028609350323677,
+"195": 0.0,
+"197": 0.0014405763940885663,
+"199": 0.010087416507303715,
+"201": 0.003771368181332946,
+"203": 0.2800574004650116,
+"204": 0.0,
+"205": 0.005525591317564249,
+"206": 0.0,
+"207": 0.005866290535777807,
+"208": 0.0,
+"209": 7.355055277002975e-05,
+"211": 0.0007329693180508912,
+"213": 0.0011784996604546905,
+"215": 0.007793822325766087,
+"217": 0.002047579735517502,
+"219": 0.0034932284615933895,
+"225": 0.0019275317899882793,
+"229": 0.005425832699984312,
+"231": 0.001393233542330563,
+"237": 0.0013196829240769148,
+"239": 0.003771368181332946,
+"241": 0.0,
+"243": 0.0003669073630589992,
+"247": 0.005949986632913351,
+"249": 0.0,
+"251": 0.0020425075199455023,
+"253": 0.004609168041497469,
+"255": 0.0034146057441830635,
+"257": 0.0,
+"259": 0.0,
+"261": 0.0,
+"263": 0.0,
+"265": 0.0,
+"267": 0.0,
+"269": 0.0,
+"271": 0.0,
+"273": 0.0,
+"275": 0.0,
+"River": -0.8301329612731934,
+"Lake": 0.0,
+"1": 0.02904181182384491,
+"2": -0.02077007107436657,
+"3": 0.14171935617923737
+},
+"flow": {
+"20": -0.14171935617923737,
+"40": -0.02904181182384491,
+"50": 0.02077007107436657,
+"60": 0.8301329612731934,
+"101": 6.040703937060243e-09,
+"103": 0.010602829977869987,
+"105": -0.026661360636353493,
+"107": 0.002037856262177229,
+"109": -0.0006580136250704527,
+"111": -0.020220771431922913,
+"112": 0.03144128620624542,
+"113": -0.0050869048573076725,
+"114": 0.007846562191843987,
+"115": -0.00258145690895617,
+"116": 0.001067995559424162,
+"117": 0.040143515914678574,
+"119": -0.04627388343214989,
+"120": 0.07312989234924316,
+"121": 0.06556876748800278,
+"122": 0.02323881909251213,
+"123": 0.619653582572937,
+"125": 0.8301329612731934,
+"129": 0.18372105062007904,
+"131": 0.1662207841873169,
+"133": -0.14171935617923737,
+"135": 0.023008447140455246,
+"137": 0.003614122048020363,
+"145": 0.019394325092434883,
+"147": 0.018896380439400673,
+"149": -0.03964007645845413,
+"151": -0.03911592438817024,
+"153": 0.021576425060629845,
+"155": 0.02391228824853897,
+"159": -0.024635113775730133,
+"161": -0.026923632249236107,
+"163": -0.009911015629768372,
+"169": 0.013645186088979244,
+"171": 0.029227083548903465,
+"173": 0.5024064779281616,
+"175": 0.49802809953689575,
+"177": 0.4945348799228668,
+"179": 0.477322518825531,
+"180": 0.0002198062720708549,
+"181": 0.0002198062720708549,
+"183": 0.4631657302379608,
+"185": -0.0012309150770306587,
+"186": 0.02146068774163723,
+"187": 0.4232705533504486,
+"189": 0.29589512944221497,
+"191": -0.12404957413673401,
+"193": -0.10327865928411484,
+"195": 0.029871413484215736,
+"197": 0.024953672662377357,
+"199": -0.004088140558451414,
+"201": -0.02904181182384491,
+"202": 0.03418333828449249,
+"203": 0.0148911252617836,
+"204": 0.03418333828449249,
+"205": 0.02146068774163723,
+"207": 0.0189792662858963,
+"209": 0.010136261582374573,
+"211": 0.03866427391767502,
+"213": 0.011324426159262657,
+"215": 0.008675402961671352,
+"217": -0.01538120862096548,
+"219": -0.01587659679353237,
+"221": 0.01587659679353237,
+"223": 0.002867115428671241,
+"225": 0.004307691473513842,
+"229": 0.29589512944221497,
+"231": 0.27882111072540283,
+"233": 0.2800574004650116,
+"235": 0.006986620370298624,
+"237": 0.028625791892409325,
+"238": 0.024770405143499374,
+"239": 0.002010902389883995,
+"240": 0.024770405143499374,
+"241": 0.024770405143499374,
+"243": 0.024696853011846542,
+"245": 0.018805842846632004,
+"247": 0.015262164175510406,
+"249": 0.007468340452760458,
+"251": 0.0034932284615933895,
+"257": 0.0019275317899882793,
+"261": 0.002365180989727378,
+"263": 0.001393233542330563,
+"269": 0.005158040206879377,
+"271": 0.004453885369002819,
+"273": -0.0006155277951620519,
+"275": -0.0014373152516782284,
+"277": 0.0003669073630589992,
+"281": -0.001804222585633397,
+"283": -0.0029495805501937866,
+"285": 0.00016540790966246277,
+"287": -0.0079196160659194,
+"289": 0.02077007107436657,
+"291": 0.004609168041497469,
+"293": 0.004826679825782776,
+"295": -0.002784172771498561,
+"297": 0.030799932777881622,
+"299": 0.014797496609389782,
+"301": 0.014797496609389782,
+"303": 0.016002435237169266,
+"305": 0.009343583136796951,
+"307": 0.025346018373966217,
+"309": 0.013140627183020115,
+"311": -0.004465223755687475,
+"313": 0.029563775286078453,
+"315": -0.13315007090568542,
+"317": 0.007018576376140118,
+"319": -3.1956009479472414e-05,
+"321": 0.47630634903907776,
+"323": -0.00500767445191741,
+"325": 0.00910049770027399,
+"329": 0.8301329612731934,
+"330": 0.0,
+"333": -1.6096256771902517e-08,
+"10": 0.0,
+"335": 0.8301329612731934
+}
+}
+}

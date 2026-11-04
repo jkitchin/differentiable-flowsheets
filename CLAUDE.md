@@ -6,7 +6,7 @@ gradient-based optimization, sensitivity analysis and technoeconomics.
 
 Module-specific invariants live in a `CLAUDE.md` next to the code and load
 when you work there: `src/difflow/{planning,stochastic,reconciliation}/`,
-every plugin package (`src/difflow_{bio,ree,cc,gas,power,refinery}/`), and
+every plugin package (`src/difflow_{bio,ree,cc,gas,power,refinery,water}/`), and
 the refinery subpackages (`vacuum/`, `reforming/`, `hydroprocessing/`,
 `hydrotreating/`, `hydrocracking/`, `hydrogen/`, `residue/`, `preheat/`,
 `gasplant/`, `fcc/`). Read the relevant one before changing a module -- most
@@ -52,6 +52,8 @@ src/difflow_ree/       rare earth solvent extraction
 src/difflow_cc/        carbon capture (amine, membrane, adsorption, DAC)
 src/difflow_gas/       gas transmission networks
 src/difflow_power/     electrical grids (power flow, AC/DC-OPF)
+src/difflow_water/     water: seawater properties, RO, pressure exchanger,
+                       LCOW (WaterTAP-compatible); networks/treatment planned
 src/difflow_refinery/  petroleum refining (assay -> CDU/VDU, conversion units,
                        gas plant, blending, H2 network, planning)
 tests/                 pytest; plugin tests in tests/<plugin>/

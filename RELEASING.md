@@ -1,7 +1,7 @@
 # Releasing difflow
 
 Developer & release guide for **difflow**, the JAX-based differentiable flowsheet
-framework. This distribution (`difflow`) bundles **seven** packages that ship together
+framework. This distribution (`difflow`) bundles **eight** packages that ship together
 from one wheel:
 
 | Import package | Role |
@@ -13,6 +13,7 @@ from one wheel:
 | `difflow_gas` | Gas-transmission-network plugin |
 | `difflow_power` | Electrical-grid (power flow, OPF) plugin |
 | `difflow_refinery` | Petroleum-refining plugin |
+| `difflow_water` | Water treatment and desalination plugin |
 
 The plugins register via the `difflow.plugins` entry points in `pyproject.toml`.
 
@@ -96,6 +97,7 @@ Bump the version per [semver](https://semver.org) in **all** of these locations:
 - [ ] `src/difflow_ree/__init__.py`: `__version__ = "X.Y.Z"`
 - [ ] `src/difflow_cc/__init__.py`: `__version__ = "X.Y.Z"`
 - [ ] `src/difflow_power/__init__.py`: `__version__ = "X.Y.Z"`
+- [ ] `src/difflow_water/__init__.py`: `__version__ = "X.Y.Z"`
 - [ ] `CITATION.cff`: `version: X.Y.Z` **and** `date-released: "YYYY-MM-DD"` (the release
       date). Drop the previous release's *version* DOI from `identifiers` (keep the
       concept DOI); the new version DOI only exists once Zenodo mints it. This is what GitHub's "Cite this repository" button renders.
@@ -117,13 +119,13 @@ Bump the version per [semver](https://semver.org) in **all** of these locations:
 - [ ] `rm -rf dist && uv build` — always wipe first; a stale gitignored `dist/` may exist.
       Produces an sdist + a wheel (backend: **hatchling**).
 - [ ] `uvx twine check dist/*` passes.
-- [ ] Inspect the wheel — it must contain **all seven** packages:
-      `python -m zipfile -l dist/difflow-*.whl | grep -E "difflow(_bio|_ree|_cc|_gas|_power|_refinery)?/__init__.py"`
-      (expect `difflow/` plus the six `difflow_*` plugin packages).
+- [ ] Inspect the wheel — it must contain **all eight** packages:
+      `python -m zipfile -l dist/difflow-*.whl | grep -E "difflow(_bio|_ree|_cc|_gas|_power|_refinery|_water)?/__init__.py"`
+      (expect `difflow/` plus the seven `difflow_*` plugin packages).
 - [ ] Smoke test in a clean venv:
       ```bash
       python -m venv /tmp/df && /tmp/df/bin/pip install dist/difflow-*.whl
-      /tmp/df/bin/python -c "import difflow, difflow_bio, difflow_ree, difflow_cc, difflow_gas, difflow_power, difflow_refinery; print(difflow.__version__)"
+      /tmp/df/bin/python -c "import difflow, difflow_bio, difflow_ree, difflow_cc, difflow_gas, difflow_power, difflow_refinery, difflow_water; print(difflow.__version__)"
       /tmp/df/bin/difflow --help          # the `difflow` console script (report CLI)
       ```
 - [ ] Plugin discovery works — the `difflow.plugins` entry points import and `register()`
@@ -161,7 +163,7 @@ Bump the version per [semver](https://semver.org) in **all** of these locations:
 ## PyPI publishing setup (one-time)
 
 `.github/workflows/publish.yml` **already exists**. It builds an sdist + wheel on every
-published GitHub release, runs `twine check`, verifies all seven packages made it into the
+published GitHub release, runs `twine check`, verifies all eight packages made it into the
 wheel, and uploads via **OIDC trusted publishing** (no API token is stored in this repo).
 
 Two things still have to be done by hand, in a browser, before the first release.
