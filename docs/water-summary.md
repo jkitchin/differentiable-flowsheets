@@ -82,6 +82,12 @@ still differentiable.
 (water-summary-gaps)=
 ## Known gaps
 
+Against WaterTAP 1.8.0 the plugin covers its seawater RO, MVC, GAC, ASM1
+(BSM1) and ADM1 flowsheets, about 15-20 % of WaterTAP's unit models. The
+full list of what is missing (nanofiltration, electrodialysis, ion
+exchange, the zero-order library, BSM2, ...) is in
+[Coverage relative to WaterTAP](unit-operations-water.md#water-watertap-coverage).
+
 - RO transports sea salt as one solute; ions are resolved only for scaling
   (equal rejection assumed). Saturation indices are at 1 atm, without
   kinetics; no Sr, Ba, silica or boron.

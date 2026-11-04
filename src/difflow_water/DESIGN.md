@@ -422,6 +422,17 @@ values below. Re-run it for any new reference.
 - Valve modelling: primary references for (a) the smoothed PRV/PSV/FCV/check
   valve forms and (b) complementarity formulations of network valves.
 
+## 6a. Status after phases 1-4 and next candidates
+
+Built: phases 1-4 except ASM2d (deferred, see phase 4). Coverage of
+WaterTAP 1.8.0 is listed in `docs/unit-operations-water.md`, "Coverage
+relative to WaterTAP". Next candidates, in priority order for WaterTAP
+comparability: nanofiltration (DSPM-DE), electrodialysis, ion exchange, a
+zero-order removal unit with WaterTAP's cost curves, BSM2 (with the
+ASM-ADM interfaces), then ASM2d once Henze et al. (1999) is in hand. Also
+open from earlier phases: MSF, coagulation/softening/UV, treatment
+costing.
+
 ## 7. Open design questions
 
 - Smoothing width defaults for the smoothed valves, and the solver for the

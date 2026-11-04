@@ -1087,6 +1087,58 @@ What the comparison taught:
 
 ---
 
+(water-watertap-coverage)=
+## Coverage relative to WaterTAP
+
+WaterTAP is the benchmark. This is what `difflow_water` covers of WaterTAP
+1.8.0 (the version every comparison here was run against), and what it
+does not. By unit-model count, the coverage is about 15-20 % of WaterTAP,
+and much less if its zero-order library counts.
+
+**Covered and cross-checked against WaterTAP:**
+
+| WaterTAP | difflow_water | Agreement |
+|---|---|---|
+| RO1D + pressure exchanger + pumps (`RO_with_energy_recovery`) | `ROStage`, `ROTrain`, `PressureExchanger`, `WaterPump`, `swro_performance` | within 0.3 % |
+| `mvc_single_stage` | `MVCDesalinator`, `mvc_performance` | 4e-7; LCOW optimum to 1e-7 |
+| `GAC` (CPHSDM, fixed `k_f`/`D_s`) | `GACAdsorber` | 2e-14 |
+| `ASM1_flowsheet` (BSM1 layout) | `ActivatedSludgePlant`, `activated_sludge_plant` | 1.3e-7 |
+| `ADM1_flowsheet` | `AnaerobicDigester`, `anaerobic_digester` | 2.5e-4 |
+| `WaterTAPCosting` | `economics` (RO, pumps, PX, MVC units) | equal for those units |
+
+**In WaterTAP, not yet in difflow_water** (in rough order of priority for
+comparability):
+
+1. Nanofiltration: `nanofiltration_DSPMDE_0D`, `nanofiltration_0D`, `nanofiltration_ZO`.
+2. Electrodialysis: `electrodialysis_0D`, `_1D`, `_bipolar_1D`.
+3. Ion exchange: `ion_exchange_0D`.
+4. The zero-order library (`unit_models/zero_order`), about a hundred
+   removal-fraction units with their cost curves; most treatment-train
+   screening uses it.
+5. Plant-wide wastewater: BSM2 (`full_water_resource_recovery_facility`),
+   the ASM-ADM translators, thickener, dewatering, the clarifier unit.
+6. Other activated-sludge models: ASM2d, modified ASM2d, ASM3, modified
+   ADM1. ASM2d is blocked on a readable primary source (see Known gaps).
+7. Other membranes: osmotically assisted RO (0D/1D), low-salt-rejection RO
+   (LSRRO), membrane distillation, RO0D.
+8. Other units: crystallizer (and its surrogate), UV/AOP, electrocoagulation,
+   electrolyzer, boron removal, coagulation/flocculation, steam ejector and
+   heater, stoichiometric reactor, generic desalter/separation.
+9. GAC options: calculated film transfer (Gnielinski) and surface diffusion,
+   the surrogate CPHSDM, and GAC costing.
+10. Property packages: MCAS (multicomponent aqueous solution), NaCl, and the
+    water/vapor package beyond what MVC needs.
+11. Costing for every unit beyond those listed above, and WaterTAP's
+    parameter-sweep and UI tooling (difflow has its own sweeps and editor).
+
+**In difflow_water, not in WaterTAP:** water distribution networks
+(EPANET 2.2 hydraulics, extended-period simulation, water quality, pump
+scheduling; cross-checked against EPANET), Pitzer speciation and scaling
+(cross-checked against PHREEQC; WaterTAP uses Reaktoro), multi-effect
+distillation, sedimentation, rapid filtration, disinfection, the Takács
+settler, and exact JAX gradients through every model, including recycles
+and steady-state solves.
+
 (water-gaps)=
 ## Known gaps
 
