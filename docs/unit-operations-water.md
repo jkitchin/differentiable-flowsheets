@@ -103,6 +103,27 @@ osmotic pressure of a permeate (S ~ 1e-4) is an extrapolation. It is small
 next to the feed's, and WaterTAP does the same. `seawater.validity(T, S)`
 reports whether a concrete state is inside each correlation's range.
 
+(water-seawater-teos10)=
+**Check against TEOS-10.** `benchmarks/teos10/seawater_teos10.py`
+evaluates TEOS-10 [S4], the seawater standard whose Gibbs function is
+IAPWS-2008, with its reference code (GSW-Python 3.6.23 [GSW]). The grid is
+5-40 C and 0-70 g/kg at 1 atm, and notebook 77 compares the results.
+Largest deviations, against the accuracy Sharqawy et al. [S1] state for
+each correlation:
+
+| Property | max deviation from TEOS-10 | stated accuracy [S1] |
+|---|---|---|
+| density (Eq. 8) | 0.07 % | 0.1 % |
+| specific heat (Eq. 9) | 0.15 % | 0.28 % |
+| osmotic pressure (Eq. 49 coefficient) | 0.62 % | 1.4 % |
+| enthalpy rise from 15 C (Eq. 43) | 0.55 % | 0.5 % |
+| latent heat of water (Eq. 54) | 0.15 % | 0.01 % (vs IAPWS-95) |
+
+Eq. 43 is valid from 10 C. Below that its salinity term drifts: at 5 C and
+35 g/kg it gives -882 J/kg for the effect of salt, against TEOS-10's -1178.
+The latent-heat comparison is not like for like, since TEOS-10's value is
+for evaporation from seawater and Eq. 54 is for pure water at saturation.
+
 ---
 
 (water-chemistry)=
@@ -640,6 +661,12 @@ g/m^3`), or `S_O` held at `DO_setpoint` with the aeration it needs
 reported. The kinetic parameters are fields of the params (BSM1 values by
 default). `info` has the state, the conversion rates and the aeration.
 
+Checked against the BSM1 report on its own (notebook 79). Fed the printed
+Table 6 state of reactor 4 (or 1), the reactor gives reactor 5 (or 2)
+within 0.4 % on every state: dissolved oxygen 0.489 against 0.491 g/m^3,
+the rest within 0.2 %. That is the precision of the 3-4-digit printed
+inlet.
+
 (op-takacssettler)=
 ### TakacsSettler
 
@@ -649,7 +676,9 @@ settling velocity is `v_s = max(0, min(v0', v0 (e^{-r_h (X - X_min)} -
 e^{-r_p (X - X_min)})))` with `X_min = f_ns X_f`. Fluxes between layers
 are limited by `min(J_s,m, J_s,m+-1)`, and above the feed layer by the
 threshold `X_t`. Solubles pass unchanged, and particulates keep the feed's
-fractions. `info["solids"]` is the layer profile, bottom first.
+fractions. `info["solids"]` is the layer profile, bottom first. Fed the
+printed Table 6 reactor 5 state, it reproduces the report's Table 7
+layers within 0.13 % (notebook 79).
 
 (op-activatedsludgeplant)=
 ### ActivatedSludgePlant
@@ -812,6 +841,11 @@ from Stokes' law `v_s = (2/9) a_p^2 (rho_p - rho_w) g / mu` (as stated in
 removed solids at a set solids fraction. Flocculent and hindered settling
 are not modelled.
 
+**Check** (notebook 78). The ideal-basin law was re-derived by tracking
+20,000 particles through a rectangular basin of three depths, and the
+removal matches the unit's at every depth. No published settling-column
+or basin data set was reachable.
+
 (op-filtration)=
 ### Filtration
 
@@ -829,6 +863,13 @@ Yao's efficiency is not capped at 1 (it can exceed 1 at the extremes,
 Later correlations (Rajagopalan-Tien, Tufenkji-Elimelech) are not
 implemented.
 
+**Check** (notebook 78). Integrating the collector balance slice by slice
+reproduces the closed-form removal to 2e-5. The least-removed particle,
+about 1.6 um at 12 m/h through 0.5 mm sand, is the classical minimum of
+Yao's efficiency. The grain Reynolds number at 12 m/h is 1.5, at the edge
+of Carman-Kozeny's laminar range. No published filter-run data were
+reachable.
+
 (op-disinfection)=
 ### Disinfection
 
@@ -842,6 +883,20 @@ time. Rate constants are inputs; the defaults are ILLUSTRATIVE, since real
 values depend on organism, disinfectant, pH and temperature. The 1908
 papers were not read (their PMC copies are behind a bot check), so the
 forms are (unverified) against them.
+
+**Check against the EPA CT table** (notebook 78). The US EPA's Surface
+Water Treatment Rule guidance [EP1] tabulates the CT for 3-log *Giardia*
+inactivation by free chlorine against residual, temperature and pH. The
+values used are as reproduced in [TN] Table 1, at 5 and 15 C, pH 7.0 and
+residuals 0.6-2.8 mg/L. In plug flow, Chick-Watson needs
+`CT = 3 ln 10 C^(1-n) / k`. Two constants per temperature fit the
+tabulated CT within 2.8 %: `n` = 0.854 at 5 C and 0.855 at 15 C, with `k`
+= 0.046 and 0.092 (L/mg)^n/min. At the table's CT the fitted law gives
+2.95-3.09 logs, and the unit as 200 tanks in series 0.05 log less. One
+mixed tank at the same CT gives 0.9 log, which is why the regulations
+credit only a fraction of the residence time. The pH and temperature
+dependence of `k` is not modelled: take `k` and `n` from the table column
+for the conditions.
 
 (op-gacadsorber)=
 ### GACAdsorber
@@ -1087,6 +1142,33 @@ What the comparison taught:
 
 ---
 
+(water-unit-checks)=
+## Per-unit examples and checks
+
+Notebooks 77-79 take each unit on its own: how it works, then the check
+behind it. The plant-level studies are notebooks 70-76.
+
+| Unit | Notebook | Checked against | Result |
+|---|---|---|---|
+| seawater properties | 77 | TEOS-10 (GSW reference code) | within Sharqawy's stated accuracy except the enthalpy rise (0.55 % vs 0.5 %); see [above](water-seawater-teos10) |
+| `ROStage`, `ROTrain` | 77 | WaterTAP RO1D; thermodynamic least work | within 0.3 %; plant SEC 2.5-2.7 times the least work |
+| `PressureExchanger`, `WaterPump` | 77 | WaterTAP; the defining identities | 0.02 % / 0.24 % in the plant |
+| `MVCDesalinator` | 77 | WaterTAP | 4e-7 |
+| `MEDDesalinator` | 77 | nothing published; mass and salt balances | balances close |
+| `Sedimentation` | 78 | the ideal-basin law, re-derived by tracking particles | equal at every depth |
+| `Filtration` | 78 | the removal law, re-derived slice by slice; Yao's efficiency as [F2] states it | equal to 2e-5 |
+| `Disinfection` | 78 | the US EPA SWTR CT table for 3-log *Giardia* by free chlorine [EP1, TN], 5 and 15 C, pH 7 | Chick-Watson fits it within about 3 % (`n` = 0.85); at the table's CT the fitted law gives 2.95-3.09 logs |
+| `GACAdsorber` | 78 | WaterTAP | 2e-14 (WaterTAP's example is outside the constant-pattern regime) |
+| `ASM1Reactor` | 79 | BSM1 Table 6: each reactor from the printed state of the one before | within 0.4 % (the printed inlet's precision) |
+| `TakacsSettler` | 79 | BSM1 Table 7, fed the printed reactor 5 | within 0.13 % |
+| `ActivatedSludgePlant` | 79 | BSM1 Tables 6-7; WaterTAP | 0.3 %; 1.3e-7 |
+| `AnaerobicDigester` | 79 | Rosén & Jeppsson Section 7; WaterTAP | 1.7e-7; 2.5e-4 |
+
+Where no published data set could be read (RO and MVC plant data, MED,
+settling-column and filter-run data, GAC column tests), the table says
+so. A check against WaterTAP is an implementation check (same equations,
+another code), not a validation of the physics.
+
 (water-watertap-coverage)=
 ## Coverage relative to WaterTAP
 
@@ -1219,6 +1301,9 @@ source; a design input or placeholder.
 | F1 | Yao, K.-M.; Habibian, M.T.; O'Melia, C.R. "Water and waste water filtration. Concepts and applications." *Environ. Sci. Technol.* **1971**, 5(11), 1105--1112. doi:10.1021/es60058a005 | Filtration theory, single collector efficiency | Citation verified (Crossref). Not read: the efficiency as restated in [F2]. |
 | F2 | Messina, F.; Marchisio, D.L.; Sethi, R. "An extended and total flux normalized correlation equation for predicting single-collector efficiency." *J. Colloid Interface Sci.* **2015**, 446, 185--193. doi:10.1016/j.jcis.2015.01.024 | Yao's efficiency (Eq. 1), dimensionless groups, Stokes and Stokes-Einstein (Table 1) | Citation verified (Crossref). **Content verified** (author manuscript, polito.it). |
 | F3 | Carman, P.C. "Fluid flow through granular beds." *Trans. IChemE* **1937**, 15, 150--166; reprinted *Chem. Eng. Res. Des.* **1997**, 75, S32--S48. doi:10.1016/S0263-8762(97)80003-2 | Clean-bed head loss | Citation verified (Crossref, the reprint). Not read: Kozeny constant 5 (unverified). |
+| GSW | GSW-Python 3.6.23, the TEOS-10 Gibbs SeaWater reference software (teos-10.org; PyPI `gsw`) | TEOS-10 reference values for the seawater property check (`benchmarks/teos10/`) | Software, run directly (not a difflow dependency). |
+| EP1 | U.S. Environmental Protection Agency. *Guidance Manual for Compliance with the Filtration and Disinfection Requirements for Public Water Systems Using Surface Water Sources*; March **1991** edition | CT values for *Giardia* inactivation by free chlorine | Not read in the original: the values are as reproduced in [TN]. |
+| TN | Tennessee Department of Environment and Conservation, Division of Water Supply. *Guidance Manual for Determination of Disinfectant Contact Time and CT Requirements for Public Water Systems*; July **1991** | Table 1, reproducing [EP1]'s CT table for unfiltered systems (5 and 15 C, pH 7.0 columns used) | Read (scanned copy; a few OCR artifacts, none in the columns used). |
 | D2 | El-Dessouky, H.T.; Ettouney, H.M. *Fundamentals of Salt Water Desalination*; Elsevier: Amsterdam, **2002**. doi:10.1016/B978-0-444-50810-2.X5000-3 | MED and MVC configurations | DOI, title, year and publisher verified (Crossref; it lists no authors, so authorship is (unverified)). Not read: no equation is taken from it. |
 | B1 | Akkor, I.; Amusat, O.O.; Vecchiarelli, P.; Gounaris, C.E.; Knueven, B.; Dudchenko, A.V. "Optimization of desalination systems with detailed water chemistry through integration of Reaktoro in WaterTAP." *ACS ES&T Eng.* **2026**, 6(5), 1464--1477. doi:10.1021/acsestengg.5c01008 | WaterTAP (benchmark context) | Citation verified (Crossref) |
 | B2 | Dudchenko, A.; Atia, A.; Bartholomew, T. "WaterTAP: Tool for analysis of water treatment systems." NAWI Alliance Fall Meeting, **2023** (OSTI). doi:10.2172/2447624 | WaterTAP (benchmark) | Citation verified (Crossref). The comparison used WaterTAP 1.8.0 from PyPI. |

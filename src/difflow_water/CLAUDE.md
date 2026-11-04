@@ -150,6 +150,13 @@ Notes for Claude Code, loaded when working in this directory. The plan is
   (1.7e-4 offset); a trial of that term gave 3.7x WaterTAP's evaporation
   and was dropped -- do not add it back without finding why.
 
+- Per-unit checks: notebooks 77-79 take each unit alone with its check
+  (TEOS-10 for seawater via `benchmarks/teos10/`, the EPA SWTR CT table
+  for `Disinfection`, BSM1 Tables 6-7 reactor by reactor, Rosen & Jeppsson
+  for ADM1, WaterTAP where nothing published is readable). After changing
+  a unit, re-execute its notebook and update the "Per-unit examples and
+  checks" table in the docs. Never turn these comparisons into tests.
+
 ## Not palette operations
 
 `chemistry`, `economics`, `network`, `swro_performance`/`build_swro_flowsheet`

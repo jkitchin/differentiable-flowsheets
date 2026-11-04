@@ -32,7 +32,7 @@ treatment (equations, parameters, references) is in
 
 | Unit | Kind | In → out | Model | Validated how |
 |---|---|---|---|---|
-| [`seawater` properties](unit-operations-water.md#water-seawater-properties) | library | (T, S) → ρ, μ, φ, π | Sharqawy et al. 2010 Eqs. 8, 22, 23, 49 | Coefficients read against the paper (content verified); WaterTAP uses the same equations |
+| [`seawater` properties](unit-operations-water.md#water-seawater-properties) | library | (T, S) → ρ, μ, φ, π | Sharqawy et al. 2010 Eqs. 8, 22, 23, 49 | Coefficients read against the paper (content verified); within Sharqawy's stated accuracy of TEOS-10 (density 0.07 %, cp 0.15 %, osmotic pressure 0.6 %; notebook 77) |
 | [Pitzer chemistry, `speciate`](unit-operations-water.md#water-chemistry) | library | element totals, T → speciation, pH, saturation indices | Harvie-Møller-Weare Pitzer model as in PHRQPITZ; PHREEQC pitzer.dat parameters | Equations read against PHRQPITZ (content verified); SI within 0.0004 and pH within 3e-5 of PHREEQC, seawater to 3x concentrate, 15-35 C |
 | [`ROStage`](unit-operations-water.md#op-rostage) | palette | feed → concentrate, permeate | Solution-diffusion, film theory, plug flow; WaterTAP channel correlations; optional saturation indices | Within 0.3 % of WaterTAP RO1D (160 elements) on four cases |
 | [`ROTrain`](unit-operations-water.md#op-rotrain) | palette | feed → concentrate, permeate | ROStages in series with interstage boosters | No physics of its own |
@@ -44,11 +44,11 @@ treatment (equations, parameters, references) is in
 | [`MEDDesalinator`, `med_performance`](unit-operations-water.md#op-meddesalinator) | palette | feed → distillate, brine | Parallel-feed MED: per-effect mass, salt and energy balances on Sharqawy properties | No WaterTAP counterpart; balances only (no fitted coefficients) |
 | [`ActivatedSludgePlant`, `activated_sludge_plant`](unit-operations-water.md#op-activatedsludgeplant) | palette | influent → effluent, wastage | BSM1: ASM1 reactors + Takács settler, steady state, one equation set | BSM1 report Tables 6-7 within 3.2e-3 (printed digits); WaterTAP's BSM1 example within 1.3e-7 |
 | [`AnaerobicDigester`, `anaerobic_digester`](unit-operations-water.md#op-anaerobicdigester) | palette | influent → effluent, biogas | ADM1 as implemented for BSM2 (Rosen & Jeppsson 2006), algebraic pH, steady state | Their 13-digit verification case within 1.7e-7; WaterTAP's ADM1 example within 2.5e-4 |
-| [`ASM1Reactor`](unit-operations-water.md#op-asm1reactor) | palette | inlet → outlet | ASM1 CSTR at steady state; KLa or DO setpoint | ASM1 read against the BSM1 report |
-| [`TakacsSettler`](unit-operations-water.md#op-takacssettler) | palette | feed → effluent, underflow | 10-layer Takács settler, steady state | As in the BSM1 report (settler profile reproduced) |
+| [`ASM1Reactor`](unit-operations-water.md#op-asm1reactor) | palette | inlet → outlet | ASM1 CSTR at steady state; KLa or DO setpoint | BSM1 Table 6 reproduced reactor by reactor within 0.4 % (notebook 79) |
+| [`TakacsSettler`](unit-operations-water.md#op-takacssettler) | palette | feed → effluent, underflow | 10-layer Takács settler, steady state | BSM1 Table 7 layers within 0.13 % from the printed feed (notebook 79) |
 | [`Sedimentation`](unit-operations-water.md#op-sedimentation) | palette | feed → clarified, sludge | Ideal basin, overflow-rate removal, Stokes settling | Derived from the ideal-basin assumptions; Stokes as stated in Messina et al. 2015 (read) |
 | [`Filtration`](unit-operations-water.md#op-filtration) | palette | feed → filtrate, retained | Yao colloid filtration (clean bed), Carman-Kozeny head loss | Yao's efficiency cross-checked against Messina et al. 2015; no independent numerical check |
-| [`Disinfection`](unit-operations-water.md#op-disinfection) | palette | feed → treated | Chick-Watson in CSTRs in series; CT, log inactivation | Standard law; papers not read; rate constants are inputs |
+| [`Disinfection`](unit-operations-water.md#op-disinfection) | palette | feed → treated | Chick-Watson in CSTRs in series; CT, log inactivation | Fitted to the EPA SWTR CT table for *Giardia* (within 3 %); reproduces 3 logs at the table's CT (notebook 78) |
 | [`GACAdsorber`](unit-operations-water.md#op-gacadsorber) | palette | feed → treated, removed | WaterTAP's CPHSDM (Hand et al. 1984) | Within 2e-14 of WaterTAP 1.8.0 on four cases |
 | [thermal properties](unit-operations-water.md#water-thermal-properties) | library | (T, S, P) → c_p, h, h_fg, p_v, BPE | Sharqawy 2010 Eqs. 9, 36, 37, 43, 53-55; Nayar 2016 digits via WaterTAP | Content verified to the printed digits; brine vapor pressure equal to WaterTAP's to 1e-9 |
 | [`swro_performance` / `build_swro_flowsheet`](unit-operations-water.md#water-swro) | library | intake → LCOW, SEC, recovery, ... | The plant above | Against WaterTAP's `RO_with_energy_recovery` layout |
@@ -82,6 +82,8 @@ still differentiable.
 (water-summary-gaps)=
 ## Known gaps
 
+Every unit is taken on its own, with its check, in notebooks 77-79
+([per-unit examples and checks](unit-operations-water.md#water-unit-checks)).
 Against WaterTAP 1.8.0 the plugin covers its seawater RO, MVC, GAC, ASM1
 (BSM1) and ADM1 flowsheets, about 15-20 % of WaterTAP's unit models. The
 full list of what is missing (nanofiltration, electrodialysis, ion
