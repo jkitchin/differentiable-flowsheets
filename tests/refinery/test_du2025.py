@@ -184,3 +184,17 @@ def test_fit_tbp_mini():
     assert np.all(np.diff(fit.points[0][1]) > 0)
     assay = crude_assay(fit, 0)
     assert assay.basis == "mass" and assay.heavy_end is not None
+
+
+def test_crude_cut_table_matches_model(model):
+    """#531: the swing-cut block on the published tables gives the CDU's
+    outlets at a point the residual model accepts."""
+    from difflow_refinery.benchmarks.du2025.crude import cut_table
+    from difflow_refinery.swing_cut import swing_cut_block
+    table, phi = cut_table(load_case(MINI), "UCDU0")
+    x = _forward_point(model)
+    idx = model.index()
+    F, q = swing_cut_block(table, jnp.array([x[idx[("F", "s0")]]]), jnp.asarray(phi))
+    for i, p in enumerate(table.products):
+        assert float(F[i]) == pytest.approx(x[idx[("F", p)]], rel=1e-12)
+        assert float(q["Q1"][i]) == pytest.approx(x[idx[("FQ", p, "Q1")]], rel=1e-12)

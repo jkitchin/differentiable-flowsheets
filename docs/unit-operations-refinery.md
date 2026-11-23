@@ -514,6 +514,35 @@ Making a cut point a column *spec* would describe the same feasible set, and it 
 For the same reason, `product_value_block` prices products in bbl/d only. Folded into the revenue as a smooth penalty, a quality limit puts curvature in the objective that a linear model cannot see. On the test crude, that version crawled along the penalty's shoulder at a radius of 1e-4 and stopped at the iteration cap.
 
 (refinery-preheat)=
+(refinery-swing-cut)=
+## The swing-cut planning block
+
+A planning model represents a crude unit as cut yields per crude, split into heart cuts and *swing cuts*. A swing cut lies between two products, and the planner chooses how much of it goes to each. `difflow_refinery.swing_cut` (#531) implements this as formulated by Du et al. (2025), and it differs from the delta-base crude block of the previous section. `swing_cut_block(table, crude_rates, phi)` takes the crude rates and the swing fractions `phi` in [0, 1] as its decisions. It returns the product flows and properties: specific gravity blends by volume, and every other property by mass unless it is declared volume-based. It is pure JAX and linear in `phi` for flows. It is a library, not a palette operation.
+
+A `SwingCutTable` holds the cuts from light to heavy, the products, each product's own (heart) cut, the `(product, swing cut)` pairs, and per-crude cut yields and properties. It comes from one of three generators:
+
+- **The published tables.** `du2025.crude.cut_table(data, "UCDU0")` builds it from the benchmark's `y`, `FQcut`, `phi` and `SC`. With the published crude rates and `phi`, the block reproduces both benchmark crude units' outlet flows, to 2e-15, and every blended property at the published solution, to 4e-16 relative. The Eq. 5 properties are SG, the `Qw` and the `Qv` indices. Q45, which the benchmark traces but never blends, is left out.
+- **An assay at TBP cut points.** `cut_table_from_assays(assays, cut_points, ...)` characterizes each assay at the cut points, one pseudo-component per cut, and reports SG, sulfur, nitrogen and CCR. This is the ideal-fractionation limit, and it is differentiable with respect to the cut points: with `as_arrays=True`, `jax.jacfwd` gives about 0.2 % of yield per K on the test crude.
+- **The rigorous crude unit.** `cut_table_from_crude_unit(unit, rate, T, P, [(light, heavy, width)])` solves the `CrudeUnit` once at its own specs. It then solves once more per swing, with the light product's volume-rate spec raised by `width`. The swing cut is the material the light product gains, with that material's own SG and sulfur, and the heavy product's heart cut is its base flow less its swing cuts. The cut yields therefore sum to 1, every number is the column's response, and AD through the solves gives the Jacobian. Each swing costs a column solve (about 20 s for one swing on the 8-stage test column), so build the table once.
+
+<!-- doc-test: skip: needs the benchmark data (downloaded, not vendored) -->
+```python
+from difflow_refinery.benchmarks.du2025.crude import cut_table, published_rates
+from difflow_refinery.swing_cut import swing_cut_block, swing_property_error
+
+table, phi = cut_table(data, "UCDU0")             # 25 crudes, 13 cuts, 10 products, 9 swings
+rates = published_rates(table, "UCDU0", sol)
+F, q = swing_cut_block(table, rates, phi)          # = the published outlets
+jax.jacfwd(lambda p: swing_cut_block(table, rates, p)[0])(phi)   # dF/dphi
+```
+
+**Swing-cut properties that vary.** The published formulation gives a swing cut one set of properties whichever way it goes. With `varying=True`, or with a list of swing-cut names, each property is linear across the swing cut's span. The line is centred on the cut's own value, with its slope taken from the neighbouring cuts, and consecutive slices go to the recipients from light to heavy. The two forms agree at `phi` = 0 and 1. `swing_property_error(table, rates, phi, k, q)` moves swing `k` across [0, 1] with only that swing cut varying, and returns the product property difference. At the published Case 1 crude rates:
+
+- **Swing cuts between neighbouring products:** the constant-property form is off by at most 0.006 in SG and 0.025 wt% in sulfur. Most are below 0.003 and 0.005.
+- **Swing cuts the benchmark sends to a non-adjacent product:** `s310` and `s303` into `s0` are off by up to 0.022 in SG. `UCDU1`'s three-way `s297` is off by up to 0.16 wt% in sulfur. Here the linear profile is itself a guess: which recipient takes the light end is not defined.
+
+The by-hand checks (published reproduction, swing-fraction and cut-point Jacobians against central differences, CrudeUnit-generated yields summing to 1 with SG and sulfur rising) are in `tests/reference/swing_cut_check.py`.
+
 ## The preheat train
 
 The crude reaches the furnace at 250 °C or so, from a tank at ambient temperature. Most of that heat is recovered from the column's own products and pumparounds in a train of exchangers. The furnace supplies the rest, so the train sets the fuel bill as much as the column does. `difflow_refinery.preheat` models the train from tank to furnace inlet. It has three kinds of item:
@@ -4560,6 +4589,8 @@ xs, info = du2025.solve_local(model, x, options=du2025.WARM_START_OPTIONS)
 - Eq. 18 and the volumes `V` exist only for blenders with a gravity spec (`Ublend2`, `Ublend6`).
 
 With these rules, every equation closes at the published point to 8.5e-8, which is the solver's tolerance, and no inequality or bound is violated. The profit is 34,167,967.96. A pounce solve started there with `WARM_START_OPTIONS` takes about 15 s and returns within 1 of that profit. The result varies between processes in the last digits, from 34,167,968.5 to 34,167,969.0. Solves started from that point perturbed by ±30 % reach 34,167,968.8 and 34,167,969.2. The by-hand check is `tests/reference/du2025_case1_check.py`; it also compares the Jacobian with central differences.
+
+**Crude units as swing-cut blocks.** `du2025.crude.cut_table` turns a benchmark crude unit into a `SwingCutTable` for the swing-cut block ({ref}`refinery-swing-cut`, #531), with `phi` as decisions instead of fixed parameters.
 
 **Blocks.** `du2025.blocks` holds the same equations solved forward as pure JAX functions: `fixed_yield` (Eq. 8), `delta_base` and `delta_base_coefficients` (Eqs. 9-10), `swing_cut` and `cut_properties` (Eqs. 4-5), `blend` (Eqs. 12-13, 18), `split` (Eqs. 3, 17), `transfer` (Eq. 11) and `blend_margins` (Eq. 19c). These are the interfaces that a nonlinear unit replaces. `tests/refinery/test_du2025.py` builds an operating point from the blocks alone and checks that the residual model accepts it.
 

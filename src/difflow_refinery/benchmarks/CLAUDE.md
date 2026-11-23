@@ -24,7 +24,9 @@ not a palette operation.
 - Case 1 only: one flow `F_s` = FVI = FVO (Eq. 21, no inventory). Features
   Case 1 leaves empty (inventory, periods > 1, CDUMQ, CRU, RB, Qv) RAISE --
   never ignore them silently.
-- Swing-cut ratios `phi` are fixed parameters here; #531 makes them decisions.
+- Swing-cut ratios `phi` are fixed parameters in `build_model`; `crude.cut_table`
+  + `difflow_refinery.swing_cut` makes them decisions (#531). Q45 is dropped
+  from the cut table: traced but never blended, its published values are free.
 - The model is nonconvex (pooling): `solve_local` is a local solve. Never
   present it as the global optimum. From the published point use
   `WARM_START_OPTIONS` (mu_init 1e-6); the default barrier ends 68 lower.
