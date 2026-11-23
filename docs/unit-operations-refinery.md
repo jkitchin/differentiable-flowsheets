@@ -2676,6 +2676,55 @@ A crude-unit product carries every cut at some trace level. `Hydrotreater(..., t
 - **Near a mixture's critical region** (a naphtha with little treat gas at 50--60 bar) the bed-inlet PR flash can fail; the unit then returns `converged=False`. A stability test and a critical-point-robust flash are not implemented.
 - **Deactivation tracking** with `difflow.reconciliation.tracking` is possible (the activity is a parameter with a gradient) but not demonstrated.
 - Out of scope (as the issue says): residue hydrotreating/HDM, countercurrent reactors, reactor internals and pressure drop, amine unit detail, dynamics.
+
+### Jet and wax-oil (VGO) service (#536)
+
+`difflow_refinery.hydrotreating.services` sets the hydrotreater up for the two services in the Du et al. benchmark that it did not cover: jet/kerosene (`Upd2`) and wax oil, a VGO hydrotreater ahead of the FCC (`Upf18`). Both run the existing `Hydrotreater` with its reactor, HP separator, recycle loop and stripper unchanged. What the module adds sits around the solve.
+
+<!-- doc-test: skip: compiles the hydrotreater (minutes) -->
+```python
+from difflow_refinery.hydrotreating.services import (jet_params, jet_properties, jet_margins,
+    vgo_params, heavy_ends_removal, fcc_feed_from_hydrotreater)
+
+res = Hydrotreater(char, kero_feed, jet_params()).solve(kero_feed)        # 30 bar, LHSV 3, 300 C
+jet_margins(jet_properties(res.outputs))      # smoke, flash, aromatics, S, mercaptan S, freeze
+
+res = Hydrotreater(char, vgo_feed, vgo_params()).solve(vgo_feed)         # 100 bar, LHSV 1, 380 C
+he = heavy_ends_removal(ccr_in, niv_in, res.outputs["wabt"], 1.0)        # HDCCR, HDM
+fcc_feed = fcc_feed_from_hydrotreater(res.outputs, ccr_wt=he["ccr_wt"], niv_wppm=he["niv_wppm"])
+FCCUnit(FCCParams()).solve(fcc_feed)
+```
+
+**Jet.**
+
+- `jet_params()` is a mild, low-pressure point: 30 bar, LHSV 3/h, 300 C, 100 Nm3/m3.
+- `JET_SPECS` is the Jet A-1 / No. 3 jet set: smoke point at least 25 mm, flash at least 38 C, freeze at most -47 C, aromatics at most 25 vol%, sulfur at most 3000 wppm, mercaptan sulfur at most 30 wppm.
+- `jet_properties` takes the smoke point from `properties.smoke_point`, which is itself marked unverified.
+- The flash point comes from the TBP 10 % point, conservative against D86.
+- Mercaptan sulfur is reported as the *total* sulfur, an upper bound, because mercaptans are not tracked.
+- The freeze point needs per-component n-paraffins that the outputs do not carry, so it is NaN, and its margin stays NaN rather than counting as met.
+
+On a 150-250 C kerosene cut at 0.34 wt% S and `jet_params()`, all balances close to about 1e-16. The product misses on smoke point (23.3 mm) and aromatics (26.7 vol%) and passes on flash (48 C) and sulfur (1380 wppm). Mild service on that feed does not make jet by itself.
+
+**Wax oil.**
+
+- `vgo_params()` runs the hydrocracker's VGO pretreat kinetics, which already carry basic-nitrogen inhibition and the activity multiplier (the deactivation hook), at 100 bar, LHSV 1/h and 380 C.
+- The reactor does not track Conradson carbon or metals, so `heavy_ends_removal` applies first-order HDCCR and HDM after the reactor. Its constants are ILLUSTRATIVE.
+- `fcc_feed_from_hydrotreater` maps the product onto an `FCCFeed`: SG, Tb (the product T50), Kw, Riazi-Daubert MW, H, S, N, CCR and Ni+V.
+
+On a 370-560 C wax oil, the balances close to about 1e-15. Sulfur and nitrogen are removed almost entirely, CCR falls from 0.66 to 0.33 wt% and Ni+V from 0.16 to 0.009 wppm, and the FCC converges on the product: 77.6 % conversion, 49.4 % gasoline.
+
+**Against `Upd2`.** The crude was adjusted so that the kerosene cut has `Upd2`'s base feed (SG 0.797, 0.058 wt% S), and the AD sensitivities on an oil basis were taken there:
+
+| | AD d/dSG | published | AD d/dS | published |
+|---|---|---|---|---|
+| gas (`s215`) | -0.00012 | -0.0005 | +0.0068 | -0.005 |
+| jet (`s104`) | +0.00132 | +0.0013 | -0.0057 | -0.001 |
+
+Three of the four signs agree. The jet-vs-SG sensitivity matches to 2 %. The gas-vs-sulfur sensitivity disagrees: ours rises with feed sulfur because H2S joins the gas, and the published value falls. `Upd2` has no separate sour-gas outlet, so its published decrease is hard to reconcile with sulfur leaving as H2S.
+
+Not reproduced: published kerosene-HDT and VGO HDS/HDN data (#536 asks for one dataset each; none were at hand). The full solves are by hand: `tests/reference/hdt_services_check.py jet|vgo`, a few minutes each. The fast tests in `tests/refinery/test_hdt_services.py` cover the helpers. Example: `examples/83_refinery_jet_vgo_hydrotreating.ipynb`.
+
 (refinery-alkylation)=
 ## Alkylation
 
