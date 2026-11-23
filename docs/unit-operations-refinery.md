@@ -4527,6 +4527,68 @@ References:
   doi:10.1016/j.fuproc.2004.04.001.
 - U.S. Standard Atmosphere, 1976, NOAA-S/T 76-1562.
 
+(refinery-du2025)=
+## The Du et al. (2025) planning benchmark
+
+`difflow_refinery.benchmarks.du2025` (#530, tracking #538) implements the refinery planning benchmark of W. Du, C. Wang, C. Fan et al., "A production planning benchmark for real-world refinery-petrochemical complexes", arXiv:2503.22057 (2025), exactly as published. It gives difflow a public reference refinery: a real topology with crude data, prices, product specifications and a delta-base planning model. Later work replaces its fixed-yield and delta-base units with difflow's nonlinear ones and compares their AD Jacobians with the published delta vectors. It is a library, not a palette operation.
+
+The data are **not** in this repository. The paper is CC BY-NC-SA and the [data repository](https://github.com/EMRPS/refinery-planning-benchmark) has no license file. `fetch` downloads them to `$DIFFLOW_DU2025_DATA` (default `~/.cache/difflow/du2025`):
+
+<!-- doc-test: skip: needs the benchmark data (downloaded, not vendored) -->
+```python
+from difflow_refinery.benchmarks import du2025
+
+root = du2025.fetch()                               # case1/: sets, parameters, solution
+data = du2025.load_case(root / "case1")             # typed sets and parameters
+model = du2025.build_model(data)                    # 1850 variables, 1621 equations, 81 inequalities
+sol = du2025.load_solution(root / "case1" / "solution_baron.gdx")   # needs gams.transfer
+x = model.x_from_solution(sol)
+model.violations(x)        # {'eq': 8.5e-08, 'ineq': 5.7e-14, 'bounds': 0.0}
+model.profit(x)            # 34167967.96 -- paper Table 3: 34,167,968
+xs, info = du2025.solve_local(model, x, options=du2025.WARM_START_OPTIONS)
+```
+
+**Case 1.** Two crude units with swing cuts process up to 25 crudes; 20 fixed-yield units (`Upf0`-`Upf19`), 5 delta-base units (`Upd0`-`Upd4`), 32 mixers, 61 splitters and 12 blenders make 37 products from 31 raw materials under 27 capacity limits, in one period with no inventory. With no inventory, the paper's Eq. 21 makes a stream's inlet and outlet flows equal, so one flow `F_s` stands for both. Cases 2 and 3 (inventory, binaries, three periods) raise `NotImplementedError`.
+
+**Model.** `build_model` writes every equation of the paper's Section 3 as a residual over one flat vector of the GAMS model's variables: flows `F`, batch flows `FVM`, properties `FQ`, delta-base coefficients `GM` and volumes `V`, `VM`. With denominators cleared, every equation is a polynomial of degree at most two, because pooling, delta-base yields and volume blending are all bilinear. So the model is stored as COO arrays (`PolySystem`) of constants, linear terms and bilinear terms. Evaluating it costs two segment sums, its Jacobian is exact, and its sparsity pattern is known without probing. `solve_local` hands it to pounce with that pattern. Pooling makes the model nonconvex, so a local solve finds a local optimum and does not certify a global one.
+
+**What the published model does that the paper does not say.** These were read from the variables and bounds stored with the published solution:
+
+- `FQ[s, SPG] <= 10`, and a fixed property without an `FQ0` value is fixed at 0.
+- A property that an equation references but `SQ` does not trace is a free nonnegative variable (`model.untracked`). The mixer inlet `s6`'s sulfur is one. Such a property is a degree of freedom of the *benchmark*, not of the plant. In the published solution several of them are unphysical: the gravity of `s163`, for example, is 4.9e-7. Do not read plant data from them.
+- Eq. 13a (volume balance) is skipped for a mixer outlet whose gravity is fixed, as Eqs. 13b and 13c are.
+- Eq. 18 and the volumes `V` exist only for blenders with a gravity spec (`Ublend2`, `Ublend6`).
+
+With these rules, every equation closes at the published point to 8.5e-8, which is the solver's tolerance, and no inequality or bound is violated. The profit is 34,167,967.96. A pounce solve started there with `WARM_START_OPTIONS` takes about 15 s and returns within 1 of that profit. The result varies between processes in the last digits, from 34,167,968.5 to 34,167,969.0. Solves started from that point perturbed by ±30 % reach 34,167,968.8 and 34,167,969.2. The by-hand check is `tests/reference/du2025_case1_check.py`; it also compares the Jacobian with central differences.
+
+**Blocks.** `du2025.blocks` holds the same equations solved forward as pure JAX functions: `fixed_yield` (Eq. 8), `delta_base` and `delta_base_coefficients` (Eqs. 9-10), `swing_cut` and `cut_properties` (Eqs. 4-5), `blend` (Eqs. 12-13, 18), `split` (Eqs. 3, 17), `transfer` (Eq. 11) and `blend_margins` (Eq. 19c). These are the interfaces that a nonlinear unit replaces. `tests/refinery/test_du2025.py` builds an operating point from the blocks alone and checks that the residual model accepts it.
+
+Example: `examples/80_refinery_du2025_benchmark.ipynb` covers the published point, a local re-solve, the binding limits from the multipliers, and the Jacobian of a delta-base unit.
+
+**Unit identification.** The names in the data are anonymized. The table below is the issue's provisional table, checked against the Case 1 data, which give the inlets and outlets of each unit, its base yields, the gravities at the solution, and any hydrogen co-feed (an inlet with `gamma` << 1):
+
+| Unit | Evidence in the data | Identification |
+|---|---|---|
+| `Upf3` | 4 feed batches at SG 0.85, 10.3 t; outlets 0.35 / 0.27 / 0.24 / 0.14 | FCC (consistent) |
+| `Upf4` | SG 0.91 feed; 8 outlets including a heavy one (SG 1.08) | FCC (consistent) |
+| `Upf7` | SG 0.93 feed + H2 co-feed (`gamma` 0.03); 9 outlets | hydrocracker (consistent) |
+| `Upf14` | SG 0.72 naphtha in; main product 74.5 %, fixed RON 102 on its aromatics cut | continuous reformer (consistent) |
+| `Upf17` | SG 0.68 naphtha in; 86 % goes on to `Upf14` | naphtha hydrotreater (consistent) |
+| `Upd0`, `Upd1` | SG 0.93 / 0.83 feeds + H2; ~93-100 % liquid yield; delta on S and SPG | diesel hydrotreaters (consistent) |
+| `Upd2` | SG 0.79 feed + H2; 98 % yield | jet hydrotreater (consistent) |
+| `Upd4` | SG 0.72 feed + H2; 97.6 % yield; delta on sulfur only | gasoline desulfurization, S Zorb (consistent) |
+| `Upf18` | heavy feed + H2; 91.6 % at SG 0.90 | VGO hydrotreater (consistent) |
+| `Upf19` | SG 1.07 feed; 26 % to the FCC feed `Upf3`, 73 % to fuel | solvent deasphalter (consistent) |
+| `Upf12`, `Upf13` | same outlet structure (0.453 / 0.212 / 0.124 ...); `Upf12` runs on a purchased feed | aromatics extraction (consistent) |
+| `Upf5`, `Upf6` | SG 0.58 LPG in; ~28 % C4 cut to `Upf10` | gas fractionation (consistent) |
+| `Upf10` | the C4 cut in; 95 % to one product | MTBE / C4 (consistent) |
+| `Upf1` | 3 feed batches, 8 outlets; its feed gravity is untraced (free) | delayed coker (plausible; not confirmed) |
+| `Upf11` | one feed, two outlets, the second a capacity-controlled output | H2 PSA (not confirmed) |
+| `Upd3` | two outlets near 50/50 at SG 0.65 / 0.71; delta on SPG and `Q21`; idle at the optimum | unidentified |
+| `Upf0`, `Upf2`, `Upf8`, `Upf9`, `Upf15`, `Upf16` | light-ends and small units | unidentified |
+
+"Consistent" means that the data do not contradict the identification. It does not mean that the data prove it.
+
 (refinery-validation)=
 ## Validation
 

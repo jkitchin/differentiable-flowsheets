@@ -9,7 +9,7 @@ when you work there: `src/difflow/{planning,stochastic,reconciliation}/`,
 every plugin package (`src/difflow_{bio,ree,cc,gas,power,refinery,water}/`), and
 the refinery subpackages (`vacuum/`, `reforming/`, `hydroprocessing/`,
 `hydrotreating/`, `hydrocracking/`, `hydrogen/`, `residue/`, `preheat/`,
-`gasplant/`, `fcc/`). Read the relevant one before changing a module -- most
+`gasplant/`, `fcc/`, `benchmarks/`). Read the relevant one before changing a module -- most
 say "do not weaken them" for a reason a regression test records.
 
 ## Commands

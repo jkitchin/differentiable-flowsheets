@@ -183,6 +183,9 @@ Every unit closes to round-off, so the plant does (rel 1e-8). Organic S in the
 off-gas/purge vapour (oil lumps) is NOT H2S: it burns with the fuel gas, booked
 as its own row. The H2 surplus is judged on throughput (loop tol), not on itself.
 
-Subpackages carry their own CLAUDE.md: `alkylation/` is above; `treating/`, `vacuum/`,
+Du et al. (2025) planning benchmark (#530, `difflow_refinery.benchmarks.du2025`,
+a library): see `benchmarks/CLAUDE.md`. Its data are never vendored.
+
+Subpackages carry their own CLAUDE.md: `alkylation/` is above; `benchmarks/`, `treating/`, `vacuum/`,
 `reforming/`, `hydroprocessing/` (shared by `hydrotreating/`, `hydrocracking/`,
 `residue/`), `hydrocracking/`, `hydrogen/`, `residue/`, `preheat/`, `gasplant/`, `fcc/`.
