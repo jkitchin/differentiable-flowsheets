@@ -196,9 +196,12 @@ guess, worst where a swing feeds a non-adjacent product.
 Delayed coker (#534, `difflow_refinery.coking`, a library): Gary-Handwerk CCR
 correlations, pooled feeds, `coker_block`; see `coking/CLAUDE.md`.
 
+S Zorb gasoline desulfurizer (#535, `difflow_refinery.desulfurization`, a
+library; all constants ILLUSTRATIVE): see `desulfurization/CLAUDE.md`.
+
 Du et al. (2025) planning benchmark (#530, `difflow_refinery.benchmarks.du2025`,
 a library): see `benchmarks/CLAUDE.md`. Its data are never vendored.
 
-Subpackages carry their own CLAUDE.md: `alkylation/` is above; `benchmarks/`, `coking/`, `treating/`, `vacuum/`,
+Subpackages carry their own CLAUDE.md: `alkylation/` is above; `benchmarks/`, `coking/`, `desulfurization/`, `treating/`, `vacuum/`,
 `reforming/`, `hydroprocessing/` (shared by `hydrotreating/`, `hydrocracking/`,
 `residue/`), `hydrocracking/`, `hydrogen/`, `residue/`, `preheat/`, `gasplant/`, `fcc/`.

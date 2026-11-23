@@ -3365,6 +3365,36 @@ These are recorded as found. An SG term would need a source, and none is impleme
 
 Tests: `tests/refinery/test_coker.py` (fast) and `tests/reference/coker_check.py` (by hand). The by-hand file covers balances over 5-25 wt% CCR, the coke-vs-CCR line, finite-difference gradients and the comparison above. Published yields for named residues are not reproduced: none were at hand. Example: `examples/81_refinery_delayed_coker.ipynb`.
 
+(refinery-szorb)=
+## FCC gasoline desulfurization (S Zorb)
+
+`difflow_refinery.desulfurization` (#535) is an S Zorb-type reactive-adsorption desulfurizer. FCC gasoline and hydrogen pass through a fluidized bed of Ni/ZnO sorbent. Nickel hydrogenolyses the C-S bonds, ZnO captures the sulfur as ZnS, and the sorbent circulates to a regenerator. The process is described by Babich & Moulijn, *Fuel* 82 (2003) 607. Olefin hydrogenation is the side reaction, and it costs octane. Like the FCC, the unit is a library, not a palette operation.
+
+```python
+import jax
+from difflow_refinery.desulfurization import SZorbFeed, SZorbUnit
+
+feed = SZorbFeed.from_properties(50.0, sg=0.73, sulfur_wppm=500.0, olefins_vol=30.0,
+                                 aromatics_vol=22.0, ron=92.0, mon=80.0)
+unit = SZorbUnit()
+out = unit.solve(feed)           # product.S_wppm 7.9, ron.loss 0.88, h2.consumption_wt 0.07
+dS_dT = jax.grad(lambda T: unit.solve(feed, T=T)["product.S_wppm"])(693.15)
+```
+
+**Model.** Pure JAX, with one scalar root solve:
+
+- **Sulfur removal.** Per sulfur class of #305 (sulfides with mercaptans, thiophenes, benzothiophenes, DBTs), first order in plug flow: `S_out = S_in exp(-k(T) θ / WHSV)`.
+- **Sorbent activity.** `θ = 1 - q/q_max` is the free capacity at the reactor's sorbent loading `q`. At steady state the circulating sorbent carries the captured sulfur: `q = q_regen + S_captured / circulation`. Removal lowers activity and activity lowers removal, so `q` is the root of one equation, solved by Newton and differentiated implicitly. This is the unit's nonlinearity: at 1500 wppm feed sulfur the sorbent nears saturation and product sulfur climbs to 190 wppm. A fixed delta vector cannot show that.
+- **Olefin saturation.** First order, with a higher activation energy than sulfur removal, so a hotter bed costs octane faster than it removes sulfur. RON and MON fall in proportion to the olefins saturated.
+- **Hydrogen.** Hydrogen consumption is per mole of sulfur removed by class, plus one per mole of olefin saturated.
+- **Balances.** The sulfur and mass balances close exactly.
+
+**Every rate constant, the sorbent capacity, loading and circulation, the H2 stoichiometry, the octane slopes and the light-ends factor are ILLUSTRATIVE.** They are chosen to land in the published *ranges* (about 500 wppm to below 10, RON loss about 1). No plant data set is reproduced; #535 asks for one, and none was at hand.
+
+**Against the Du et al. (2025) `Upd4`.** The benchmark's S Zorb is a delta-base unit with one property, feed sulfur. Its sour-gas outlet rises by +0.0104 per wt% S. The AD sensitivity of our captured sulfur (as H2S) at its base feed (0.06 wt% S) is +0.0101, a ratio of 0.97. That is close to H2S stoichiometry at 98 % capture. The published base sour-gas yield, 0.19 %, is three times what its own delta implies (0.06 %), the same inconsistency the coker shows.
+
+Tests: `tests/refinery/test_szorb.py` (fast) and `tests/reference/szorb_check.py` (by hand). The by-hand file covers balances over feeds and severities, monotone trends (product S falls and RON loss rises with severity), finite-difference gradients through the root solve, and the `Upd4` comparison. Example: `examples/82_refinery_szorb.ipynb`. The Prime-G selective-HDS variant is not implemented.
+
 ## The hydrogen network
 
 `difflow_refinery.hydrogen` (#329) balances the refinery's hydrogen: the
@@ -4758,7 +4788,7 @@ The sulfur signs agree. The magnitudes do not: the published values are 40-60x s
 | `Upf17` | SG 0.68 naphtha in; 86 % goes on to `Upf14` | naphtha hydrotreater (consistent) |
 | `Upd0`, `Upd1` | SG 0.93 / 0.83 feeds + H2; ~93-100 % liquid yield; delta on S and SPG | diesel hydrotreaters (consistent) |
 | `Upd2` | SG 0.79 feed + H2; 98 % yield | jet hydrotreater (consistent) |
-| `Upd4` | SG 0.72 feed + H2; 97.6 % yield; delta on sulfur only | gasoline desulfurization, S Zorb (consistent) |
+| `Upd4` | SG 0.72 feed + H2; 97.6 % yield; delta on sulfur only | gasoline desulfurization, S Zorb (consistent); difflow model: {ref}`S Zorb <refinery-szorb>` |
 | `Upf18` | heavy feed + H2; 91.6 % at SG 0.90 | VGO hydrotreater (consistent) |
 | `Upf19` | SG 1.07 feed; 26 % to the FCC feed `Upf3`, 73 % to fuel | solvent deasphalter (consistent) |
 | `Upf12`, `Upf13` | same outlet structure (0.453 / 0.212 / 0.124 ...); `Upf12` runs on a purchased feed | aromatics extraction (consistent) |
