@@ -199,6 +199,10 @@ correlations, pooled feeds, `coker_block`; see `coking/CLAUDE.md`.
 S Zorb gasoline desulfurizer (#535, `difflow_refinery.desulfurization`, a
 library; all constants ILLUSTRATIVE): see `desulfurization/CLAUDE.md`.
 
+Fixed-yield blocks (#537, `difflow_refinery.fixed_yield`, a library):
+`FixedYieldBlock` on `PropertyStream`s, base yields + property transfer, an
+explicit `loss` outlet; `to_blend_component` / `to_coker_feed`.
+
 Du et al. (2025) planning benchmark (#530, `difflow_refinery.benchmarks.du2025`,
 a library): see `benchmarks/CLAUDE.md`. Its data are never vendored.
 

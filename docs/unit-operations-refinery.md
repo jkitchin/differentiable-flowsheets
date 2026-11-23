@@ -4826,6 +4826,45 @@ The sulfur signs agree. The magnitudes do not: the published values are 40-60x s
 - **Crude and vacuum units:** covered by the reconstructed assays (#532) and the swing-cut generators (#531).
 - **`Upd3` and `Upd4`:** no difflow unit yet (#534, #535).
 
+### Fixed-yield blocks and which units to model next (#537)
+
+The benchmark's solvent deasphalter (`Upf19`), aromatics extraction (`Upf12`, `Upf13`), gas fractionation (`Upf5`, `Upf6`) and MTBE unit (`Upf10`) have no difflow model. `difflow_refinery.fixed_yield` represents them as the benchmark does, with base yields and property transfer, on difflow's side of the interface.
+
+- A `FixedYieldBlock` maps `PropertyStream`s (a mass rate plus named properties) to outlet streams.
+- Each outlet property is either transferred (`alpha × an inlet's property`) or fixed. One that is neither is not reported, because the benchmark leaves it free.
+- Where the yields do not sum to the inlet coefficients, as with `Upf19`'s 0.99, the difference is an explicit `loss` outlet, so the mass balance closes.
+- `PropertyStream.to_blend_component()` and `.to_coker_feed()` hand a product to the blend pool or the coker.
+- `du2025.units.fixed_yield_block(data, unit)` builds the block from the benchmark data, with properties under difflow's names (`BENCHMARK_KEYS`).
+
+```python
+from difflow_refinery.fixed_yield import FixedYieldBlock, PropertyStream
+
+sda = FixedYieldBlock("sda", {"vr": 1.0}, {"dao": 0.26, "pitch": 0.73},
+                      transfer={"pitch": {"S_wt": ("vr", 1.15), "CCR_wt": ("vr", 1.04)}},
+                      fixed={"dao": {"SG": 0.95, "S_wt": 0.6, "CCR_wt": 0.2}})
+out = sda({"vr": PropertyStream(10.0, {"SG": 1.03, "S_wt": 3.0, "CCR_wt": 20.0})})
+coker_feed = out["pitch"].to_coker_feed() if "SG" in out["pitch"].props else None
+```
+
+At the published solution, every batch of the six units reproduces its outlet flows and transferred properties exactly, and closes its mass balance. The check is `tests/reference/du2025_fixed_yield_check.py`.
+
+**Which to upgrade.** The envelope theorem gives the optimal profit's sensitivity to each outlet yield with no re-solve: `dP*/dγ = -(λ · ∂g/∂γ)/scale` at a local optimum, with `λ` pounce's multipliers (`du2025.calibration.yield_sensitivity`). A finite re-solve that moves 1 wt% of `Upf10`'s yield confirms it: 75,779 by the envelope theorem against 75,780 by re-solve. Ranked by the profit change from moving 1 wt% of yield from a unit's least to its most valuable outlet, at the Case 1 optimum:
+
+| Unit | | Profit per 1 wt% |
+|---|---|---|
+| `Upf13` | aromatics extraction (reformate) | 858,683 |
+| `Upf4` | FCC, for scale | 711,141 |
+| `Upf3` | FCC, for scale | 396,326 |
+| `Upf12` | aromatics extraction (purchased feed) | 136,680 |
+| `Upf6` | gas fractionation | 107,009 |
+| `Upf5` | gas fractionation | 98,927 |
+| `Upf10` | MTBE / C4 | 46,671 |
+| `Upf19` | solvent deasphalter | 9,115 |
+
+**Recommendation.** The aromatics extraction on reformate is the one that warrants a mechanistic model (a sulfolane extraction split). Its yields move the optimum more than either FCC's, because its outlets go to products of very different value, and `m37` carries 11.5 of its throughput. The gas fractionation units come next, at an eighth of that, through the `gasplant` columns. MTBE and the deasphalter do not justify a mechanistic model at this optimum: 1 wt% of deasphalter yield is worth about 9 k. These are local sensitivities at one optimum of a nonconvex model, and they rank by yield, not by any other property. A different crude slate can reorder them.
+
+The published solution stores 14 of its 485 fixed properties, all specific gravities, at 0.01 instead of their fixed values; the deasphalted oil, for example, is fixed at 1.05. Those variables appear in no equation, so the stored value is GAMS's initial level, not a solution. The model uses the fixed values (`FQ0`) and is unaffected.
+
 **Unit identification.** The names in the data are anonymized. The table below is the issue's provisional table, checked against the Case 1 data, which give the inlets and outlets of each unit, its base yields, the gravities at the solution, and any hydrogen co-feed (an inlet with `gamma` << 1):
 
 | Unit | Evidence in the data | Identification |

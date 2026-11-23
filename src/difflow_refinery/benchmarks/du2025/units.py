@@ -155,3 +155,69 @@ def fcc_outlet_yields(base, lumped) -> np.ndarray:
            o["gasoline"]: lumped[2] - loss, o["lco"]: lumped[3],
            o["slurry"]: lumped[4], o["coke"]: lumped[5], o["loss"]: loss}
     return np.array([out[s] for s in base.outlets])
+
+
+# --------------------------------------------------------------------------- #
+# Fixed-yield blocks (#537)                                                    #
+# --------------------------------------------------------------------------- #
+
+#: The benchmark units #537 keeps as fixed-yield blocks, and what they are
+#: (identified from the data in #530/#532: routing, yields, fixed products).
+FIXED_YIELD_UNITS = {"Upf19": "solvent deasphalter",
+                     "Upf12": "aromatics extraction (purchased feed)",
+                     "Upf13": "aromatics extraction (reformate)",
+                     "Upf5": "gas fractionation", "Upf6": "gas fractionation",
+                     "Upf10": "MTBE / C4"}
+
+#: Benchmark property index -> the difflow name a downstream unit reads
+#: (:mod:`difflow_refinery.blending` keys, plus S_wt/CCR_wt/NiV_wppm/N_wppm).
+#: Only indices identified with high or medium confidence (#532).
+BENCHMARK_KEYS = {"Q168": "SG", "Q0": "S_wt", "Q2": "RON", "Q4": "MON",
+                  "Q51": "olefins_vol", "Q11": "aromatics_vol", "Q13": "benzene_vol",
+                  "Q21": "CCR_wt", "Q25": "NiV_wppm", "Q18": "N_wppm"}
+
+
+def fixed_yield_block(data, unit: str, batch: str | None = None, *, named: bool = True):
+    """A :class:`~difflow_refinery.fixed_yield.FixedYieldBlock` from the benchmark.
+
+    Args:
+        data: The benchmark case.
+        unit: A process unit, e.g. ``"Upf19"``.
+        batch: Its batch; default the first.
+        named: Key properties by :data:`BENCHMARK_KEYS` (dropping indices
+            with no difflow name); ``False`` keeps the benchmark indices.
+
+    Returns:
+        The block: ``gamma`` for inlets and outlets, transfers from
+        ``alpha`` (from the inlet named in ``QT``), fixed values from ``FIX``
+        / ``FQ0`` (0 where ``FQ0`` is silent, as in the benchmark).
+    """
+    from difflow_refinery.fixed_yield import FixedYieldBlock
+    from difflow_refinery.benchmarks.du2025.calibration import unit_base
+    b = unit_base(data, unit, batch)
+    key = (lambda q: BENCHMARK_KEYS.get(q)) if named else (lambda q: q)
+    alpha, f0 = data.param("alpha"), data.param("FQ0")
+    fix = set(data.sets["FIX"])
+    transfer, fixed = {}, {}
+    for o in b.outlets:
+        for (s, s2, q), a in alpha.items():
+            if s2 == o and s in b.inlets and key(q) and (o, q) not in fix:
+                transfer.setdefault(o, {})[key(q)] = (s, a)
+        for (s, q) in fix:
+            if s == o and key(q):
+                fixed.setdefault(o, {})[key(q)] = f0.get((s, q), 0.0)
+    return FixedYieldBlock(f"{unit}.{b.batch}", dict(zip(b.inlets, b.gamma_in.tolist())),
+                           dict(zip(b.outlets, b.gamma_out.tolist())), transfer, fixed)
+
+
+def stream_from_solution(sol, unit: str, batch: str, s: str, *, named: bool = True):
+    """The published flow of ``s`` in a unit batch, with its traced properties."""
+    from difflow_refinery.fixed_yield import PropertyStream
+    mass = sol["FVM"].get((unit, batch, s, "1"), 0.0)
+    props = {}
+    for (ss, q, t), v in sol.get("FQ", {}).items():
+        if ss == s:
+            k = BENCHMARK_KEYS.get(q) if named else q
+            if k:
+                props[k] = v
+    return PropertyStream(jnp.asarray(mass), {k: jnp.asarray(v) for k, v in props.items()})

@@ -78,3 +78,19 @@ not a palette operation.
   sensitivities disagree in sign with the published delta, and Upd0's
   published S deltas are ~10x below H2S stoichiometry (Del = 10 vs Upd1's 1).
   Recorded in the docs; do not tune away (#533 says so).
+
+### Fixed-yield blocks and the upgrade ranking (#537)
+
+- `difflow_refinery.fixed_yield.FixedYieldBlock` is generic (not benchmark
+  specific); `du2025.units.fixed_yield_block` builds one from the data. An
+  outlet property that is neither transferred nor fixed is NOT reported --
+  the benchmark leaves it free; do not invent one. Yields that do not sum to
+  the inlets become an explicit `loss` outlet (Upf19: 1 %).
+- `calibration.yield_sensitivity` is the envelope theorem with pounce's
+  multipliers (sign: pounce minimizes -P * PROFIT_SCALE, so dP/dp =
+  -(mult_g . dg/dp) / PROFIT_SCALE). It matched a finite re-solve to 1e-5
+  (Upf10). Keep that check when changing either.
+- Ranking at the Case 1 optimum: ARU on reformate (Upf13) >> GFU > MTBE >
+  SDA; only the ARU warrants a mechanistic model (docs). Local, one optimum.
+- The GDX stores 14 FIXED SPG levels at 0.01 (vars in no equation: GAMS's
+  initial level). Our model uses FQ0 constants; do not read those levels.

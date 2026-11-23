@@ -354,3 +354,52 @@ def objective_change(data: Du2025Data, new: Du2025Data, x0, *, options=None) -> 
     return {"profit_before": ia["profit"], "profit_after": ib["profit"],
             "status_before": ia.get("status_msg"), "status_after": ib.get("status_msg"),
             "violations_after": m1.violations(xb), "changed": changed}
+
+
+def yield_sensitivity(model, x, mult_g, units, *, scale: float | None = None) -> dict:
+    """d(optimal profit) / d(outlet yield) for process units, by the envelope theorem.
+
+    At a local optimum ``x`` with constraint multipliers ``mult_g``
+    (pounce's ``info["mult_g"]``, equality rows first), the derivative of
+    the optimal profit with respect to a parameter ``p`` is the partial
+    derivative of the Lagrangian:
+    ``d P*/dp = -(mult_g . dg/dp) / PROFIT_SCALE``. The objective pounce
+    minimizes is ``-P * PROFIT_SCALE``. For a fixed-yield row (Eq. 8),
+    ``gin FVM_o - gamma_o sum FVM_in``, the derivative with respect to an
+    outlet's ``gamma_o`` is ``-sum FVM_in`` on that row alone. No re-solve
+    is needed, and :func:`objective_change` checks the result with a finite
+    re-solve.
+
+    Args:
+        model: The :class:`~.model.Du2025Model`.
+        x: The optimum.
+        mult_g: Its multipliers.
+        units: Process unit names (fixed-yield).
+        scale: The objective scale; default ``model.PROFIT_SCALE``.
+
+    Returns:
+        ``{unit: {"by_outlet": {(batch, outlet): dP/dgamma}, "spread": max -
+        min over outlets, "per_wt_pct": spread / 100}}``. ``per_wt_pct`` is
+        the profit change for moving 1 wt% of yield from the unit's least
+        to its most valuable outlet, holding everything else at the
+        optimum.
+    """
+    from difflow_refinery.benchmarks.du2025 import model as mdl
+    scale = mdl.PROFIT_SCALE if scale is None else scale
+    lam = np.asarray(mult_g)[: model.eq.n_rows]
+    x = np.asarray(x)
+    idx = model.index()
+    row = {n: i for i, n in enumerate(model.eq.names)}
+    out = {}
+    for u in units:
+        by = {}
+        for (uu, m, s) in model.data.sets["OM"]:
+            if uu != u or ("8", u, m, s) not in row:
+                continue
+            ins = [ss for (a, mm, ss) in model.data.sets["IM"] if (a, mm) == (u, m)]
+            fin = sum(x[idx[("FVM", u, m, ss)]] for ss in ins)
+            by[(m, s)] = float(-(lam[row[("8", u, m, s)]] * (-fin)) / scale)
+        vals = list(by.values()) or [0.0]
+        out[u] = {"by_outlet": by, "spread": max(vals) - min(vals),
+                  "per_wt_pct": (max(vals) - min(vals)) / 100.0}
+    return out
