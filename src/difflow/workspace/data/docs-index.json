@@ -1,5 +1,5 @@
 {
- "n_sections": 1312,
+ "n_sections": 1313,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -10310,16 +10310,25 @@
    "targets": [
     "refinery-residue-not-done"
    ],
-   "text": "- **No literature or plant cross-check.** The constants are illustrative and were chosen to land in published severity ranges. They are not fitted, and no paper's profiles are reproduced. Product sulfur, metals and hydrogen are the shape of the answer, not a prediction for any catalyst.\n- **No recycle-gas loop, hot/cold separators or fractionator column**: see the specs above for what stands in for each.\n- **No catalyst deactivation.** `metals.deposit` is reported, and `activity` is a differentiable multiplier that `difflow.reconciliation.tracking` could follow, but neither metals-driven deactivation nor cycle length is modelled.\n- **One average catalyst** for every bed (no HDM/HDS grading), and one `T_ref`.\n- **The RDS distillate** leaves at about the parent's sulfur and is not hydrotreated. In the example it goes to the fuel oil.\n- **No VDU in the route.** For this crude it is not needed, as explained above. The pieces compose: `VacuumColumn` on the RDS residue, or the RDS on a vacuum residue (VRDS), with the same unit.\n- Out of scope: ebullated-bed and slurry residue hydrocracking, solvent deasphalting, coking, and IMO compatibility and stability (the P-value).\n\n---\n\n(refinery-hydrogen)="
+   "text": "- **No literature or plant cross-check.** The constants are illustrative and were chosen to land in published severity ranges. They are not fitted, and no paper's profiles are reproduced. Product sulfur, metals and hydrogen are the shape of the answer, not a prediction for any catalyst.\n- **No recycle-gas loop, hot/cold separators or fractionator column**: see the specs above for what stands in for each.\n- **No catalyst deactivation.** `metals.deposit` is reported, and `activity` is a differentiable multiplier that `difflow.reconciliation.tracking` could follow, but neither metals-driven deactivation nor cycle length is modelled.\n- **One average catalyst** for every bed (no HDM/HDS grading), and one `T_ref`.\n- **The RDS distillate** leaves at about the parent's sulfur and is not hydrotreated. In the example it goes to the fuel oil.\n- **No VDU in the route.** For this crude it is not needed, as explained above. The pieces compose: `VacuumColumn` on the RDS residue, or the RDS on a vacuum residue (VRDS), with the same unit.\n- Out of scope: ebullated-bed and slurry residue hydrocracking, solvent deasphalting, coking, and IMO compatibility and stability (the P-value).\n\n---\n\n(refinery-hydrogen)=\n(refinery-coker)="
+  },
+  {
+   "anchor": "delayed-coking",
+   "heading": "Delayed coking",
+   "path": "Refinery Unit Operations > Delayed coking",
+   "source": "unit-operations-refinery.md",
+   "targets": [
+    "refinery-hydrogen",
+    "refinery-coker"
+   ],
+   "text": "`difflow_refinery.coking` (#534) is a delayed coking unit. It takes atmospheric or vacuum residue, deasphalter pitch and FCC slurry, and makes dry gas, LPG, H2S, NH3, coker naphtha, coker diesel, heavy coker gas oil and petroleum coke. Like the FCC, it is a library, not a palette operation.\n\n```python\nimport jax\nfrom difflow_refinery.coking import CokerFeed, DelayedCoker, coker_block\n\nvr = CokerFeed.from_properties(8.0, sg=1.03, sulfur_wt=3.5, ccr_wt=22.0,\n                               nitrogen_wppm=4000.0, nickel_vanadium_wppm=250.0)\nslurry = CokerFeed.from_properties(2.0, sg=1.08, sulfur_wt=1.2, ccr_wt=6.0)\nunit = DelayedCoker()\nout = unit.solve([vr, slurry])          # feeds pooled first: SG by volume, the rest by mass\nout[\"yield.coke\"], out[\"naphtha.SG\"], out[\"coke.S_wt\"], out[\"balance.mass\"]\ndcoke = jax.grad(lambda p: unit.solve(vr, drum_P=p)[\"yield.coke\"])(2.0)\nblock = coker_block(unit, CokerFeed.blend([vr, slurry]), [\"feed.ccr\", \"drum_P\", \"recycle\"])\n```\n\n**Model.** The yields are the delayed-coking correlations of Gary, Handwerk & Kaiser (*Petroleum Refining*, 5th ed., ch. 5), written in the feed's Conradson carbon (CCR, wt%):\n\n- coke = 1.6 CCR;\n- gas (C4-) = 7.8 + 0.144 CCR;\n- gasoline = 11.29 + 0.343 CCR;\n- gas oil = the rest.\n\nTheir volume yields are written in the feed's API gravity: 186.5/(131.5 + API) and 155.5/(131.5 + API). Those two formulas fix the products' gravities, SG = SG_feed \u00d7 mass yield / volume yield, so the gravities are not set separately. The constants are transcribed and have **not** been re-checked against the book in this repository; treat them as unverified until someone checks them.\n\nH2S and NH3, from the gas shares of feed sulfur and nitrogen, are carved out of the C4- gas, so mass, S and N close exactly. All feed Ni + V reports to the coke. Feeds are pooled before the yield model, as the Du et al. coker mixer does (their Fig. 5). A feed CCR outside 4-30 wt% raises `CokerRangeWarning`; it is never clipped."
   },
   {
    "anchor": "the-hydrogen-network",
    "heading": "The hydrogen network",
    "path": "Refinery Unit Operations > The hydrogen network",
    "source": "unit-operations-refinery.md",
-   "targets": [
-    "refinery-hydrogen"
-   ],
+   "targets": [],
    "text": "`difflow_refinery.hydrogen` (#329) balances the refinery's hydrogen: the\nreformer's net gas, a hydrogen plant and imports on one side, the\nhydrotreaters' and hydrocracker's makeup on the other, through one or more\nheaders, with an optional PSA, purge to fuel gas, and export. It returns the\nbalanced header and the purity each consumer receives, and\n`close_hydrotreater_loop` feeds that purity back into the hydrotreaters. A\nlibrary, not a palette operation.\n\n<!-- doc-test: skip: fragment: needs a solved reformer `ref` and hydrotreaters -->\n```python\nimport difflow_refinery.hydrogen as h2\n\nnet = h2.HydrogenNetwork(\n    producers=[h2.Producer.from_reformer(ref)],              # the reformer's net gas, as it is\n    consumers=[h2.Consumer(\"nht\", 20.0, P=60e5, min_purity=0.85),\n               h2.Consumer(\"dht\", 40.0, P=60e5, min_pH2=50e5)],\n    headers=[h2.Header(\"main\", P=20e5, min_purge=1.0,\n                       psa=None,                             # or h2.PSA(recovery=0.88, purity=0.999)\n                       swing=[h2.Import(purity=0.999)])])     # fills a deficit\nres = net.solve()\nres.outputs[\"h2.surplus\"], res.outputs[\"nht.purity\"], res.balances\n\n# feed the purity back into the hydrotreaters (substitution on the purity)\nloop = h2.close_hydrotreater_loop(net, {\"nht\": (nht, nht_feed, nht_params),\n                                        \"dht\": (dht, dht_feed, dht_params)})\nloop.header.outputs[\"h2.surplus\"], loop.params[\"nht\"].makeup, loop.units[\"nht\"].outputs[\"reactor.pH2_in\"]\n```"
   },
   {

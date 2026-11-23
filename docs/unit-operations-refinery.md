@@ -3311,6 +3311,60 @@ The assay there is given 40 wppm Ni+V, so HDM has something to remove. On its 44
 ---
 
 (refinery-hydrogen)=
+(refinery-coker)=
+## Delayed coking
+
+`difflow_refinery.coking` (#534) is a delayed coking unit. It takes atmospheric or vacuum residue, deasphalter pitch and FCC slurry, and makes dry gas, LPG, H2S, NH3, coker naphtha, coker diesel, heavy coker gas oil and petroleum coke. Like the FCC, it is a library, not a palette operation.
+
+```python
+import jax
+from difflow_refinery.coking import CokerFeed, DelayedCoker, coker_block
+
+vr = CokerFeed.from_properties(8.0, sg=1.03, sulfur_wt=3.5, ccr_wt=22.0,
+                               nitrogen_wppm=4000.0, nickel_vanadium_wppm=250.0)
+slurry = CokerFeed.from_properties(2.0, sg=1.08, sulfur_wt=1.2, ccr_wt=6.0)
+unit = DelayedCoker()
+out = unit.solve([vr, slurry])          # feeds pooled first: SG by volume, the rest by mass
+out["yield.coke"], out["naphtha.SG"], out["coke.S_wt"], out["balance.mass"]
+dcoke = jax.grad(lambda p: unit.solve(vr, drum_P=p)["yield.coke"])(2.0)
+block = coker_block(unit, CokerFeed.blend([vr, slurry]), ["feed.ccr", "drum_P", "recycle"])
+```
+
+**Model.** The yields are the delayed-coking correlations of Gary, Handwerk & Kaiser (*Petroleum Refining*, 5th ed., ch. 5), written in the feed's Conradson carbon (CCR, wt%):
+
+- coke = 1.6 CCR;
+- gas (C4-) = 7.8 + 0.144 CCR;
+- gasoline = 11.29 + 0.343 CCR;
+- gas oil = the rest.
+
+Their volume yields are written in the feed's API gravity: 186.5/(131.5 + API) and 155.5/(131.5 + API). Those two formulas fix the products' gravities, SG = SG_feed × mass yield / volume yield, so the gravities are not set separately. The constants are transcribed and have **not** been re-checked against the book in this repository; treat them as unverified until someone checks them.
+
+H2S and NH3, from the gas shares of feed sulfur and nitrogen, are carved out of the C4- gas, so mass, S and N close exactly. All feed Ni + V reports to the coke. Feeds are pooled before the yield model, as the Du et al. coker mixer does (their Fig. 5). A feed CCR outside 4-30 wt% raises `CokerRangeWarning`; it is never clipped.
+
+Everything else is **illustrative**: the dry gas/LPG and diesel/heavy gas oil splits, the sulfur and nitrogen distributions, the naphtha and diesel olefins, and the sensitivities to drum pressure, coil outlet temperature and recycle ratio. Their signs follow Gary et al.: more pressure or recycle makes more coke and gas, and a hotter coil makes less coke. Their sizes are not from data. The lumped kinetic model of the upgrade path (Del Bianco et al. 1993) is not implemented.
+
+**Against the Du et al. (2025) cokers.** Case 2 of the benchmark has two delta-base delayed cokers, `Upd0` and `Upd1`: the paper's Table 5 units. Their outlets were identified from the published delta vectors. One outlet moves by +0.0156 per wt% CCR, which is coke; another by +0.0035 per wt% S, which is H2S. At the published base feeds (SG 1.01 / 0.997, S 3.0 / 1.0 wt%, CCR 19.5 / 18.0), `tests/reference/coker_check.py` prints:
+
+| | coke | naphtha | diesel + gas oil | gas (incl. H2S) |
+|---|---|---|---|---|
+| `Upd0` difflow / published | 31.2 / 31.0 % | 18.0 / 17.2 % | 40.2 / 43.8 % | 10.6 / 7.8 % |
+| `Upd1` difflow / published | 28.8 / 26.5 % | 17.5 / 18.8 % | 43.3 / 47.3 % | 10.1 / 7.2 % |
+
+Signs of the AD sensitivities against the published `delta / Del` agree on 6 of 9 (`Upd0`) and 5 of 8 (`Upd1`) nonzero entries:
+
+- **Agree:**
+  - The coke-vs-CCR slope (0.0160 against 0.0156).
+  - The H2S-vs-S slope (0.0032 against 0.0035).
+  - The fall of diesel and gas oil with CCR. Ours is two to three times steeper.
+- **Disagree:**
+  - Naphtha and gas *rise* with CCR in the correlation and fall in the published vectors.
+  - The correlation's weight yields do not depend on SG, so every SG sensitivity is zero, against published values of up to ±0.018 per unit SG.
+  - The published base H2S yield (0.2 %) is inconsistent with the published H2S delta, which at 3 wt% S implies about 1 %.
+
+These are recorded as found. An SG term would need a source, and none is implemented.
+
+Tests: `tests/refinery/test_coker.py` (fast) and `tests/reference/coker_check.py` (by hand). The by-hand file covers balances over 5-25 wt% CCR, the coke-vs-CCR line, finite-difference gradients and the comparison above. Published yields for named residues are not reproduced: none were at hand. Example: `examples/81_refinery_delayed_coker.ipynb`.
+
 ## The hydrogen network
 
 `difflow_refinery.hydrogen` (#329) balances the refinery's hydrogen: the
@@ -4710,7 +4764,7 @@ The sulfur signs agree. The magnitudes do not: the published values are 40-60x s
 | `Upf12`, `Upf13` | same outlet structure (0.453 / 0.212 / 0.124 ...); `Upf12` runs on a purchased feed | aromatics extraction (consistent) |
 | `Upf5`, `Upf6` | SG 0.58 LPG in; ~28 % C4 cut to `Upf10` | gas fractionation (consistent) |
 | `Upf10` | the C4 cut in; 95 % to one product | MTBE / C4 (consistent) |
-| `Upf1` | 3 feed batches, 8 outlets; its feed gravity is untraced (free) | delayed coker (plausible; not confirmed) |
+| `Upf1` | 3 feed batches, 8 outlets; its feed gravity is untraced (free) | delayed coker (plausible; not confirmed); difflow model: {ref}`Delayed coking <refinery-coker>` |
 | `Upf11` | one feed, two outlets, the second a capacity-controlled output | H2 PSA (not confirmed) |
 | `Upd3` | delta-base on SG and Conradson carbon (`Q21`) about a base of SG 1.01 / CCR 18.7; two outlets near 50/50; idle at the optimum | residue unit: coker or deasphalter (#532) |
 | `Upf0`, `Upf2`, `Upf8`, `Upf9`, `Upf15`, `Upf16` | light-ends and small units | unidentified |

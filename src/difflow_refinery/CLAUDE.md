@@ -193,9 +193,12 @@ solve per swing, ~20 s each: by hand only, `tests/reference/swing_cut_check.py`)
 agrees with constant at phi 0/1 -- tested); the slope from the neighbours is a
 guess, worst where a swing feeds a non-adjacent product.
 
+Delayed coker (#534, `difflow_refinery.coking`, a library): Gary-Handwerk CCR
+correlations, pooled feeds, `coker_block`; see `coking/CLAUDE.md`.
+
 Du et al. (2025) planning benchmark (#530, `difflow_refinery.benchmarks.du2025`,
 a library): see `benchmarks/CLAUDE.md`. Its data are never vendored.
 
-Subpackages carry their own CLAUDE.md: `alkylation/` is above; `benchmarks/`, `treating/`, `vacuum/`,
+Subpackages carry their own CLAUDE.md: `alkylation/` is above; `benchmarks/`, `coking/`, `treating/`, `vacuum/`,
 `reforming/`, `hydroprocessing/` (shared by `hydrotreating/`, `hydrocracking/`,
 `residue/`), `hydrocracking/`, `hydrogen/`, `residue/`, `preheat/`, `gasplant/`, `fcc/`.
