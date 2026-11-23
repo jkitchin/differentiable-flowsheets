@@ -1,0 +1,139 @@
+This file is a tiny synthetic case in the format of the Du et al. (2025) benchmark, written for difflow's tests. It holds none of the benchmark's data.
+
+Sets
+S   set of streams
+/
+s0, s1, s2, s3, s4, s5, s6, s7, s8, s9
+s10, s11
+/
+U   set of unit operations
+/
+UCDU0, Upf0, Upd0, Umix0, Usplit0, Ublend0
+/
+M   set of batches
+/
+m0, m1, m2, m3
+/
+Q   set of properties
+/
+Q0, Q1, Q2
+/
+C   set of capacity indices
+/
+ccap0, ccap1
+/
+S_P(s)  set of products
+/
+s3, s7, s10, s11
+/
+S_M(s)  set of raw materials
+/
+s0
+/
+T   set of periods
+/
+1
+/
+UCDU(u) set of CDUs
+/
+UCDU0
+/
+UPF(u)  set of process units without delta-base formulation
+/
+Upf0
+/
+UPD(u)  set of process units with delta-base formulation
+/
+Upd0
+/
+UMIX(u) set of mixers
+/
+Umix0
+/
+USPL(u) set of splitters
+/
+Usplit0
+/
+UBLD(u) set of blenders
+/
+Ublend0
+/
+IU(u,s) set of pairs that stream s is the input of unit u
+/
+UCDU0.s0, Upf0.s1, Upd0.s2, Umix0.s4, Umix0.s6
+Usplit0.s8, Ublend0.s9, Ublend0.s5
+/
+OU(u,s) set of pairs that stream s is the output of unit u
+/
+UCDU0.s1, UCDU0.s2, UCDU0.s3, Upf0.s4, Upf0.s5
+Upd0.s6, Upd0.s7, Umix0.s8, Usplit0.s9, Usplit0.s10
+Ublend0.s11
+/
+IM(u,m,s)   set of groups that stream s is the input of unit u in batch m
+/
+UCDU0.m0.s0, Upf0.m1.s1, Upd0.m2.s2, Umix0.m3.s4, Umix0.m3.s6
+/
+OM(u,m,s)   set of groups that stream s is the output of unit u in batch m
+/
+UCDU0.m0.s1, UCDU0.m0.s2, UCDU0.m0.s3, Upf0.m1.s4, Upf0.m1.s5
+Upd0.m2.s6, Upd0.m2.s7, Umix0.m3.s8
+/
+SC(u,m,s,ss)    set of groups that cut fraction ss can be merged into output stream s of CDU u in batch m
+/
+UCDU0.m0.s1.s3, UCDU0.m0.s2.s3
+/
+SPG(q)  specific gravity
+/
+Q1
+/
+Qv(q)   set of volume-based properties
+/
+
+/
+Qw(q)   set of weight-based properties
+/
+Q0
+/
+Qp(q)   set of percentage properties
+/
+Q2
+/
+SQ(s,q) set of traced property q of stream s
+/
+s1.Q0, s1.Q1, s2.Q0, s2.Q1, s3.Q0
+s3.Q1, s4.Q0, s4.Q1, s5.Q0, s5.Q1
+s6.Q0, s6.Q1, s8.Q0, s8.Q1, s9.Q0
+s9.Q1, s10.Q0, s10.Q1
+/
+FIX(s,q)    set of fixed property q of stream s
+/
+s5.Q0, s5.Q1
+/
+QT(s,ss,q)  set of property q transferred from s to ss
+/
+s1.s4.Q0, s2.s6.Q0
+/
+VMQ(u,m,s,q)    set of property q under control for virtual batch m of mixer-based unit u
+/
+Umix0.m3.s4.Q2
+/
+DBSQ(u,m,s,q)   delta-base formulation of unit u in batch m involves inlet stream s and property q
+/
+Upd0.m2.s2.Q0
+/
+CAPIN(c)    set of inlet stream capacity control
+/
+ccap0
+/
+CAPOUT(c)   set of outlet stream capacity control
+/
+ccap1
+/
+CAPS(c,s)   set of stream s under control for capacity c
+/
+ccap0.s0, ccap1.s7
+/
+
+CDUMQ(u,m,q)    set of property q under control for batch m of CDU u    /  /
+CRU(q)  set of properties under control for CDUs    /  /
+RB(u)   set of proportional blending units  /  /;

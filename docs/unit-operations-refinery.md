@@ -514,6 +514,35 @@ Making a cut point a column *spec* would describe the same feasible set, and it 
 For the same reason, `product_value_block` prices products in bbl/d only. Folded into the revenue as a smooth penalty, a quality limit puts curvature in the objective that a linear model cannot see. On the test crude, that version crawled along the penalty's shoulder at a radius of 1e-4 and stopped at the iteration cap.
 
 (refinery-preheat)=
+(refinery-swing-cut)=
+## The swing-cut planning block
+
+A planning model represents a crude unit as cut yields per crude, split into heart cuts and *swing cuts*. A swing cut lies between two products, and the planner chooses how much of it goes to each. `difflow_refinery.swing_cut` (#531) implements this as formulated by Du et al. (2025), and it differs from the delta-base crude block of the previous section. `swing_cut_block(table, crude_rates, phi)` takes the crude rates and the swing fractions `phi` in [0, 1] as its decisions. It returns the product flows and properties: specific gravity blends by volume, and every other property by mass unless it is declared volume-based. It is pure JAX and linear in `phi` for flows. It is a library, not a palette operation.
+
+A `SwingCutTable` holds the cuts from light to heavy, the products, each product's own (heart) cut, the `(product, swing cut)` pairs, and per-crude cut yields and properties. It comes from one of three generators:
+
+- **The published tables.** `du2025.crude.cut_table(data, "UCDU0")` builds it from the benchmark's `y`, `FQcut`, `phi` and `SC`. With the published crude rates and `phi`, the block reproduces both benchmark crude units' outlet flows, to 2e-15, and every blended property at the published solution, to 4e-16 relative. The Eq. 5 properties are SG, the `Qw` and the `Qv` indices. Q45, which the benchmark traces but never blends, is left out.
+- **An assay at TBP cut points.** `cut_table_from_assays(assays, cut_points, ...)` characterizes each assay at the cut points, one pseudo-component per cut, and reports SG, sulfur, nitrogen and CCR. This is the ideal-fractionation limit, and it is differentiable with respect to the cut points: with `as_arrays=True`, `jax.jacfwd` gives about 0.2 % of yield per K on the test crude.
+- **The rigorous crude unit.** `cut_table_from_crude_unit(unit, rate, T, P, [(light, heavy, width)])` solves the `CrudeUnit` once at its own specs. It then solves once more per swing, with the light product's volume-rate spec raised by `width`. The swing cut is the material the light product gains, with that material's own SG and sulfur, and the heavy product's heart cut is its base flow less its swing cuts. The cut yields therefore sum to 1, every number is the column's response, and AD through the solves gives the Jacobian. Each swing costs a column solve (about 20 s for one swing on the 8-stage test column), so build the table once.
+
+<!-- doc-test: skip: needs the benchmark data (downloaded, not vendored) -->
+```python
+from difflow_refinery.benchmarks.du2025.crude import cut_table, published_rates
+from difflow_refinery.swing_cut import swing_cut_block, swing_property_error
+
+table, phi = cut_table(data, "UCDU0")             # 25 crudes, 13 cuts, 10 products, 9 swings
+rates = published_rates(table, "UCDU0", sol)
+F, q = swing_cut_block(table, rates, phi)          # = the published outlets
+jax.jacfwd(lambda p: swing_cut_block(table, rates, p)[0])(phi)   # dF/dphi
+```
+
+**Swing-cut properties that vary.** The published formulation gives a swing cut one set of properties whichever way it goes. With `varying=True`, or with a list of swing-cut names, each property is linear across the swing cut's span. The line is centred on the cut's own value, with its slope taken from the neighbouring cuts, and consecutive slices go to the recipients from light to heavy. The two forms agree at `phi` = 0 and 1. `swing_property_error(table, rates, phi, k, q)` moves swing `k` across [0, 1] with only that swing cut varying, and returns the product property difference. At the published Case 1 crude rates:
+
+- **Swing cuts between neighbouring products:** the constant-property form is off by at most 0.006 in SG and 0.025 wt% in sulfur. Most are below 0.003 and 0.005.
+- **Swing cuts the benchmark sends to a non-adjacent product:** `s310` and `s303` into `s0` are off by up to 0.022 in SG. `UCDU1`'s three-way `s297` is off by up to 0.16 wt% in sulfur. Here the linear profile is itself a guess: which recipient takes the light end is not defined.
+
+The by-hand checks (published reproduction, swing-fraction and cut-point Jacobians against central differences, CrudeUnit-generated yields summing to 1 with SG and sulfur rising) are in `tests/reference/swing_cut_check.py`.
+
 ## The preheat train
 
 The crude reaches the furnace at 250 °C or so, from a tank at ambient temperature. Most of that heat is recovered from the column's own products and pumparounds in a train of exchangers. The furnace supplies the rest, so the train sets the fuel bill as much as the column does. `difflow_refinery.preheat` models the train from tank to furnace inlet. It has three kinds of item:
@@ -2647,6 +2676,55 @@ A crude-unit product carries every cut at some trace level. `Hydrotreater(..., t
 - **Near a mixture's critical region** (a naphtha with little treat gas at 50--60 bar) the bed-inlet PR flash can fail; the unit then returns `converged=False`. A stability test and a critical-point-robust flash are not implemented.
 - **Deactivation tracking** with `difflow.reconciliation.tracking` is possible (the activity is a parameter with a gradient) but not demonstrated.
 - Out of scope (as the issue says): residue hydrotreating/HDM, countercurrent reactors, reactor internals and pressure drop, amine unit detail, dynamics.
+
+### Jet and wax-oil (VGO) service (#536)
+
+`difflow_refinery.hydrotreating.services` sets the hydrotreater up for the two services in the Du et al. benchmark that it did not cover: jet/kerosene (`Upd2`) and wax oil, a VGO hydrotreater ahead of the FCC (`Upf18`). Both run the existing `Hydrotreater` with its reactor, HP separator, recycle loop and stripper unchanged. What the module adds sits around the solve.
+
+<!-- doc-test: skip: compiles the hydrotreater (minutes) -->
+```python
+from difflow_refinery.hydrotreating.services import (jet_params, jet_properties, jet_margins,
+    vgo_params, heavy_ends_removal, fcc_feed_from_hydrotreater)
+
+res = Hydrotreater(char, kero_feed, jet_params()).solve(kero_feed)        # 30 bar, LHSV 3, 300 C
+jet_margins(jet_properties(res.outputs))      # smoke, flash, aromatics, S, mercaptan S, freeze
+
+res = Hydrotreater(char, vgo_feed, vgo_params()).solve(vgo_feed)         # 100 bar, LHSV 1, 380 C
+he = heavy_ends_removal(ccr_in, niv_in, res.outputs["wabt"], 1.0)        # HDCCR, HDM
+fcc_feed = fcc_feed_from_hydrotreater(res.outputs, ccr_wt=he["ccr_wt"], niv_wppm=he["niv_wppm"])
+FCCUnit(FCCParams()).solve(fcc_feed)
+```
+
+**Jet.**
+
+- `jet_params()` is a mild, low-pressure point: 30 bar, LHSV 3/h, 300 C, 100 Nm3/m3.
+- `JET_SPECS` is the Jet A-1 / No. 3 jet set: smoke point at least 25 mm, flash at least 38 C, freeze at most -47 C, aromatics at most 25 vol%, sulfur at most 3000 wppm, mercaptan sulfur at most 30 wppm.
+- `jet_properties` takes the smoke point from `properties.smoke_point`, which is itself marked unverified.
+- The flash point comes from the TBP 10 % point, conservative against D86.
+- Mercaptan sulfur is reported as the *total* sulfur, an upper bound, because mercaptans are not tracked.
+- The freeze point needs per-component n-paraffins that the outputs do not carry, so it is NaN, and its margin stays NaN rather than counting as met.
+
+On a 150-250 C kerosene cut at 0.34 wt% S and `jet_params()`, all balances close to about 1e-16. The product misses on smoke point (23.3 mm) and aromatics (26.7 vol%) and passes on flash (48 C) and sulfur (1380 wppm). Mild service on that feed does not make jet by itself.
+
+**Wax oil.**
+
+- `vgo_params()` runs the hydrocracker's VGO pretreat kinetics, which already carry basic-nitrogen inhibition and the activity multiplier (the deactivation hook), at 100 bar, LHSV 1/h and 380 C.
+- The reactor does not track Conradson carbon or metals, so `heavy_ends_removal` applies first-order HDCCR and HDM after the reactor. Its constants are ILLUSTRATIVE.
+- `fcc_feed_from_hydrotreater` maps the product onto an `FCCFeed`: SG, Tb (the product T50), Kw, Riazi-Daubert MW, H, S, N, CCR and Ni+V.
+
+On a 370-560 C wax oil, the balances close to about 1e-15. Sulfur and nitrogen are removed almost entirely, CCR falls from 0.66 to 0.33 wt% and Ni+V from 0.16 to 0.009 wppm, and the FCC converges on the product: 77.6 % conversion, 49.4 % gasoline.
+
+**Against `Upd2`.** The crude was adjusted so that the kerosene cut has `Upd2`'s base feed (SG 0.797, 0.058 wt% S), and the AD sensitivities on an oil basis were taken there:
+
+| | AD d/dSG | published | AD d/dS | published |
+|---|---|---|---|---|
+| gas (`s215`) | -0.00012 | -0.0005 | +0.0068 | -0.005 |
+| jet (`s104`) | +0.00132 | +0.0013 | -0.0057 | -0.001 |
+
+Three of the four signs agree. The jet-vs-SG sensitivity matches to 2 %. The gas-vs-sulfur sensitivity disagrees: ours rises with feed sulfur because H2S joins the gas, and the published value falls. `Upd2` has no separate sour-gas outlet, so its published decrease is hard to reconcile with sulfur leaving as H2S.
+
+Not reproduced: published kerosene-HDT and VGO HDS/HDN data (#536 asks for one dataset each; none were at hand). The full solves are by hand: `tests/reference/hdt_services_check.py jet|vgo`, a few minutes each. The fast tests in `tests/refinery/test_hdt_services.py` cover the helpers. Example: `examples/83_refinery_jet_vgo_hydrotreating.ipynb`.
+
 (refinery-alkylation)=
 ## Alkylation
 
@@ -3282,6 +3360,90 @@ The assay there is given 40 wppm Ni+V, so HDM has something to remove. On its 44
 ---
 
 (refinery-hydrogen)=
+(refinery-coker)=
+## Delayed coking
+
+`difflow_refinery.coking` (#534) is a delayed coking unit. It takes atmospheric or vacuum residue, deasphalter pitch and FCC slurry, and makes dry gas, LPG, H2S, NH3, coker naphtha, coker diesel, heavy coker gas oil and petroleum coke. Like the FCC, it is a library, not a palette operation.
+
+```python
+import jax
+from difflow_refinery.coking import CokerFeed, DelayedCoker, coker_block
+
+vr = CokerFeed.from_properties(8.0, sg=1.03, sulfur_wt=3.5, ccr_wt=22.0,
+                               nitrogen_wppm=4000.0, nickel_vanadium_wppm=250.0)
+slurry = CokerFeed.from_properties(2.0, sg=1.08, sulfur_wt=1.2, ccr_wt=6.0)
+unit = DelayedCoker()
+out = unit.solve([vr, slurry])          # feeds pooled first: SG by volume, the rest by mass
+out["yield.coke"], out["naphtha.SG"], out["coke.S_wt"], out["balance.mass"]
+dcoke = jax.grad(lambda p: unit.solve(vr, drum_P=p)["yield.coke"])(2.0)
+block = coker_block(unit, CokerFeed.blend([vr, slurry]), ["feed.ccr", "drum_P", "recycle"])
+```
+
+**Model.** The yields are the delayed-coking correlations of Gary, Handwerk & Kaiser (*Petroleum Refining*, 5th ed., ch. 5), written in the feed's Conradson carbon (CCR, wt%):
+
+- coke = 1.6 CCR;
+- gas (C4-) = 7.8 + 0.144 CCR;
+- gasoline = 11.29 + 0.343 CCR;
+- gas oil = the rest.
+
+Their volume yields are written in the feed's API gravity: 186.5/(131.5 + API) and 155.5/(131.5 + API). Those two formulas fix the products' gravities, SG = SG_feed × mass yield / volume yield, so the gravities are not set separately. The constants are transcribed and have **not** been re-checked against the book in this repository; treat them as unverified until someone checks them.
+
+H2S and NH3, from the gas shares of feed sulfur and nitrogen, are carved out of the C4- gas, so mass, S and N close exactly. All feed Ni + V reports to the coke. Feeds are pooled before the yield model, as the Du et al. coker mixer does (their Fig. 5). A feed CCR outside 4-30 wt% raises `CokerRangeWarning`; it is never clipped.
+
+Everything else is **illustrative**: the dry gas/LPG and diesel/heavy gas oil splits, the sulfur and nitrogen distributions, the naphtha and diesel olefins, and the sensitivities to drum pressure, coil outlet temperature and recycle ratio. Their signs follow Gary et al.: more pressure or recycle makes more coke and gas, and a hotter coil makes less coke. Their sizes are not from data. The lumped kinetic model of the upgrade path (Del Bianco et al. 1993) is not implemented.
+
+**Against the Du et al. (2025) cokers.** Case 2 of the benchmark has two delta-base delayed cokers, `Upd0` and `Upd1`: the paper's Table 5 units. Their outlets were identified from the published delta vectors. One outlet moves by +0.0156 per wt% CCR, which is coke; another by +0.0035 per wt% S, which is H2S. At the published base feeds (SG 1.01 / 0.997, S 3.0 / 1.0 wt%, CCR 19.5 / 18.0), `tests/reference/coker_check.py` prints:
+
+| | coke | naphtha | diesel + gas oil | gas (incl. H2S) |
+|---|---|---|---|---|
+| `Upd0` difflow / published | 31.2 / 31.0 % | 18.0 / 17.2 % | 40.2 / 43.8 % | 10.6 / 7.8 % |
+| `Upd1` difflow / published | 28.8 / 26.5 % | 17.5 / 18.8 % | 43.3 / 47.3 % | 10.1 / 7.2 % |
+
+Signs of the AD sensitivities against the published `delta / Del` agree on 6 of 9 (`Upd0`) and 5 of 8 (`Upd1`) nonzero entries:
+
+- **Agree:**
+  - The coke-vs-CCR slope (0.0160 against 0.0156).
+  - The H2S-vs-S slope (0.0032 against 0.0035).
+  - The fall of diesel and gas oil with CCR. Ours is two to three times steeper.
+- **Disagree:**
+  - Naphtha and gas *rise* with CCR in the correlation and fall in the published vectors.
+  - The correlation's weight yields do not depend on SG, so every SG sensitivity is zero, against published values of up to ±0.018 per unit SG.
+  - The published base H2S yield (0.2 %) is inconsistent with the published H2S delta, which at 3 wt% S implies about 1 %.
+
+These are recorded as found. An SG term would need a source, and none is implemented.
+
+Tests: `tests/refinery/test_coker.py` (fast) and `tests/reference/coker_check.py` (by hand). The by-hand file covers balances over 5-25 wt% CCR, the coke-vs-CCR line, finite-difference gradients and the comparison above. Published yields for named residues are not reproduced: none were at hand. Example: `examples/81_refinery_delayed_coker.ipynb`.
+
+(refinery-szorb)=
+## FCC gasoline desulfurization (S Zorb)
+
+`difflow_refinery.desulfurization` (#535) is an S Zorb-type reactive-adsorption desulfurizer. FCC gasoline and hydrogen pass through a fluidized bed of Ni/ZnO sorbent. Nickel hydrogenolyses the C-S bonds, ZnO captures the sulfur as ZnS, and the sorbent circulates to a regenerator. The process is described by Babich & Moulijn, *Fuel* 82 (2003) 607. Olefin hydrogenation is the side reaction, and it costs octane. Like the FCC, the unit is a library, not a palette operation.
+
+```python
+import jax
+from difflow_refinery.desulfurization import SZorbFeed, SZorbUnit
+
+feed = SZorbFeed.from_properties(50.0, sg=0.73, sulfur_wppm=500.0, olefins_vol=30.0,
+                                 aromatics_vol=22.0, ron=92.0, mon=80.0)
+unit = SZorbUnit()
+out = unit.solve(feed)           # product.S_wppm 7.9, ron.loss 0.88, h2.consumption_wt 0.07
+dS_dT = jax.grad(lambda T: unit.solve(feed, T=T)["product.S_wppm"])(693.15)
+```
+
+**Model.** Pure JAX, with one scalar root solve:
+
+- **Sulfur removal.** Per sulfur class of #305 (sulfides with mercaptans, thiophenes, benzothiophenes, DBTs), first order in plug flow: `S_out = S_in exp(-k(T) θ / WHSV)`.
+- **Sorbent activity.** `θ = 1 - q/q_max` is the free capacity at the reactor's sorbent loading `q`. At steady state the circulating sorbent carries the captured sulfur: `q = q_regen + S_captured / circulation`. Removal lowers activity and activity lowers removal, so `q` is the root of one equation, solved by Newton and differentiated implicitly. This is the unit's nonlinearity: at 1500 wppm feed sulfur the sorbent nears saturation and product sulfur climbs to 190 wppm. A fixed delta vector cannot show that.
+- **Olefin saturation.** First order, with a higher activation energy than sulfur removal, so a hotter bed costs octane faster than it removes sulfur. RON and MON fall in proportion to the olefins saturated.
+- **Hydrogen.** Hydrogen consumption is per mole of sulfur removed by class, plus one per mole of olefin saturated.
+- **Balances.** The sulfur and mass balances close exactly.
+
+**Every rate constant, the sorbent capacity, loading and circulation, the H2 stoichiometry, the octane slopes and the light-ends factor are ILLUSTRATIVE.** They are chosen to land in the published *ranges* (about 500 wppm to below 10, RON loss about 1). No plant data set is reproduced; #535 asks for one, and none was at hand.
+
+**Against the Du et al. (2025) `Upd4`.** The benchmark's S Zorb is a delta-base unit with one property, feed sulfur. Its sour-gas outlet rises by +0.0104 per wt% S. The AD sensitivity of our captured sulfur (as H2S) at its base feed (0.06 wt% S) is +0.0101, a ratio of 0.97. That is close to H2S stoichiometry at 98 % capture. The published base sour-gas yield, 0.19 %, is three times what its own delta implies (0.06 %), the same inconsistency the coker shows.
+
+Tests: `tests/refinery/test_szorb.py` (fast) and `tests/reference/szorb_check.py` (by hand). The by-hand file covers balances over feeds and severities, monotone trends (product S falls and RON loss rises with severity), finite-difference gradients through the root solve, and the `Upd4` comparison. Example: `examples/82_refinery_szorb.ipynb`. The Prime-G selective-HDS variant is not implemented.
+
 ## The hydrogen network
 
 `difflow_refinery.hydrogen` (#329) balances the refinery's hydrogen: the
@@ -4526,6 +4688,206 @@ References:
 - El-Bishtawi, R., Haimour, N., Fuel Process. Technol. 86, 245-260 (2004),
   doi:10.1016/j.fuproc.2004.04.001.
 - U.S. Standard Atmosphere, 1976, NOAA-S/T 76-1562.
+
+(refinery-du2025)=
+## The Du et al. (2025) planning benchmark
+
+`difflow_refinery.benchmarks.du2025` (#530, tracking #538) implements the refinery planning benchmark of W. Du, C. Wang, C. Fan et al., "A production planning benchmark for real-world refinery-petrochemical complexes", arXiv:2503.22057 (2025), exactly as published. It gives difflow a public reference refinery: a real topology with crude data, prices, product specifications and a delta-base planning model. Later work replaces its fixed-yield and delta-base units with difflow's nonlinear ones and compares their AD Jacobians with the published delta vectors. It is a library, not a palette operation.
+
+The data are **not** in this repository. The paper is CC BY-NC-SA and the [data repository](https://github.com/EMRPS/refinery-planning-benchmark) has no license file. `fetch` downloads them to `$DIFFLOW_DU2025_DATA` (default `~/.cache/difflow/du2025`):
+
+<!-- doc-test: skip: needs the benchmark data (downloaded, not vendored) -->
+```python
+from difflow_refinery.benchmarks import du2025
+
+root = du2025.fetch()                               # case1/: sets, parameters, solution
+data = du2025.load_case(root / "case1")             # typed sets and parameters
+model = du2025.build_model(data)                    # 1850 variables, 1621 equations, 81 inequalities
+sol = du2025.load_solution(root / "case1" / "solution_baron.gdx")   # needs gams.transfer
+x = model.x_from_solution(sol)
+model.violations(x)        # {'eq': 8.5e-08, 'ineq': 5.7e-14, 'bounds': 0.0}
+model.profit(x)            # 34167967.96 -- paper Table 3: 34,167,968
+xs, info = du2025.solve_local(model, x, options=du2025.WARM_START_OPTIONS)
+```
+
+**Case 1.** Two crude units with swing cuts process up to 25 crudes; 20 fixed-yield units (`Upf0`-`Upf19`), 5 delta-base units (`Upd0`-`Upd4`), 32 mixers, 61 splitters and 12 blenders make 37 products from 31 raw materials under 27 capacity limits, in one period with no inventory. With no inventory, the paper's Eq. 21 makes a stream's inlet and outlet flows equal, so one flow `F_s` stands for both. Cases 2 and 3 (inventory, binaries, three periods) raise `NotImplementedError`.
+
+**Model.** `build_model` writes every equation of the paper's Section 3 as a residual over one flat vector of the GAMS model's variables: flows `F`, batch flows `FVM`, properties `FQ`, delta-base coefficients `GM` and volumes `V`, `VM`. With denominators cleared, every equation is a polynomial of degree at most two, because pooling, delta-base yields and volume blending are all bilinear. So the model is stored as COO arrays (`PolySystem`) of constants, linear terms and bilinear terms. Evaluating it costs two segment sums, its Jacobian is exact, and its sparsity pattern is known without probing. `solve_local` hands it to pounce with that pattern. Pooling makes the model nonconvex, so a local solve finds a local optimum and does not certify a global one.
+
+**What the published model does that the paper does not say.** These were read from the variables and bounds stored with the published solution:
+
+- `FQ[s, SPG] <= 10`, and a fixed property without an `FQ0` value is fixed at 0.
+- A property that an equation references but `SQ` does not trace is a free nonnegative variable (`model.untracked`). The mixer inlet `s6`'s sulfur is one. Such a property is a degree of freedom of the *benchmark*, not of the plant. In the published solution several of them are unphysical: the gravity of `s163`, for example, is 4.9e-7. Do not read plant data from them.
+- Eq. 13a (volume balance) is skipped for a mixer outlet whose gravity is fixed, as Eqs. 13b and 13c are.
+- Eq. 18 and the volumes `V` exist only for blenders with a gravity spec (`Ublend2`, `Ublend6`).
+
+With these rules, every equation closes at the published point to 8.5e-8, which is the solver's tolerance, and no inequality or bound is violated. The profit is 34,167,967.96. A pounce solve started there with `WARM_START_OPTIONS` takes about 15 s and returns within 1 of that profit. The result varies between processes in the last digits, from 34,167,968.5 to 34,167,969.0. Solves started from that point perturbed by ±30 % reach 34,167,968.8 and 34,167,969.2. The by-hand check is `tests/reference/du2025_case1_check.py`; it also compares the Jacobian with central differences.
+
+**Crude units as swing-cut blocks.** `du2025.crude.cut_table` turns a benchmark crude unit into a `SwingCutTable` for the swing-cut block ({ref}`refinery-swing-cut`, #531), with `phi` as decisions instead of fixed parameters.
+
+**Blocks.** `du2025.blocks` holds the same equations solved forward as pure JAX functions: `fixed_yield` (Eq. 8), `delta_base` and `delta_base_coefficients` (Eqs. 9-10), `swing_cut` and `cut_properties` (Eqs. 4-5), `blend` (Eqs. 12-13, 18), `split` (Eqs. 3, 17), `transfer` (Eq. 11) and `blend_margins` (Eq. 19c). These are the interfaces that a nonlinear unit replaces. `tests/refinery/test_du2025.py` builds an operating point from the blocks alone and checks that the residual model accepts it.
+
+Example: `examples/80_refinery_du2025_benchmark.ipynb` covers the published point, a local re-solve, the binding limits from the multipliers, and the Jacobian of a delta-base unit.
+
+### Property data (#532)
+
+The benchmark names its properties `Q0`-`Q169` and does not say what they are. It also gives each crude only as cut yields and cut properties. Three modules fill that in. The tables below come from the Case 1 data; nothing has been confirmed by the authors.
+
+**Property map** (`du2025.properties.PROPERTY_MAP`). Each index carries a name, a unit, a confidence and its evidence. `blend_key` points to the matching quality in `difflow_refinery.blending.PROPERTY_RULES`, and `named()` turns a stream's `{index: value}` into named properties. The benchmark blends every property except SG *by mass*, while difflow's blend pool blends aromatics, olefins and benzene by volume and octane by RT-70. So the index is the same but the rule is not.
+
+| Confidence | Indices |
+|---|---|
+| high | Q168 SG; Q169 virtual-batch component share; Q0 sulfur wt%; Q2 RON; Q4 MON; Q13 benzene vol%; Q51 olefins vol%; Q14 cetane index; Q18 total nitrogen wppm; Q21 Conradson carbon wt%; Q22 Ni, Q23 V, Q25 Ni+V wppm (Q22 + Q23 = Q25 on 324 of 325 cuts) |
+| medium | Q11 aromatics vol%; Q52 MTBE/oxygenates vol%; Q19 basic nitrogen; Q5 N+2A reforming potential |
+| low | Q10 paraffins; Q6 RVP of gasoline components; Q47 viscosity blending index |
+| unknown | Q8, Q15, Q16 (= 0.85 x Q15 on every cut), Q17, Q36, Q37, Q42, Q44, Q45 (the one traced index outside `Qw`), Q53 |
+
+The issue's guess that Q21 is olefins is replaced. Q21 is 0.01-0.02 on distillates and 17-28 on vacuum residue, the coker feed is limited to 30 and the residue-hydrotreater feed to 21, so it is Conradson carbon. This also identifies `Upd3`: its yields move with Q21 and SG about a base of 18.7 and SG 1.01, so it is a residue unit (coker or deasphalter).
+
+**Crude assays** (`du2025.assays`). The crude units cut every crude at the same anonymized temperatures. `fit_tbp(data)` fits the reference unit's (`UCDU0`, 13 cuts) cut temperatures jointly over all 25 crudes. It chooses them so that each crude's Watson K, computed from each cut's mid boiling point and SG, follows a linear trend in cumulative yield. A prior toward typical cut points (`TYPICAL_CUTS_C`) sets the temperature scale, which the data cannot fix. Each crude's TBP curve then passes through its cumulative yields at those temperatures, on a probability scale. Its gravity curve has its knots corrected so that every cut keeps its SG. `crude_assay(fit, i)` makes the difflow `Assay`. It is on a mass basis with a heavy end; the cut sulfur (Q0), nitrogen (Q18) and CCR (Q21) are measured curves, and Ni+V (Q25) is the bulk value.
+
+<!-- doc-test: skip: needs the benchmark data (downloaded, not vendored) -->
+```python
+from difflow_refinery.assay import characterize
+from difflow_refinery.benchmarks.du2025.assays import crude_assay, fit_tbp
+
+fit = fit_tbp(data)                          # about 8 s
+fit.summary()["UCDU0"]       # max yield err 3e-4, max SG err 0 -- reproduced
+fit.cut_points["UCDU0"] - 273.15     # 93 103 140 152 226 256 268 285 363 491 513 526 C
+char = characterize(crude_assay(fit, 0), cut_points=fit.cut_points["UCDU0"],
+                    composition=True)        # one pseudo-component per benchmark cut + lump
+```
+
+Characterized this way, every one of the 25 crudes reproduces `UCDU0`'s cut yields within 0.5 wt% and its cut SG within 0.005, which is the #532 target. In the benchmark data, sulfur and nitrogen rise with boiling point on every crude and CCR on all but one. SG falls between adjacent cuts in 8 of the 575 (crude, cut) steps. The fitted Watson K deviates from each crude's linear trend by 0.05 RMS.
+
+**The second crude unit does not fit the same oils.** `UCDU1`'s cut temperatures are fitted, again jointly, to its own yields on the same curves. Its cut yields then miss by up to 13.6 wt%, and its SG by up to 0.17 (on its HVGO swing cut). For the same crude, the two units' data imply different oils: for crude `s7`, `UCDU1`'s residue starts at a cumulative yield of 0.53 and `UCDU0`'s at 0.65, yet the cut SGs match in places. No shared TBP curve reconciles both units, which is consistent with the paper's statement that the parameters were "systematically perturbed". `fit.yield_error["UCDU1"]` records the mismatch. A crude-unit model of `UCDU1` (#531) should be calibrated to its own cut data, not to these curves.
+
+**Feed properties the nonlinear units need.** `characterize(..., composition=True)` on a reconstructed assay gives the following for each cut. Some values come from the benchmark and the rest from difflow's correlations:
+
+- From the benchmark: sulfur, total nitrogen (gas oil and heavier), Conradson carbon, Ni+V, and basic nitrogen on one cut.
+- From correlations: PNA, hydrogen, and the sulfur and nitrogen classes (difflow's #305 correlations); their defaults are marked illustrative there.
+- ILLUSTRATIVE, with no data: C7 asphaltenes are `ASPHALTENES_PER_CCR` (0.35) times the bulk CCR. Nitrogen below gas oil is anchored at 0.5 wppm at the lightest cut, which leaves the naphtha cuts at tens of wppm, too high; a naphtha hydrotreater model should not take its nitrogen from here.
+- Cracked naphtha is not a crude cut. Its olefins (Q51: FCC gasoline 27.5-38 vol%), aromatics (Q11) and octanes come from the benchmark's fixed values on those streams (`named(data.param("FQ0") ...)`).
+
+### Calibrating difflow units into the benchmark (#533)
+
+`du2025.calibration` connects a difflow unit to a benchmark process unit in four steps:
+
+1. `unit_base(data, unit, batch)` reads the unit's base point: its inlets and outlets, `gamma`, the yields on total feed, and the base feed properties (`B`, or the published inlet properties).
+2. `calibrate(predict, theta0, target, lower=, upper=)` fits the unit's knobs to those yields by Levenberg-Marquardt with AD Jacobians. The bounds are enforced through a sigmoid, and a trial point where the unit fails is rejected rather than allowed to break the fit.
+3. `compare_delta` sets the unit's AD sensitivities against the published `delta / Del`.
+4. `substitute(data, base, yields, dyields)` writes the unit back as *its own delta-base linearization*: `gamma` from the unit, and `delta / Del` from its Jacobian with respect to feed SG and sulfur. The re-solved benchmark therefore stays bilinear, and `objective_change` re-solves it with pounce and lists the limits that change status. This is also how a planner consumes a rigorous model.
+
+`du2025.units` holds the mapping for each unit: the feed it builds, the lumps it reports and its knobs with their bounds. The by-hand checks are `tests/reference/du2025_calibration_check.py` and `du2025_hdt_check.py`; the numbers below come from them.
+
+**FCC (`Upf3`, `Upf4`).** The outlets were identified from the stream routing and the published properties. One of them is a sour-gas stream (published sulfur 90 wt%), which the main fractionator does not make on its own. `Upf3` sends 1.8 % of a 0.24 wt% S feed there, more than the 0.26 % H2S the sulfur can make, so sour gas and dry gas are fitted as one lump. Seven knobs, inside wide physical bounds, are fitted: activity, riser outlet temperature, feed preheat, the two fractionator cut points, and multipliers on the dry-gas and coke rate constants. A soft target keeps the regenerator near 700 C. Without it, the first fit landed on the heat balance's hot branch (a 1016 C regenerator), near a turning point where a 1e-4 change in feed SG loses the solution.
+
+| Batch | Feed (SG, S wt%) | Worst lump error | Regenerator | Notes |
+|---|---|---|---|---|
+| `Upf3.m9` | 0.894, 0.24 | 0.58 wt% (slurry) | 717 C | within the 1 wt% target |
+| `Upf4.m13` | 0.912, 0.52 | 0.20 wt% (slurry) | 706 C | within target |
+| `Upf3.m11` (deasphalted oil) | assumed 0.92, 0.6 | 2.5 wt% (coke) | 643 C | coke target 0.4 % |
+| `Upf3.m12` (hydrocracker bottoms) | assumed 0.92, 0.0005 | 2.7 wt% | 629 C | coke target 0.65 % |
+| `Upf3.m10` (light recracking feed) | 0.85, 0.0001 | -- | -- | no LCO, slurry or coke: outside the VGO kinetics |
+
+The co-processed batches cannot be matched by any setting. A heat-balanced riser does not make 0.4-0.65 % coke, because the coke burned is what heats the reactor. These benchmark batch yields are increments inside a unit whose heat balance is shared, not stand-alone yields. Their published feed SG is 0.01, one of the free variables, so 0.92 is assumed for them.
+
+Several knobs end at a bound: riser outlet 490 C, preheat 150 C and LCO/slurry cut 400 C. The illustrative kinetics (`fcc/CLAUDE.md`) need to be pushed to their edges to reach these yields. Calibrating them to the benchmark's perturbed yields does not validate them. At the calibrated points, mass, C, H, S, N and energy close to round-off, and the AD Jacobian with respect to feed SG and sulfur matches central differences.
+
+With both calibrated FCCs substituted as delta-base units, the re-solved profit rises from 34,167,969 to **34,514,084 (+1.0 %)**. `Ublend3`'s RON minimum becomes binding. The gain comes from the FCC's sensitivity to feed gravity: at the base point, a heavier feed makes more LCO (+0.66 to +0.70 per unit SG) and less LPG. The published fixed-yield FCC has no such lever.
+
+**Hydrotreaters (`Upd0`, `Upd1`).** The rigorous `Hydrotreater` runs on a 230-370 C straight-run cut whose SG and sulfur match `B`; the crude's bulk SG and sulfur are solved for. It *cannot* be calibrated to the benchmark: with inlet temperature, cracking-leak constant (up to 100x) and purge at their bounds, `Upd1` makes 0.4 % naphtha against the benchmark's 6.4 %. The benchmark's naphtha implies naphtha-range material in the feed, which a gas-oil cut does not carry. Its gas yields also count the residue of a 1.8-2.8 % hydrogen-rich inlet stream of unknown composition. The sensitivities at the closest point, on an oil basis, per unit SG and per wt% S, against the published `delta / Del`:
+
+| `Upd1` lump | AD d/dSG | published | AD d/dS | published |
+|---|---|---|---|---|
+| gas (sour + fuel) | +0.022 | -0.010 | +0.0101 | +0.0041 (sour gas alone: +0.0111) |
+| naphtha | -0.0028 | -0.040 | +0.00003 | -0.0003 |
+| diesel | -0.00004 | +0.110 | -0.0086 | -0.0028 |
+
+With respect to sulfur, the AD gas sensitivity is H2S stoichiometry at 98 % HDS (0.0106 x 0.98), and it matches the published sour-gas delta to 9 %. The published diesel loss per wt% S has the right sign, but the rigorous unit's is three times larger. With respect to gravity, the two disagree in sign for gas and diesel: the published diesel yield *rises* by 0.11 per unit SG, and the rigorous unit's does not move. These disagreements are reported as found, not tuned away (#533).
+
+`Upd0` (no naphtha outlet) *does* calibrate, but only just: gas 1.6 % against 2.5 % and diesel 99.1 % against 100.1 %, worst error 0.99 wt%, with inlet T (660 K) and purge (0.30) at their upper bounds. Its sensitivities, on the same basis:
+
+| `Upd0` lump | AD d/dSG | published | AD d/dS | published |
+|---|---|---|---|---|
+| gas (sour + fuel) | +0.187 | -0.00001 | +0.0141 | +0.00033 |
+| diesel | -0.112 | +0.00013 | -0.0124 | -0.0002 |
+
+The sulfur signs agree. The magnitudes do not: the published values are 40-60x smaller. `Upd0`'s published sour-gas delta is 0.00109 per wt% S, ten times *below* H2S stoichiometry, while `Upd1`'s matches it. `Upd0` uses `Del` = 10 and `Upd1` uses `Del` = 1, which suggests the two units' steps are on different scales. The stoichiometry supports `Upd1`'s.
+
+**Gasoline blending.** Under difflow's nonlinear rules (RT-70 octane, aromatics and olefins by volume), the published blends still meet every spec. The numbers move, though. `Ublend4`'s MON is 92.0, not the mass-linear 94.4, and the 34 vol% aromatics limit that binds in `Ublend4` and `Ublend5` is 29.8 and 32.1 vol% by volume. Blending aromatics by mass overstates them, because they are the densest components. The benchmark plan therefore leaves aromatics slack unused, and a nonlinear blend model would move it. The blenders are not substituted into the re-solve, because RT-70 is not bilinear.
+
+**Not substituted, with the reason.**
+
+- **CCR reformer (`Upf14`):** forward-only, never jitted, and about 1 min per solve, so a calibration needs hours. Its `NaphthaFeed` also needs a PIONA that the benchmark reduces to N+2A (Q5).
+- **Hydrocracker (`Upf7`):** reverse-only, about 80 s and 6 GB per gradient. Not run.
+- **Naphtha hydrotreater (`Upf17`) and jet hydrotreater (`Upd2`):** the same `Hydrotreater`. Not run, given the gas-oil result above.
+- **H2 PSA (`Upf11`):** the benchmark gives no composition for its feed, so two yields cannot identify its knobs.
+- **Crude and vacuum units:** covered by the reconstructed assays (#532) and the swing-cut generators (#531).
+- **`Upd3` and `Upd4`:** no difflow unit yet (#534, #535).
+
+### Fixed-yield blocks and which units to model next (#537)
+
+The benchmark's solvent deasphalter (`Upf19`), aromatics extraction (`Upf12`, `Upf13`), gas fractionation (`Upf5`, `Upf6`) and MTBE unit (`Upf10`) have no difflow model. `difflow_refinery.fixed_yield` represents them as the benchmark does, with base yields and property transfer, on difflow's side of the interface.
+
+- A `FixedYieldBlock` maps `PropertyStream`s (a mass rate plus named properties) to outlet streams.
+- Each outlet property is either transferred (`alpha × an inlet's property`) or fixed. One that is neither is not reported, because the benchmark leaves it free.
+- Where the yields do not sum to the inlet coefficients, as with `Upf19`'s 0.99, the difference is an explicit `loss` outlet, so the mass balance closes.
+- `PropertyStream.to_blend_component()` and `.to_coker_feed()` hand a product to the blend pool or the coker.
+- `du2025.units.fixed_yield_block(data, unit)` builds the block from the benchmark data, with properties under difflow's names (`BENCHMARK_KEYS`).
+
+```python
+from difflow_refinery.fixed_yield import FixedYieldBlock, PropertyStream
+
+sda = FixedYieldBlock("sda", {"vr": 1.0}, {"dao": 0.26, "pitch": 0.73},
+                      transfer={"pitch": {"S_wt": ("vr", 1.15), "CCR_wt": ("vr", 1.04)}},
+                      fixed={"dao": {"SG": 0.95, "S_wt": 0.6, "CCR_wt": 0.2}})
+out = sda({"vr": PropertyStream(10.0, {"SG": 1.03, "S_wt": 3.0, "CCR_wt": 20.0})})
+coker_feed = out["pitch"].to_coker_feed() if "SG" in out["pitch"].props else None
+```
+
+At the published solution, every batch of the six units reproduces its outlet flows and transferred properties exactly, and closes its mass balance. The check is `tests/reference/du2025_fixed_yield_check.py`.
+
+**Which to upgrade.** The envelope theorem gives the optimal profit's sensitivity to each outlet yield with no re-solve: `dP*/dγ = -(λ · ∂g/∂γ)/scale` at a local optimum, with `λ` pounce's multipliers (`du2025.calibration.yield_sensitivity`). A finite re-solve that moves 1 wt% of `Upf10`'s yield confirms it: 75,779 by the envelope theorem against 75,780 by re-solve. Ranked by the profit change from moving 1 wt% of yield from a unit's least to its most valuable outlet, at the Case 1 optimum:
+
+| Unit | | Profit per 1 wt% |
+|---|---|---|
+| `Upf13` | aromatics extraction (reformate) | 858,683 |
+| `Upf4` | FCC, for scale | 711,141 |
+| `Upf3` | FCC, for scale | 396,326 |
+| `Upf12` | aromatics extraction (purchased feed) | 136,680 |
+| `Upf6` | gas fractionation | 107,009 |
+| `Upf5` | gas fractionation | 98,927 |
+| `Upf10` | MTBE / C4 | 46,671 |
+| `Upf19` | solvent deasphalter | 9,115 |
+
+**Recommendation.** The aromatics extraction on reformate is the one that warrants a mechanistic model (a sulfolane extraction split). Its yields move the optimum more than either FCC's, because its outlets go to products of very different value, and `m37` carries 11.5 of its throughput. The gas fractionation units come next, at an eighth of that, through the `gasplant` columns. MTBE and the deasphalter do not justify a mechanistic model at this optimum: 1 wt% of deasphalter yield is worth about 9 k. These are local sensitivities at one optimum of a nonconvex model, and they rank by yield, not by any other property. A different crude slate can reorder them.
+
+The published solution stores 14 of its 485 fixed properties, all specific gravities, at 0.01 instead of their fixed values; the deasphalted oil, for example, is fixed at 1.05. Those variables appear in no equation, so the stored value is GAMS's initial level, not a solution. The model uses the fixed values (`FQ0`) and is unaffected.
+
+**Unit identification.** The names in the data are anonymized. The table below is the issue's provisional table, checked against the Case 1 data, which give the inlets and outlets of each unit, its base yields, the gravities at the solution, and any hydrogen co-feed (an inlet with `gamma` << 1):
+
+| Unit | Evidence in the data | Identification |
+|---|---|---|
+| `Upf3` | 4 feed batches at SG 0.85, 10.3 t; outlets 0.35 / 0.27 / 0.24 / 0.14 | FCC (consistent) |
+| `Upf4` | SG 0.91 feed; 8 outlets including a heavy one (SG 1.08) | FCC (consistent) |
+| `Upf7` | SG 0.93 feed + H2 co-feed (`gamma` 0.03); 9 outlets | hydrocracker (consistent) |
+| `Upf14` | SG 0.72 naphtha in; main product 74.5 %, fixed RON 102 on its aromatics cut | continuous reformer (consistent) |
+| `Upf17` | SG 0.68 naphtha in; 86 % goes on to `Upf14` | naphtha hydrotreater (consistent) |
+| `Upd0`, `Upd1` | SG 0.93 / 0.83 feeds + H2; ~93-100 % liquid yield; delta on S and SPG | diesel hydrotreaters (consistent) |
+| `Upd2` | SG 0.79 feed + H2; 98 % yield | jet hydrotreater (consistent) |
+| `Upd4` | SG 0.72 feed + H2; 97.6 % yield; delta on sulfur only | gasoline desulfurization, S Zorb (consistent); difflow model: {ref}`S Zorb <refinery-szorb>` |
+| `Upf18` | heavy feed + H2; 91.6 % at SG 0.90 | VGO hydrotreater (consistent) |
+| `Upf19` | SG 1.07 feed; 26 % to the FCC feed `Upf3`, 73 % to fuel | solvent deasphalter (consistent) |
+| `Upf12`, `Upf13` | same outlet structure (0.453 / 0.212 / 0.124 ...); `Upf12` runs on a purchased feed | aromatics extraction (consistent) |
+| `Upf5`, `Upf6` | SG 0.58 LPG in; ~28 % C4 cut to `Upf10` | gas fractionation (consistent) |
+| `Upf10` | the C4 cut in; 95 % to one product | MTBE / C4 (consistent) |
+| `Upf1` | 3 feed batches, 8 outlets; its feed gravity is untraced (free) | delayed coker (plausible; not confirmed); difflow model: {ref}`Delayed coking <refinery-coker>` |
+| `Upf11` | one feed, two outlets, the second a capacity-controlled output | H2 PSA (not confirmed) |
+| `Upd3` | delta-base on SG and Conradson carbon (`Q21`) about a base of SG 1.01 / CCR 18.7; two outlets near 50/50; idle at the optimum | residue unit: coker or deasphalter (#532) |
+| `Upf0`, `Upf2`, `Upf8`, `Upf9`, `Upf15`, `Upf16` | light-ends and small units | unidentified |
+
+"Consistent" means that the data do not contradict the identification. It does not mean that the data prove it.
 
 (refinery-validation)=
 ## Validation

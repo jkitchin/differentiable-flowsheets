@@ -1,0 +1,103 @@
+This file is a tiny synthetic case in the format of the Du et al. (2025) benchmark, written for difflow's tests. It holds none of the benchmark's data.
+
+Parameters
+c_P(s)  product price
+/
+s3=1.0, s7=3.0, s10=2.0, s11=4.0
+/
+c_M(s)  raw material cost
+/
+s0=1.5
+/
+ci_P(s) inventory product price
+/
+/
+ci_M(s) inventory material cost
+/
+/
+FVMin(s,t)  minimum mass flow of stream s in period t
+/
+s0.1=0.5
+/
+FVMax(s,t)  maximum mass flow of stream s in period t
+/
+s0.1=10.0
+/
+FQ0(s,q)    fixed property q of stream s
+/
+s5.Q0=0.2, s5.Q1=0.75
+/
+FQMin(s,q)  minimum property q of stream s
+/
+s8.Q1=0.5
+/
+FQMax(s,q)  maximum property q of stream s
+/
+s8.Q0=5.0
+/
+FQcut(m,s,ss,q) property transferring ratio for CDU
+/
+m0.s1.s0.Q0=0.1, m0.s1.s0.Q1=0.7, m0.s2.s0.Q0=1.2, m0.s2.s0.Q1=0.9
+m0.s3.s0.Q0=0.5, m0.s3.s0.Q1=0.8
+/
+y(u,m,s,ss) cut fraction yield
+/
+UCDU0.m0.s1.s0=0.4, UCDU0.m0.s2.s0=0.5, UCDU0.m0.s3.s0=0.1
+/
+phi(u,m,s,ss)   swing cut ratio
+/
+UCDU0.m0.s1.s3=0.3, UCDU0.m0.s2.s3=0.5
+/
+gamma(u,m,s)    base yield coefficient of stream s in batch m on unit u
+/
+Upf0.m1.s1=1.0, Upf0.m1.s4=0.7, Upf0.m1.s5=0.3, Upd0.m2.s2=1.0, Upd0.m2.s6=0.6
+Upd0.m2.s7=0.4
+/
+B(u,m,q)    baseline property q of inlet stream s on process unit u
+/
+Upd0.m2.Q0=1.0
+/
+delta(u,m,s,q)  unit step deviating from baseline yield coefficient of stream s in batch m of process unit u for property q
+/
+Upd0.m2.s6.Q0=-0.05, Upd0.m2.s7.Q0=0.05
+/
+Del(u,m,q)  unit step deviating from baseline property q in batch m of process unit u
+/
+Upd0.m2.Q0=0.5
+/
+FVCMin(c,t) minimum capacity in period t
+/
+/
+FVCMax(c,t) maximum capacity in period t
+/
+ccap0.1=8.0, ccap1.1=3.0
+/
+alpha(s,ss,q)   property transferring ratio
+/
+s1.s4.Q0=0.5, s2.s6.Q0=0.8
+/
+w(u,m,s,q)  component composition
+/
+Umix0.m3.s4.Q2=100.0
+/
+FQBMax(u,q) maximum property q for blender u
+/
+Ublend0.Q0=0.3
+/
+FQBMin(u,q) minimum property q for blender u
+/
+Ublend0.Q1=0.6
+/
+FQVMin(u,m,q)   minimum property q of batch m in unit u
+/
+Umix0.m3.Q2=10.0
+/
+FQVMax(u,m,q)   maximum property q of batch m in unit u
+/
+Umix0.m3.Q2=90.0
+/
+LMin(s,t)   minimum inventory level of stream s during period t /  /
+LMax(s,t)   maximum inventory level of stream s during period t /  /
+MFQMin(q)   minimum property q of the total crude oil processed in the system   /  /
+MFQMax(q)   maximum property q of the total crude oil processed in the system   /  /
+FQcrd(m,s,q)    property q of crude oil s in batch m    /  /;

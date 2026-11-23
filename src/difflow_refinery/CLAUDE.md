@@ -183,6 +183,29 @@ Every unit closes to round-off, so the plant does (rel 1e-8). Organic S in the
 off-gas/purge vapour (oil lumps) is NOT H2S: it burns with the fuel gas, booked
 as its own row. The H2 surplus is judged on throughput (loop tol), not on itself.
 
-Subpackages carry their own CLAUDE.md: `alkylation/` is above; `treating/`, `vacuum/`,
+Swing-cut planning block (#531, `difflow_refinery.swing_cut`, a library):
+`SwingCutTable` + `swing_cut_block(table, rates, phi, varying=...)`. SG blends
+by volume, others by mass (Eq. 5). Generators: published tables
+(`du2025.crude.cut_table`, reproduces both CDUs to round-off), assay at TBP cut
+points (differentiable in the cut points), rigorous CrudeUnit (one extra column
+solve per swing, ~20 s each: by hand only, `tests/reference/swing_cut_check.py`).
+`varying` swing properties are linear, CENTRED on the cut's value (mean kept;
+agrees with constant at phi 0/1 -- tested); the slope from the neighbours is a
+guess, worst where a swing feeds a non-adjacent product.
+
+Delayed coker (#534, `difflow_refinery.coking`, a library): Gary-Handwerk CCR
+correlations, pooled feeds, `coker_block`; see `coking/CLAUDE.md`.
+
+S Zorb gasoline desulfurizer (#535, `difflow_refinery.desulfurization`, a
+library; all constants ILLUSTRATIVE): see `desulfurization/CLAUDE.md`.
+
+Fixed-yield blocks (#537, `difflow_refinery.fixed_yield`, a library):
+`FixedYieldBlock` on `PropertyStream`s, base yields + property transfer, an
+explicit `loss` outlet; `to_blend_component` / `to_coker_feed`.
+
+Du et al. (2025) planning benchmark (#530, `difflow_refinery.benchmarks.du2025`,
+a library): see `benchmarks/CLAUDE.md`. Its data are never vendored.
+
+Subpackages carry their own CLAUDE.md: `alkylation/` is above; `benchmarks/`, `coking/`, `desulfurization/`, `treating/`, `vacuum/`,
 `reforming/`, `hydroprocessing/` (shared by `hydrotreating/`, `hydrocracking/`,
 `residue/`), `hydrocracking/`, `hydrogen/`, `residue/`, `preheat/`, `gasplant/`, `fcc/`.
