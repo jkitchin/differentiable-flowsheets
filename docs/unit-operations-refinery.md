@@ -4636,6 +4636,63 @@ Characterized this way, every one of the 25 crudes reproduces `UCDU0`'s cut yiel
 - ILLUSTRATIVE, with no data: C7 asphaltenes are `ASPHALTENES_PER_CCR` (0.35) times the bulk CCR. Nitrogen below gas oil is anchored at 0.5 wppm at the lightest cut, which leaves the naphtha cuts at tens of wppm, too high; a naphtha hydrotreater model should not take its nitrogen from here.
 - Cracked naphtha is not a crude cut. Its olefins (Q51: FCC gasoline 27.5-38 vol%), aromatics (Q11) and octanes come from the benchmark's fixed values on those streams (`named(data.param("FQ0") ...)`).
 
+### Calibrating difflow units into the benchmark (#533)
+
+`du2025.calibration` connects a difflow unit to a benchmark process unit in four steps:
+
+1. `unit_base(data, unit, batch)` reads the unit's base point: its inlets and outlets, `gamma`, the yields on total feed, and the base feed properties (`B`, or the published inlet properties).
+2. `calibrate(predict, theta0, target, lower=, upper=)` fits the unit's knobs to those yields by Levenberg-Marquardt with AD Jacobians. The bounds are enforced through a sigmoid, and a trial point where the unit fails is rejected rather than allowed to break the fit.
+3. `compare_delta` sets the unit's AD sensitivities against the published `delta / Del`.
+4. `substitute(data, base, yields, dyields)` writes the unit back as *its own delta-base linearization*: `gamma` from the unit, and `delta / Del` from its Jacobian with respect to feed SG and sulfur. The re-solved benchmark therefore stays bilinear, and `objective_change` re-solves it with pounce and lists the limits that change status. This is also how a planner consumes a rigorous model.
+
+`du2025.units` holds the mapping for each unit: the feed it builds, the lumps it reports and its knobs with their bounds. The by-hand checks are `tests/reference/du2025_calibration_check.py` and `du2025_hdt_check.py`; the numbers below come from them.
+
+**FCC (`Upf3`, `Upf4`).** The outlets were identified from the stream routing and the published properties. One of them is a sour-gas stream (published sulfur 90 wt%), which the main fractionator does not make on its own. `Upf3` sends 1.8 % of a 0.24 wt% S feed there, more than the 0.26 % H2S the sulfur can make, so sour gas and dry gas are fitted as one lump. Seven knobs, inside wide physical bounds, are fitted: activity, riser outlet temperature, feed preheat, the two fractionator cut points, and multipliers on the dry-gas and coke rate constants. A soft target keeps the regenerator near 700 C. Without it, the first fit landed on the heat balance's hot branch (a 1016 C regenerator), near a turning point where a 1e-4 change in feed SG loses the solution.
+
+| Batch | Feed (SG, S wt%) | Worst lump error | Regenerator | Notes |
+|---|---|---|---|---|
+| `Upf3.m9` | 0.894, 0.24 | 0.58 wt% (slurry) | 717 C | within the 1 wt% target |
+| `Upf4.m13` | 0.912, 0.52 | 0.20 wt% (slurry) | 706 C | within target |
+| `Upf3.m11` (deasphalted oil) | assumed 0.92, 0.6 | 2.5 wt% (coke) | 643 C | coke target 0.4 % |
+| `Upf3.m12` (hydrocracker bottoms) | assumed 0.92, 0.0005 | 2.7 wt% | 629 C | coke target 0.65 % |
+| `Upf3.m10` (light recracking feed) | 0.85, 0.0001 | -- | -- | no LCO, slurry or coke: outside the VGO kinetics |
+
+The co-processed batches cannot be matched by any setting. A heat-balanced riser does not make 0.4-0.65 % coke, because the coke burned is what heats the reactor. These benchmark batch yields are increments inside a unit whose heat balance is shared, not stand-alone yields. Their published feed SG is 0.01, one of the free variables, so 0.92 is assumed for them.
+
+Several knobs end at a bound: riser outlet 490 C, preheat 150 C and LCO/slurry cut 400 C. The illustrative kinetics (`fcc/CLAUDE.md`) need to be pushed to their edges to reach these yields. Calibrating them to the benchmark's perturbed yields does not validate them. At the calibrated points, mass, C, H, S, N and energy close to round-off, and the AD Jacobian with respect to feed SG and sulfur matches central differences.
+
+With both calibrated FCCs substituted as delta-base units, the re-solved profit rises from 34,167,969 to **34,514,084 (+1.0 %)**. `Ublend3`'s RON minimum becomes binding. The gain comes from the FCC's sensitivity to feed gravity: at the base point, a heavier feed makes more LCO (+0.66 to +0.70 per unit SG) and less LPG. The published fixed-yield FCC has no such lever.
+
+**Hydrotreaters (`Upd0`, `Upd1`).** The rigorous `Hydrotreater` runs on a 230-370 C straight-run cut whose SG and sulfur match `B`; the crude's bulk SG and sulfur are solved for. It *cannot* be calibrated to the benchmark: with inlet temperature, cracking-leak constant (up to 100x) and purge at their bounds, `Upd1` makes 0.4 % naphtha against the benchmark's 6.4 %. The benchmark's naphtha implies naphtha-range material in the feed, which a gas-oil cut does not carry. Its gas yields also count the residue of a 1.8-2.8 % hydrogen-rich inlet stream of unknown composition. The sensitivities at the closest point, on an oil basis, per unit SG and per wt% S, against the published `delta / Del`:
+
+| `Upd1` lump | AD d/dSG | published | AD d/dS | published |
+|---|---|---|---|---|
+| gas (sour + fuel) | +0.022 | -0.010 | +0.0101 | +0.0041 (sour gas alone: +0.0111) |
+| naphtha | -0.0028 | -0.040 | +0.00003 | -0.0003 |
+| diesel | -0.00004 | +0.110 | -0.0086 | -0.0028 |
+
+With respect to sulfur, the AD gas sensitivity is H2S stoichiometry at 98 % HDS (0.0106 x 0.98), and it matches the published sour-gas delta to 9 %. The published diesel loss per wt% S has the right sign, but the rigorous unit's is three times larger. With respect to gravity, the two disagree in sign for gas and diesel: the published diesel yield *rises* by 0.11 per unit SG, and the rigorous unit's does not move. These disagreements are reported as found, not tuned away (#533).
+
+`Upd0` (no naphtha outlet) *does* calibrate, but only just: gas 1.6 % against 2.5 % and diesel 99.1 % against 100.1 %, worst error 0.99 wt%, with inlet T (660 K) and purge (0.30) at their upper bounds. Its sensitivities, on the same basis:
+
+| `Upd0` lump | AD d/dSG | published | AD d/dS | published |
+|---|---|---|---|---|
+| gas (sour + fuel) | +0.187 | -0.00001 | +0.0141 | +0.00033 |
+| diesel | -0.112 | +0.00013 | -0.0124 | -0.0002 |
+
+The sulfur signs agree. The magnitudes do not: the published values are 40-60x smaller. `Upd0`'s published sour-gas delta is 0.00109 per wt% S, ten times *below* H2S stoichiometry, while `Upd1`'s matches it. `Upd0` uses `Del` = 10 and `Upd1` uses `Del` = 1, which suggests the two units' steps are on different scales. The stoichiometry supports `Upd1`'s.
+
+**Gasoline blending.** Under difflow's nonlinear rules (RT-70 octane, aromatics and olefins by volume), the published blends still meet every spec. The numbers move, though. `Ublend4`'s MON is 92.0, not the mass-linear 94.4, and the 34 vol% aromatics limit that binds in `Ublend4` and `Ublend5` is 29.8 and 32.1 vol% by volume. Blending aromatics by mass overstates them, because they are the densest components. The benchmark plan therefore leaves aromatics slack unused, and a nonlinear blend model would move it. The blenders are not substituted into the re-solve, because RT-70 is not bilinear.
+
+**Not substituted, with the reason.**
+
+- **CCR reformer (`Upf14`):** forward-only, never jitted, and about 1 min per solve, so a calibration needs hours. Its `NaphthaFeed` also needs a PIONA that the benchmark reduces to N+2A (Q5).
+- **Hydrocracker (`Upf7`):** reverse-only, about 80 s and 6 GB per gradient. Not run.
+- **Naphtha hydrotreater (`Upf17`) and jet hydrotreater (`Upd2`):** the same `Hydrotreater`. Not run, given the gas-oil result above.
+- **H2 PSA (`Upf11`):** the benchmark gives no composition for its feed, so two yields cannot identify its knobs.
+- **Crude and vacuum units:** covered by the reconstructed assays (#532) and the swing-cut generators (#531).
+- **`Upd3` and `Upd4`:** no difflow unit yet (#534, #535).
+
 **Unit identification.** The names in the data are anonymized. The table below is the issue's provisional table, checked against the Case 1 data, which give the inlets and outlets of each unit, its base yields, the gravities at the solution, and any hydrogen co-feed (an inlet with `gamma` << 1):
 
 | Unit | Evidence in the data | Identification |

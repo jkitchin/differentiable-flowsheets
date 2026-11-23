@@ -198,3 +198,67 @@ def test_crude_cut_table_matches_model(model):
     for i, p in enumerate(table.products):
         assert float(F[i]) == pytest.approx(x[idx[("F", p)]], rel=1e-12)
         assert float(q["Q1"][i]) == pytest.approx(x[idx[("FQ", p, "Q1")]], rel=1e-12)
+
+
+# --------------------------------------------------------------------------- #
+# #533: calibration framework                                                 #
+# --------------------------------------------------------------------------- #
+
+def test_substitute_identity(model):
+    """Writing a unit back with its own published coefficients changes nothing."""
+    from difflow_refinery.benchmarks.du2025.calibration import substitute, unit_base
+    data = load_case(MINI)
+    b = unit_base(data, "Upd0")
+    new = substitute(data, b, b.yields, {q: v / b.gamma_in.sum() for q, v in b.delta.items()})
+    m1 = build_model(new)
+    x = np.linspace(0.5, 1.5, model.n)
+    assert m1.var_names == model.var_names
+    np.testing.assert_allclose(np.asarray(m1.eq(x)), np.asarray(model.eq(x)), atol=1e-12)
+
+
+def test_substitute_fixed_yield_becomes_delta_base():
+    from difflow_refinery.benchmarks.du2025.calibration import substitute, unit_base
+    data = load_case(MINI)
+    b = unit_base(data, "Upf0")
+    new = substitute(data, b, [0.65, 0.35], {"Q0": [0.01, -0.01]}, {"Q0": 0.3})
+    assert "Upf0" in new.elements("UPD") and "Upf0" not in new.elements("UPF")
+    assert "Upf0" in data.elements("UPF")                  # the original is untouched
+    assert np.all(np.isfinite(np.asarray(build_model(new).eq(np.ones(52)))))
+
+
+def test_calibrate_and_compare_delta():
+    from difflow_refinery.benchmarks.du2025.calibration import calibrate, compare_delta, unit_base
+    data = load_case(MINI)
+    b = unit_base(data, "Upd0")
+    # a toy unit: yields move linearly with sulfur at a tunable rate
+    def unit(theta, S):
+        y0 = jnp.array([theta[0], 1.0 - theta[0]])
+        return y0 + theta[1] * (S - 1.0) * jnp.array([-1.0, 1.0])
+    cal = calibrate(lambda th: unit(th, 1.0), [0.5, 0.1], b.yields,
+                    lower=[0.0, 0.0], upper=[1.0, 1.0])
+    assert cal.within_tol and cal.max_abs_error < 1e-6
+    cmp = compare_delta(b, lambda p: unit(jnp.asarray(cal.theta), p[0]))
+    assert cmp.summary()["n"] == 2 and cmp.sign_agree.all()
+
+
+def test_calibrate_bad_start_raises():
+    from difflow_refinery.benchmarks.du2025.calibration import calibrate
+    with pytest.raises(ValueError, match="strictly inside"):
+        calibrate(lambda t: t, [1.0], [0.5], lower=[0.0], upper=[1.0])
+
+
+def test_fcc_lumping_round_trip():
+    """FCC lumps -> benchmark outlets -> lumps is the identity (no FCC solve)."""
+    from difflow_refinery.benchmarks.du2025.calibration import UnitBase
+    from difflow_refinery.benchmarks.du2025.units import (FCC_OUTLETS, fcc_outlet_yields,
+                                                          fcc_targets, is_cracking_batch)
+    o = FCC_OUTLETS["Upf3"]
+    outs = tuple(o[k] for k in ("acid_gas", "dry_gas", "lpg", "gasoline", "lco", "slurry",
+                                "coke", "loss"))
+    y = np.array([0.02, 0.03, 0.17, 0.48, 0.19, 0.05, 0.059, 0.001])
+    b = UnitBase("Upf3", "m9", ("s27",), outs, np.ones(1), y, y, {}, {})
+    assert is_cracking_batch(b)
+    lumped = fcc_targets(b)
+    np.testing.assert_allclose(fcc_outlet_yields(b, lumped), y, atol=1e-15)
+    short = UnitBase("Upf3", "m10", ("s1",), outs[:4], np.ones(1), y[:4], y[:4], {}, {})
+    assert not is_cracking_batch(short) and fcc_targets(short)[3] == 0.0

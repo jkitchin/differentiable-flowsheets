@@ -54,3 +54,27 @@ not a palette operation.
   volume average (they differ by ~0.005 over the residue cut).
 - ILLUSTRATIVE: `ASPHALTENES_PER_CCR`, `LIGHT_NITROGEN_WPPM` (naphtha N comes
   out at tens of wppm, too high), `TYPICAL_CUTS_C`.
+
+### Calibration (#533: `calibration`, `units`)
+
+- A calibrated unit goes back into the benchmark as ITS OWN delta-base
+  linearization (`substitute`): gamma from the unit, delta/Del from its AD
+  Jacobian wrt feed SG/S. This keeps `build_model` bilinear -- never put a
+  unit's nonlinear solve inside the PolySystem.
+- `calibrate` is a Python LM loop on purpose: a trial point where a unit
+  fails (NaN, or a solver that raises) is rejected. Do not swap in
+  optimistix LM -- it dies on the first non-finite trial (seen with the FCC).
+- FCC: ALWAYS calibrate with `with_regenerator=True` (soft 700 C target).
+  Without it the fit landed on the hot branch (1016 C regenerator, cat/oil
+  2.4) next to a turning point where FD fails. Knobs end at bounds; the
+  kinetics stay ILLUSTRATIVE (`fcc/CLAUDE.md`).
+- The FCC's sour-gas outlet (s137/s138) is NOT pure H2S (yield > the feed S
+  can make; the S-free batch m10 sends 24 % there): fitted summed with dry gas.
+- Batch yields of co-processed FCC feeds (m11 DAO, m12 UCO) have coke 0.4-
+  0.65 %: no heat-balanced riser makes that. They are increments, not
+  stand-alone yields -- report, do not tune toward them.
+- The rigorous hydrotreater does NOT reach Upd1 (naphtha 0.4 % at every bound
+  vs 6.4 %) and only just reaches Upd0 (0.99 wt%, knobs at bounds); its SG
+  sensitivities disagree in sign with the published delta, and Upd0's
+  published S deltas are ~10x below H2S stoichiometry (Del = 10 vs Upd1's 1).
+  Recorded in the docs; do not tune away (#533 says so).

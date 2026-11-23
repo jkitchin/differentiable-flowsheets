@@ -12,7 +12,9 @@ maximizes profit locally with pounce. The generic blocks (fixed-yield,
 delta-base, swing-cut CDU, mixer, splitter, blender) are in
 :mod:`~difflow_refinery.benchmarks.du2025.blocks`; the property map in
 :mod:`~difflow_refinery.benchmarks.du2025.properties`; reconstructed crude
-assays in :mod:`~difflow_refinery.benchmarks.du2025.assays` (#532).
+assays in :mod:`~difflow_refinery.benchmarks.du2025.assays` (#532); calibrating
+difflow units into it in :mod:`~difflow_refinery.benchmarks.du2025.calibration`
+and :mod:`~difflow_refinery.benchmarks.du2025.units` (#533).
 
 A library, not a palette operation (#538 tracks the reference refinery).
 
@@ -24,7 +26,7 @@ A library, not a palette operation (#538 tracks the reference refinery).
 34167967.96...
 """
 
-from difflow_refinery.benchmarks.du2025 import assays, blocks, properties
+from difflow_refinery.benchmarks.du2025 import assays, blocks, calibration, properties, units
 from difflow_refinery.benchmarks.du2025.data import (
     CASE1_PUBLISHED_PROFIT,
     Du2025Data,
@@ -45,7 +47,7 @@ from difflow_refinery.benchmarks.du2025.model import (
 )
 
 __all__ = [
-    "CASE1_PUBLISHED_PROFIT", "Du2025Data", "assays", "properties", "Du2025Model", "PolySystem", "WARM_START_OPTIONS", "blocks",
+    "CASE1_PUBLISHED_PROFIT", "Du2025Data", "assays", "calibration", "properties", "units", "Du2025Model", "PolySystem", "WARM_START_OPTIONS", "blocks",
     "build_model", "default_data_dir", "export_solution_json", "fetch", "find_case",
     "load_case", "load_solution", "parse_gams_text", "solve_local",
 ]
