@@ -4565,6 +4565,46 @@ With these rules, every equation closes at the published point to 8.5e-8, which 
 
 Example: `examples/80_refinery_du2025_benchmark.ipynb` covers the published point, a local re-solve, the binding limits from the multipliers, and the Jacobian of a delta-base unit.
 
+### Property data (#532)
+
+The benchmark names its properties `Q0`-`Q169` and does not say what they are. It also gives each crude only as cut yields and cut properties. Three modules fill that in. The tables below come from the Case 1 data; nothing has been confirmed by the authors.
+
+**Property map** (`du2025.properties.PROPERTY_MAP`). Each index carries a name, a unit, a confidence and its evidence. `blend_key` points to the matching quality in `difflow_refinery.blending.PROPERTY_RULES`, and `named()` turns a stream's `{index: value}` into named properties. The benchmark blends every property except SG *by mass*, while difflow's blend pool blends aromatics, olefins and benzene by volume and octane by RT-70. So the index is the same but the rule is not.
+
+| Confidence | Indices |
+|---|---|
+| high | Q168 SG; Q169 virtual-batch component share; Q0 sulfur wt%; Q2 RON; Q4 MON; Q13 benzene vol%; Q51 olefins vol%; Q14 cetane index; Q18 total nitrogen wppm; Q21 Conradson carbon wt%; Q22 Ni, Q23 V, Q25 Ni+V wppm (Q22 + Q23 = Q25 on 324 of 325 cuts) |
+| medium | Q11 aromatics vol%; Q52 MTBE/oxygenates vol%; Q19 basic nitrogen; Q5 N+2A reforming potential |
+| low | Q10 paraffins; Q6 RVP of gasoline components; Q47 viscosity blending index |
+| unknown | Q8, Q15, Q16 (= 0.85 x Q15 on every cut), Q17, Q36, Q37, Q42, Q44, Q45 (the one traced index outside `Qw`), Q53 |
+
+The issue's guess that Q21 is olefins is replaced. Q21 is 0.01-0.02 on distillates and 17-28 on vacuum residue, the coker feed is limited to 30 and the residue-hydrotreater feed to 21, so it is Conradson carbon. This also identifies `Upd3`: its yields move with Q21 and SG about a base of 18.7 and SG 1.01, so it is a residue unit (coker or deasphalter).
+
+**Crude assays** (`du2025.assays`). The crude units cut every crude at the same anonymized temperatures. `fit_tbp(data)` fits the reference unit's (`UCDU0`, 13 cuts) cut temperatures jointly over all 25 crudes. It chooses them so that each crude's Watson K, computed from each cut's mid boiling point and SG, follows a linear trend in cumulative yield. A prior toward typical cut points (`TYPICAL_CUTS_C`) sets the temperature scale, which the data cannot fix. Each crude's TBP curve then passes through its cumulative yields at those temperatures, on a probability scale. Its gravity curve has its knots corrected so that every cut keeps its SG. `crude_assay(fit, i)` makes the difflow `Assay`. It is on a mass basis with a heavy end; the cut sulfur (Q0), nitrogen (Q18) and CCR (Q21) are measured curves, and Ni+V (Q25) is the bulk value.
+
+<!-- doc-test: skip: needs the benchmark data (downloaded, not vendored) -->
+```python
+from difflow_refinery.assay import characterize
+from difflow_refinery.benchmarks.du2025.assays import crude_assay, fit_tbp
+
+fit = fit_tbp(data)                          # about 8 s
+fit.summary()["UCDU0"]       # max yield err 3e-4, max SG err 0 -- reproduced
+fit.cut_points["UCDU0"] - 273.15     # 93 103 140 152 226 256 268 285 363 491 513 526 C
+char = characterize(crude_assay(fit, 0), cut_points=fit.cut_points["UCDU0"],
+                    composition=True)        # one pseudo-component per benchmark cut + lump
+```
+
+Characterized this way, every one of the 25 crudes reproduces `UCDU0`'s cut yields within 0.5 wt% and its cut SG within 0.005, which is the #532 target. In the benchmark data, sulfur and nitrogen rise with boiling point on every crude and CCR on all but one. SG falls between adjacent cuts in 8 of the 575 (crude, cut) steps. The fitted Watson K deviates from each crude's linear trend by 0.05 RMS.
+
+**The second crude unit does not fit the same oils.** `UCDU1`'s cut temperatures are fitted, again jointly, to its own yields on the same curves. Its cut yields then miss by up to 13.6 wt%, and its SG by up to 0.17 (on its HVGO swing cut). For the same crude, the two units' data imply different oils: for crude `s7`, `UCDU1`'s residue starts at a cumulative yield of 0.53 and `UCDU0`'s at 0.65, yet the cut SGs match in places. No shared TBP curve reconciles both units, which is consistent with the paper's statement that the parameters were "systematically perturbed". `fit.yield_error["UCDU1"]` records the mismatch. A crude-unit model of `UCDU1` (#531) should be calibrated to its own cut data, not to these curves.
+
+**Feed properties the nonlinear units need.** `characterize(..., composition=True)` on a reconstructed assay gives the following for each cut. Some values come from the benchmark and the rest from difflow's correlations:
+
+- From the benchmark: sulfur, total nitrogen (gas oil and heavier), Conradson carbon, Ni+V, and basic nitrogen on one cut.
+- From correlations: PNA, hydrogen, and the sulfur and nitrogen classes (difflow's #305 correlations); their defaults are marked illustrative there.
+- ILLUSTRATIVE, with no data: C7 asphaltenes are `ASPHALTENES_PER_CCR` (0.35) times the bulk CCR. Nitrogen below gas oil is anchored at 0.5 wppm at the lightest cut, which leaves the naphtha cuts at tens of wppm, too high; a naphtha hydrotreater model should not take its nitrogen from here.
+- Cracked naphtha is not a crude cut. Its olefins (Q51: FCC gasoline 27.5-38 vol%), aromatics (Q11) and octanes come from the benchmark's fixed values on those streams (`named(data.param("FQ0") ...)`).
+
 **Unit identification.** The names in the data are anonymized. The table below is the issue's provisional table, checked against the Case 1 data, which give the inlets and outlets of each unit, its base yields, the gravities at the solution, and any hydrogen co-feed (an inlet with `gamma` << 1):
 
 | Unit | Evidence in the data | Identification |
@@ -4584,7 +4624,7 @@ Example: `examples/80_refinery_du2025_benchmark.ipynb` covers the published poin
 | `Upf10` | the C4 cut in; 95 % to one product | MTBE / C4 (consistent) |
 | `Upf1` | 3 feed batches, 8 outlets; its feed gravity is untraced (free) | delayed coker (plausible; not confirmed) |
 | `Upf11` | one feed, two outlets, the second a capacity-controlled output | H2 PSA (not confirmed) |
-| `Upd3` | two outlets near 50/50 at SG 0.65 / 0.71; delta on SPG and `Q21`; idle at the optimum | unidentified |
+| `Upd3` | delta-base on SG and Conradson carbon (`Q21`) about a base of SG 1.01 / CCR 18.7; two outlets near 50/50; idle at the optimum | residue unit: coker or deasphalter (#532) |
 | `Upf0`, `Upf2`, `Upf8`, `Upf9`, `Upf15`, `Upf16` | light-ends and small units | unidentified |
 
 "Consistent" means that the data do not contradict the identification. It does not mean that the data prove it.

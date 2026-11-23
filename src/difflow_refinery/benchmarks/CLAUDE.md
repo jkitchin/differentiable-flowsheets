@@ -33,3 +33,22 @@ not a palette operation.
   ties the two together.
 - The unit identification table in the docs is "consistent with the data",
   not proven; keep the distinction.
+
+### Property data (#532: `properties`, `assays`)
+
+- `PROPERTY_MAP` confidences are evidence-based; never upgrade one without new
+  evidence, and keep "unknown" indices listed. Q21 is CONRADSON CARBON (not
+  olefins, the issue's guess); Q22 + Q23 = Q25 (Ni, V, Ni+V) on 324/325 cuts.
+- The benchmark blends all but SG by MASS; difflow's blend pool by volume /
+  RT-70. Mapping an index to a `blend_key` does not make the rules equal.
+- `fit_tbp`: cut temperatures are fitted (shared across crudes) from Watson-K
+  smoothness + a typical-cut prior. The data cannot fix the absolute
+  temperature scale -- the prior does. UCDU0 is the reference and is
+  reproduced (yield 3e-4, SG 0 through `characterize`); UCDU1 is NOT
+  consistent with the same oils (yield up to 13.6 wt%, SG 0.16) -- a data
+  property, recorded in `yield_error`, not a fit bug. Do not "fix" it by
+  per-unit curves for one crude.
+- Gravity knots are corrected to `characterize`'s ARITHMETIC cut mean, not the
+  volume average (they differ by ~0.005 over the residue cut).
+- ILLUSTRATIVE: `ASPHALTENES_PER_CCR`, `LIGHT_NITROGEN_WPPM` (naphtha N comes
+  out at tens of wppm, too high), `TYPICAL_CUTS_C`.

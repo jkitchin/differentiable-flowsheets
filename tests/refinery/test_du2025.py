@@ -152,3 +152,35 @@ def test_local_solve_smoke(model):
     x, info = solve_local(model, _forward_point(model), options={"max_iter": 200})
     assert np.all(np.isfinite(x))
     assert np.isfinite(info["profit"])
+
+
+# --------------------------------------------------------------------------- #
+# #532: property map and reconstructed assays                                 #
+# --------------------------------------------------------------------------- #
+
+def test_property_map_contract():
+    from difflow_refinery.benchmarks.du2025.properties import PROPERTY_MAP, by_name, describe
+    from difflow_refinery.blending import PROPERTY_RULES
+    from difflow_refinery.assay import Assay
+    import dataclasses
+    fields = {f.name for f in dataclasses.fields(Assay)}
+    for q, p in PROPERTY_MAP.items():
+        assert q == p.index
+        assert p.confidence in ("high", "medium", "low", "unknown")
+        assert p.blend_key is None or p.blend_key in PROPERTY_RULES
+        assert p.assay_field is None or p.assay_field in fields
+    assert by_name()["SG"] == "Q168"
+    assert describe("Q99").endswith("not used in Case 1")
+
+
+def test_fit_tbp_mini():
+    from difflow_refinery.benchmarks.du2025.assays import crude_assay, cut_tables, fit_tbp
+    data = load_case(MINI)
+    (table,) = cut_tables(data)
+    assert table.cuts == ("s1", "s3", "s2")           # light to heavy by SG
+    fit = fit_tbp(data, max_steps=50)
+    s = fit.summary()["UCDU0"]
+    assert np.isfinite(s["max_yield_err"]) and np.isfinite(s["max_sg_err"])
+    assert np.all(np.diff(fit.points[0][1]) > 0)
+    assay = crude_assay(fit, 0)
+    assert assay.basis == "mass" and assay.heavy_end is not None

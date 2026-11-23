@@ -95,3 +95,54 @@ def test_local_solve_stays(setup):
     xs, info = du2025.solve_local(model, x, options=du2025.WARM_START_OPTIONS)
     assert model.violations(xs)["eq"] < 1e-6
     assert info["profit"] == pytest.approx(float(model.profit(x)), rel=1e-4)
+
+
+# --------------------------------------------------------------------------- #
+# #532: property map and reconstructed assays                                 #
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture(scope="module")
+def tbp(setup):
+    from difflow_refinery.benchmarks.du2025.assays import fit_tbp
+    return fit_tbp(setup[0])
+
+
+def test_nickel_plus_vanadium(setup):
+    """The relation behind Q22/Q23/Q25 (property map, 'high')."""
+    fq = setup[0].param("FQcut")
+    pairs = [(v, fq[(m, c, f, "Q22")] + fq[(m, c, f, "Q23")])
+             for (m, c, f, q), v in fq.items() if q == "Q25"]
+    ok = [abs(a - b) <= 1e-3 * max(1.0, a) for a, b in pairs]
+    assert len(pairs) == 325 and sum(ok) >= 324      # one perturbed entry
+
+
+def test_reference_unit_reproduced(tbp):
+    from difflow_refinery.benchmarks.du2025.assays import SG_TOL, YIELD_TOL
+    s = tbp.summary()["UCDU0"]
+    assert s["max_yield_err"] < YIELD_TOL and s["max_sg_err"] < SG_TOL
+
+
+def test_characterized_assay_reproduces_cuts(tbp):
+    import warnings
+    from difflow_refinery.assay import characterize
+    from difflow_refinery.benchmarks.du2025.assays import SG_TOL, YIELD_TOL, crude_assay
+    t = tbp.tables[0]
+    for i in range(len(tbp.crudes)):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ch = characterize(crude_assay(tbp, i), cut_points=tbp.cut_points[t.unit])
+        mf, sg, k = np.asarray(ch.mass_fraction), np.asarray(ch.SG), len(t.cuts) - 1
+        y = np.concatenate([mf[:k], [mf[k:].sum()]])
+        sgc = np.concatenate([sg[:k], [mf[k:].sum() / (mf[k:] / sg[k:]).sum()]])
+        assert np.max(np.abs(y - t.yields[i])) < YIELD_TOL
+        assert np.max(np.abs(sgc - t.props["SPG"][i])) < SG_TOL
+
+
+def test_cut_trends(tbp):
+    """Sulfur, nitrogen and CCR rise with boiling point in the benchmark data;
+    gravity does in all but a few (crude, cut) steps, which are recorded."""
+    from difflow_refinery.benchmarks.du2025.assays import monotone_violations
+    assert monotone_violations(tbp, "Q0") == {"UCDU0": 0, "UCDU1": 0}
+    assert monotone_violations(tbp, "Q18") == {"UCDU0": 0, "UCDU1": 0}
+    assert sum(monotone_violations(tbp, "Q21").values()) <= 1
+    assert sum(monotone_violations(tbp, "SPG").values()) <= 8

@@ -1,5 +1,5 @@
 {
- "n_sections": 1309,
+ "n_sections": 1310,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -10562,6 +10562,14 @@
     "refinery-du2025"
    ],
    "text": "`difflow_refinery.benchmarks.du2025` (#530, tracking #538) implements the refinery planning benchmark of W. Du, C. Wang, C. Fan et al., \"A production planning benchmark for real-world refinery-petrochemical complexes\", arXiv:2503.22057 (2025), exactly as published. It gives difflow a public reference refinery: a real topology with crude data, prices, product specifications and a delta-base planning model. Later work replaces its fixed-yield and delta-base units with difflow's nonlinear ones and compares their AD Jacobians with the published delta vectors. It is a library, not a palette operation.\n\nThe data are **not** in this repository. The paper is CC BY-NC-SA and the [data repository](https://github.com/EMRPS/refinery-planning-benchmark) has no license file. `fetch` downloads them to `$DIFFLOW_DU2025_DATA` (default `~/.cache/difflow/du2025`):\n\n<!-- doc-test: skip: needs the benchmark data (downloaded, not vendored) -->\n```python\nfrom difflow_refinery.benchmarks import du2025\n\nroot = du2025.fetch()                               # case1/: sets, parameters, solution\ndata = du2025.load_case(root / \"case1\")             # typed sets and parameters\nmodel = du2025.build_model(data)                    # 1850 variables, 1621 equations, 81 inequalities\nsol = du2025.load_solution(root / \"case1\" / \"solution_baron.gdx\")   # needs gams.transfer\nx = model.x_from_solution(sol)\nmodel.violations(x)        # {'eq': 8.5e-08, 'ineq': 5.7e-14, 'bounds': 0.0}\nmodel.profit(x)            # 34167967.96 -- paper Table 3: 34,167,968\nxs, info = du2025.solve_local(model, x, options=du2025.WARM_START_OPTIONS)\n```\n\n**Case 1.** Two crude units with swing cuts process up to 25 crudes; 20 fixed-yield units (`Upf0`-`Upf19`), 5 delta-base units (`Upd0`-`Upd4`), 32 mixers, 61 splitters and 12 blenders make 37 products from 31 raw materials under 27 capacity limits, in one period with no inventory. With no inventory, the paper's Eq. 21 makes a stream's inlet and outlet flows equal, so one flow `F_s` stands for both. Cases 2 and 3 (inventory, binaries, three periods) raise `NotImplementedError`."
+  },
+  {
+   "anchor": "property-data-532",
+   "heading": "Property data (#532)",
+   "path": "Refinery Unit Operations > The Du et al. (2025) planning benchmark > Property data (#532)",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "The benchmark names its properties `Q0`-`Q169` and does not say what they are. It also gives each crude only as cut yields and cut properties. Three modules fill that in. The tables below come from the Case 1 data; nothing has been confirmed by the authors.\n\n**Property map** (`du2025.properties.PROPERTY_MAP`). Each index carries a name, a unit, a confidence and its evidence. `blend_key` points to the matching quality in `difflow_refinery.blending.PROPERTY_RULES`, and `named()` turns a stream's `{index: value}` into named properties. The benchmark blends every property except SG *by mass*, while difflow's blend pool blends aromatics, olefins and benzene by volume and octane by RT-70. So the index is the same but the rule is not.\n\n| Confidence | Indices |\n|---|---|\n| high | Q168 SG; Q169 virtual-batch component share; Q0 sulfur wt%; Q2 RON; Q4 MON; Q13 benzene vol%; Q51 olefins vol%; Q14 cetane index; Q18 total nitrogen wppm; Q21 Conradson carbon wt%; Q22 Ni, Q23 V, Q25 Ni+V wppm (Q22 + Q23 = Q25 on 324 of 325 cuts) |\n| medium | Q11 aromatics vol%; Q52 MTBE/oxygenates vol%; Q19 basic nitrogen; Q5 N+2A reforming potential |\n| low | Q10 paraffins; Q6 RVP of gasoline components; Q47 viscosity blending index |\n| unknown | Q8, Q15, Q16 (= 0.85 x Q15 on every cut), Q17, Q36, Q37, Q42, Q44, Q45 (the one traced index outside `Qw`), Q53 |\n\nThe issue's guess that Q21 is olefins is replaced. Q21 is 0.01-0.02 on distillates and 17-28 on vacuum residue, the coker feed is limited to 30 and the residue-hydrotreater feed to 21, so it is Conradson carbon. This also identifies `Upd3`: its yields move with Q21 and SG about a base of 18.7 and SG 1.01, so it is a residue unit (coker or deasphalter)."
   },
   {
    "anchor": "validation",
